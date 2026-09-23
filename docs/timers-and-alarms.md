@@ -72,6 +72,9 @@ Measured 2026-09-23, so implementation does not have to rediscover them.
   exactly the behaviour requested for timers and alarms, so nothing new is needed for it.
 - **Present tones:** `sounds/` holds `awake.wav`, `connected.wav`, `done.wav`, `power-on.wav`
   and a `candidates/` directory (which is how the existing ones were chosen).
+- **One tone we get for free:** the satellite source ships `sounds/timer_finished.wav` (vendored at
+  `pi/vendor/native-satellite-13bb024/sounds/`, see `docs/owning-the-satellite-stack.md`). That is a
+  ready-made timer tone, so the timer feature needs no new sound design unless we dislike it.
 
 ## Timers
 

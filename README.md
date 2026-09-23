@@ -135,6 +135,7 @@ missing. See `docs/restart-safety-and-portability.md` for the planned hardening.
 - [`docs/satellite-http-config.md`](docs/satellite-http-config.md) configuration server for the satellite: feasibility research, not built
 - [`docs/owning-the-satellite-stack.md`](docs/owning-the-satellite-stack.md) what is pinned and vendored, our divergence from upstream, and how to rebuild the device
 - [`docs/feature-roadmap.md`](docs/feature-roadmap.md) features worth building ourselves, diffed against the successor project, with the reasoning for staying on Wyoming
+- [`docs/potentially-supported-devices.md`](docs/potentially-supported-devices.md) microphone devices worth buying and testing, with the compatibility reasoning and a test checklist
 
 ## Status and known gaps
 
