@@ -228,3 +228,9 @@ INTERRUPT_ENABLED = True
 # Shorter than this and the utterance is treated as noise rather than as speech. "you" and "beep"
 # are what our own playback tends to produce when the wake word self-triggers.
 INTERRUPT_MIN_CHARS = 5
+# How long the interruption watcher will wait for speech after a mid-task wake word. This bound is
+# load-bearing: a satellite that is still playing cannot stream the microphone, so a wake word that
+# lands while the device is speaking would otherwise wait forever, keep ownership of the satellite
+# event queue, and swallow every later wake detection. The device then looks completely deaf
+# (Angela hit exactly that on 2026-09-23, minutes after the feature shipped).
+INTERRUPT_CAPTURE_SECONDS = 12.0

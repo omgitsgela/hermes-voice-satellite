@@ -535,6 +535,8 @@ class VoiceLoop:
         A wake-word satellite only streams audio after a detection, so a detection arriving here
         means someone deliberately woke the device mid-task. What follows decides the outcome.
         """
+        from bridge.config import INTERRUPT_CAPTURE_SECONDS
+
         while not state.done:
             event = await self._next(0.5)
             if event is None:
@@ -545,7 +547,25 @@ class VoiceLoop:
                 continue
             name = Detection.from_event(event).name
             _LOGGER.info("interruption: wake word %r while a task is running", name)
-            result = await self.capture_utterance(name)
+            if state.done:
+                return
+            # Bounded, and this bound is not optional. `capture_utterance` waits for audio with no
+            # deadline of its own, and a satellite that is still PLAYING cannot stream the
+            # microphone, so a wake word that lands during the answer leaves it waiting forever.
+            # Worse, the waiting watcher stays the active consumer of the satellite queue and
+            # silently eats every later wake detection, which makes the device look completely deaf
+            # (Angela hit exactly this on 2026-09-23, minutes after this feature shipped).
+            # CancelledError is deliberately NOT caught here: swallowing it is how a task that should
+            # have died keeps running.
+            try:
+                result = await asyncio.wait_for(self.capture_utterance(name),
+                                                timeout=INTERRUPT_CAPTURE_SECONDS)
+            except asyncio.TimeoutError:
+                _LOGGER.info("interruption: no speech after the wake (%.0fs); "
+                             "carrying on with the running task", INTERRUPT_CAPTURE_SECONDS)
+                continue
+            if state.done:
+                return
             if result is None:
                 continue
             transcript = await self.transcribe(result.audio)
