@@ -5,6 +5,7 @@ The satellite is a Wyoming *server*: we dial out to it. All audio processing
 wake word, and playback.
 """
 
+import os
 from pathlib import Path
 
 # --- the satellite ---------------------------------------------------------
@@ -29,7 +30,9 @@ AUDIO_OUT = PROJECT_DIR / "audio"
 GATEWAY_BASE_URL = "http://127.0.0.1:8642"      # loopback; never exposed to the LAN
 GATEWAY_ENV_FILE = Path.home() / ".hermes" / ".env"
 GATEWAY_API_KEY_VAR = "API_SERVER_KEY"
-VOICE_ROUTE_ALIAS = "voice"        # gateway.api_server.model_routes.voice -> cerebras qwen-3.8-27b
+VOICE_ROUTE_ALIAS = ""               # empty = do not pin a model: the voice surface runs on the
+                                     # gateway's normal default (and its fallback chain), same as any
+                                     # other conversation. Set to a model_routes alias to override it.
 VOICE_SESSION_ID = "voice-wyoming1"  # stable id, so the assistant has continuity
 
 # How long a wake keeps the mic open while the bridge waits for a real utterance. A blip (the
@@ -194,3 +197,16 @@ ANNOUNCE_TURN_MAX_AGE = 180.0     # a turn "active" longer than this means the f
 # Pi; connected.wav is played by this bridge the moment the link is up, because only the host knows
 # that. See scripts/make_chimes.py for the two designs.
 CONNECTED_TONE = PROJECT_DIR / "sounds" / "connected.wav"
+# The connected tone and the green LED flash must fire once per boot, not once per connection.
+# Angela, 2026-09-23: the hourly link refresh was announcing itself with both, all night. This
+# marker records which host boot last heard the tone.
+CONNECTED_TONE_BOOT_MARKER = PROJECT_DIR / "state" / "connected-tone-boot-id"
+
+# How long to wait for a wake word before refreshing the satellite link.
+#
+# This used to be hard-coded in wait_for_wake, and a timeout was treated as a fatal connection
+# problem: the process exited, systemd restarted it, and every restart replayed the connect tone,
+# reloaded whisper and Piper, and left the device deaf for about nine seconds. An hour with nobody
+# speaking is the normal overnight state, not a fault, so it is now a socket refresh instead
+# (Angela, 2026-09-23). Overridable so the refresh can be tested in seconds rather than an hour.
+WAKE_WAIT_SECONDS = float(os.environ.get("VOICE_WAKE_WAIT_SECONDS", "3600"))

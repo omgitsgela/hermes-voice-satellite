@@ -184,6 +184,29 @@ def _boot_pulse_wanted(args: argparse.Namespace) -> bool:
     return True
 
 
+# The green connect flash is for "the device just came up and found its host", not for every
+# reconnection. Angela, 2026-09-23: the bridge refreshed its link once an hour overnight and the
+# flash ran every time. Same /run marker trick as the boot pulse, so a service restart does not
+# replay it and a real reboot does.
+_FIRST_CONNECT_MARKER = Path("/run/wyoming-led-first-connect")
+
+# How long the host may be gone before the LEDs admit it. Deliberately longer than the few seconds
+# a routine link refresh takes, so red keeps meaning "something is actually wrong".
+DISCONNECT_RED_GRACE_SECONDS = 30.0
+
+
+def _first_connect_this_boot() -> bool:
+    """True only for the first satellite connection of this boot."""
+    if _FIRST_CONNECT_MARKER.exists():
+        _LOGGER.info("Already connected once this boot; staying silent")
+        return False
+    try:
+        _FIRST_CONNECT_MARKER.touch()
+    except OSError:
+        _LOGGER.warning("Could not create %s", _FIRST_CONNECT_MARKER)
+    return True
+
+
 class LEDController:
     """Single owner of the strip: either one solid colour or one running pulse.
 
@@ -283,8 +306,41 @@ class LEDsEventHandler(AsyncEventHandler):
         self.cli_args = cli_args
         self.client_id = str(time.monotonic_ns())
         self.controller = controller
+        # Pending "the host has been gone a while, admit it with red" timer, cancelled by a
+        # reconnect. Angela, 2026-09-23: red used to appear instantly on every disconnect, which
+        # meant it also flashed red through the routine hourly link refresh.
+        self._red_task: Optional[asyncio.Task] = None
 
         _LOGGER.debug("Client connected: %s", self.client_id)
+
+    def _cancel_red_timer(self) -> None:
+        """Drop a pending red, if there is one. Called on every reconnect."""
+        task = self._red_task
+        self._red_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            _LOGGER.info("reconnected before the grace period ended; red cancelled")
+
+    async def _red_after_grace(self) -> None:
+        """Show red, but only once the host has been gone long enough to mean it.
+
+        Angela, 2026-09-23: red used to appear the instant the link dropped, so the routine hourly
+        refresh produced a red flash too, and the colour stopped meaning anything. The grace period
+        is deliberately longer than a refresh takes, so red now only appears for a real outage.
+        """
+        self._cancel_red_timer()
+
+        async def _wait_then_red() -> None:
+            try:
+                await asyncio.sleep(DISCONNECT_RED_GRACE_SECONDS)
+            except asyncio.CancelledError:
+                raise
+            _LOGGER.warning("host gone for %.0fs; showing red", DISCONNECT_RED_GRACE_SECONDS)
+            await self.controller.set_color(_RED)
+
+        _LOGGER.info("satellite disconnected; showing red in %.0fs if it stays away",
+                     DISCONNECT_RED_GRACE_SECONDS)
+        self._red_task = asyncio.create_task(_wait_then_red())
 
     async def handle_event(self, event: Event) -> bool:
         _LOGGER.debug(event)
@@ -313,15 +369,23 @@ class LEDsEventHandler(AsyncEventHandler):
         elif RunSatellite.is_type(event.type):
             await self.controller.set_color(_BLACK)
         elif SatelliteConnected.is_type(event.type):
-            # Flash. This also ends the startup pulse, which is exactly when the device is
-            # genuinely ready.
-            for _ in range(3):
-                await self.controller.set_color(_GREEN)
-                await asyncio.sleep(0.3)
+            # A reconnect cancels any pending red before anything else is shown.
+            self._cancel_red_timer()
+            if _first_connect_this_boot():
+                # Flash. This also ends the startup pulse, which is exactly when the device is
+                # genuinely ready.
+                for _ in range(3):
+                    await self.controller.set_color(_GREEN)
+                    await asyncio.sleep(0.3)
+                    await self.controller.set_color(_BLACK)
+                    await asyncio.sleep(0.3)
+            else:
+                # A reconnect is silent (Angela, 2026-09-23). Still go dark here, so a service
+                # restart inside the startup window cannot leave the lights breathing.
                 await self.controller.set_color(_BLACK)
-                await asyncio.sleep(0.3)
         elif SatelliteDisconnected.is_type(event.type):
-            await self.controller.set_color(_RED)
+            # Red now means a real outage, not a blink (Angela, 2026-09-23).
+            await self._red_after_grace()
         elif event.type == WAKE_NOW_EVENT:
             # Open the microphone by asking the wake shim to inject a wake detection. Best effort:
             # a follow-up window with nothing to hear is a missed convenience, never a broken turn.

@@ -39,6 +39,22 @@ from typing import Optional
 # again, no matter how many capabilities were added since.
 STATE_FILE = Path(__file__).resolve().parent.parent / "state" / "voice-session.txt"
 
+
+class IdleWakeRefresh(Exception):
+    """No wake word for the configured window. Not a failure, just time to refresh the link.
+
+    Deliberately NOT a subclass of TimeoutError or ConnectionError: the loop treats those as real
+    connection problems and exits, which is the behaviour this replaces (Angela, 2026-09-23).
+    """
+
+
+def _boot_id() -> str:
+    """The host's boot id, used to tell a reboot from a restart."""
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError:
+        return ""
+
 import numpy as np
 from wyoming.asr import Transcript
 from wyoming.audio import AudioChunk
@@ -410,13 +426,24 @@ class VoiceLoop:
     async def _next(self, timeout: float):
         return await self.sat.next_event(timeout)
 
-    async def wait_for_wake(self, timeout: float = 3600.0) -> str:
-        """Block until the satellite reports its wake word. Returns the word name."""
+    async def wait_for_wake(self, timeout: Optional[float] = None) -> str:
+        """Block until the satellite reports its wake word. Returns the word name.
+
+        A timeout here is NOT a connection failure. An hour with nobody speaking is the normal
+        overnight state, and treating it as fatal is exactly what made the bridge exit, restart,
+        replay its connect tone, reload whisper and Piper, and go deaf for nine seconds, once an
+        hour all night (Angela, 2026-09-23). `run()` catches IdleWakeRefresh and refreshes the
+        socket in place instead.
+        """
+        from bridge.config import WAKE_WAIT_SECONDS
+
+        if timeout is None:
+            timeout = WAKE_WAIT_SECONDS
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
-                raise TimeoutError("no wake word")
+                raise IdleWakeRefresh(f"no wake word in {timeout:.0f}s")
             event = await self._next(min(remaining, 30.0))
             if event is None:
                 if self.sat.eof:
@@ -827,8 +854,21 @@ class VoiceLoop:
         The satellite has no power light and no connection light, and Angela asked to be able to
         tell "powered on" from "actually connected". Best effort on purpose: a missing or
         unplayable tone must never stop the loop from starting.
+
+        Once per boot, not once per connection. Angela, 2026-09-23: the hourly link refresh used to
+        restart this process, so the tone played all night long. A restart of this service, or a
+        reconnection, is now silent; a real reboot of this host still says hello.
         """
-        from bridge.config import CONNECTED_TONE
+        from bridge.config import CONNECTED_TONE, CONNECTED_TONE_BOOT_MARKER
+
+        boot = _boot_id()
+        if boot and CONNECTED_TONE_BOOT_MARKER.is_file():
+            try:
+                if CONNECTED_TONE_BOOT_MARKER.read_text().strip() == boot:
+                    _LOGGER.info("connected tone already played this boot; staying silent")
+                    return
+            except OSError as exc:
+                _LOGGER.warning("could not read %s: %s", CONNECTED_TONE_BOOT_MARKER, exc)
 
         if not CONNECTED_TONE.is_file():
             _LOGGER.warning("connected tone missing at %s", CONNECTED_TONE)
@@ -837,6 +877,25 @@ class VoiceLoop:
             await self.sat.play_wav(CONNECTED_TONE)
         except Exception as exc:  # noqa: BLE001 - never let a chime block startup
             _LOGGER.warning("could not play the connected tone: %s", exc)
+            return
+        if boot:
+            try:
+                CONNECTED_TONE_BOOT_MARKER.parent.mkdir(parents=True, exist_ok=True)
+                CONNECTED_TONE_BOOT_MARKER.write_text(boot + "\n")
+            except OSError as exc:
+                _LOGGER.warning("could not record the boot id: %s", exc)
+
+    async def _refresh_link(self) -> None:
+        """Refresh the satellite socket in place after an idle wait, without exiting.
+
+        The satellite goes inert on a new connection until it is told the host is ready, so `run()`
+        must be re-sent or the device would sit there awake but deaf. That re-send is the whole
+        difference between a working refresh and a silent dead device.
+        """
+        _LOGGER.info("refreshing the satellite link after an idle wait")
+        await self.sat.reconnect()
+        await self.sat.run()
+        _LOGGER.info("satellite link refreshed; wake word re-armed")
 
     async def run(self, max_turns: Optional[int] = None) -> None:
         await self.start()
@@ -850,6 +909,17 @@ class VoiceLoop:
                 turns += await self.follow_up_chain(already=turns, max_turns=max_turns)
             except asyncio.CancelledError:
                 raise
+            except IdleWakeRefresh as exc:
+                # Not a fault: nobody spoke for the configured window. Refresh in place instead of
+                # exiting. Exiting is what replayed the connect tone, reloaded the models and went
+                # deaf for seconds, once an hour overnight (Angela, 2026-09-23).
+                _LOGGER.info("idle: %s", exc)
+                try:
+                    await self._refresh_link()
+                except Exception as refresh_exc:  # noqa: BLE001 - keep waiting, do not exit
+                    _LOGGER.error("link refresh failed: %s", refresh_exc)
+                    await asyncio.sleep(5.0)
+                continue
             except (ConnectionError, TimeoutError) as exc:
                 _LOGGER.error("connection problem: %s", exc)
                 raise
