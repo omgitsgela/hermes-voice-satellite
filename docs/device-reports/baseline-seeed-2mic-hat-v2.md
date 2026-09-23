@@ -6,7 +6,7 @@ hand-written, so re-running the script on this device should reproduce it.
 
 ```
 device check on wyoming1  (Debian GNU/Linux 12 (bookworm), kernel 6.12.109+rpt-rpi-v8, aarch64 (64bit))
-  memory: {'MemTotal': '416 MB', 'MemAvailable': '182 MB'}   thermal: temp=61.2'C
+  memory: {'MemTotal': '416 MB', 'MemAvailable': '179 MB'}   thermal: temp=61.2'C
 throttled=0x0
 
   ALSA cards:
@@ -15,6 +15,8 @@ throttled=0x0
 
   card 'seeed2micvoicec' capture: 16 kHz mono available: False
     arecord: main:831: audio open error: Device or resource busy
+    NOTE: this card is in use, so its parameters cannot be measured right now. That is expected while the voice stack is running: either stop the satellite services first, or run this check on a device before starting them.
+    in use as: plughw:CARD=seeed2micvoicec,DEV=0 (from wyoming-satellite.service)
   card 'seeed2micvoicec' playback: present
 
   LED bus: spidev ['/dev/spidev0.0', '/dev/spidev0.1']
@@ -33,10 +35,13 @@ throttled=0x0
 ## What the next device has to beat or match
 
 - Capture is `plughw:CARD=seeed2micvoicec` at 16 kHz mono. That exact card string is the first
-  thing to change for a new device, and it is what the satellite's `--wake-uri`/`--mic-uri` point at.
+  thing to change for a new device.
 - `spidev` present is what lets the existing APA102 LED service drive a device at all. Every USB
-  array in `docs/potentially-supported-devices.md` uses WS2812 instead, so none of them can reuse it.
+  array in `docs/potentially-supported-devices.md` uses WS2812 instead, so none can reuse it.
 - Playback comes from this HAT (speaker header). A capture-only device would leave the Pi with no
   audio output at all, because a Pi Zero 2 W has none of its own.
-- No input/button device is exposed by this HAT, so any button support on a new device would be
+- No input or button device is exposed by this HAT, so any button support on a new device would be
   newly available rather than a regression.
+- The capture parameters read as unmeasurable here because the running stack holds the card. For a
+  real measurement, run this check on a new device BEFORE starting the services, and note that
+  the in-use path is reported from the satellite unit when the card is busy.

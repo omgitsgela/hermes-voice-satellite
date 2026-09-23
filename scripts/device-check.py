@@ -68,20 +68,43 @@ def cards() -> list[dict]:
 
 
 def card_caps(card_id: str) -> dict:
-    """Capture/playback formats for a card, by asking ALSA rather than guessing."""
-    caps = {"capture": "", "playback": "", "capture_16k_mono": False}
+    """Capture/playback formats for a card, by asking ALSA rather than guessing.
+
+    A card in use cannot be opened: on the current device the running satellite holds the
+    microphone, so `arecord` returns "Device or resource busy" and a naive checker would report that
+    the card cannot capture at all. That is a false negative, and it would appear on exactly the
+    devices we care about, so the busy case is named explicitly and we report what the card is in
+    use AS, read from the satellite unit, which is the real answer for "what is this device doing".
+    """
+    caps = {"capture": "", "playback": "", "capture_16k_mono": False, "busy": False, "in_use_as": ""}
     for direction, tool in (("capture", "arecord"), ("playback", "aplay")):
         binary = shutil.which(tool)
         if not binary:
             continue
         out = run([binary, "-D", f"plughw:CARD={card_id}", "--dump-hw-params", "/dev/null"], timeout=8)
+        if "busy" in out.lower():
+            caps["busy"] = True
+            caps[direction] = (
+                f"{out}\n  NOTE: this card is in use, so its parameters cannot be measured right now."
+                " That is expected while the voice stack is running: either stop the satellite"
+                " services first, or run this check on a device before starting them."
+            )
+            continue
         caps[direction] = out[:600]
-        if direction == "capture" and "RATE: [16000]" in out.replace("  ", " "):
-            caps["capture_16k_mono"] = True
-        elif direction == "capture":
-            for line in out.splitlines():
-                if line.strip().upper().startswith("RATE") and "16000" in line:
-                    caps["capture_16k_mono"] = True
+        if direction == "capture":
+            if "RATE: [16000]" in out.replace("  ", " ") or any(
+                "16000" in l for l in out.splitlines() if l.strip().upper().startswith("RATE")
+            ):
+                caps["capture_16k_mono"] = True
+
+    # What the running stack actually opens, which is the useful fact when the card is busy.
+    unit = run(["sh", "-c", "systemctl cat wyoming-satellite.service 2>/dev/null | grep ExecStart"])
+    for token in unit.split():
+        if "CARD=" in token:
+            caps["in_use_as"] = token.strip("'\"")
+            if caps["busy"]:
+                caps["capture"] += f"\n  in use as: {caps['in_use_as']} (from wyoming-satellite.service)"
+            break
     return caps
 
 
