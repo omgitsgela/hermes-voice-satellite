@@ -48,7 +48,7 @@ listener is the announcement endpoint, which requires a token.
 | `reference/` | Upstream reference copies of the files the device patches, for diffing |
 | `hubitat/` | `HermesAnnouncer.groovy`, the Hubitat driver that speaks through this system |
 | `hermes/plugins/` | The Hermes plugins the voice surface uses, verbatim from a working install |
-| `hermes/patches/` | The core patches, as diffs, plus a checker |
+| `hermes/patches/` | The three remaining core patches, as diffs, plus a checker |
 | `hermes/config/` | The voice-surface configuration keys, with placeholders instead of secrets |
 | `hermes/systemd/` | The bridge's user unit |
 | `skills/` | The skills that document how to operate and repair this system |
@@ -133,8 +133,10 @@ missing. See `docs/restart-safety-and-portability.md` for the planned hardening.
 
 ## Status and known gaps
 
-- Verified working as of 2026-09-22/23: wake word, follow-up mode, announcements, LED states, the
-  narrowed 8-tool voice surface, and the deepseek voice route.
+- Verified working as of 2026-09-22/23: wake word, follow-up mode, announcements, LED states.
+- **The voice surface runs at full parity with a normal Hermes conversation** (24 toolsets, 52 tools,
+  ~19k tokens of schema) on the gateway's default model, so it inherits the normal fallback chain.
+  It is no longer narrowed, and it no longer pins a voice-specific model route.
 - **One satellite only.** `SATELLITE_HOST` is a single address and the session is a single session.
 - Machine-specific values are still hardcoded in `bridge/config.py`.
 - `voices/`, `logs/`, `audio/` and `state/` are intentionally not committed.

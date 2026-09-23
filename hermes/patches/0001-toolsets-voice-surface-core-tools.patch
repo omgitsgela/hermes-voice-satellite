@@ -1,5 +1,5 @@
 diff --git a/toolsets.py b/toolsets.py
-index 1b2da7f579..61118906f4 100644
+index 1b2da7f579..b208bf735b 100644
 --- a/toolsets.py
 +++ b/toolsets.py
 @@ -27,6 +27,17 @@ _HERMES_CORE_TOOLS = [
@@ -20,18 +20,3 @@ index 1b2da7f579..61118906f4 100644
      "kanban_show", "kanban_list",
      "kanban_complete", "kanban_block", "kanban_request_review",
      "kanban_request_changes",
-@@ -103,6 +114,14 @@ TOOLSETS = {
-         "instructions and knowledge",
-         ["skills_list", "skill_view", "skill_manage"],
-     ),
-+    # LOCAL PATCH (Angela, 2026-09-22): read-only counterpart to `skills`, for channels that should
-+    # be able to CONSULT skills but never modify them — a voice microphone in a shared room being
-+    # the case that motivated it, where the write half was only a prompt-level guard. Both tools are
-+    # already in _HERMES_CORE_TOOLS, so this adds nothing deferrable.
-+    "skills_read": _ts(
-+        "Consult skill documents: list and view only, never create or edit",
-+        ["skills_list", "skill_view"],
-+    ),
-     # web_search belongs to `web`/`search` only. Listing it here too let
-     # `disabled_toolsets: [browser]` (headless/Docker deployments) strip
-     # web_search from every session, because disabled toolsets are a strict
