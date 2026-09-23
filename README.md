@@ -131,6 +131,7 @@ needs, where it lives, and what it is for. Read it before deploying.
 so an update stashes them and the system runs unpatched until they are re-applied. Run
 `hermes/patches/check-patches.sh` after every update; it is read-only and tells you which patches are
 missing. See `docs/restart-safety-and-portability.md` for the planned hardening.
+- [`docs/timers-and-alarms.md`](docs/timers-and-alarms.md) timers and alarms: design spec, not built yet
 
 ## Status and known gaps
 

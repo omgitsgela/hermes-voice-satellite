@@ -1,0 +1,295 @@
+# Timers and alarms
+
+Design spec, written 2026-09-23. **Status: not built.** Everything here is a plan to
+implement later, except where a line is marked as verified, which means it was measured on
+`autumn` or `wyoming1` on 2026-09-23 rather than assumed.
+
+Angela's request, verbatim:
+
+> It would be nice to have both a timer countdown, and an alarm function. both will announce using
+> the announcement pathway when the timer or alarm is sounding off. Possible voice commands to
+> initiate these are similar to Alexa: "Set a timer for 5 minutes" ... "set a timer for 3 minutes
+> called check the popcorn .... your check the popcorn timer is done". for the alarm, we would set
+> time probably with cron jobs, and it could even be repeating or on a schedule if needed. When I
+> ask the agent what timers or alarms are running, it should be able to retrieve that information
+> and ignore the rest of the cron jobs in there, probably with some kind of category tag.
+
+## The shape of the answer
+
+Two features that look similar and want completely different machinery. This is the single most
+important decision in this document, so it is first.
+
+| | Timer | Alarm |
+|---|---|---|
+| When | "5 minutes from now" | A clock time or a repeating schedule |
+| Duration | Seconds to hours | Standing, or one future moment |
+| Owner | The bridge, in `state/timers.json` | Cron, as a real Hermes cron job |
+| Why | Cron cannot express this | Cron is exactly this |
+| Fires by | Its own scheduler task in the bridge | A cron tick running a script |
+| Announced | Through `/announce`, tone `timer` | Through `/announce`, tone `alarm` |
+
+**Why timers cannot be cron jobs.** Three verified reasons, each fatal on its own:
+
+- Cron's smallest unit is one minute, so "set a timer for 90 seconds" is not expressible.
+- The existing duration parser refuses the forms people actually speak. Verified against
+  `cron.jobs.parse_duration`: `"5 minutes"` gives 5 and `"5m"` gives 5, but `"90 seconds"` and
+  `"1 hour 30 minutes"` both raise `ValueError`. It is minute-granular and single-unit.
+- Cron schedules are wall-clock aligned, not relative. "Every 5 minutes" fires at :00, :05, :10,
+  which is not five minutes from whenever the person spoke.
+
+**Why alarms should be.** Cron already has exactly the properties an alarm needs: one-shot times,
+repeating schedules, retry and failure history, and a tick that runs whether or not anyone is
+logged in. Rebuilding that inside the bridge would duplicate a working system.
+
+## Verified capabilities this design relies on
+
+Measured 2026-09-23, so implementation does not have to rediscover them.
+
+- **Cron jobs have no tag or category field.** A live job record carries 31 fields
+  (`id, name, schedule, schedule_display, prompt, script, no_agent, deliver, skills, enabled,
+  state, repeat, next_run_at, last_status, ...`) and none of them is a tag. `_cron_tags` does not
+  exist in `cron/jobs.py`. **The "category tag" in the request therefore has to be a naming
+  convention plus our own tooling, not a schema field.** See the alarms section.
+- **Schedule grammar** (`cron.jobs.parse_schedule`), all tested:
+  - `weekdays at 6:30am` -> cron `30 6 * * 1-5`
+  - `every monday 9am` -> cron `0 9 * * 1`
+  - `every 30m` -> interval, 30 minutes
+  - `2026-09-24T06:30` -> kind `once`, `run_at 2026-09-24T06:30:00-06:00` (naive timestamps are
+    read in the configured Hermes timezone, which is Denver here, so no UTC arithmetic needed)
+  - a bare `6:30am` is **refused**. This matters: "set an alarm for 6:30" must be turned into
+    either a weekday phrase or an ISO timestamp by the caller before it will be accepted.
+- **`croniter` is installed** in the Hermes venv, so the natural weekday and time phrases work.
+- **The announcement payload has no sound selector today.** `/announce` accepts `text`, `source`,
+  `key` and `chime` (bool). A distinct alarm tone therefore needs one small addition, below.
+- **The announce server is `bridge/announce.py`**, aiohttp, with `/announce`,
+  `/announce/health`, and `/settings` (GET and POST), all bearer-token authenticated. A `/timers`
+  route belongs beside them.
+- **Announcements already queue behind a live conversation** and start with the chime. That is
+  exactly the behaviour requested for timers and alarms, so nothing new is needed for it.
+- **Present tones:** `sounds/` holds `awake.wav`, `connected.wav`, `done.wav`, `power-on.wav`
+  and a `candidates/` directory (which is how the existing ones were chosen).
+
+## Timers
+
+### What a person says, and what happens
+
+| Spoken | Tool call | Reply, spoken |
+|---|---|---|
+| "Set a timer for 5 minutes" | `timer_set(minutes=5)` | "Timer set for five minutes." |
+| "Set a timer for 3 minutes called check the popcorn" | `timer_set(minutes=3, label="check the popcorn")` | "Timer set for three minutes, check the popcorn." |
+| "How long is left on the popcorn timer?" | `timer_list()` | "Two minutes left on the popcorn timer." |
+| "What timers are running?" | `timer_list()` | "One: check the popcorn, two minutes left." |
+| "Cancel the popcorn timer" | `timer_cancel(label="popcorn")` | "Cancelled." |
+| "Cancel all timers" | `timer_cancel(all=true)` | "All timers cancelled." |
+
+On expiry, spoken verbatim through the announcement path, matching the wording asked for:
+
+- unnamed: "Your timer is done."
+- named: "Your check the popcorn timer is done."
+
+Replies stay inside the existing voice rules: two short sentences at most, no lists, and no
+follow-up question.
+
+### Where state lives
+
+`state/timers.json`, matching the existing `state/follow-up-on` pattern. Untracked, mode 600,
+written atomically through a temporary file and a rename. Each record:
+
+```json
+{
+  "id": "t7f3a1",
+  "label": "check the popcorn",
+  "created_at": 1790000000.0,
+  "due_at": 1790000180.0,
+  "duration_seconds": 180,
+  "announced": false
+}
+```
+
+### The firing path
+
+**Timers never speak directly.** They enqueue an announcement and let the existing announcement
+path do the talking, which is what keeps the one-`aplay` rule, the `PLAYBACK_LOCK`, and the
+queue-behind-a-conversation behaviour intact for free. A timer that fired straight at the
+satellite would be a second playback path and would race a live answer.
+
+New module `bridge/timers.py`:
+
+- `parse_duration(text)` accepting the forms people actually say: `5 minutes`, `90 seconds`,
+  `1 hour 30 minutes`, `1h30m`, `half an hour`, `20 mins`, `1.5 hours`. Unit tests cover each.
+- A scheduler task started with the bridge, waking on the earliest deadline, not a one-second
+  poll loop.
+- Overdue handling on restart: a timer whose `due_at` passed while the bridge was down fires
+  immediately, once, with its normal text, and the log records the lateness in seconds.
+- A hard cap on concurrent timers (suggest 10), refused politely with a spoken line rather than
+  silently dropped.
+
+### The control surface
+
+New endpoint on the existing aiohttp app, same bearer token as `/announce`:
+
+```
+POST /timers          {"action": "set", "seconds": 180, "label": "check the popcorn"}
+                      {"action": "list"}
+                      {"action": "cancel", "id": "t7f3a1"} or {"label": "popcorn"} or {"all": true}
+GET  /timers          the same list, for scripts and cron
+```
+
+### The assistant's access
+
+A new Hermes plugin `~/.hermes/plugins/hermes_timers/`, modelled on
+`~/.hermes/plugins/voice_satellite/` (`plugin.yaml`, `voice_tool.py`, a live test). Three tools:
+`timer_set`, `timer_list`, `timer_cancel`. The plugin talks to the bridge over HTTP exactly as the
+`voice_satellite` plugin already does, so nothing here needs a core patch and the tools are
+available on every Hermes surface, not only the microphone.
+
+## Alarms
+
+### The category problem, and the answer
+
+Cron jobs have no tag field, and adding one would mean a core patch, which is the exact thing the
+project just finished eliminating. So the category is a **name convention**:
+
+- Every alarm is a cron job whose name begins with `alarm:`, for example
+  `alarm: weekday wake 6:30am`.
+- `alarm_list` in the same plugin reads `~/.hermes/cron/jobs.json` directly, keeps only jobs whose
+  name starts with `alarm:`, and returns those. The assistant never has to see the other jobs, and
+  asking "what alarms are running" never lists the inbox sweeps.
+- The plugin also returns each alarm's schedule, its one-shot or repeating nature, and its last
+  run status, so "did my 6:30 alarm go off?" is answerable.
+
+The honest limit: a prefix is a convention, not a schema field. Anything that creates an alarm
+must use it, and nothing in Hermes enforces it. Where that could bite is documented as a trap at
+the end of this file. If a real tags field ever lands upstream, this is the one place to revisit.
+
+### How an alarm is created
+
+The assistant creates a normal cron job with its existing cron tool, using the grammar in the
+verified section:
+
+| Spoken | Cron schedule string | Result |
+|---|---|---|
+| "Set an alarm for 6:30 in the morning on weekdays" | `weekdays at 6:30am` | Repeating, Monday to Friday |
+| "Wake me at 6am tomorrow" | `2026-09-24T06:00` | One-shot, fires once then done |
+| "Set an alarm for 7am every day" | `every day at 7am` | Repeating daily |
+
+Properties that make this clean:
+
+- `no_agent: true` with a script, so the alarm costs no model call and cannot vary its wording.
+- `deliver: local`, and the job's final line is `[SILENT]`, so the alarm makes no chat noise. It
+  exists to speak in the house, not to send a message.
+- The script is `scripts/alarm_fire.py`, which POSTs to `/announce` with the alarm tone and the
+  alarm's own label, exiting 0 when accepted.
+
+### The one small bridge change an alarm sound needs
+
+Today `/announce` only knows `chime: true`. Add an optional `sound` field, defaulting to `chime`,
+accepting `timer` and `alarm`. Two new tones land in `sounds/`, made the same way the existing
+ones were. The alarm tone should be recognisably different from the done tone, since a timer
+finishing and an alarm going off want different reactions from a person.
+
+### Ringing until dismissed
+
+Not in the first version, and worth being explicit about why: the first version announces once, the
+same as any other announcement. A real alarm clock rings until someone silences it, and that needs
+three things this project already owns but has not combined yet:
+
+1. A repeat loop, which is trivial.
+2. A way to hear "stop" without a wake word, which is exactly what the wake shim's `wake-now`
+   injection already does, including the retry behaviour already built for follow-up mode.
+3. An LED state for "an alarm is sounding", which the LED service already supports through the
+   same event path the bridge uses for `led-busy`.
+
+Recommended as a second phase, behind an explicit decision, because a device that keeps talking
+until silenced is a different thing to live with than one that says a sentence and stops.
+
+## Announcement house rules this design must respect
+
+The announcement path is deliberately reserved for things worth hearing, and these features are
+the sanctioned exception because they were asked for by name. Everything else still applies:
+
+- Never route the text through a model. Speaks verbatim.
+- 400 characters maximum. "Your check the popcorn timer is done." is 38.
+- Delivery is best effort. A 202 means queued, not spoken, and failures are recorded in
+  `logs/announcements.jsonl` and never retried.
+- The token is read from `state/announce-token.txt` and never printed.
+- **If the bridge is down when an alarm fires, the announcement is refused and nothing is heard.**
+  The script records the miss. Whether to also send a Telegram note, and whether to retry once
+  after a minute, is an open decision below.
+
+## Files
+
+New:
+
+- `bridge/timers.py` (parser, store, scheduler task)
+- `scripts/test_timers.py` (offline: parser, store, overdue handling, ordering)
+- `scripts/alarm_fire.py` (what a cron alarm job runs)
+- `scripts/test_alarm_fire.py` (offline, against a stub announce server)
+- `hermes/plugins/hermes_timers/` (`plugin.yaml`, `timer_tool.py`, `test_timers_live.py`)
+- `sounds/timer.wav`, `sounds/alarm.wav`
+- `docs/timers-and-alarms.md` (this file)
+
+Changed:
+
+- `bridge/announce.py`: the `/timers` route, and the optional `sound` field
+- `bridge/loop.py` or the service entry point: start the timer task with the bridge
+- `README.md`: a line pointing here
+
+Unchanged on purpose: anything in the Hermes checkout. This feature adds no patch.
+
+## Tests and acceptance
+
+Offline, no device, run before anything is deployed:
+
+- `parse_duration` accepts every spoken form listed above and refuses nonsense.
+- A timer with a past deadline fires exactly once on load and logs its lateness.
+- Overlapping timers fire in deadline order.
+- `timer_cancel` by label matches case-insensitively and only the intended timer.
+- `alarm_list` returns only `alarm:`-prefixed jobs from a fixture `jobs.json` that also contains
+  ordinary jobs, which is the requirement in the request.
+
+Live, done once by hand with a 10-second timer and a person listening:
+
+1. "Set a timer for 10 seconds." The reply comes back and the LEDs behave as normal.
+2. The tone and the words arrive 10 seconds later, after any answer has finished speaking.
+3. "What timers are running?" answers with the remaining seconds.
+4. A timer set while a long answer is being spoken waits its turn instead of talking over it.
+
+## Open decisions for Angela
+
+1. **Should an alarm ring until silenced, or announce once like a timer?** The recommendation is
+   to ship once-only first and add ringing as a deliberate second phase.
+2. **If the bridge is down when an alarm fires, do we want a Telegram note, or silence?**
+3. **Should timers survive a bridge restart, or clear on restart?** The recommendation is survive,
+   with late ones firing immediately.
+4. **Do we want the instant local phrase path for timers?** The bridge already answers a small set
+   of literal phrases without a model call. Adding "set a timer for ..." to it would cut the
+   latency to near zero but also means the timer name and duration are parsed by our own code
+   rather than the model. My recommendation is to skip it in version one and measure first, since
+   the extra step is only the tool-search detour.
+5. **How many timers at once?** Suggested cap is 10.
+
+## Traps worth writing down before the code exists
+
+- **A bare clock time is refused by the cron parser.** Anything composing an alarm schedule must
+  produce `weekdays at 6:30am`, `every day at 7am`, or an ISO timestamp. This will be the most
+  common first bug, because "set an alarm for 6:30" is what a person says.
+- **A timer must never play directly to the satellite.** It goes through `/announce` or it will
+  fight the conversation loop for the single `aplay`.
+- **An alarm is invisible to `alarm_list` if its name lacks the prefix.** A future session adding
+  an alarm by hand must use `alarm: ...`, or the "what alarms are running" question will lie by
+  omission.
+- **Never let a timer or alarm be treated as a chatty notification.** If a future session starts
+  wiring status updates to the same endpoint, the sound stops meaning anything, which was the
+  whole point of the feature.
+- **Do not put the announce token in a log, a note, or a chat message.** The helper reads it from
+  the state file.
+
+## Suggested order of work
+
+1. `parse_duration` and the timer store, with tests. No hardware, no announcements.
+2. The `/timers` endpoint and the scheduler task, firing through the existing announce path.
+3. The plugin, so the assistant can set and list timers.
+4. The two tones, and the `sound` field on `/announce`.
+5. Alarms: `alarm_fire.py`, the name convention, and `alarm_list`.
+6. The live acceptance run, once, with someone in the room.
