@@ -153,6 +153,10 @@ expectation, 2026-09-23: a feature enhancement belongs on the Issues page, not o
 | [#7](https://github.com/omgitsgela/hermes-voice-satellite/issues/7) | Buy and test the shortlisted devices |
 | [#8](https://github.com/omgitsgela/hermes-voice-satellite/issues/8) | Evaluate their sound assets and stop model |
 | [#9](https://github.com/omgitsgela/hermes-voice-satellite/issues/9) | The DKMS build-versus-installed warning |
+| [#10](https://github.com/omgitsgela/hermes-voice-satellite/issues/10) | Volume control by voice, with a hard floor that is never zero |
+
+#10 is Angela's own request rather than a gap against the successor project, and it is filed
+here all the same: this index is the list of what we intend to build, whatever the source of the idea.
 
 Keep both places in step: this document carries the reasoning, the issues carry the work. When an
 issue is opened, link it here; when an idea arrives that is not already an issue, file it.
