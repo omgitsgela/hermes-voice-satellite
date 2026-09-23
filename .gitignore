@@ -21,3 +21,4 @@ __pycache__/
 *.bak-*
 *.bak-wakeword-*
 *.pre-*
+.worktrees/
