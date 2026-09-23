@@ -159,6 +159,28 @@ class SatelliteClient:
             await self._client.disconnect()
         _LOGGER.info("disconnected from %s:%s", self.host, self.port)
 
+    async def reconnect(self) -> None:
+        """Reopen the socket without restarting the process or reloading the models.
+
+        Angela, 2026-09-23. The bridge used to exit on the hourly wake-word timeout, so systemd
+        restarted it: the connect tone played every hour, whisper and Piper reloaded (about 640 MB
+        churn), and the device was deaf for roughly nine seconds. Refreshing in place does the same
+        job with none of that.
+
+        `_eof` must be cleared and the stale queue drained, or the fresh link reports itself dead
+        immediately and the caller loops. A brand new client is used rather than reusing the old
+        one, so no half-closed state can survive the swap.
+        """
+        await self.close()
+        self._client = AsyncTcpClient(self.host, self.port, connect_timeout=10.0)
+        self._eof = False
+        while True:
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        await self.connect()
+
     async def __aenter__(self) -> "SatelliteClient":
         await self.connect()
         return self

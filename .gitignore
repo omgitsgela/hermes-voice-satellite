@@ -1,12 +1,23 @@
-# never commit these
-state/              # announce token and runtime flags
+# Runtime state and build artifacts. Never commit these.
+#
+# One pattern per line, and NO trailing comments on a pattern line. gitignore does not support
+# them: an earlier version of this file had comments after the patterns, which made the comment
+# part of the pattern, so nothing here matched anything. Verify with:
+#     git check-ignore -v state logs voices .venv
+state/
 logs/
-audio/              # capture scratch
-voices/             # 61 MB of Piper models, downloadable
+audio/
+voices/
 .venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+.mypy_cache/
+
+# Local edits and backups people leave behind
+*.orig
 *.orig.bak
+*.bak
 *.bak-*
 *.bak-wakeword-*
+*.pre-*

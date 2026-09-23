@@ -2,10 +2,16 @@
 
 Recorded 2026-09-23. **Why this file exists:** we run upstream voice satellite software that is now
 archived, and we had already modified it. One modification was a 7-line edit to the satellite's own
-core file living only as an uncommitted change on the Pi, and this repo's copy of that file was
-stale, so it no longer matched what was actually deployed. If that card had died, the fix would have
+core file living only as an uncommitted change on the Pi. If that card had died, the fix would have
 been gone and the symptom would have come back with no obvious cause. Everything in the running
 stack is now pinned, vendored, or written down here.
+
+**Correction, 2026-09-23.** An earlier version of this file said the repo's copy of the satellite
+core was stale. It was not. A sync script matched files by *filename* instead of by path, so it
+wrote the bridge's client over the repo's copy of the satellite core (1397 lines replaced by 438).
+The repo had been correct all along; the damage was self-inflicted by the sync method. Fixed, and
+the lesson is why the live tree is now a git checkout rather than a hand-synced copy: **match paths,
+never filenames.**
 
 Angela's direction, 2026-09-23: "at this point, we are taking inspiration from other projects, and
 we will build and develop the future on our own."
