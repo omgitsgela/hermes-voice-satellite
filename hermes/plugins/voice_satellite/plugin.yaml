@@ -1,0 +1,7 @@
+name: voice_satellite
+version: 1.0.0
+description: "Control for the wyoming1 voice satellite: follow-up mode on, off or status, through the bridge's authenticated settings endpoint. Lets the assistant act on any natural phrasing instead of the bridge matching one literal phrase."
+author: angela
+kind: standalone
+provides_tools:
+  - voice_satellite

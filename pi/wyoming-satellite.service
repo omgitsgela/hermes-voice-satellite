@@ -1,0 +1,39 @@
+[Unit]
+# Retry calmly and without a rate limit. A cold boot can lose the wake-word race more than
+# once, and the previous policy (RestartSec=1 plus a limit of 5 starts in 10s) left the
+# unit abandoned and dead until a power cycle. Unbounded is safe now that the power-on
+# tone is gated to once per boot, so a retry loop is silent.
+StartLimitIntervalSec=0
+Description=Wyoming Satellite
+Wants=network-online.target
+After=network-online.target
+Requires=wyoming-openwakeword.service
+After=wyoming-openwakeword.service
+Requires=2mic_leds.service
+After=2mic_leds.service
+
+
+[Service]
+Type=simple
+WorkingDirectory=/home/wyoming1/wyoming-satellite
+ExecStartPre=-/bin/sh -c 'test -e /run/wyoming-power-on-said || { touch /run/wyoming-power-on-said; exec /usr/bin/aplay -D plughw:CARD=seeed2micvoicec,DEV=0 /home/wyoming1/sounds/power-on.wav; }'
+# led_cmd.py is a safety net, not the main path. The bridge publishes led-busy and led-idle
+# itself, because a hook here cannot tell the bridge's "One moment." filler from the real
+# answer (both arrive as AudioStart), which ended the pulse a second after it started. This
+# hook still ends the pulse after any playback completes, covering error paths and
+# announcements. Loopback only, so nothing new is exposed to the LAN.
+ExecStart=/home/wyoming1/wyoming-satellite/script/run --name 'wyoming1' --uri 'tcp://0.0.0.0:10700' \
+    --mic-command 'arecord -D plughw:CARD=seeed2micvoicec,DEV=0 -r 16000 -c 1 -f S16_LE -t raw' \
+    --snd-command 'aplay -D plughw:CARD=seeed2micvoicec,DEV=0 -r 22050 -c 1 -f S16_LE -t raw' \
+    --wake-uri 'tcp://127.0.0.1:10400' \
+    --wake-word-name 'ok_nabu' \
+    --event-uri 'tcp://127.0.0.1:10500' \
+    --awake-wav /home/wyoming1/sounds/awake.wav \
+    --done-wav /home/wyoming1/sounds/done.wav \
+    --mic-seconds-to-mute-after-awake-wav 0.1 \
+    --tts-played-command '/usr/bin/python3 /home/wyoming1/wyoming-satellite/examples/led_cmd.py idle'
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

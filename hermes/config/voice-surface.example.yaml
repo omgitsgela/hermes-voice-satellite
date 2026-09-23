@@ -1,0 +1,43 @@
+# Voice-surface configuration, as used by the reference installation.
+# Copy the keys you need into ~/.hermes/config.yaml. Contains no secrets.
+#
+# The plugins must ALSO be enabled by name, or discovery never sees them and their toolsets
+# resolve to nothing:
+#   hermes plugins enable voice_satellite     (and hubitat, google, geolocation)
+
+plugins:
+  enabled:
+    - geolocation
+    - google
+    - hubitat
+    - voice_satellite
+  entries:
+    voice_satellite:
+      allow_tool_override: false
+
+# What the voice surface is allowed to see. Deliberately narrow, and deliberately without
+# `safe` (which brings image_gen, the one deferrable tool that drags in the tool_search bridge).
+platform_toolsets:
+  api_server:
+    - geolocation
+    - google
+    - hubitat
+    - skills_read
+    - voice_satellite
+    - web
+
+gateway:
+  api_server:
+    host: 127.0.0.1        # loopback ONLY. This is a full agent surface with tool access.
+    port: 8642
+    model_routes:
+      voice:                # what answers on the device. Must be a provider that is not the
+        provider: deepseek  # global default, or patch 0003 matters (see hermes/patches/README.md).
+        model: deepseek-flash
+
+# Hermes' own TTS/STT, for other platforms. The voice bridge runs its own Piper and
+# faster-whisper inside its own virtualenv and ignores these.
+tts:
+  provider: piper
+stt:
+  provider: local

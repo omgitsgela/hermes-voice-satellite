@@ -1,0 +1,13 @@
+diff --git a/cron/jobs.py b/cron/jobs.py
+index 98e26aa0b2..39b5ad4250 100644
+--- a/cron/jobs.py
++++ b/cron/jobs.py
+@@ -1692,7 +1692,7 @@ def _compute_provider_model_snapshots(
+             if normalized_base_url:
+                 runtime_kwargs["explicit_base_url"] = normalized_base_url
+             snap = resolve_runtime_provider(**runtime_kwargs)
+-            provider_snapshot = str(snap.get("provider") or "").strip().lower() or None
++            provider_snapshot = str(snap.get("requested_provider") or snap.get("provider") or "").strip().lower() or None
+     if normalized_model is None:
+         with contextlib.suppress(Exception):
+             model_snapshot = _resolve_default_model_snapshot() or None

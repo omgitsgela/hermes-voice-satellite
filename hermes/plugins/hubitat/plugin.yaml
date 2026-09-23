@@ -1,0 +1,7 @@
+name: hubitat
+version: 1.0.0
+description: "Hubitat Maker API control: read sensors and control lights, switches, plugs, fans and the thermostat. Never touches locks. Built as a plugin tool so the voice surface can reach the house without a terminal."
+author: angela
+kind: standalone
+provides_tools:
+  - hubitat

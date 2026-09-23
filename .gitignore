@@ -1,0 +1,12 @@
+# never commit these
+state/              # announce token and runtime flags
+logs/
+audio/              # capture scratch
+voices/             # 61 MB of Piper models, downloadable
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.orig.bak
+*.bak-*
+*.bak-wakeword-*

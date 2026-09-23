@@ -1,0 +1,196 @@
+"""Bridge configuration for the wyoming1 voice satellite.
+
+The satellite is a Wyoming *server*: we dial out to it. All audio processing
+(VAD, STT, TTS) happens here on `autumn`; the Pi only does mic capture,
+wake word, and playback.
+"""
+
+from pathlib import Path
+
+# --- the satellite ---------------------------------------------------------
+SATELLITE_HOST = "192.168.0.149"
+SATELLITE_PORT = 10700
+
+# Taken from the satellite's own ExecStart flags, so these are its real formats:
+#   --mic-command 'arecord -D plughw:CARD=seeed2micvoicec,DEV=0 -r 16000 -c 1 -f S16_LE -t raw'
+#   --snd-command 'aplay  -D plughw:CARD=seeed2micvoicec,DEV=0 -r 22050 -c 1 -f S16_LE -t raw'
+MIC_FORMAT = (16000, 2, 1)   # rate Hz, width bytes, channels  -> what the mic sends us
+SND_FORMAT = (22050, 2, 1)   # what aplay expects from us
+
+# --- local paths -----------------------------------------------------------
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+VOICES_DIR = PROJECT_DIR / "voices"
+PIPER_VOICE_NAME = "en_US-hfc_male-medium"          # Angela's pick; also Hermes' platform voice
+VOICE_MODEL = VOICES_DIR / f"{PIPER_VOICE_NAME}.onnx"
+VOICE_CONFIG = VOICES_DIR / f"{PIPER_VOICE_NAME}.onnx.json"
+AUDIO_OUT = PROJECT_DIR / "audio"
+
+# --- the Hermes gateway's API server (loopback only) -----------------------
+GATEWAY_BASE_URL = "http://127.0.0.1:8642"      # loopback; never exposed to the LAN
+GATEWAY_ENV_FILE = Path.home() / ".hermes" / ".env"
+GATEWAY_API_KEY_VAR = "API_SERVER_KEY"
+VOICE_ROUTE_ALIAS = "voice"        # gateway.api_server.model_routes.voice -> cerebras qwen-3.8-27b
+VOICE_SESSION_ID = "voice-wyoming1"  # stable id, so the assistant has continuity
+
+# How long a wake keeps the mic open while the bridge waits for a real utterance. A blip (the
+# satellite's wake chime leaking into the mic, a cough, a lip smack) no longer ends the
+# activation, so this is the only bound on an activation where nobody actually speaks. Chosen
+# 2026-09-22 after Michael reported the activation closing before he could speak.
+CAPTURE_ACTIVATION_SECONDS = 30.0
+
+# --- follow-up mode: keep listening after an answer --------------------------
+# Angela's request, 2026-09-22: a control mode which, when on, makes the device listen again
+# straight after it finishes speaking, so continuing a conversation does not need the wake word
+# every turn. Off by default, because it changes how the device behaves in the room, and persisted
+# so it survives a restart and can be flipped by voice, by a script, or by a cron job.
+FOLLOW_UP_SECONDS = 15.0          # Angela's number: about fifteen seconds of listening
+FOLLOW_UP_SETTLE_SECONDS = 0.6    # let the speaker and the room go quiet before opening the mic
+FOLLOW_UP_MAX_TURNS = 10          # a chain longer than this is a runaway, not a conversation
+
+# How long to wait before asking a second time for the microphone. The injected wake detection is
+# occasionally not acted on by the satellite (measured 2026-09-22: one follow-up window opened the
+# microphone, the next did not, with identical commands). A satellite that is already streaming
+# ignores the request before it would chime or flash its lights, so asking twice costs nothing and
+# matters only when the first request did not take.
+FOLLOW_UP_WAKE_RETRY_SECONDS = 1.5
+
+# How long a follow-up window stays deaf before it starts listening.
+#
+# Opening the microphone means injecting a wake detection, which makes the satellite play its awake
+# chime, and the window's own microphone hears that chime and its room echo. Angela hit the result on
+# 2026-09-22: "it was responding to its own boop sound effect as if it was a conversation". The
+# satellite already mutes its mic across the chime itself (0.4 s plus a 0.1 s margin), but that leaves
+# the echo, and a 0.2-0.3 s burst of echo is long enough to pass the endpointer as an utterance.
+#
+# Ignoring the first moment of the window is the targeted fix: it applies only here, so the normal
+# wake-word path keeps its existing behaviour, and it costs nothing real, because nobody can be
+# understood over a chime that is still ringing.
+FOLLOW_UP_QUIET_SECONDS = 1.2
+FOLLOW_UP_STATE_FILE = PROJECT_DIR / "state" / "follow-up-on"
+# Published while a follow-up window is open, so the device shows that it is listening for a reply
+# of its own accord rather than looking switched off. Handled by 2mic_leds on the Pi.
+FOLLOW_UP_LED = "led-followup"
+
+# The phrase sets for the bridge-local controls. Deliberately literal: a mis-heard toggle would
+# change how the device behaves in the room, and anything more conversational belongs to the
+# assistant, which is slower but can cope with it.
+FOLLOW_UP_ON_PHRASES = (
+    "turn on follow up mode", "turn follow up mode on", "turn follow up on", "follow up mode on",
+    "follow up on", "enable follow up mode", "start follow up mode", "switch on follow up mode",
+)
+FOLLOW_UP_OFF_PHRASES = (
+    "turn off follow up mode", "turn follow up mode off", "turn follow up off", "follow up mode off",
+    "follow up off", "disable follow up mode", "stop follow up mode", "stop following up",
+    "switch off follow up mode", "end follow up mode",
+)
+# "Stop" ends the current follow-up conversation and hands the device back to waiting for its wake
+# word, WITHOUT switching follow-up mode off: the next conversation follows up again. Angela asked for
+# exactly this on 2026-09-22 ("ok nabu stop should be a way to stop the current follow up conversation,
+# but leave it open to retrigger again").
+#
+# Matched as the WHOLE utterance, never as a substring: "stop" is an ordinary word, and a substring
+# match would swallow "stop the sprinklers" and answer it with "Stopping.". The wake-word forms are
+# here because the satellite strips the wake word from the audio it sends, but not always.
+# A stop is only recognised as a whole utterance: an optional lead-in (STOP_PREFIXES) followed by
+# exactly one of STOP_CORES. That is what lets "will you stop" and "stop listening to me" through
+# while leaving "stop the sprinklers" and "stop by the store later" to the model, where they belong.
+STOP_PREFIXES = (
+    "ok", "okay", "please", "hey", "now", "just", "and", "so", "um", "alright", "all right",
+    "will you", "could you", "can you", "would you", "do you mind if you",
+    "okay now", "ok now", "okay now will you", "now will you", "can you please", "please just",
+)
+STOP_CORES = (
+    "stop", "stop it", "stop now", "stop it now", "stop that", "stop already", "stop please",
+    "stop listening", "stop listening to me", "stop talking", "stop talking to me",
+    "stop following me", "stop replying", "please stop", "just stop",
+    "ok nabu stop", "okay nabu stop", "hey nabu stop", "nabu stop",
+    "quiet", "be quiet", "hush", "shush", "shut up", "silence", "enough", "that's enough",
+    "that's all", "that is all", "that'll be all", "that's it", "never mind", "nevermind",
+    "we're done", "we are done", "i'm done", "im done", "i am done",
+    "goodbye", "bye", "good night", "goodnight",
+)
+
+FOLLOW_UP_STATUS_PHRASES = (
+    "is follow up mode on", "is follow up on", "follow up mode status", "check follow up mode",
+)
+
+# Spoken answers: everything a small speaker cannot convey is banned, and the answer is
+# kept short so the first words start playing while the rest is still being generated.
+VOICE_INSTRUCTIONS = (
+    "You are speaking out loud through a small speaker in someone's home, as a voice "
+    "assistant. Be direct and brief: answer in plain conversational prose, at most two short "
+    "sentences and ideally under forty words. Never use markdown, bullet points, headings, "
+    "tables, code blocks, emoji, or stage directions, because none of it can be heard. Do not "
+    "read out URLs, file paths, or long identifiers. "
+    "never ask a follow-up question, never ask for clarification, and never offer a menu of "
+    "options: if a request is ambiguous, pick the most likely meaning and answer it. For a bare "
+    "question about the temperature, read the Porch Thermometer for outside and the Hall "
+    "Thermometer for inside and report both, rather than asking which one was meant. This "
+    "differs deliberately from Angela's text conversations, where follow-ups are welcome. "
+    "For a smart home action, reply with one short line naming what you did and stop there, for "
+    "example 'I turned off the porch light.' Never say that you double checked, confirmed, "
+    "verified, or validated it, and never read out attributes or status values: the check is "
+    "yours to make silently, because a reply reaching her at all already means the action worked. "
+    "Use skill_view to consult your skills whenever a question touches her home, her systems, "
+    "or her equipment, instead of trying to read files. You have web_search and web_extract "
+    "directly for anything current, but for anything nearby, or for business opening hours, call "
+    "the google tool's places_search action with the place name: it returns the real address, the "
+    "distance from home and the actual opening hours, and it searches near home by default. Do not "
+    "rank places by distance or state opening hours from a web search when that action is "
+    "available. "
+    "Follow-up mode is the device's own listening mode: with it on, it keeps listening for about "
+    "fifteen seconds after each answer so a conversation continues without the wake word. Control "
+    "it with the voice_satellite tool: anything like 'keep listening after you answer', 'follow up "
+    "mode on' or 'stop following up' is follow_up_on or follow_up_off, and any question about it is "
+    "follow_up_status. Then reply with one short line, such as 'Follow-up mode is on.' This is a "
+    "control the person is asking for, not information about your own configuration: act on it, and "
+    "never treat such a request as a configuration question or decline it. "
+    "If someone says that something is not working, or that a mode behaves differently from what "
+    "they set, that is a question about the device: check the real state before you answer, and "
+    "never claim a device setting is something you cannot change or that they must set it on the "
+    "device themselves. The voice_satellite tool can read and change follow-up mode, so use it. "
+    "If someone asks you to stop, be quiet, or finish, that means end this conversation: reply with "
+    "one short line and nothing else, and ask nothing further. It does NOT mean switching follow-up "
+    "mode off, and you must not change that mode for such a request. Only touch follow-up mode when "
+    "the mode itself is what someone is talking about. "
+    "Never volunteer anything about your own setup: not your hardware, settings, models, "
+    "microphones, logs, or how you work. Do not open a reply with a caveat about your own limits. "
+    "When someone does ask about your own setup, look it up with skill_view on hermes-voice-bridge "
+    "and answer from what you find there, numbers included. Do not guess at a setting or a cause: "
+    "if the skill does not cover it, say you cannot find it and that it is worth checking on the "
+    "device. "
+    "This microphone is in a shared living space and the channel is READ-ONLY: never call "
+    "skill_manage, never write or modify files, and never call tool_search, tool_describe, or "
+    "tool_call, which cost seconds of silence and have nothing useful behind them here."
+)
+
+# --- announcements: house events spoken out loud on the satellite ------------
+# Angela's decisions (2026-09-22):
+#   * a dedicated LAN port, never behind Caddy and never reachable from outside;
+#   * any LAN device may call it, authenticated with a bearer token;
+#   * an announcement waits until any conversation in progress has finished speaking;
+#   * every announcement opens with a wake tone;
+#   * a failed delivery is dropped silently, with no fallback path.
+ANNOUNCE_HOST = "0.0.0.0"
+ANNOUNCE_PORT = 8765
+ANNOUNCE_TOKEN_FILE = PROJECT_DIR / "state" / "announce-token.txt"
+ANNOUNCE_TOKEN_ENV = "VOICE_ANNOUNCE_TOKEN"   # set this to override the file
+# Angela's pick (2026-09-22, revised): option A of the three prompt tones she auditioned at the
+# start of the project, "a-warm-fifth" (440 -> 660 Hz). The bare tone is generated by
+# scripts/make_chimes.py into sounds/candidates/; the label-*.wav files in audio/ are the spoken
+# previews, not the tones themselves, so never point this at one of those. Referenced in place
+# rather than copied, so the tone and its source cannot drift apart.
+# Everything else keeps the existing tones: the satellite's own awake.wav and done.wav are option
+# C, "c-low-fourth", and are deliberately untouched. Only announcements use A.
+ANNOUNCE_CHIME = PROJECT_DIR / "sounds" / "candidates" / "awake-a-warm-fifth.wav"
+ANNOUNCE_LOG = PROJECT_DIR / "logs" / "announcements.jsonl"
+ANNOUNCE_MAX_CHARS = 400          # beyond this a spoken announcement is almost certainly a bug
+ANNOUNCE_MAX_QUEUE = 5            # beyond this callers get 503 and the text is dropped
+ANNOUNCE_DEDUP_SECONDS = 60.0     # same source + same text inside this window is ignored
+ANNOUNCE_TURN_MAX_AGE = 180.0     # a turn "active" longer than this means the flag went stale
+
+# Startup feedback for the device itself. It has no power light and no connection light, so Angela
+# asked to be able to hear both (2026-09-22). power-on.wav is played by the satellite service on the
+# Pi; connected.wav is played by this bridge the moment the link is up, because only the host knows
+# that. See scripts/make_chimes.py for the two designs.
+CONNECTED_TONE = PROJECT_DIR / "sounds" / "connected.wav"

@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""Prove the wake shim relays faithfully and can open the microphone on request.
+
+No device, no wake word, no network beyond loopback: a fake wake service and a fake satellite stand in
+for the real ones.
+
+What matters, in order of how badly it would hurt if it broke:
+
+  * the satellite's audio reaches the wake service byte for byte (wake detection depends on it);
+  * an event from the wake service reaches the satellite intact, payload included;
+  * a requested injection arrives as a valid `detection` event;
+  * an injection never corrupts a relayed event (this is why the upstream direction is
+    event-at-a-time rather than a byte copy);
+  * with no satellite connected, the control port says so instead of pretending;
+
+    /home/angela/hermes-voice-bridge/.venv/bin/python test_wake_shim.py
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from wake_shim import WakeShim  # noqa: E402
+
+PROBLEMS = 0
+
+
+def check(label: str, ok: bool, detail: str = "") -> None:
+    global PROBLEMS
+    print(f"   {'OK  ' if ok else 'FAIL'} {label}{(' -- ' + str(detail)) if detail else ''}")
+    if not ok:
+        PROBLEMS += 1
+
+
+async def start(handler, host="127.0.0.1"):
+    server = await asyncio.start_server(handler, host, 0)
+    return server, server.sockets[0].getsockname()[1]
+
+
+class FakeWakeService:
+    """Stands in for wyoming-openwakeword: reports what it received, can send events."""
+
+    def __init__(self):
+        self.received = bytearray()
+        self.sat_writers = []
+        self.server = None
+        self.port = 0
+
+    async def handle(self, reader, writer):
+        self.sat_writers.append(writer)
+        try:
+            while True:
+                data = await reader.read(65536)
+                if not data:
+                    break
+                self.received.extend(data)
+        except (ConnectionResetError, OSError):
+            pass
+
+    async def start(self):
+        self.server, self.port = await start(self.handle)
+
+    async def send_event(self, event: dict, payload: bytes = b"") -> None:
+        writer = self.sat_writers[-1]
+        line = json.dumps(event).encode() + b"\n"
+        if payload:
+            writer.write(line + payload)
+        else:
+            writer.write(line)
+        await writer.drain()
+
+
+class FakeSatellite:
+    """Stands in for the satellite: sends bytes, collects everything it receives."""
+
+    def __init__(self, reader, writer):
+        self.reader = reader
+        self.writer = writer
+        self.events = []
+
+    @classmethod
+    async def connect(cls, port):
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        return cls(reader, writer)
+
+    async def collect(self, seconds: float) -> None:
+        """Read events the way the satellite does: a JSON line, then any declared payload.
+
+        Honouring data_length/payload_length is what keeps event boundaries straight: without it the
+        payload bytes are read as if they were the next line, and a later event looks glued to them.
+        """
+        end = asyncio.get_running_loop().time() + seconds
+        while asyncio.get_running_loop().time() < end:
+            try:
+                line = await asyncio.wait_for(self.reader.readline(), timeout=0.2)
+            except asyncio.TimeoutError:
+                continue
+            if not line:
+                return
+            try:
+                event = json.loads(line)
+            except ValueError:
+                self.events.append({"raw": line.decode(errors="replace")})
+                continue
+            for key in ("data_length", "payload_length"):
+                length = event.get(key)
+                if isinstance(length, int) and length > 0:
+                    body = await self.reader.readexactly(length)
+                    event["_payload_bytes"] = event.get("_payload_bytes", 0) + len(body)
+            self.events.append(event)
+
+
+async def send_control(port: int, command: str) -> str:
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    writer.write((command + "\n").encode())
+    await writer.drain()
+    reply = (await asyncio.wait_for(reader.readline(), timeout=5.0)).decode().strip()
+    writer.close()
+    return reply
+
+
+async def main() -> int:
+    print("=== WAKE SHIM (loopback only) ===")
+
+    wake = FakeWakeService()
+    await wake.start()
+
+    shim = WakeShim(listen_host="127.0.0.1", listen_port=0,
+                    upstream_host="127.0.0.1", upstream_port=wake.port,
+                    control_host="127.0.0.1", control_port=0, wake_name="ok_nabu")
+    listen_server, listen_port = await start(shim.handle_satellite)
+    control_server, control_port = await start(shim.handle_control)
+
+    # 1. The satellite's audio must reach the wake service byte for byte.
+    sat = await FakeSatellite.connect(listen_port)
+    audio = json.dumps({"type": "audio-chunk", "data": {"rate": 16000},
+                        "payload_length": 320}).encode() + b"\n" + b"\x01\x02" * 160
+    sat.writer.write(audio)
+    await sat.writer.drain()
+    for _ in range(40):
+        if len(wake.received) >= len(audio):
+            break
+        await asyncio.sleep(0.05)
+    check("the satellite's audio reaches the wake service unchanged",
+          bytes(wake.received) == audio, f"{len(wake.received)}/{len(audio)} bytes")
+
+    # 2. A wake service event must reach the satellite intact, payload included.
+    payload = b"\xaa\xbb" * 20
+    await wake.send_event({"type": "info", "data": {"note": "hello"}, "payload_length": len(payload)},
+                          payload)
+    await asyncio.sleep(0.2)
+    await sat.collect(0.6)
+    check("an event from the wake service arrives as one valid event",
+          any(e.get("type") == "info" and e.get("data", {}).get("note") == "hello"
+              for e in sat.events), sat.events[:3])
+
+    # 3. On request, a valid detection must arrive.
+    before = len(sat.events)
+    reply = await send_control(control_port, "wake")
+    await sat.collect(0.6)
+    new = [e for e in sat.events[before:] if e.get("type") == "detection"]
+    check("the control port reports success", reply == "ok", repr(reply))
+    check("a synthetic detection arrives, named for the wake word",
+          len(new) == 1 and new[0].get("data", {}).get("name") == "ok_nabu", new)
+    check("the shim counted the injection", shim.injections == 1, shim.injections)
+
+    # 4. An injection must not corrupt a relayed event. Send a payload event and inject at once.
+    before = len(sat.events)
+    payload2 = b"\x11\x22" * 64
+    await asyncio.gather(
+        wake.send_event({"type": "info", "data": {"note": "concurrent"},
+                         "payload_length": len(payload2)}, payload2),
+        send_control(control_port, "wake"),
+    )
+    await asyncio.sleep(0.2)
+    await sat.collect(0.8)
+    fresh = sat.events[before:]
+    intact = any(e.get("type") == "info" and e.get("data", {}).get("note") == "concurrent"
+                 for e in fresh)
+    detections = sum(1 for e in fresh if e.get("type") == "detection")
+    check("an injection alongside a relayed event: the relayed event survives", intact, fresh[:4])
+    check("an injection alongside a relayed event: the detection still arrives",
+          detections >= 1, f"detections={detections}")
+
+    # 5. A rejected command must not open the microphone.
+    reply = await send_control(control_port, "please listen")
+    check("an unknown control command is refused", reply.startswith("usage"), repr(reply))
+
+    sat.writer.close()
+    await asyncio.sleep(0.2)
+
+    # 6. With no satellite connected, say so rather than pretending.
+    shim._sat_writer = None
+    reply = await send_control(control_port, "wake")
+    check("with no satellite it reports no-satellite", reply == "no-satellite", repr(reply))
+
+    # 7. Everything is bound to loopback.
+    from wake_shim import (DEFAULT_CONTROL_HOST, DEFAULT_LISTEN_HOST, DEFAULT_UPSTREAM_HOST)
+    check("default hosts are all 127.0.0.1",
+          {DEFAULT_LISTEN_HOST, DEFAULT_CONTROL_HOST, DEFAULT_UPSTREAM_HOST} == {"127.0.0.1"},
+          (DEFAULT_LISTEN_HOST, DEFAULT_CONTROL_HOST, DEFAULT_UPSTREAM_HOST))
+
+    listen_server.close()
+    control_server.close()
+    wake.server.close()
+    print(f"\n=== {'ALL CHECKS PASSED' if PROBLEMS == 0 else f'{PROBLEMS} PROBLEM(S)'} ===")
+    return 1 if PROBLEMS else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(asyncio.run(main()))

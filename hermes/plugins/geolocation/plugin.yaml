@@ -1,0 +1,7 @@
+name: geolocation
+version: 1.0.0
+description: "Open-data geolocation tool (geolocate): resolves ordinary location wording to GPS coordinates using local Colorado CDOT/crossroads evidence plus open geocoding. Never uses Google Places."
+author: angela
+kind: standalone
+provides_tools:
+  - geolocate

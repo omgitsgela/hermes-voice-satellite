@@ -1,0 +1,20 @@
+# /etc/systemd/system/wyoming-satellite.service
+[Unit]
+Description=Wyoming Satellite
+Wants=network-online.target
+After=network-online.target
+Requires=wyoming-openwakeword.service
+After=wyoming-openwakeword.service
+Requires=2mic_leds.service
+After=2mic_leds.service
+
+
+[Service]
+Type=simple
+WorkingDirectory=/home/wyoming1/wyoming-satellite
+ExecStart=/home/wyoming1/wyoming-satellite/script/run --name 'wyoming1' --uri 'tcp://0.0.0.0:10700' --mic-command 'arecord -D plughw:CARD=seeed2micvoicec,DEV=0 -r 16000 -c 1 -f S16_LE -t raw' --snd-command 'aplay -D plughw:CARD=seeed2micvoicec,DEV=0 -r 22050 -c 1 -f S16_LE -t raw' --wake-uri 'tcp://127.0.0.1:10400' --wake-word-name 'ok_nabu' --event-uri 'tcp://127.0.0.1:10500'
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=default.target

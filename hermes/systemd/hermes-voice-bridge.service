@@ -1,0 +1,22 @@
+[Unit]
+Description=Hermes Voice Bridge - Wyoming satellite voice frontend
+After=network-online.target hermes-gateway.service
+Wants=network-online.target
+# The bridge dials the satellite on tcp/10700 and the Hermes API server on loopback 8642.
+# Deliberately no Requires=hermes-gateway: it retries by itself, so a gateway restart or an
+# update should not cascade into taking the bridge down with it.
+
+[Service]
+Type=simple
+WorkingDirectory=/home/angela/hermes-voice-bridge
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/angela/hermes-voice-bridge/.venv/bin/python -m bridge.loop
+Restart=always
+RestartSec=5
+# A turn can legitimately take a while (tool calls, a long spoken answer). Give it room to finish
+# rather than SIGKILLing mid-playback.
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=default.target

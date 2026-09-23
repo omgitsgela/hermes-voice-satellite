@@ -1,0 +1,35 @@
+diff --git a/model_tools.py b/model_tools.py
+index f0e56c19e2..a4c7c2d011 100644
+--- a/model_tools.py
++++ b/model_tools.py
+@@ -529,12 +529,24 @@ def _compute_tool_definitions(enabled_toolsets: Optional[List[str]] = None, disa
+         ts_cfg = _load_ts_config()
+         if not skip_tool_search_assembly and ts_cfg.enabled != "off":
+             assembly = assemble_tool_defs(filtered_tools, context_length=_resolve_active_context_length(), config=ts_cfg)
+-            if assembly.activated and not quiet_mode:
+-                print(f"🔎 Tool Search (tier {assembly.tier}): {assembly.deferred_count} "
+-                      f"MCP/plugin tools deferred (~{assembly.deferred_tokens} tokens) behind "
+-                      f"tool_search/describe/call — "
+-                      f"{_TOOL_SEARCH_LISTING_FORMS.get(assembly.listing_form, assembly.listing_form)}.")
+-            filtered_tools = assembly.tool_defs
++            # LOCAL PATCH (Angela, 2026-09-22): an EMPTY deferrable catalogue must not add the bridge.
++            #
++            # The bridge only earns its place when there is something behind it. On a locked-down
++            # surface where every tool is already core (the voice satellite's safe + skills_read +
++            # hubitat set, for example) assembly still activated and injected an empty
++            # tool_search/describe/call catalogue. The model then spent seconds poking at it: measured
++            # at 1.8 s inside one voice turn, with three pointless round trips, on a channel where
++            # silence is the most expensive thing there is.
++            #
++            # Deferring nothing means keeping the raw definitions, which is exactly what the
++            # no-assembly path returns anyway.
++            if assembly.activated and getattr(assembly, "deferred_count", 0) > 0:
++                if not quiet_mode:
++                    print(f"🔎 Tool Search (tier {assembly.tier}): {assembly.deferred_count} "
++                          f"MCP/plugin tools deferred (~{assembly.deferred_tokens} tokens) behind "
++                          f"tool_search/describe/call — "
++                          f"{_TOOL_SEARCH_LISTING_FORMS.get(assembly.listing_form, assembly.listing_form)}.")
++                filtered_tools = assembly.tool_defs
+     except Exception as e:  # pragma: no cover — never break tool loading
+         logger.warning("Tool search assembly skipped: %s", e)
+ 

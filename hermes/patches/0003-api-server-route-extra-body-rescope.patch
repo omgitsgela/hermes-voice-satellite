@@ -1,0 +1,50 @@
+diff --git a/gateway/platforms/api_server.py b/gateway/platforms/api_server.py
+index bdb7843627..ccb1ec4c97 100644
+--- a/gateway/platforms/api_server.py
++++ b/gateway/platforms/api_server.py
+@@ -2152,11 +2152,45 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
+         model = runtime_kwargs.pop("model", None) or _resolve_gateway_model()
+         request_reasoning_config = _request_reasoning_config(model_options)
+         request_service_tier = _request_service_tier(model_options)
++        # --- LOCAL PATCH (Angela, 2026-09-22) ---------------------------------------------
++        # Capture the PRE-selection runtime so a provider switch can be detected afterwards.
++        # See the extra_body re-scope immediately below.
++        _pre_provider = runtime_kwargs.get("provider")
++        _pre_base_url = runtime_kwargs.get("base_url")
++        # ----------------------------------------------------------------------------------
+         model, session_override, request_model, request_provider = self._select_agent_runtime(
+             runtime_kwargs, model,
+             requested_model=requested_model, requested_provider=requested_provider, route=route,
+             session_model=session_model, confirmed_runtime_lock=confirmed_runtime_lock,
+             gateway_session_key=gateway_session_key, session_id=session_id)
++        # --- LOCAL PATCH (Angela, 2026-09-22) ---------------------------------------------
++        # Re-scope extra_body when the route / per-request selection switched providers.
++        #
++        # The global runtime resolved above carries request_overrides containing the DEFAULT
++        # provider's custom_providers ``extra_body``. AIAgent init merges the matched
++        # provider's extra_body UNDER whatever is already there (existing wins), so a stale
++        # entry survives the switch and reaches the wrong upstream: the local qwen38
++        # provider's ``chat_template_kwargs: {preserve_thinking: true}`` was sent to Cerebras,
++        # which rejects that property outright (HTTP 400 ``wrong_api_format``) and silently
++        # fell the turn back to another provider while still returning HTTP 200.
++        #
++        # Mirrors the two paths that already handle this correctly:
++        #   agent_runtime_helpers (the /model switch) -> overrides.pop("extra_body", None)
++        #   chat_completion_helpers._rescope_fallback_extra_body (the fallback chain)
++        # Both drop the OLD provider's contribution and let init re-derive it for the provider
++        # that actually runs. Only ``extra_body`` is dropped here; service_tier / speed and any
++        # caller-supplied keys are preserved.
++        if (_pre_provider, _pre_base_url) != (runtime_kwargs.get("provider"), runtime_kwargs.get("base_url")):
++            _overrides = runtime_kwargs.get("request_overrides")
++            if isinstance(_overrides, dict) and "extra_body" in _overrides:
++                runtime_kwargs["request_overrides"] = {
++                    k: v for k, v in _overrides.items() if k != "extra_body"
++                }
++                logger.debug(
++                    "api_server: dropped stale extra_body on provider switch %s/%s -> %s/%s",
++                    _pre_provider, _pre_base_url,
++                    runtime_kwargs.get("provider"), runtime_kwargs.get("base_url"))
++        # ----------------------------------------------------------------------------------
+         user_config = _load_gateway_config()
+         enabled_toolsets = sorted(_get_platform_tools(user_config, "api_server"))
+         max_iterations = _current_max_iterations()
