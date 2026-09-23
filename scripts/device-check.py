@@ -45,17 +45,25 @@ def run(cmd: list[str], timeout: int = 10) -> str:
 
 
 def cards() -> list[dict]:
-    """The ALSA cards, as the kernel reports them."""
+    """The ALSA cards, as the kernel reports them.
+
+    Parsed line by line, not by blank-line blocks: /proc/asound/cards has no blank line between
+    entries, so block splitting collapses every card into one and reports only the first. That bug
+    made the first baseline report claim the device under test was HDMI audio. Card ids are stripped
+    of the kernel's column padding, because the unpadded name is what belongs in
+    `plughw:CARD=<id>`.
+    """
     out = []
-    text = Path("/proc/asound/cards").read_text() if Path("/proc/asound/cards").exists() else ""
-    for block in text.split("\n\n"):
-        block = block.strip()
-        if not block or not block[0].isdigit():
+    path = Path("/proc/asound/cards")
+    if not path.exists():
+        return out
+    for line in path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or not stripped[0].isdigit() or "[" not in stripped:
             continue
-        first = block.splitlines()[0]
-        idx = first.split()[0]
-        name = first.split("[", 1)[1].split("]", 1)[0] if "[" in first else "?"
-        out.append({"index": idx, "id": name, "raw": " ".join(first.split())})
+        idx = stripped.split()[0]
+        name = stripped.split("[", 1)[1].split("]", 1)[0].strip()
+        out.append({"index": idx, "id": name, "raw": stripped})
     return out
 
 
