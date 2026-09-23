@@ -15,8 +15,9 @@ Captured 2026-09-23 from the working device (`wyoming1`).
 
 ## Notes carried from the device
 
-- The driver is **not** installed with DKMS. A kernel upgrade removes the sound card until the driver
-  is rebuilt from this source. This is the most likely way the device breaks by itself.
+- The driver is **DKMS-installed** and rebuilds itself on kernel upgrades (`dkms.conf` sets
+  `AUTOINSTALL="yes"`). Verified 2026-09-23 by the loaded module's path under `updates/dkms/`. If a
+  future kernel ever fails to build it, this vendored source is the rollback.
 - The driver package supports more than our HAT: it ships device-tree overlays and asound state for
   **2, 4, 6 and 8 microphone** variants (`seeed-2mic-voicecard.dtbo`, `seeed-4mic-voicecard.dtbo`,
   `seeed-8mic-voicecard.dtbo`, `asound_4mic.conf`, `asound_6mic.conf`). Any ReSpeaker I2S HAT that

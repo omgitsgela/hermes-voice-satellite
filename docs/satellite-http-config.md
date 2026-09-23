@@ -161,7 +161,7 @@ Not to be raised again until she asks, by her instruction on 2026-09-23:
 New: `bridge/config_ui.py` (routes and validators), `bridge/static/settings.html`,
 `scripts/test_config_ui.py` (validators, allowlist, rollback logic), and a line in `README.md`.
 
-Changed: `bridge/announce.py` (mount the app), `pi-led/2mic_service.py` (a settings-apply event
+Changed: `bridge/announce.py` (mount the app), `pi/2mic_service.py` (a settings-apply event
 handler, reusing the existing forward-event path), and whatever sudoers allowlist the hardening
 produces.
 

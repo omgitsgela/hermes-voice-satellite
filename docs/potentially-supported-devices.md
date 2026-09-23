@@ -13,7 +13,7 @@ written down before the boxes arrive.
 | | Current device |
 |---|---|
 | Capture | Seeed ReSpeaker 2-Mics Pi HAT (I2S HAT), card `seeed2micvoicec`, codec `tlv320aic3x`, opened as `plughw:CARD=seeed2micvoicec` |
-| Driver | Seeed `seeed-voicecard` 0.3, built against kernel `6.12.109+rpt-rpi-v8`, **not DKMS**, so a kernel upgrade removes the card until it is rebuilt |
+| Driver | Seeed `seeed-voicecard` 0.3. **DKMS-installed** (verified 2026-09-23: loaded from `updates/dkms/`, `AUTOINSTALL="yes"`), so a kernel upgrade rebuilds it automatically |
 | Playback | the HAT's **speaker header**, which drives a speaker directly off the codec's amplifier. The same HAT also exposes a 3.5 mm jack; we are not using it. A Pi Zero 2 W has no analogue output of its own, so this HAT is what gives us sound at all. |
 | LEDs | 3 x APA102 on `/dev/spidev0.0`, driven by our own service |
 | Host | Pi Zero 2 W, 416 MB RAM, ~171 MB available, Debian 12 arm64, 64-bit |

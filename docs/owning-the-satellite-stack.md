@@ -87,11 +87,15 @@ real backstop and lives with the `remote-system-operations` procedure.
 
 ## Maintenance watch items
 
-- **Kernel upgrade breaks audio.** Rebuild the driver after any kernel change. This is worth
-  fixing properly rather than remembering: the vendored driver ships a `dkms.conf`, so installing it
-  with DKMS would make it rebuild automatically on every kernel upgrade. Angela's stated direction
-  (2026-09-23) is to keep the stack working across kernel updates, and this is the highest-value piece
-  of that work. **Not done yet: it is a change to the device and needs her go-ahead.**
+- **Kernel upgrade does not break audio: the driver is already DKMS.** Verified 2026-09-23: the
+  loaded module comes from `/lib/modules/<kernel>/updates/dkms/snd-soc-seeed-voicecard.ko.xz`, dkms
+  3.0.10 is installed, `/usr/src/seeed-voicecard-0.3/dkms.conf` carries `AUTOINSTALL="yes"`, and the
+  kernel post-install hook is in place, so a new kernel rebuilds the module automatically.
+  **Earlier versions of this file said the driver was not DKMS and that a kernel upgrade would
+  remove the sound card. That was wrong**, and it came from `which dkms` failing because `/usr/sbin`
+  is not on the PATH in a non-login SSH. Always use `/usr/sbin/dkms` on this host.
+  The vendored copy of the source in `pi/vendor/seeed-voicecard-0.3` still matters: it is the exact
+  version DKMS builds, and it is the rollback if a future DKMS build fails.
 - The upstream repo is archived, so there are no security fixes coming. Our exposure is limited by
   the device listening on only SSH and the Wyoming port, with everything else on loopback.
 - The Pi venv pins are recorded here and nowhere else. Re-freeze after any deliberate change.
