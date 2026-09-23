@@ -1,0 +1,21 @@
+# /etc/systemd/system/wake-shim.service
+[Unit]
+Description=Wake word shim (on-demand microphone release for follow-up mode)
+Wants=network-online.target
+After=network-online.target
+# The shim proxies the wake service, so that service should be up first. It is not Requires= on
+# wyoming-openwakeword because the shim retries its upstream connection on its own, and a wake
+# service restart must not take the microphone path down with it.
+After=wyoming-openwakeword.service
+Wants=wyoming-openwakeword.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/wyoming1/wyoming-satellite/examples
+# The satellite's virtualenv: this speaks the wyoming protocol and needs that package.
+ExecStart=/home/wyoming1/wyoming-satellite/.venv/bin/python3 /home/wyoming1/wyoming-satellite/examples/wake_shim.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

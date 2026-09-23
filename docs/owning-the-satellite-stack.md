@@ -1,0 +1,87 @@
+# Owning the satellite stack
+
+Recorded 2026-09-23. **Why this file exists:** we run upstream voice satellite software that is now
+archived, and we had already modified it. One modification was a 7-line edit to the satellite's own
+core file living only as an uncommitted change on the Pi, and this repo's copy of that file was
+stale, so it no longer matched what was actually deployed. If that card had died, the fix would have
+been gone and the symptom would have come back with no obvious cause. Everything in the running
+stack is now pinned, vendored, or written down here.
+
+Angela's direction, 2026-09-23: "at this point, we are taking inspiration from other projects, and
+we will build and develop the future on our own."
+
+## What is actually running, pinned
+
+| Component | Version | Where it came from |
+|---|---|---|
+| Satellite software | `wyoming-satellite` commit `13bb024`, tag `v1.4.1-4-g13bb024`, dated 2025-04-25 | `github.com/rhasspy/wyoming-satellite` (**archived upstream**) |
+| Wyoming library | `wyoming 1.5.4` | the satellite's venv, frozen in `pi/vendor/pi-venv-freeze.txt` |
+| Wake engine | `wyoming-openwakeword` 2.1.0, TFLite models only | system packages plus our custom model dir |
+| Wake model | `hey_hermes` (community model 2338), threshold 0.35 | `/home/wyoming1/wake-models`, named by filename stem |
+| Audio driver | Seeed `seeed-voicecard` 0.3, tree fingerprint `a77f9c72fca4aa38ad6e4775072b0d4aa385ebea0c36f904fce66e2c521aa61d` | `/usr/src/seeed-voicecard-0.3`, vendored here |
+| Operating system | Debian 12 bookworm, arm64, 64-bit | Raspberry Pi OS on a Pi Zero 2 W |
+| Kernel | `6.12.109+rpt-rpi-v8` | the driver is built against this exact kernel |
+| Audio hardware | card `seeed2micvoicec`, codec `tlv320aic3x`, opened as `plughw:CARD=seeed2micvoicec` | the Seeed 2-mic HAT |
+| LEDs | 3 x APA102 on `/dev/spidev0.0` | driven by our own service |
+
+## Our divergence from upstream, in full
+
+Captured as patches in `pi/vendor/`. Nothing here is upstream behaviour.
+
+1. **`wyoming_satellite/satellite.py`, 7 lines.** The done tone is now played with
+   `mute_microphone=True`, exactly as the awake tone already was. Without it the tone is captured as
+   speech: on 2026-09-22 the follow-up window opened 0.6 s after playback, the tone arrived about a
+   second later, was transcribed as "beep", and the device answered its own chime. This is the fix
+   for that, and it existed only on the device until now.
+2. **`examples/2mic_service.py`, +343 lines.** Our LED service, effectively entirely ours now:
+   boot pulse, wake colour, working pulse, follow-up colour, and the red-after-30s disconnected
+   state.
+3. **Three example scripts we added:** `wake_shim.py` (holds 10400 so the microphone can be opened
+   on demand for follow-up mode), `inject_wake.py`, `led_cmd.py` (lets the satellite's own TTS hooks
+   change the LEDs over loopback).
+4. **Two systemd drop-ins**, which is where the real configuration lives:
+   - `wyoming-satellite.service.d`: `Requires=` and `After=` on `wake-shim.service`, so the shim is
+     up first, and restarting it bounces the satellite. The drop-in carries the warning to check
+     `systemctl is-active wyoming-satellite` afterwards.
+   - `wyoming-openwakeword.service.d`: moves the wake service to 10401 and sets `--threshold 0.35`
+     and `--custom-model-dir`. Both settings are in one file on purpose, because systemd takes the
+     last `ExecStart` and a second drop-in would silently cancel the threshold.
+
+## What we vendored
+
+| Path | What it is |
+|---|---|
+| `pi/vendor/native-satellite-13bb024/` | the satellite source at the pinned commit, our changes applied, no `.git` |
+| `pi/vendor/seeed-voicecard-0.3/` | the audio driver source, 53 files, 1.3 MB |
+| `pi/vendor/wyoming-satellite-core-satellite-py.patch` | the 7-line core change, applyable to a clean checkout |
+| `pi/vendor/wyoming-satellite-local-changes.patch` | the full divergence, for reference |
+| `pi/vendor/pi-venv-freeze.txt` | the satellite venv, 16 packages, exact versions |
+| `pi/systemd/*.service` and `*-overrides.conf` | the units and drop-ins as deployed |
+
+Deliberately **not** vendored: the wake model binary (recorded above by name and source, since it is
+a 422 KB blob reproducible from the community library), and the gold SD card image, which is the
+real backstop and lives with the `remote-system-operations` procedure.
+
+## Rebuilding this device from scratch
+
+1. Flash Raspberry Pi OS 64-bit (bookworm). 64-bit matters: audio enhancements and local wake word
+   detection require it.
+2. Build and install the audio driver from `pi/vendor/seeed-voicecard-0.3` (`install.sh`). **It is
+   not installed with DKMS**, so a kernel upgrade will silently remove the sound card and it must be
+   rebuilt afterwards. This is the single most likely way this device breaks on its own.
+3. Check out the satellite at `13bb024`, or copy `pi/vendor/native-satellite-13bb024` into place,
+   then apply the core patch if the source came from upstream.
+4. Recreate the venv from `pi/vendor/pi-venv-freeze.txt`.
+5. Copy the wake model into `/home/wyoming1/wake-models`.
+6. Install the units and drop-ins from `pi/systemd/`, then `daemon-reload`. Start order: LED service,
+   wake engine, shim, then satellite.
+7. Copy the three scripts into `examples/`.
+8. Verify: `arecord -l` shows `seeed2micvoicec`; the wake word fires; the LEDs pulse on boot and go
+   green once; a done tone plays without being transcribed.
+
+## Maintenance watch items
+
+- **Kernel upgrade breaks audio.** Rebuild the driver after any kernel change.
+- The upstream repo is archived, so there are no security fixes coming. Our exposure is limited by
+  the device listening on only SSH and the Wyoming port, with everything else on loopback.
+- The Pi venv pins are recorded here and nowhere else. Re-freeze after any deliberate change.
