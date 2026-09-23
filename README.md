@@ -132,6 +132,7 @@ so an update stashes them and the system runs unpatched until they are re-applie
 `hermes/patches/check-patches.sh` after every update; it is read-only and tells you which patches are
 missing. See `docs/restart-safety-and-portability.md` for the planned hardening.
 - [`docs/timers-and-alarms.md`](docs/timers-and-alarms.md) timers and alarms: design spec, not built yet
+- [`docs/satellite-http-config.md`](docs/satellite-http-config.md) configuration server for the satellite: feasibility research, not built
 
 ## Status and known gaps
 
