@@ -132,6 +132,27 @@ Watch `OHF-Voice/linux-voice-assistant` for ideas, specifically: its `docs/enabl
 `docs/peripheral_api.md`, its `wakewords/` and `sounds/` directories (prebuilt tones we might reuse),
 and its `CHANGELOG.md`.
 
-A low-frequency cron job could check that repo monthly and report only when something relevant
-appears, so this stays a background signal instead of a thing anyone has to remember. Not created
-yet; it needs Angela's approval.
+A low-frequency cron job checks that repo monthly and reports only when something relevant appears,
+so this stays a background signal instead of a thing anyone has to remember. Created 2026-09-23:
+cron job `watch-successor-voice-repos`, 09:00 on the 1st, in monitor mode (a deterministic digest,
+so it is completely silent unless something actually changed upstream).
+
+## These are tracked as GitHub issues
+
+The gaps above are filed as issues on this repository, which is where feature work is planned. Angela's
+expectation, 2026-09-23: a feature enhancement belongs on the Issues page, not only in a document.
+
+| Issue | What it covers |
+|---|---|
+| [#1](https://github.com/omgitsgela/hermes-voice-satellite/issues/1) | Acoustic echo cancellation, the biggest gap |
+| [#2](https://github.com/omgitsgela/hermes-voice-satellite/issues/2) | MicroWakeWord as a lighter wake engine |
+| [#3](https://github.com/omgitsgela/hermes-voice-satellite/issues/3) | Media playback |
+| [#4](https://github.com/omgitsgela/hermes-voice-satellite/issues/4) | Multiple simultaneous wake words |
+| [#5](https://github.com/omgitsgela/hermes-voice-satellite/issues/5) | Timers and alarms, from the written spec |
+| [#6](https://github.com/omgitsgela/hermes-voice-satellite/issues/6) | Configuration server (on autumn, not the Pi) |
+| [#7](https://github.com/omgitsgela/hermes-voice-satellite/issues/7) | Buy and test the shortlisted devices |
+| [#8](https://github.com/omgitsgela/hermes-voice-satellite/issues/8) | Evaluate their sound assets and stop model |
+| [#9](https://github.com/omgitsgela/hermes-voice-satellite/issues/9) | The DKMS build-versus-installed warning |
+
+Keep both places in step: this document carries the reasoning, the issues carry the work. When an
+issue is opened, link it here; when an idea arrives that is not already an issue, file it.
