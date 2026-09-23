@@ -38,7 +38,7 @@ the only copy of them:
 | Patch | Voice-critical? |
 |---|---|
 | `toolsets.py` — the four names in `_HERMES_CORE_TOOLS` plus `skills_read` | Yes: without it those tools defer behind a `tool_search` bridge the surface does not carry, so they vanish |
-| `hermes_cli/tools_config.py` — `skills_read` row, `hubitat` default-off | Yes: without default-off, plugin toolsets switch on for every bundled platform |
+| `hermes_cli/tools_config.py` — `skills_read` row, and `hubitat`, `google`, `voice_satellite` set default-off | Yes: without default-off, plugin toolsets switch on for every bundled platform |
 | `gateway/platforms/api_server.py` — drop stale provider `extra_body` when a route switches provider | Yes: the voice route runs a different provider from the global default, which is exactly the case that silently fell back to a paid lane |
 | `model_tools.py` — no bridge when the deferrable catalogue is empty | No: costs tokens and a detour, still works |
 | `cron/jobs.py` — store `requested_provider` | No: unrelated to voice |
