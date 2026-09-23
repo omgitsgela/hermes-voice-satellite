@@ -21,9 +21,16 @@ import json
 import sys
 import urllib.request
 
-REPOS = ["OHF-Voice/linux-voice-assistant"]
-WATCH_DIRS = ["docs", "wakewords", "sounds", "linux_voice_assistant"]
-WATCH_FILES = ["CHANGELOG.md", "README.md"]
+# What to watch, per repository. The transport repository matters more to us than the application
+# built on it: we depend on the protocol itself, and it is where new event types appear (timers, for
+# one, arrived there long before we had a use for them).
+WATCH = {
+    "OHF-Voice/wyoming": {"dirs": ["wyoming"], "files": ["README.md", "SECURITY.md"]},
+    "OHF-Voice/linux-voice-assistant": {
+        "dirs": ["docs", "wakewords", "sounds", "linux_voice_assistant"],
+        "files": ["CHANGELOG.md", "README.md"],
+    },
+}
 API = "https://api.github.com"
 TIMEOUT = 20
 
@@ -37,21 +44,21 @@ def get(url: str):
 
 def main() -> int:
     lines: list[str] = []
-    for repo in REPOS:
+    for repo, spec in WATCH.items():
         try:
             head = get(f"{API}/repos/{repo}/commits?per_page=1")[0]["sha"][:10]
         except Exception as exc:  # noqa: BLE001 - a network hiccup must be visible, not silent
             print(f"{repo}: fetch failed: {type(exc).__name__}")
             return 1
         lines.append(f"repo {repo} @ {head}")
-        for d in WATCH_DIRS:
+        for d in spec["dirs"]:
             try:
                 items = get(f"{API}/repos/{repo}/contents/{d}")
             except Exception:
                 continue
             names = sorted(str(i.get("name")) for i in items)
             lines.append(f"  {d}/ ({len(names)}): {' '.join(names)}")
-        for f in WATCH_FILES:
+        for f in spec["files"]:
             try:
                 meta = get(f"{API}/repos/{repo}/contents/{f}")
             except Exception:
