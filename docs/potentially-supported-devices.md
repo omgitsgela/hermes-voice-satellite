@@ -14,7 +14,7 @@ written down before the boxes arrive.
 |---|---|
 | Capture | Seeed ReSpeaker 2-Mics Pi HAT (I2S HAT), card `seeed2micvoicec`, codec `tlv320aic3x`, opened as `plughw:CARD=seeed2micvoicec` |
 | Driver | Seeed `seeed-voicecard` 0.3, built against kernel `6.12.109+rpt-rpi-v8`, **not DKMS**, so a kernel upgrade removes the card until it is rebuilt |
-| Playback | the HAT's 3.5 mm analogue jack, because a Pi Zero 2 W has no analogue output of its own |
+| Playback | the HAT's **speaker header**, which drives a speaker directly off the codec's amplifier. The same HAT also exposes a 3.5 mm jack; we are not using it. A Pi Zero 2 W has no analogue output of its own, so this HAT is what gives us sound at all. |
 | LEDs | 3 x APA102 on `/dev/spidev0.0`, driven by our own service |
 | Host | Pi Zero 2 W, 416 MB RAM, ~171 MB available, Debian 12 arm64, 64-bit |
 | Wake word | `hey_hermes`, openWakeWord, on the Pi |
@@ -27,7 +27,10 @@ A device has to satisfy all of these to be a drop-in:
    Raspberry Pi I2S HAT with a Linux driver both qualify. A board whose host is its own
    microcontroller does not, because our stack is Linux.
 2. **It gives us an audio output**, or we have to solve output separately. The Pi Zero 2 W has no
-   analogue jack, so a capture-only device means adding a USB speaker or similar.
+   analogue output of its own, so the device has to supply one. A 3.5 mm jack and an amplified
+   speaker header are equally acceptable; our current HAT offers both and we use the speaker header,
+   which is the pattern a replacement should follow. A capture-only device means adding a USB
+   speaker or similar.
 3. **Its LEDs are addressable by us.** This is the sharpest constraint we have: our LED service
    drives **APA102 over SPI**. Every device below uses **WS2812**, which is a different chip on a
    different bus, so none of them can reuse that service and all of them need new LED code.
@@ -140,3 +143,42 @@ confirmed by testing a new unit rather than assumed.
 
 Record the results in a table in this file as they come in, including the ones that lose. A failed
 candidate is still a result.
+
+## How we will support these devices
+
+Angela's direction, 2026-09-23:
+
+> We will maintain our own software stack to support the respeaker devices, including the LED
+> drivers, and update code as needed to keep within kernel updates as they happen. It's going to be a
+> lot of work, but we can do it. I'll buy a bunch of these devices so we can practically test them.
+
+That makes this project the owner of the device layer, not a consumer of it. Concretely, that means:
+
+**One code path, several devices.** The differences between candidates are limited and known: the
+ALSA device name, which channel to capture, the playback device, the LED chip and bus, and whether
+there is a button. None of that belongs in `if device == ...` branches. The clean shape is a small
+**device profile** per unit (capture device, playback device, channel, LED type, button), with the
+services reading the profile instead of hard-coding names. Worth building when the second device
+arrives and the real differences are visible, rather than guessing now.
+
+**The LED layer is the real work.** Our current service drives APA102 over SPI. Every candidate here
+uses WS2812, and the XVF3800's twelve LEDs are driven by the XMOS chip over USB, not by a GPIO bus at
+all. So this becomes a small driver layer behind one interface, with an implementation per chip, and
+the state machine (boot pulse, wake, working, follow-up, red) staying exactly as it is. The state
+machine is the valuable part and it is already written and tested.
+
+**Kernel updates.** The Seeed driver is not installed with DKMS, so a kernel upgrade silently removes
+the sound card. The driver source ships a `dkms.conf`, which means converting the install to DKMS
+would make it rebuild automatically on every kernel change. That is the single highest-value piece of
+maintenance work for keeping this stack alive, and it is a small job.
+
+**A repeatable device check.** The checklist above should become a script that reports what a unit
+actually is: which ALSA cards exist, what capture formats they claim, which LED bus is present, and
+whether a button exists. Run it once per device, before writing any code for that device, and keep
+the reports in this folder. That turns "works on my desk" into a record.
+
+**Proof of the replacement path.** The vault already records that our HAT is the **V2.0 revision with
+a TLV320AIC3104** codec, enabled by `dtoverlay=respeaker-2mic-v2_0`, and that most guides describe
+the older V1.x with a WM8960. The 2-Mics HAT still on sale is listed as V2.0/AIC3104, which matches
+what we run, so re-buying the same HAT is a like-for-like replacement for the current device and the
+cheapest way to have a spare. Confirm it by testing one, but expect it to match.

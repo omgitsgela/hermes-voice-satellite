@@ -81,7 +81,15 @@ real backstop and lives with the `remote-system-operations` procedure.
 
 ## Maintenance watch items
 
-- **Kernel upgrade breaks audio.** Rebuild the driver after any kernel change.
+- **Kernel upgrade breaks audio.** Rebuild the driver after any kernel change. This is worth
+  fixing properly rather than remembering: the vendored driver ships a `dkms.conf`, so installing it
+  with DKMS would make it rebuild automatically on every kernel upgrade. Angela's stated direction
+  (2026-09-23) is to keep the stack working across kernel updates, and this is the highest-value piece
+  of that work. **Not done yet: it is a change to the device and needs her go-ahead.**
 - The upstream repo is archived, so there are no security fixes coming. Our exposure is limited by
   the device listening on only SSH and the Wyoming port, with everything else on loopback.
 - The Pi venv pins are recorded here and nowhere else. Re-freeze after any deliberate change.
+- **The device layer is ours now.** Angela, 2026-09-23: "We will maintain our own software stack to
+  support the respeaker devices, including the LED drivers, and update code as needed to keep within
+  kernel updates as they happen." The plan for several devices lives in
+  `docs/potentially-supported-devices.md`.
