@@ -563,19 +563,43 @@ class VoiceLoop:
             except asyncio.TimeoutError:
                 _LOGGER.info("interruption: no speech after the wake (%.0fs); "
                              "carrying on with the running task", INTERRUPT_CAPTURE_SECONDS)
+                await self._end_capture()
                 continue
             if state.done:
                 return
             if result is None:
+                await self._end_capture()
                 continue
             transcript = await self.transcribe(result.audio)
             if not transcript:
                 _LOGGER.info("interruption: nothing intelligible after the wake; ignoring")
+                await self._end_capture()
                 continue
             _LOGGER.info("interruption heard: %s", transcript)
-            if await self._handle_interruption(transcript) == "stopped":
+            outcome = await self._handle_interruption(transcript)
+            # The capture is over whichever way it went, so hand the microphone back. Leaving the
+            # satellite streaming is issue #12: a streaming satellite ignores its own wake word, so
+            # the device looks deaf until the next hourly link refresh. Angela hit exactly that on
+            # 2026-09-23 by interrupting during an answer.
+            await self._end_capture()
+            if outcome == "stopped":
                 state.stop_playback = True
                 return
+
+    async def _end_capture(self) -> None:
+        """Hand the microphone back to wake-word listening after a capture we did not finish.
+
+        A satellite that has been woken is streaming, and a streaming satellite ignores its own wake
+        word. The normal turn closes the microphone by sending an empty transcript, which the protocol
+        treats as the end of the utterance; the interruption path bypasses that flow entirely, so it
+        has to do it here. `run-satellite` goes too, because a satellite mid-stream may otherwise
+        ignore the first message. Best effort: failing to tidy up must never break the running task.
+        """
+        try:
+            await self.sat.send(Transcript(text="").event())
+            await self.sat.run()
+        except Exception as exc:  # noqa: BLE001 - never let tidying up break the turn
+            _LOGGER.warning("could not re-arm the satellite after an interruption: %s", exc)
 
     async def capture_utterance(self, wake_word: str) -> Optional[EndpointResult]:
         """Feed mic audio to the endpointer until the utterance is complete."""

@@ -40,6 +40,7 @@ class HangingLoop:
     def __init__(self) -> None:
         self.reads = 0
         self.captures = 0
+        self.rearmed = 0
         self.eof = False
 
     @property
@@ -63,6 +64,10 @@ class HangingLoop:
 
     async def transcribe(self, audio):
         return ""                      # never reached
+
+    async def _end_capture(self):
+        # The fix for the deaf-device bug: an abandoned capture must hand the microphone back.
+        self.rearmed += 1
 
 
 def check(name: str, got, want) -> None:
@@ -90,6 +95,7 @@ async def main() -> int:
         # And it must still obey the shutdown signal, cancel or not.
         state.done = True
         await asyncio.sleep(0.7)
+        check("the mic was handed back after the abandoned capture", loop.rearmed >= 1, True)
         check("state.done ends the watcher", task.done(), True)
         if not task.done():
             task.cancel()
