@@ -122,14 +122,19 @@ def main() -> int:
         f"live tree dirty at sync time: {'yes' if dirty else 'no'}\n"
     )
 
-    print(f"  commit {head[:8]}: {copied} copied, {skipped} already current, {failed} failed, "
-          f"{len(tracked)} tracked, bundle {'ok' if bundle_ok else 'FAILED'}")
-    if dirty:
-        print("  note: the live tree had uncommitted changes, which are NOT in this backup")
-    for p in problems[:10]:
-        print(f"  PROBLEM {p}")
-    return 1 if (failed or problems) else 0
-
+    # Quiet on success, on purpose. This runs hourly as a no_agent watchdog job whose stdout is
+    # delivered verbatim, so anything printed here becomes a message to Angela. Say nothing unless
+    # something is actually wrong; every tick is still recorded in the cron run history and in the
+    # NAS SYNC-INFO.txt file.
+    if failed or problems or not bundle_ok:
+        print(f"NAS mirror for hermes-voice-satellite failed at commit {head[:8]}: "
+              f"{failed} copy error(s), {len(problems)} problem(s)"
+              f"{'' if bundle_ok else ', and the history bundle could not be written'}")
+        for p in problems[:10]:
+            print(f"  {p}")
+        print(f"  source: {REPO}   destination: {NAS_DIR}")
+        return 1
+    return 0
 
 if __name__ == "__main__":
     raise SystemExit(main())
