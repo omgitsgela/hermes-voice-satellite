@@ -478,6 +478,85 @@ class VoiceLoop:
                 self.self_trigger_count += 1
                 _LOGGER.warning("wake word during playback: treating as a self-trigger")
 
+    # -- interruption while a task is running (Angela, 2026-09-23) ----------
+
+    async def _handle_interruption(self, transcript: str) -> str:
+        """Decide what a mid-task utterance means, and act on it.
+
+        Returns "ignored", "stopped", "steered", "steer_failed" or "control".
+
+        Called only while a run is in flight, from the interruption watcher. It touches very little
+        of this object on purpose, so scripts/test_interrupt.py can drive it with stubs instead of
+        a satellite, a gateway and a microphone.
+        """
+        from bridge.config import INTERRUPT_ENABLED, INTERRUPT_MIN_CHARS
+
+        if not getattr(self, "interrupt_enabled", INTERRUPT_ENABLED):
+            return "ignored"
+
+        text = (transcript or "").strip()
+        if not text:
+            return "ignored"
+
+        # Order matters here, and the test caught why. A stop is checked FIRST and with no length
+        # guard: "stop" is four characters long and is the single most important word in this whole
+        # feature. The length guard exists for the steer path only, where our own playback leaking
+        # into the mic produces things like "you" or "beep".
+        #
+        # The control-phrase matcher is reused rather than reimplemented: it sets stop_requested only
+        # for a whole-utterance stop, which is what keeps "stop the sprinklers" out of this path.
+        self.stop_requested = False
+        reply = self._local_command(text)
+        if self.stop_requested:
+            self.stop_requested = False
+            stopped = await self.gateway.stop()
+            _LOGGER.info("interruption: stop heard mid-task; gateway stop accepted=%s", stopped)
+            await self.say("Stopped.")
+            return "stopped"
+        if reply:
+            _LOGGER.info("interruption: control phrase mid-task, answering locally")
+            await self.say(reply)
+            return "control"
+
+        if len(text) < INTERRUPT_MIN_CHARS:
+            _LOGGER.info("interruption: %r is too short to be speech; ignoring", text)
+            return "ignored"
+
+        accepted = await self.gateway.steer(text)
+        if accepted:
+            _LOGGER.info("interruption: new information steered into the running task")
+            return "steered"
+        _LOGGER.warning("interruption: run would not accept the text, so it was dropped")
+        return "steer_failed"
+
+    async def _watch_for_interruption(self, state: "InterruptState") -> None:
+        """Watch the satellite for a wake word while a task is running, and interrupt it.
+
+        A wake-word satellite only streams audio after a detection, so a detection arriving here
+        means someone deliberately woke the device mid-task. What follows decides the outcome.
+        """
+        while not state.done:
+            event = await self._next(0.5)
+            if event is None:
+                if self.sat.eof:
+                    return
+                continue
+            if not Detection.is_type(event.type):
+                continue
+            name = Detection.from_event(event).name
+            _LOGGER.info("interruption: wake word %r while a task is running", name)
+            result = await self.capture_utterance(name)
+            if result is None:
+                continue
+            transcript = await self.transcribe(result.audio)
+            if not transcript:
+                _LOGGER.info("interruption: nothing intelligible after the wake; ignoring")
+                continue
+            _LOGGER.info("interruption heard: %s", transcript)
+            if await self._handle_interruption(transcript) == "stopped":
+                state.stop_playback = True
+                return
+
     async def capture_utterance(self, wake_word: str) -> Optional[EndpointResult]:
         """Feed mic audio to the endpointer until the utterance is complete."""
         self._ep.reset()
@@ -759,6 +838,19 @@ class VoiceLoop:
                 await stream.say("One moment.")
                 spoken_any = True
 
+        # Watch for an interruption for as long as the task is running. The satellite keeps
+        # listening for its wake word throughout, so a detection arriving here means someone
+        # deliberately woke the device mid-task (Angela, 2026-09-23).
+        class _Interrupt:
+            """Mutable state shared with the interruption watcher."""
+
+            def __init__(self) -> None:
+                self.done = False
+                self.stop_playback = False
+
+        state = _Interrupt()
+        watcher = asyncio.create_task(self._watch_for_interruption(state),
+                                      name="interruption-watcher")
         try:
             async with self.sat.tts_stream() as stream:
                 buffer = SentenceBuffer()
@@ -766,6 +858,8 @@ class VoiceLoop:
                                                     on_tool_started=fill_silence):
                     if stats.first_delta_seconds == 0.0:
                         stats.first_delta_seconds = time.perf_counter() - t_gateway
+                    if state.stop_playback:
+                        break
                     for piece in buffer.push(delta):
                         stats.reply += piece + " "
                         if stats.first_audio_seconds == 0.0:
@@ -774,20 +868,49 @@ class VoiceLoop:
                             # moment the working pulse should stop.
                             await self.publish_led(LED_IDLE)
                         await stream.say(piece)
-                tail = buffer.flush()
-                if tail:
-                    stats.reply += tail
-                    if stats.first_audio_seconds == 0.0:
-                        stats.first_audio_seconds = time.perf_counter() - t_gateway
-                        await self.publish_led(LED_IDLE)
-                    await stream.say(tail)
+                if not state.stop_playback:
+                    tail = buffer.flush()
+                    if tail:
+                        stats.reply += tail
+                        if stats.first_audio_seconds == 0.0:
+                            stats.first_audio_seconds = time.perf_counter() - t_gateway
+                            await self.publish_led(LED_IDLE)
+                        await stream.say(tail)
                 stats.audio_seconds = stream.seconds_sent
-            await self.wait_for_played()
+            if state.stop_playback:
+                # Closing the speech stream is what cuts the satellite's playback buffer. The run
+                # itself was already cancelled server-side by the stop call.
+                stats.note = "interrupted: stopped mid-task"
+                _LOGGER.info("task stopped on request; abandoning the rest of the answer")
+            else:
+                await self.wait_for_played()
         except VoiceGatewayError as exc:
-            stats.note = f"gateway error: {exc}"
-            _LOGGER.error("gateway failed: %s", exc)
-            await self.say("I can't reach my brain right now.")
+            if state.stop_playback or "cancel" in str(exc).lower():
+                # We asked for this. Do not apologise for a stop the person requested.
+                stats.note = "interrupted: run cancelled"
+                _LOGGER.info("run cancelled at the person's request")
+            else:
+                stats.note = f"gateway error: {exc}"
+                _LOGGER.error("gateway failed: %s", exc)
+                await self.say("I can't reach my brain right now.")
         finally:
+            state.done = True
+            watcher.cancel()
+            try:
+                await watcher
+            except asyncio.CancelledError:
+                pass
+            # A wake detection left in the queue would be read by the next wait_for_wake as a fresh
+            # wake and start a phantom turn. Drain here, where we know any detection was ours.
+            drained = 0
+            while True:
+                leftover = await self._next(0.05)
+                if leftover is None:
+                    break
+                if Detection.is_type(leftover.type):
+                    drained += 1
+            if drained:
+                _LOGGER.info("drained %d leftover wake detection(s) after the turn", drained)
             self._speaking = False
             # Safety net for the paths that never speak (gateway error, empty reply): a turn
             # must not leave the working pulse running until its cap.

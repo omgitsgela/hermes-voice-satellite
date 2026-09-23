@@ -136,6 +136,7 @@ missing. See `docs/restart-safety-and-portability.md` for the planned hardening.
 - [`docs/owning-the-satellite-stack.md`](docs/owning-the-satellite-stack.md) what is pinned and vendored, our divergence from upstream, and how to rebuild the device
 - [`docs/feature-roadmap.md`](docs/feature-roadmap.md) features worth building ourselves, diffed against the successor project, with the reasoning for staying on Wyoming
 - [`docs/potentially-supported-devices.md`](docs/potentially-supported-devices.md) microphone devices worth buying and testing, with the compatibility reasoning and a test checklist
+- [`docs/interruption.md`](docs/interruption.md) talking to a task that is already running: steer it, stop it, or ignore noise
 
 ## Status and known gaps
 

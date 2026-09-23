@@ -210,3 +210,21 @@ CONNECTED_TONE_BOOT_MARKER = PROJECT_DIR / "state" / "connected-tone-boot-id"
 # speaking is the normal overnight state, not a fault, so it is now a socket refresh instead
 # (Angela, 2026-09-23). Overridable so the refresh can be tested in seconds rather than an hour.
 WAKE_WAIT_SECONDS = float(os.environ.get("VOICE_WAKE_WAIT_SECONDS", "3600"))
+
+# Voice interruption (Angela, 2026-09-23).
+#
+# While the agent is working on a task, a wake word plus a new utterance should be treated as a
+# conversation interruption rather than as a queued question:
+#
+#   * new information is handed to the run that is already going (POST /v1/runs/{id}/steer), so the
+#     agent hears it in the conversation it is having instead of as a fresh question;
+#   * a stop phrase stops that run (POST /v1/runs/{id}/stop). Before this existed, a stop could only
+#     be noticed between turns, so a "stop, that was a joke" during a running task changed nothing
+#     and the task kept working in the background.
+#
+# The guard that makes this safe: a wake detection with nothing intelligible behind it is our own
+# audio leaking into the mic, and it is discarded, never steered into a live run.
+INTERRUPT_ENABLED = True
+# Shorter than this and the utterance is treated as noise rather than as speech. "you" and "beep"
+# are what our own playback tends to produce when the wake word self-triggers.
+INTERRUPT_MIN_CHARS = 5

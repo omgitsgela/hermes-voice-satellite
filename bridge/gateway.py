@@ -126,7 +126,10 @@ class VoiceGateway:
         of silently going quiet.
         """
         session = self._require()
-        body: dict = {"input": text, "session_id": self.session_id, "model": self.model}
+        body: dict = {"input": text, "session_id": self.session_id}
+        if self.model:
+            # Only sent when a route alias is configured; otherwise the gateway uses its default.
+            body["model"] = self.model
         if self.instructions:
             body["instructions"] = self.instructions
 
@@ -220,6 +223,37 @@ class VoiceGateway:
                              run_id, choice, resp.status)
         except aiohttp.ClientError as exc:
             _LOGGER.warning("could not answer approval for %s: %s", run_id, exc)
+
+    async def steer(self, text: str, run_id: Optional[str] = None) -> bool:
+        """Hand new information to a run that is already going.
+
+        Angela, 2026-09-23. When she wakes the device mid-task and says something new, that belongs
+        in the conversation the agent is already having, not in a fresh question. The API server
+        exposes this as POST /v1/runs/{id}/steer, which passes the text to the live agent. It is
+        cooperative: the agent decides what to do with it, which is why a stop is a separate call.
+
+        Best effort on purpose. A steer that does not land must never break the turn in progress,
+        so this returns False rather than raising, and the caller records the drop.
+        """
+        session = self._require()
+        target = (run_id or self.last_run_id or "").strip()
+        if not target:
+            _LOGGER.warning("steer requested with no run id; nothing to steer")
+            return False
+        try:
+            async with session.post(f"{self.base_url}/v1/runs/{target}/steer",
+                                    json={"input": text}) as resp:
+                payload = await resp.json(content_type=None)
+                if resp.status != 200:
+                    _LOGGER.warning("steer refused (HTTP %s): %s", resp.status,
+                                    str(payload)[:200])
+                    return False
+        except aiohttp.ClientError as exc:
+            _LOGGER.warning("steer failed: %s: %s", type(exc).__name__, exc)
+            return False
+        accepted = bool(payload.get("accepted"))
+        _LOGGER.info("steer on run %s: %s", target, "accepted" if accepted else "not accepted")
+        return accepted
 
     async def stop(self, run_id: Optional[str] = None) -> bool:
         """Interrupt a run. Returns True when the gateway accepted the stop."""
