@@ -31,7 +31,7 @@ Verified live, not assumed:
 | API key or announce token rotated | The bridge keeps the old value until restarted | Re-read per run, or document the restart in the runbook |
 | Wake word or route changed | Correct, but needs a restart of the right component | Already documented; keep it that way |
 
-The update row is the real exposure. These three files are uncommitted edits in `~/.hermes/hermes-agent`,
+The update row is the real exposure. One file is now an uncommitted edit in `~/.hermes/hermes-agent`,
 with no pre-update backup configured (`updates.pre_update_backup: false`), so the updater's autostash is
 the only copy of them:
 

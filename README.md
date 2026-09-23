@@ -48,7 +48,7 @@ listener is the announcement endpoint, which requires a token.
 | `reference/` | Upstream reference copies of the files the device patches, for diffing |
 | `hubitat/` | `HermesAnnouncer.groovy`, the Hubitat driver that speaks through this system |
 | `hermes/plugins/` | The Hermes plugins the voice surface uses, verbatim from a working install |
-| `hermes/patches/` | The three remaining core patches, as diffs, plus a checker |
+| `hermes/patches/` | The one remaining core patch, as a diff, plus a checker |
 | `hermes/config/` | The voice-surface configuration keys, with placeholders instead of secrets |
 | `hermes/systemd/` | The bridge's user unit |
 | `skills/` | The skills that document how to operate and repair this system |
