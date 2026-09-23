@@ -94,7 +94,8 @@ here) comes from the Piper voices release; the custom wake model is a community 
 systemctl --user status hermes-voice-bridge
 journalctl --user -u hermes-voice-bridge -n 30
 
-# the voice surface resolves exactly the intended tools, with no tool_search bridge
+# what the voice surface actually resolves (it runs at parity with a normal conversation,
+# so the tool_search bridge is expected here)
 cd ~/.hermes/hermes-agent && ./venv/bin/python - <<'PY'
 import sys; sys.path.insert(0, '/home/angela/.hermes/hermes-agent')
 from hermes_cli.plugins import discover_plugins; discover_plugins(force=True)
