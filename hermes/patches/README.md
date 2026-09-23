@@ -5,7 +5,10 @@ source tree (`~/.hermes/hermes-agent`).
 
 | Patch | File | Why | Needed? |
 |---|---|---|---|
-| `0001-cron-provider-snapshot.patch` | `cron/jobs.py` | cron stored the generic billing class instead of the requested provider, so jobs without a provider pin silently ran against a different endpoint (here, OpenRouter) while still reporting success | Unrelated to voice. Upstream tracking: issue **#109765**, fix in flight as PR **#109773** (`custom:<name>` healing plus a regression test). Verified 2026-09-23 that the canonical form resolves for this config shape too, so drop this patch once a release carries that fix |
+| `0001-cron-provider-snapshot.patch` | `cron/jobs.py` | cron stored the generic billing class instead of the requested provider, so jobs without a provider pin silently ran against a different endpoint (here, OpenRouter) while still reporting success | Unrelated to voice. Upstream tracking: issue **#109765**, fix in flight as PR **#109773** (`custom:<name>` healing plus a regression test).
+We contributed an independent confirmation on 2026-09-23 (issuecomment-5793963666), including a check that the
+`custom:<name>` form resolves correctly for the `providers:` map shape the PR's test does not cover, so **do not
+file that report again**. Verified 2026-09-23 that the canonical form resolves for this config shape too, so drop this patch once a release carries that fix |
 
 ## Why the other four went away
 
