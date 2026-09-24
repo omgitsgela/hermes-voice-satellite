@@ -10,6 +10,34 @@ Written for one installation (a Pi Zero 2 W in the house, with a host running He
 the same setup can be deployed elsewhere. Names, addresses and paths in this document are placeholders:
 substitute your own.
 
+## Why a voice frontend
+
+A terminal is the natural interface to an agent, but it assumes you are at a screen with something to
+type into. The satellite is for the moments you are not:
+
+- **Your hands are occupied.** Cooking, soldering, working on something on a ladder, holding a child:
+  the wake word plus a sentence replaces typing, and the answer comes back without touching a device.
+  The voice surface runs at full parity with a normal conversation (see Status), so the same requests
+  that work in a terminal — a question, a draft, a lookup, a home-automation action — work here.
+- **The house can talk.** A cron job, a home-automation rule, or any other process can POST an
+  announcement to the bridge, and the satellite speaks it through its own speaker, queued politely
+  behind any conversation in progress. A freezer that crossed a threshold, a door left open, a backup
+  that failed: it reaches you in the room instead of as a notification you see days later. The sound
+  of that speaker becoming active *is* the signal.
+- **You can interrupt a running task.** Wake the satellite while a run is in flight and the device
+  steers or stops it: a stop phrase ends the run and acknowledges it, or new information is passed to
+  the task so it carries on with the correction. See `docs/interruption.md`.
+- **Multi-turn without the wake word.** With follow-up mode on, the microphone reopens after each
+  answer, so a short exchange — the answer, a correction, a follow-up question — stays one
+  conversation instead of repeating the wake word each time.
+- **One satellite per room.** Each satellite is a small device plus a speaker; the heavy lifting stays
+  on the host. A kitchen satellite for questions mid-recipe, a workshop one for hands-occupied work,
+  a hallway one that doubles as the announcement speaker for the whole house.
+
+What this is not: a better way to read long output. Spoken answers are kept short by design; when you
+need the full result you come back to the terminal. The satellite is for the interaction, the
+notification, and the moment your hands are full.
+
 ## Architecture
 
 ```
