@@ -32,7 +32,7 @@ FACT_CHECKS = [
      re.compile(r"0\.35"),
      "the threshold it actually runs"),
     ("Are your microphones at maximum sensitivity?",
-     re.compile(r"4[01](\.\d+)?\s*dB|\b8[01]\b|nowhere near|not at max|no, it"),
+     re.compile(r"4[01](\.\d+)?\s*(?:dB|decibel)|headroom|nowhere near|not at max|^\s*no\b", re.I),
      "the real preamp level rather than a guess"),
 ]
 
