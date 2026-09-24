@@ -629,7 +629,16 @@ class VoiceLoop:
             _LOGGER.warning("could not re-arm the satellite after an interruption: %s", exc)
 
     async def capture_utterance(self, wake_word: str) -> Optional[EndpointResult]:
-        """Feed mic audio to the endpointer until the utterance is complete."""
+        """Feed mic audio to the endpointer until the utterance is complete.
+
+        Raises the announcement gate on entry. While the microphone is open the room is, by
+        definition, in the middle of being listened to, and an announcement spoken now would be
+        captured and transcribed as though it were the person's own words. The flag is raised only
+        if it is not already set, so an interruption during a running task keeps counting from the
+        turn's own start rather than resetting the stale-age safety net (issue #19).
+        """
+        if getattr(self, "turn_started_at", None) is None:
+            self.turn_started_at = time.monotonic()
         self._ep.reset()
         announce = getattr(self, "_on_listening", None)
         if announce:
@@ -850,6 +859,10 @@ class VoiceLoop:
             # until the link refreshes. Re-arm it, and use the silent re-arm rather than the empty
             # transcript because nobody spoke and the device should stay quiet (issue #12).
             await self._rearm_wake_word()
+            # Nobody spoke, so this window is not a conversation: release the gate that
+            # capture_utterance raised, or announcements would wait out ANNOUNCE_TURN_MAX_AGE on a
+            # false wake (issue #19).
+            self.turn_started_at = None
             return stats
         # Everything from here on is the part that answers the question.
         processing_started = time.perf_counter()
