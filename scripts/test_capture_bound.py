@@ -45,6 +45,9 @@ def bridge_with(capture):
     b = Loop.__new__(Loop)
     b.capture_utterance = capture
     b._discard_queued_events = _nothing_queued
+    # capture_after_wake scopes the no-speech budget on the endpointer, so the stub needs one.
+    from bridge.endpointing import Endpointer
+    b._ep = Endpointer(silence_ms=700, min_speech_ms=250)
     return b
 
 

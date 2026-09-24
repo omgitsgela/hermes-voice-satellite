@@ -186,6 +186,28 @@ class Endpointer:
         self._speech_started_at_frame: Optional[int] = None
         self._frames_seen = 0
 
+    # -- scope of the no-speech budget ---------------------------------------
+
+    def begin_activation(self) -> None:
+        """Start a fresh activation: clear the utterance state AND the no-speech budget.
+
+        Called once per wake or follow-up window. The budget has to start clean here, or an
+        activation that ended with a full budget would close the next one on its first frame.
+        """
+        self.reset()
+
+    def begin_capture(self) -> None:
+        """Start another capture attempt within the same activation, keeping the budget.
+
+        A capture attempt ends when the endpointer returns an utterance, and a rejected one is noise
+        that must not buy the room more time (issue #47). `reset()` would clear the very count that
+        bounds this, so the budget is carried across instead. Only a real utterance clears it, in
+        `_finish`.
+        """
+        budget = self._frames_seen
+        self.reset()
+        self._frames_seen = budget
+
     # -- streaming ----------------------------------------------------------
 
     def process(self, audio: bytes) -> Optional[EndpointResult]:
