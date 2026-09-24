@@ -102,4 +102,4 @@ real backstop and lives with the `remote-system-operations` procedure.
 - **The device layer is ours now.** Angela, 2026-09-23: "We will maintain our own software stack to
   support the respeaker devices, including the LED drivers, and update code as needed to keep within
   kernel updates as they happen." The plan for several devices lives in
-  `docs/potentially-supported-devices.md`.
+  `docs/supported-devices.md`.

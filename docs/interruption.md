@@ -64,4 +64,4 @@ In `bridge/config.py`:
   in front of the device.
 - **Known limitation:** while the device is speaking, an interruption is heard through its own
   audio, so the transcript quality depends on the room. Hardware with on-chip echo cancellation
-  would improve this, which is one of the arguments in `docs/potentially-supported-devices.md`.
+  would improve this, which is one of the arguments in `docs/supported-devices.md`.

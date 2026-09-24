@@ -8,7 +8,7 @@ rediscovering them.
 |---|---|---|
 | Seeed ReSpeaker 2-Mics Pi HAT **V2.0** (TLV320AIC3104) | **In service, built and tested** | [`seeed-2mic-hat-v2.md`](seeed-2mic-hat-v2.md) |
 | ReSpeaker 4-Mic Array for Raspberry Pi | Discontinued, not owned | see issue #7 |
-| Canonical supported units (Pi HAT, ESP32 devices) | see the canonical list | `../potentially-supported-devices.md` |
+| Canonical supported units (Pi HAT, ESP32 devices) | see the canonical list | `../supported-devices.md` |
 | Integrated ESP32-class devices (reSpeaker Lite kit, XIAO variants) | Path B, blocked on the architecture decision in #11 | see issue #7 |
 
 USB-only microphones and arrays are **not supported**: their audio and their controls both belong to a

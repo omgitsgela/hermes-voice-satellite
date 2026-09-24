@@ -37,7 +37,7 @@ throttled=0x0
 - Capture is `plughw:CARD=seeed2micvoicec` at 16 kHz mono. That exact card string is the first
   thing to change for a new device.
 - `spidev` present is what lets the existing APA102 LED service drive a device at all. Every USB
-  array in `docs/potentially-supported-devices.md` uses WS2812 instead, so none can reuse it.
+  array in `docs/supported-devices.md` uses WS2812 instead, so none can reuse it.
 - Playback comes from this HAT (speaker header). A capture-only device would leave the Pi with no
   audio output at all, because a Pi Zero 2 W has none of its own.
 - No input or button device is exposed by this HAT, so any button support on a new device would be

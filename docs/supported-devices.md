@@ -1,11 +1,11 @@
-# Supported units: the canonical list
+# Supported Devices
 
-**Status: canonical.** These are the units this project supports. Everything else in the ReSpeaker and
-Seeed families is either excluded (with the reason recorded below) or on the watchlist pending vendor
-documentation.
+The units this project supports, confirmed by Angela on 2026-09-23 against the live listings.
+Everything else in the ReSpeaker and Seeed families is either excluded, with the reason recorded below,
+or on the watchlist pending vendor documentation.
 
-Confirmed by Angela 2026-09-23, against the live listings. Prices are **single-unit** prices in USD. The
-"10+:" figures Seeed shows on a product page are bulk tier prices and are not what a buyer pays for one.
+Prices are **single-unit** prices in USD. The "10+:" figures Seeed shows on a product page are bulk tier
+prices, not what a buyer pays for one.
 
 ## What counts as supported
 
@@ -20,7 +20,7 @@ A unit has to be one of exactly two shapes:
 **Excluded by rule: USB-only microphones and arrays.** Their audio goes over USB and their lights and
 buttons are driven by the vendor's own software. Wrong shape for a device we provision, update and own.
 
-## Canonical supported units
+## The supported units
 
 | Unit | SKU | Price | Path | Role |
 |---|---|---|---|---|

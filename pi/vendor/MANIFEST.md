@@ -22,7 +22,7 @@ Captured 2026-09-23 from the working device (`wyoming1`).
   **2, 4, 6 and 8 microphone** variants (`seeed-2mic-voicecard.dtbo`, `seeed-4mic-voicecard.dtbo`,
   `seeed-8mic-voicecard.dtbo`, `asound_4mic.conf`, `asound_6mic.conf`). Any ReSpeaker I2S HAT that
   matches one of those should work with the driver we already run, which is useful for the device
-  evaluation in `docs/potentially-supported-devices.md`.
+  evaluation in `docs/supported-devices.md`.
 - The satellite source ships `sounds/timer_finished.wav`, `sounds/done.wav` and `sounds/awake.wav`,
   which are candidates for the timer and alarm tones in `docs/timers-and-alarms.md`.
 - The wake model itself is not vendored: it is a 422 KB TFLite file, reproducible from the
