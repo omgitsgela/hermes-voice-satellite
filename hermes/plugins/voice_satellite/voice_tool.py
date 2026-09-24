@@ -33,7 +33,14 @@ TOKEN_ENV = "VOICE_ANNOUNCE_TOKEN"
 BASE_URL = os.environ.get("VOICE_BRIDGE_URL", "http://127.0.0.1:8765").rstrip("/")
 TIMEOUT = 10.0
 
-_ACTIONS = ("follow_up_on", "follow_up_off", "follow_up_status")
+_ACTIONS = (
+    "follow_up_on",
+    "follow_up_off",
+    "follow_up_status",
+    "endpointing_pause_tolerant",
+    "endpointing_standard",
+    "endpointing_status",
+)
 
 
 class VoiceControlError(RuntimeError):
@@ -78,12 +85,24 @@ def _request(method: str, path: str, payload: Optional[dict] = None) -> dict:
         raise VoiceControlError("the bridge is not answering on its settings port") from exc
 
 
-def _settings() -> bool:
-    """The device's current follow-up state, straight from the bridge."""
+def _settings_data() -> dict:
+    """The device's current settings, straight from the bridge."""
     data = _request("GET", "/settings")
     if not data.get("ok"):
         raise VoiceControlError(str(data.get("error") or "the bridge refused the read"))
-    return bool(data.get("follow_up"))
+    return data
+
+
+def _settings() -> bool:
+    """The device's current follow-up state, straight from the bridge."""
+    return bool(_settings_data().get("follow_up"))
+
+
+def _endpointing_profile() -> str:
+    profile = str(_settings_data().get("endpointing_profile") or "")
+    if profile not in ("standard", "pause_tolerant"):
+        raise VoiceControlError("the bridge reported an unknown endpointing profile")
+    return profile
 
 
 def _set_follow_up(on: bool) -> Any:
@@ -99,6 +118,18 @@ def _set_follow_up(on: bool) -> Any:
     return verified
 
 
+def _set_endpointing_profile(profile: str) -> str:
+    """Change the profile, then read it back from the bridge before reporting success."""
+    data = _request("POST", "/settings", {"endpointing_profile": profile})
+    if not data.get("ok"):
+        raise VoiceControlError(str(data.get("error") or "the bridge refused the change"))
+    verified = _endpointing_profile()
+    if verified != profile:
+        raise VoiceControlError(
+            f"asked for endpointing profile {profile!r} but the device reports {verified!r}")
+    return verified
+
+
 def handle(args: dict) -> str:
     action = str((args or {}).get("action") or "").strip()
     if action not in _ACTIONS:
@@ -110,6 +141,18 @@ def handle(args: dict) -> str:
             state = _settings()
             return json.dumps({"ok": True, "action": action, "follow_up": state,
                                "verified": True}, ensure_ascii=False)
+        if action == "endpointing_status":
+            profile = _endpointing_profile()
+            return json.dumps({"ok": True, "action": action,
+                               "endpointing_profile": profile, "verified": True},
+                              ensure_ascii=False)
+        if action.startswith("endpointing_"):
+            wanted = ("pause_tolerant" if action == "endpointing_pause_tolerant"
+                      else "standard")
+            profile = _set_endpointing_profile(wanted)
+            return json.dumps({"ok": True, "action": action,
+                               "endpointing_profile": profile, "verified": True},
+                              ensure_ascii=False)
         wanted = action == "follow_up_on"
         state = _set_follow_up(wanted)
         return json.dumps({"ok": True, "action": action, "follow_up": state, "verified": True},

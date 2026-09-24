@@ -186,6 +186,9 @@ class VoiceGateway:
                     _LOGGER.warning("run %s completed without any text delta", run_id)
                 return
 
+        raise VoiceGatewayError(
+            f"run {run_id} event stream ended without a terminal event")
+
     async def _events(self, run_id: str) -> AsyncIterator[RunsEvent]:
         """Iterate the run's SSE stream, skipping keepalive comments."""
         session = self._require()

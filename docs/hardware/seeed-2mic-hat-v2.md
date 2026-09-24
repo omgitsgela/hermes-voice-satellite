@@ -81,5 +81,6 @@ the microphone by our core patch, because otherwise the device hears its own chi
 - **`--mic-auto-gain`, `--mic-noise-suppression` and `--snd-volume-multiplier` are all unused**, and all
   three are plausible wins: the first two against the long endpointer waits in a noisy room, the third
   for voice volume control in #10.
-- `pi/wyoming-satellite-vad.conf` is a dormant unit that both mis-describes what VAD does and would
-  restore the old `ok_nabu` wake word if enabled. See issue #38.
+- The obsolete `pi/wyoming-satellite-vad.conf` drop-in was removed in issue #38. It falsely claimed
+  that VAD enabled wake-free streaming and would have restored the retired `ok_nabu` wake word if
+  installed. Follow-up capture uses the wake shim; do not recreate or deploy a VAD override.

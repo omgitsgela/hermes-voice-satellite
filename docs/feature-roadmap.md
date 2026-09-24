@@ -155,9 +155,18 @@ expectation, 2026-09-23: a feature enhancement belongs on the Issues page, not o
 | [#9](https://github.com/omgitsgela/hermes-voice-satellite/issues/9) | The DKMS build-versus-installed warning |
 | [#10](https://github.com/omgitsgela/hermes-voice-satellite/issues/10) | Volume control by voice, with a hard floor that is never zero |
 | [#11](https://github.com/omgitsgela/hermes-voice-satellite/issues/11) | Multi-satellite configuration and management: onboarding, updates, options at fleet scale |
+| [#26](https://github.com/omgitsgela/hermes-voice-satellite/issues/26) | Optional slower-speaking accessibility mode for utterance endpointing |
 
 #10 is a maintainer request rather than a gap against the successor project, and it is filed
 here all the same: this index is the list of what we intend to build, whatever the source of the idea.
 
 Keep both places in step: this document carries the reasoning, the issues carry the work. When an
 issue is opened, link it here; when an idea arrives that is not already an issue, file it.
+
+## Built from this list
+
+- **#26, pause-tolerant endpointing** (built 2026-09-24). Named, validated endpointing profiles with
+  `standard` and `pause_tolerant`, selected by voice, by the authenticated settings endpoint, or from a
+  state file, and applied to every capture path. The reasoning and the exact bounds are in
+  [`endpointing-profiles.md`](endpointing-profiles.md). Note what it is and is not: a longer, still
+  finite wait before an utterance closes, not a second conversation mode and not an open microphone.

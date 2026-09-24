@@ -89,6 +89,8 @@ class Announcer:
     def __init__(self, *, sat: SatelliteClient, turn_started_at: Callable[[], Optional[float]],
                  follow_up_get: Optional[Callable[[], bool]] = None,
                  follow_up_set: Optional[Callable[[bool], bool]] = None,
+                 endpointing_profile_get: Optional[Callable[[], str]] = None,
+                 endpointing_profile_set: Optional[Callable[[str], str]] = None,
                  host: str = ANNOUNCE_HOST, port: int = ANNOUNCE_PORT) -> None:
         self._sat = sat          # the conversation loop's connection; see the module docstring
         self._turn_started_at = turn_started_at
@@ -96,6 +98,8 @@ class Announcer:
         # are optional so an Announcer built without a loop still works.
         self._follow_up_get = follow_up_get
         self._follow_up_set = follow_up_set
+        self._endpointing_profile_get = endpointing_profile_get
+        self._endpointing_profile_set = endpointing_profile_set
         self.host = host
         self.port = port
         self.token_path = ANNOUNCE_TOKEN_FILE
@@ -187,35 +191,58 @@ class Announcer:
         if not self._authorised(request):
             _LOGGER.warning("rejected an unauthorised settings read from %s", request.remote)
             return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
-        if self._follow_up_get is None:
+        if self._follow_up_get is None or self._endpointing_profile_get is None:
             return web.json_response({"ok": False, "error": "not wired to the loop"}, status=501)
-        return web.json_response({"ok": True, "follow_up": bool(self._follow_up_get())})
+        return web.json_response({
+            "ok": True,
+            "follow_up": bool(self._follow_up_get()),
+            "endpointing_profile": self._endpointing_profile_get(),
+        })
 
     async def _handle_settings_post(self, request: web.Request) -> web.Response:
-        """Change the device's settings, one named setting at a time.
-
-        Deliberately a single named field rather than a general config setter: the only thing
-        anything outside the bridge may change is follow-up mode.
-        """
+        """Change exactly one validated device setting."""
         if not self._authorised(request):
             _LOGGER.warning("rejected an unauthorised settings change from %s", request.remote)
             return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
-        if self._follow_up_set is None:
+        if self._follow_up_set is None or self._endpointing_profile_set is None:
             return web.json_response({"ok": False, "error": "not wired to the loop"}, status=501)
         try:
             body = await request.json()
         except Exception:  # noqa: BLE001 - a bad body is a 400, not a 500
             return web.json_response({"ok": False, "error": "body must be JSON"}, status=400)
-        if not isinstance(body, dict) or "follow_up" not in body:
+        if not isinstance(body, dict) or len(body) != 1:
             return web.json_response(
-                {"ok": False, "error": "expected {\"follow_up\": true|false}"}, status=400)
-        wanted = body["follow_up"]
-        if not isinstance(wanted, bool):
-            return web.json_response(
-                {"ok": False, "error": "follow_up must be true or false"}, status=400)
-        result = bool(self._follow_up_set(wanted))
-        _LOGGER.info("follow-up mode set to %s over the settings endpoint", result)
-        return web.json_response({"ok": True, "follow_up": result})
+                {"ok": False,
+                 "error": "expected exactly one of follow_up or endpointing_profile"}, status=400)
+
+        if "follow_up" in body:
+            wanted = body["follow_up"]
+            if not isinstance(wanted, bool):
+                return web.json_response(
+                    {"ok": False, "error": "follow_up must be true or false"}, status=400)
+            result = bool(self._follow_up_set(wanted))
+            _LOGGER.info("follow-up mode set to %s over the settings endpoint", result)
+            return web.json_response({"ok": True, "follow_up": result})
+
+        if "endpointing_profile" in body:
+            wanted = body["endpointing_profile"]
+            if not isinstance(wanted, str):
+                return web.json_response(
+                    {"ok": False, "error": "endpointing_profile must be a string"}, status=400)
+            try:
+                result = self._endpointing_profile_set(wanted)
+            except ValueError as exc:
+                return web.json_response({"ok": False, "error": str(exc)}, status=400)
+            except OSError as exc:
+                _LOGGER.error("could not persist endpointing profile: %s", exc)
+                return web.json_response(
+                    {"ok": False, "error": "could not persist endpointing profile"}, status=500)
+            _LOGGER.info("endpointing profile set to %s over the settings endpoint", result)
+            return web.json_response({"ok": True, "endpointing_profile": result})
+
+        return web.json_response(
+            {"ok": False, "error": "unknown setting; expected follow_up or endpointing_profile"},
+            status=400)
 
     async def _handle_announce(self, request: web.Request) -> web.Response:
         if not self._authorised(request):
