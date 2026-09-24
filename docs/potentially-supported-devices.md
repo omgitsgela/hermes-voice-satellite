@@ -1,160 +1,92 @@
-# Supported devices: what counts, and what is in each class
+# Supported units: the canonical list
 
-Rewritten 2026-09-23 to match Angela's hardware schema. Prices are USD list prices as displayed when
-compiled and shift by warehouse; SKUs are for verifying rather than guessing.
+**Status: canonical.** These are the units this project supports. Everything else in the ReSpeaker and
+Seeed families is either excluded (with the reason recorded below) or on the watchlist pending vendor
+documentation.
+
+Confirmed by Angela 2026-09-23, against the live listings. Prices are **single-unit** prices in USD. The
+"10+:" figures Seeed shows on a product page are bulk tier prices and are not what a buyer pays for one.
 
 ## What counts as supported
 
-A device has to be one of exactly two shapes:
+A unit has to be one of exactly two shapes:
 
 1. **A Raspberry Pi plus an add-on board (a HAT).** The Pi is the host, the HAT supplies the microphones
-   and the control surface, and our own software drives the LEDs over SPI. This is what we run today.
-2. **An integrated ESP32-class device**, with its own processor and flashable firmware, where the device
-   is the thing rather than a peripheral of one.
+   and the control surface, and our own software drives the LEDs over SPI. This is what runs today.
+2. **An integrated ESP32-class device**, with its own processor and flashable firmware. We ship our own
+   firmware on these, speaking the Wyoming protocol directly to the bridge. Not ESPHome, not Linux Voice
+   Assistant: those are other stacks and we are not adopting them.
 
-**Explicitly not supported: USB-only microphones and arrays.** Their audio is USB, their LEDs and buttons
-are driven through the vendor's own SDK over USB, and there is no board we own. They are peripherals for a
-host that someone else's software controls, which is the wrong shape for a device we intend to provision,
-update and own end to end.
+**Excluded by rule: USB-only microphones and arrays.** Their audio goes over USB and their lights and
+buttons are driven by the vendor's own software. Wrong shape for a device we provision, update and own.
 
-## Path A: Pi plus HAT (what we run, and the cheapest good buys)
+## Canonical supported units
 
-| Device | SKU | Price | Status |
-|---|---|---|---|
-| Seeed ReSpeaker **2-Mics Pi HAT V2.0** (TLV320AIC3104) | 107100001 | $13.99 | **In service.** Full entry: [`hardware/seeed-2mic-hat-v2.md`](hardware/seeed-2mic-hat-v2.md) |
-| ReSpeaker 4-Mic Array for Raspberry Pi | 103030216 | $24.90 | **Discontinued at Seeed.** The driver supports 4-mic arrays, so equivalents from other brands are worth finding |
-| ReSpeaker 2-Mics Pi HAT, other brands | n/a | varies | Upstream's own tutorial points at a Keyestudio equivalent of our board, so clones are entirely normal here |
+| Unit | SKU | Price | Path | Role |
+|---|---|---|---|---|
+| **ReSpeaker 2-Mics Pi HAT V2.0** (TLV320AIC3104) | 107100001 | **$14** | A | What we run today. The reference implementation, and the baseline every other unit is compared against |
+| **reSpeaker Lite Voice Assistant Kit, full kit** (2-mic array, pre-soldered XIAO ESP32S3, mono enclosed speaker, acrylic enclosure) | 110061601 | **$38** | B | **Recommended complete unit.** Only option that arrives as a finished, flashable device |
+| **reSpeaker Lite Voice Assistant Kit** (array, XIAO ESP32S3, no speaker or case) | 110061601 | **$31** | B | Only worth it if a speaker and enclosure are already on hand |
+| **reSpeaker XMOS XVF3800 with XIAO ESP32S3, case version** | 114993702 | **$68** | B | **Premium unit.** On-chip AEC, AGC, DoA, VAD, dereverberation, beamforming, noise suppression, 360 degree pickup to 5 m. Needs a speaker added |
+| **reSpeaker XMOS XVF3800 with XIAO ESP32S3** (no case) | 114993700 | **~$67** | B | Same board, bring your own enclosure. Needs a speaker added |
 
-https://www.seeedstudio.com/ReSpeaker-2-Mics-Pi-HAT.html
-https://www.seeedstudio.com/ReSpeaker-4-Mic-Array-for-Raspberry-Pi.html
+- 2-Mics Pi HAT V2.0: https://www.seeedstudio.com/ReSpeaker-2-Mics-Pi-HAT.html
+- Lite full kit: https://www.seeedstudio.com/ReSpeaker-Lite-Voice-Assistant-Kit-Full-Kit-of-2-Mic-Array-pre-soldered-XIAO-ESP32S3-Mono-Enclosed-Speaker-and-Enclosure.html
+- Lite kit: https://www.seeedstudio.com/ReSpeaker-Lite-Voice-Assistant-Kit-p-5929.html
+- XVF3800 with case: https://www.seeedstudio.com/ReSpeaker-XVF3800-With-Case-XIAO-ESP32S3-p-6628.html
+- XVF3800, no case: https://www.seeedstudio.com/ReSpeaker-XVF3800-4-Mic-Array-With-XIAO-ESP32S3-p-6489.html
 
-**Why this path wins on cost and effort:** the Seeed `seeed-voicecard` driver we already run is
-DKMS-installed and ships device-tree overlays and mixer state for **2, 4, 6 and 8 microphone** arrays. A
-HAT matching one of those needs no new driver, no kernel work and no vendor SDK. Our LED service pattern
-already exists for it, and the spare for the device we run costs $13.99.
+**Which to buy.** A complete flashable device: the **$38 full kit**. The premium unit, for hardware echo
+cancellation that fixes our biggest feature gap (#1): the **$68 XVF3800 with case**. To build on a
+Raspberry Pi and match what we run: the **$14 Pi HAT**.
 
-## Path B: integrated ESP32-class devices
+## Excluded, and why
 
-| Device | SKU | Price | Note |
-|---|---|---|---|
-| reSpeaker Lite Voice Assistant Kit (ESPHome target) | 110061601 | **$30.99** | Cheapest flashable unit: array plus XIAO, no speaker or case |
-| reSpeaker Lite Voice Assistant Kit, **full kit** (array plus pre-soldered XIAO, mono enclosed speaker, acrylic enclosure) | 110061601 | **$38.00** | Best value in the list: seven dollars over the bare kit buys a speaker and an enclosure that cost more bought separately |
-| reSpeaker XVF3800 with XIAO ESP32S3 | 114993700 | $66.99 | Array plus ESP32S3 host on one board |
-| reSpeaker XVF3800 with XIAO ESP32S3, case | 114993702 | **$67.99** ($62.99 at 10+) | The premium unit, and the one to aim for. Needs a speaker added |
-| reSpeaker Flex XVF3800 Circular-4 with XIAO | 100070894 | $60.90 | Split array on an FPC plus ESP32S3 host |
-| reSpeaker Flex XVF3800 Linear-4 with XIAO | 100026178 | $60.90 | Same, linear array |
-
-https://www.seeedstudio.com/ReSpeaker-Lite-Voice-Assistant-Kit-p-5929.html
-https://www.seeedstudio.com/ReSpeaker-XVF3800-4-Mic-Array-With-XIAO-ESP32S3-p-6489.html
-https://www.seeedstudio.com/ReSpeaker-XVF3800-With-Case-XIAO-ESP32S3-p-6628.html
-https://www.seeedstudio.com/reSpeaker-Flex-XVF3800-Circular-4-with-XIAO-ESP32S3-p-6739.html
-https://www.seeedstudio.com/reSpeaker-Flex-XVF3800-Linear-4-with-XIAO-ESP32S3-p-6736.html
-
-**Settled 2026-09-23: we ship our own firmware on these devices, speaking Wyoming straight to the
-bridge.** So their value to us is not ESPHome support, it is that the microphone array, the LEDs and the
-buttons are documented and already driven from a microcontroller by someone else, which we can read as a
-reference. No ESPHome, no Linux Voice Assistant, no adoption of another stack: the device talks to our
-bridge exactly as the Pi does.
-
-The project's size makes this reasonable. Wyoming is JSON lines plus PCM audio, and 16 kHz mono is about
-32 KB/s, small enough for a microcontroller and trivially small over Wi-Fi.
-
-## Watchlist: matches the schema, not usable yet
-
-| Device | Why it is on the list |
+| Unit | Reason |
 |---|---|
-| reSpeaker Clip (wearable recorder) | Fits the integrated-device class on paper: its own processor, open-source firmware, and programmable button logic and display content, which is a control surface we could write ourselves. Blockers today are that the firmware and SDK downloads are still marked coming soon with the wiki in draft, and that it is built as a recorder for transcription and summarisation rather than as a conversational device. It also documents its own app, the SenseCraft Voice App, alongside the open SDK, so the answer to "is there an app or do we write our own" is currently both. Revisit when the SDK ships. |
+| reSpeaker XMOS XVF3800, bare USB (101991441, $54.90) | USB-only. Audio and controls belong to a vendor SDK |
+| reSpeaker XMOS XVF3800 with case, USB (114993701, $62.99) | Same |
+| reSpeaker XMOS XVF3000 with case, USB (107990193, $70.99) | Same |
+| reSpeaker Flex XVF3800 Circular-4, bare USB (100005504, $57.99) | Same |
+| reSpeaker Flex XVF3800 Linear-4, bare USB (100099135, $57.99) | Same |
+| reSpeaker Lite, bare USB (107990273, $26.99) | Same. The Lite is only supported when paired with an ESP32 host |
+| Sound Event Detection Module D1 (100049596, $18.90) | Not an audio device. An event classifier over USB serial. Its own idea, tracked separately |
+| ReSpeaker 4-Mic Array for Raspberry Pi (103030216, $24.90) | Discontinued. Equivalents from other brands are unverified |
 
-https://www.seeedstudio.com/respeaker-clip-wearable-ai-recorder.html
-
-## Excluded, and why (so the same question is not re-litigated)
-
-| Device | Why it is out |
-|---|---|
-| reSpeaker XMOS XVF3800 (bare, USB) | USB audio with an SDK-driven control surface. No board we own |
-| reSpeaker XMOS XVF3800 with Case (USB) | Same |
-| reSpeaker XMOS XVF3000 with Case (USB, the classic Mic Array v2.0 shape) | Same |
-| reSpeaker Flex XVF3800 Circular-4 (bare USB) | Same |
-| reSpeaker Flex XVF3800 Linear-4 (bare USB) | Same |
-| reSpeaker Lite (bare USB) | Same |
-| Sound Event Detection Module D1 | Not an audio device at all: an event classifier that reports classifications over USB serial. Its own idea, tracked separately, not a satellite component |
-
-The excluded devices are not bad hardware. They are good audio with someone else's control plane, and they
+The excluded units are not bad hardware. They are good audio with someone else's control plane, and they
 would leave us maintaining a vendor SDK just to change the colour of a light.
 
-## What to buy, in order
+## Watchlist
 
-1. **A spare ReSpeaker 2-Mics Pi HAT, $13.99.** The same V2.0/AIC3104 revision we run, so it is a
-   like-for-like replacement and a fair baseline for any comparison.
-2. **A 4-mic or 6-mic I2S HAT from any brand matching the driver's overlays**, if one can be found at a sane
-   price. Same path, no new software, better far-field pickup in principle.
-3. **For firmware development, the reSpeaker Lite full kit at $38.** Seven dollars over the bare kit adds
-   the mono enclosed speaker and the acrylic enclosure, which cost more bought separately, so this is the
-   turnkey starting point. Cheapest route to a flashed device
-   speaking our protocol, fewest unknowns, and it has a small LED and two buttons to exercise the control
-   path. The XVF3800 with XIAO at $66.99 is the natural second unit, since it brings on-chip echo
-   cancellation, which is our biggest feature gap.
+**reSpeaker Clip**, wearable AI recorder: https://www.seeedstudio.com/respeaker-clip-wearable-ai-recorder.html
 
+Fits the integrated-device shape on paper, with open-source firmware and programmable button logic and
+display content. Not supported and **not to go on a buyer list**, because its firmware, SDK and datasheet
+are all still marked "coming soon", its processor is unpublished, and it is built as a recorder with
+onboard storage and BLE or Wi-Fi sync rather than as a wake-word satellite. Revisit when the SDK ships.
 
-## Verified 2026-09-23, while shopping the listings
+## Reference notes
 
-### Which Raspberry Pi models the HAT actually runs on
+**Bulk pricing.** Every "10+:" figure on a Seeed listing is a tier price. The HAT shows $11.99 against
+$14 singly, and the XVF3800 case shows $62.99 against $68. Quote single-unit prices to buyers.
 
-From the driver's own README, the officially supported set is **Raspberry Pi 3 (all models), Raspberry Pi 4
-(all models), Raspberry Pi Zero and Zero W**, on **32-bit Raspberry Pi OS**, with **64-bit marked
-experimental**. The 2-Mics HAT is a 40-pin board, so it fits anything with a 40-pin header, but fitting is
-not the same as working:
+**Which Raspberry Pi.** The driver's own README supports **Pi 3 (all models), Pi 4 (all models), Pi Zero
+and Zero W**, on 32-bit Raspberry Pi OS, with 64-bit marked experimental. Two limits matter:
 
-- **Raspberry Pi 5 is not supported.** It is not on the list, and the Pi 5's RP1 chip changed the audio and
-  GPIO plumbing. Treat it as unknown until we test one, not as a safe buy.
-- **Pi Zero and Zero W (the originals) are supported by the driver but too weak for our software**, which
-  needs a 64-bit OS and enough RAM to run a wake word. The floor for this project is a **Pi Zero 2 W**.
-- Our own Zero 2 W is not on Seeed's list either and works fine, so the list is conservative rather than
-  complete. For a buyer, quote the supported list and add the Zero 2 W as the known-good build.
+- **Raspberry Pi 5 is not supported.** Absent from the list, and the Pi 5's RP1 chip changed the audio and
+  GPIO plumbing. Unknown until tested, so not a safe buy.
+- **Pi Zero and Zero W are driver-supported but too weak for our software**, which needs a 64-bit OS and
+  enough RAM for a wake word. The floor for this project is a **Pi Zero 2 W**, which works even though
+  Seeed does not list it, so their list is conservative rather than complete.
 
-### Pricing trap on the Seeed listings
+**Revision trap on the Pi HAT.** Seeed's wiki for this board mostly documents the **older V1.x built on a
+WM8960 codec**. Ours is the **V2.0 with a TLV320AIC3104**, needing a different driver and overlay. The
+V2.0 schematic is linked at the bottom of that wiki page.
 
-The **"10+:" figure on a product page is a bulk price, not the unit price.** The 2-Mics HAT shows $11.99 at
-10 or more against $13.99 singly. Any list sent to a buyer should use single-unit prices, which is what
-`What to buy` above does.
+**Full kit variant trap.** The Lite full kit comes in two variants. Only the one with the **XIAO ESP32S3
+pre-soldered** has a processor. The others have nothing to flash.
 
-### reSpeaker Lite Voice Assistant Kit, full kit variant
-
-The full kit exists in **two variants**: with the XIAO ESP32S3 pre-soldered, or without it. Only the
-pre-soldered one has a processor. Order the wrong one and there is nothing to flash.
-
-### reSpeaker XMOS XVF3800 with XIAO ESP32S3
-
-The listing confirms more than we credited, and it makes this the target device for our own firmware:
-
-- **Dual modes, I2S or USB.** The I2S path means the ESP32 reads the array directly, so no USB firmware
-  conversion is needed in the MCU direction.
-- **On-board AEC, AGC, DoA, VAD, dereverberation, beamforming and noise suppression**, with 360 degree
-  far-field pickup to 5 metres.
-
-That is the whole hard part of voice capture done on the array and handed to the microcontroller as clean
-audio. It closes the echo cancellation gap (#1) in hardware rather than in our code, which is why this is
-the device to aim for rather than the cheapest one.
-
-### reSpeaker Clip
-
-Not supported, and it should not go on a buyer list yet. Its firmware, SDK and datasheet are all still
-marked **"coming soon"**, its processor is unpublished, and it is built as a recorder with onboard storage
-and BLE or Wi-Fi sync rather than as a wake-word satellite. It stays on the watchlist.
-
-
-### Unit prices, confirmed by Angela from the live listings 2026-09-23
-
-Single-unit prices, which is what a buyer actually pays. Everything in the tables above is a single-unit
-figure unless marked otherwise.
-
-- ReSpeaker 2-Mics Pi HAT V2.0, $14 ($11.99 at 10 or more)
-- reSpeaker Lite Voice Assistant Kit, $31
-- reSpeaker Lite Voice Assistant Kit, full kit with pre-soldered XIAO, mono enclosed speaker and acrylic
-  enclosure, **$38**
-- reSpeaker XMOS XVF3800 with XIAO ESP32S3, case version, $68 ($62.99 at 10 or more)
-- reSpeaker XMOS XVF3800 with XIAO ESP32S3, no case, about $67 ($61.99 at 10 or more)
-
-The **full kit is the value pick**: $38 against $31 for the bare kit, so seven dollars buys the speaker and
-the enclosure, and it is the only option in the list that arrives as a complete, flashable device. The
-XVF3800 case version at $68 is the premium choice for its on-chip echo cancellation and beamforming.
+**Driver coverage.** The Seeed `seeed-voicecard` driver is DKMS-installed, so it rebuilds on kernel
+upgrades, and it ships device-tree overlays and mixer state for **2, 4, 6 and 8 microphone** arrays. Any
+HAT matching one of those should work without new driver code. See `hardware/seeed-2mic-hat-v2.md` for the
+unit in service and `device-reports/baseline-seeed-2mic-hat-v2.md` for its measured baseline.
