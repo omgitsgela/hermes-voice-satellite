@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Phase 2, test B: synthesize a phrase with Piper and play it on the satellite.
 
-No wake word needed: the satellite forwards AudioStart/Chunk/Stop to aplay
-unconditionally, so this proves the TTS path and the speaker end to end.
+No wake word needed. The satellite forwards AudioStart/Chunk/Stop to aplay, but it must be armed
+with RunSatellite first: a satellite that is still streaming can ignore the first message it
+receives, so this arms before playing anything (issue #37).
 
     .venv/bin/python scripts/play_phrase.py
     .venv/bin/python scripts/play_phrase.py --text "Your custom phrase here"
@@ -69,7 +70,12 @@ async def main() -> int:
             print(f"  snd services   : {snd_names}")
             print(f"  raw            : {info_msg!r}"[:400])
 
-        print("\n=== 3. STREAM IT TO THE SPEAKER ===")
+        print("\n=== 3. ARM THE SATELLITE, THEN STREAM IT TO THE SPEAKER ===")
+        # Arm it the way the bridge and scripts/diag_followup_stream.py do. A satellite that is still
+        # streaming can ignore the first message it receives, so playback sent without RunSatellite is
+        # not reliably heard. This script is the sole connection, so arming here carries none of the
+        # second-connection risk that keeps bridge/announce.py from sending it (issue #37).
+        await sat.run()
         played = await sat.play_wav(wav_path)
         print(f"\n=== RESULT: satellite reported Played = {played} ===")
         print("  events seen:", sat.event_counts)
