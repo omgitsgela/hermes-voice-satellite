@@ -8,16 +8,8 @@
 
 plugins:
   enabled:
-    - geolocation
-    - google
-    - hubitat
-    - mimo-voice
-    - skill-enforcer
-    - voice_satellite
-    - web/trafilatura
+    - voice_satellite        # the only plugin this project requires; add your own beside it
   entries:
-    skill-enforcer:
-      allow_tool_override: false
     voice_satellite:
       allow_tool_override: false
 

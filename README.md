@@ -30,7 +30,7 @@ substitute your own.
                  v
   Hermes Agent
       gateway API server bound to 127.0.0.1:8642; the voice surface follows its default model
-      plugins: voice_satellite, hubitat, google, geolocation, mimo-voice, skill-enforcer, web/trafilatura
+      plugins: voice_satellite, plus whatever else your install enables
       a small set of core patches, see hermes/patches/
 ```
 
@@ -53,7 +53,7 @@ device and receive its audio. Everything else in the stack is loopback only.
 | `pi/` | The device side: wake shim, LED service, systemd units, and `.orig` copies of the upstream files we patch |
 | `sounds/` | Chimes and tones the device plays |
 | `reference/` | Upstream reference copies of the files the device patches, for diffing |
-| `hubitat/` | `HermesAnnouncer.groovy`, the Hubitat driver that speaks through this system |
+| `hubitat/` | `HermesAnnouncer.groovy`: an optional Hubitat driver that announces through this system |
 | `hermes/plugins/` | The Hermes plugins the voice surface uses, verbatim from a working install |
 | `hermes/patches/` | The one remaining core patch, as a diff, plus a checker |
 | `hermes/config/` | The voice-surface configuration keys, with placeholders instead of secrets |
@@ -78,7 +78,8 @@ here) comes from the Piper voices release; the custom wake model is a community 
 
 ## Install: the Hermes side
 
-1. Copy the plugins in: `~/.hermes/plugins/{voice_satellite,hubitat,google,geolocation}`.
+1. Copy the plugin in: `~/.hermes/plugins/voice_satellite`. It is the only plugin this project needs;
+   the rest of the voice surface comes from your own Hermes install and its own plugins.
 2. Enable them. A plugin that merely sits in the directory is **not loaded**:
    `hermes plugins enable voice_satellite` and so on for each.
 3. Apply the configuration keys from `hermes/config/voice-surface.example.yaml` to

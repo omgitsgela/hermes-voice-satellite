@@ -1,7 +1,0 @@
-name: google
-version: 1.0.0
-description: "Google Workspace for the voice surface: tasks, calendar and contacts through Angela's gog CLI. No terminal needed, no delete action, two independent subcommand allowlists."
-author: angela
-kind: standalone
-provides_tools:
-  - google
