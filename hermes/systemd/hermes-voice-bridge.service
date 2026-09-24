@@ -12,7 +12,11 @@ WorkingDirectory=/home/angela/hermes-voice-bridge
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/home/angela/hermes-voice-bridge/.venv/bin/python -m bridge.loop
 Restart=always
-RestartSec=5
+# A satellite that is switched off cannot be dialled, and every attempt costs about 1.3s of CPU
+# reloading the whisper and Piper models before it fails. At 5s that was ~25% of a core for hours
+# (3,210 restarts observed on 2026-09-24). 60s still recovers on its own, twelve times less often.
+# The hourly in-process reconnect covers transient blips, so this path is only for real death.
+RestartSec=60
 # A turn can legitimately take a while (tool calls, a long spoken answer). Give it room to finish
 # rather than SIGKILLing mid-playback.
 TimeoutStopSec=30
