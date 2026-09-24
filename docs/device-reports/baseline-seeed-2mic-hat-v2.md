@@ -45,3 +45,25 @@ throttled=0x0
 - The capture parameters read as unmeasurable here because the running stack holds the card. For a
   real measurement, run this check on a new device BEFORE starting the services, and note that
   the in-use path is reported from the satellite unit when the card is busy.
+
+
+## Re-run 2026-09-24, with the services stopped
+
+Captured with `scripts/device-check.py` after copying the current version to the device (the copy there
+was the pre-#34 version, which matters when comparing against older reports).
+
+```
+memory: 416 MB total, 229 MB available   thermal: 42.4 C, throttled=0x0
+cards:  0 vc4-hdmi | 1 seeed2micvoicec (under test)
+card 'seeed2micvoicec' hardware ranges: rates not reported, channels not reported
+card 'seeed2micvoicec' capture: 16 kHz mono available: False   (mono ?, stereo no)
+card 'seeed2micvoicec' measured capture: 16k mono ok, 16k stereo ok
+card 'seeed2micvoicec' playback: present
+LED bus: spidev ['/dev/spidev0.0', '/dev/spidev0.1']
+overlay: dtoverlay=respeaker-2mic-v2_0
+```
+
+The advertised-parameter line and the measured line disagree, and the measured one is the truth: this card
+does not report rate or channel ranges at all, and captures at 16 kHz in both mono and stereo through
+`plughw`. Any future comparison should read the measured line first and treat the hardware-ranges line as
+advisory only.
