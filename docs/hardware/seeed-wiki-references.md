@@ -10,7 +10,23 @@ locally is worth more here than usual.
 | Product page | https://www.seeedstudio.com/ReSpeaker-2-Mics-Pi-HAT.html |
 | Seeed wiki | https://wiki.seeedstudio.com/ReSpeaker_2_Mics_Pi_HAT/ |
 | Driver source, with the overlays and asound state | mirrored from `respeaker/seeed-voicecard`, see `pi/vendor/MANIFEST.md` |
-| Enclosure and speaker (a third-party design, not Seeed's) | https://makerworld.com/en/models/1232745-voice-assistant-wyoming-satellite |
+| Enclosure (a third-party design, not Seeed's, and **not redistributable**) | https://makerworld.com/en/models/1232745-voice-assistant-wyoming-satellite |
+
+## Licensing, before anyone commits a file from somewhere else
+
+This repository is meant to be shareable, which makes third-party assets a question rather than a detail.
+
+- **The enclosure design is under MakerWorld's Standard Digital File License and must not be committed
+  here.** That licence forbids sharing, hosting, transferring or distributing the digital or printed files,
+  including remixes, and forbids use in anything that charges money. A personal copy kept off this
+  repository is fine; a copy in a repository is redistribution, and this repository is mirrored to a remote.
+  **Do not add those files, in any format, to this tree.**
+- **The V2.0 schematic** comes from Seeed's own wiki and is included for reference. Seeed publishes it
+  publicly for this board; if their terms ever change, replace it with the link.
+- **The sound assets** are CC BY 4.0, credited to Clayton Charles Tapp (cctaudio.com) via the Home Assistant
+  Voice Preview Edition. Keep the credit if they are reused or modified.
+- **Wake-word models** are community files with no stated licence. They are deliberately not committed here.
+- Everything else in this repository is ours.
 
 ## Traps this board sets
 
