@@ -2,7 +2,7 @@
 
 ## Confirmed working behaviour
 
-On 2026-09-22 Angela confirmed the Fairy Lights (device 601, Govee v2 Color
+On 2026-09-22 a Govee strip light (device 601, Govee v2 Color
 Lights 3 Driver) changed to blue then reverted under the old voice plugin.
 A single `setHue 67` changed them to blue and stayed. After the plugin fix,
 a direct plugin red request stayed red, and a spoken satellite blue request
@@ -19,7 +19,7 @@ Hubitat attribute matches. Other Govee models have not been individually tested.
 - Driver hue is 0-100; the plugin accepts degrees and converts with
   `round(hue * 100 / 360)`. Red: 0; green: 33; blue: 67 at the driver.
 - Never skip an explicit request because cached RGB matches the target. The hub
-  reported red while Angela physically saw green during diagnosis.
+  reported red while the strip was physically green during diagnosis.
 - The generic CLI is a passthrough, not a sequence guard. Callers must follow these rules.
 
 ## Current limits

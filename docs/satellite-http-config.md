@@ -1,7 +1,7 @@
 # A configuration server for the satellite
 
 Feasibility research, 2026-09-23. **Status: researched and documented, not built. Decisions are
-parked deliberately; do not re-raise them until Angela asks.**
+parked deliberately; do not re-raise them until asked.**
 
 Her request, verbatim:
 
@@ -14,8 +14,8 @@ Her request, verbatim:
 **Technically feasible. But the satellite is the wrong place to put it, and the request can be met
 better without it.**
 
-Build the configuration page on `autumn`, next to the bridge's existing authenticated HTTP server,
-and apply changes to the Pi through the control channel the bridge already uses. Angela gets what
+Build the configuration page on the host, next to the bridge's existing authenticated HTTP server,
+and apply changes to the Pi through the control channel the bridge already uses. The user gets what
 she actually asked for, which is a web page on the LAN that configures the device from any device
 in the house, with none of the risk below and no new load on the Pi.
 
@@ -23,7 +23,7 @@ Everything in this document is measured, not estimated. Measurements taken 2026-
 
 ## What the two machines actually have
 
-| | `autumn` (host) | `wyoming1` (the satellite) |
+| | the host | the satellite |
 |---|---|---|
 | CPU | workstation class | 4 x Cortex-A53, load average 0.69 |
 | RAM | 17.9 GB, **13.5 GB available** | 416 MB total, 244 MB used, **171 MB available** |
@@ -47,7 +47,7 @@ the one port the bridge dials into.** Every internal control path is loopback.
 ### The fact that decides this
 
 ```
-User wyoming1 may run the following commands on wyoming1:
+The satellite user may run the following commands on the satellite:
     (ALL : ALL) ALL
     (ALL) NOPASSWD: ALL
 ```
@@ -66,7 +66,7 @@ The account that would own any web server on this device has **passwordless, unr
    available, and a small stdlib server costs maybe 20 to 35 MB of it, which is roughly a fifth of
    what is left. The device already shows occasional playback underruns, with Wi-Fi as the prime
    suspect. Adding a second workload that competes for the same CPU and the same Wi-Fi is a
-   plausible way to make the one symptom that annoys Angela more frequent.
+   plausible way to make the one symptom that annoys the user most.
 3. **It does not need to be there.** Almost every setting she would want to change is applied by
    restarting a service on the Pi. Something else on the LAN can do that. The bridge already runs
    an authenticated HTTP server on a machine with 13.5 GB spare, and there is already a proven,
@@ -76,13 +76,13 @@ The account that would own any web server on this device has **passwordless, unr
 
 ## The recommended design
 
-A settings page served by the bridge on `autumn`, using the same aiohttp app that already serves
+A settings page served by the bridge on the host, using the same aiohttp app that already serves
 `/announce` and `/settings`.
 
 - **Front end:** one static page, no framework, no build step. Works in a phone browser.
 - **Auth:** the same bearer-token pattern as `/announce`, issued to the browser once and stored
   locally, or a single shared password with a session cookie. LAN trust, exactly like the
-  announcement endpoint, which Angela already accepted. **Not internet-facing, and no TLS, because
+  announcement endpoint, which is already accepted for this design. **Not internet-facing, and no TLS, because
   a self-signed certificate means installing a CA on every device that visits, which is exactly the
   onboarding friction she does not want.**
 - **Writes are an allowlist, never a shell.** Each configurable item is a named operation with a
@@ -143,11 +143,11 @@ If the numbers barely move and the underruns do not increase, the capacity objec
 disappears and only the root-access objection remains, which is solvable by hardening sudo. If the
 underruns climb, that settles it.
 
-## Decisions parked for Angela
+## Decisions parked
 
 Not to be raised again until she asks, by her instruction on 2026-09-23:
 
-1. Configuration page on `autumn` (recommended, no new Pi surface) or on the Pi as originally
+1. Configuration page on the host (recommended, no new Pi surface) or on the Pi as originally
    imagined?
 2. If it goes on the Pi, is LAN exposure acceptable in exchange for convenience, with sudo
    hardened first?

@@ -22,7 +22,7 @@ instruction that names a codec, and note that the HAT is also sold under other b
 
 ## Enclosure and the way audio gets out
 
-Angela's build uses the **Voice Assistant - Wyoming Satellite** case by its designer on MakerWorld
+The reference build uses the **Voice Assistant - Wyoming Satellite** case by its designer on MakerWorld
 (<https://makerworld.com/en/models/1232745-voice-assistant-wyoming-satellite>), a "Living Room Ready"
 casing built for a Pi Zero 2 W with this exact HAT, with a **3070 3 W 4-ohm mono speaker**.
 The listing offers five profiles, including multi-plate and single-plate AMS versions, and both **with
@@ -44,15 +44,15 @@ casing; do the cable management; then slide the inner box into the outer box.
 
 From the satellite unit on the device, with the reason each one is there:
 
-    --name 'wyoming1'
+    --name 'my-satellite'
     --uri 'tcp://0.0.0.0:10700'               the only LAN port besides SSH
     --mic-command 'arecord -D plughw:CARD=seeed2micvoicec,DEV=0 -r 16000 -c 1 -f S16_LE -t raw'
     --snd-command 'aplay -D plughw:CARD=seeed2micvoicec,DEV=0 -r 22050 -c 1 -f S16_LE -t raw'
     --wake-uri 'tcp://127.0.0.1:10400'        the wake shim, not the wake engine directly
-    --wake-word-name 'hey_hermes'
+    --wake-word-name '<your wake word>'
     --event-uri 'tcp://127.0.0.1:10500'       how the bridge drives the LEDs
-    --awake-wav  /home/wyoming1/sounds/awake.wav
-    --done-wav   /home/wyoming1/sounds/done.wav
+    --awake-wav  ~/sounds/awake.wav
+    --done-wav   ~/sounds/done.wav
     --mic-seconds-to-mute-after-awake-wav 0.1
     --tts-played-command '/usr/bin/python3 .../examples/led_cmd.py idle'
 

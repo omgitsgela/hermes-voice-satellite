@@ -2,13 +2,13 @@
 
 Design spec, written 2026-09-23. **Status: not built.** Everything here is a plan to
 implement later, except where a line is marked as verified, which means it was measured on
-`autumn` or `wyoming1` on 2026-09-23 rather than assumed.
+the host and the satellite on 2026-09-23 rather than assumed.
 
-**Decisions are parked.** Angela said on 2026-09-23 that she is not ready to decide: "keep those
+**Decisions are parked.** the maintainer was not ready to decide on 2026-09-23: "keep those
 questions documented in the private repo, and we'll revisit later". Do not re-raise them, and do not
 treat them as blockers. They are listed at the end of this file for when she asks.
 
-Angela's request, verbatim:
+The request, verbatim:
 
 > It would be nice to have both a timer countdown, and an alarm function. both will announce using
 > the announcement pathway when the timer or alarm is sounding off. Possible voice commands to
@@ -262,7 +262,7 @@ Live, done once by hand with a 10-second timer and a person listening:
 3. "What timers are running?" answers with the remaining seconds.
 4. A timer set while a long answer is being spoken waits its turn instead of talking over it.
 
-## Decisions parked for Angela (do not re-raise until she asks)
+## Decisions parked (do not re-raise until asked)
 
 1. **Should an alarm ring until silenced, or announce once like a timer?** The recommendation is
    to ship once-only first and add ringing as a deliberate second phase.

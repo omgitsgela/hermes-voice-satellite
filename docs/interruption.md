@@ -1,6 +1,6 @@
 # Interruption: talking to a task that is already running
 
-Built 2026-09-23. Angela's incident, which this exists to fix:
+Built 2026-09-23. a real incident, which this exists to fix:
 
 > I had it turn on christmas lights, but my husband was pranking me and turned them off remotely.
 > I didnt know this, I asked it to investigate, found out it was a joke, and I tried asking the
@@ -60,7 +60,7 @@ In `bridge/config.py`:
   authenticates against the same gateway for every turn it already serves. A scripted probe was
   attempted twice and blocked by credential extraction on the command line, so it was dropped
   rather than fiddled with.
-- **Not yet verified:** the real end-to-end with a voice, which is step 2 above. That needs Angela
+- **Not yet verified:** the real end-to-end with a voice, which is step 2 above. That needs a person
   in front of the device.
 - **Known limitation:** while the device is speaking, an interruption is heard through its own
   audio, so the transcript quality depends on the room. Hardware with on-chip echo cancellation

@@ -1,11 +1,11 @@
 # Baseline device report: Seeed ReSpeaker 2-Mics Pi HAT V2.0
 
-Captured 2026-09-23 on `wyoming1` with `scripts/device-check.py`, the current device.
+Captured 2026-09-23 on the reference unit with `scripts/device-check.py`.
 Every new candidate is compared against this file. The block below is generated output, not
 hand-written, so re-running the script on this device should reproduce it.
 
 ```
-device check on wyoming1  (Debian GNU/Linux 12 (bookworm), kernel 6.12.109+rpt-rpi-v8, aarch64 (64bit))
+device check on the satellite  (Debian GNU/Linux 12 (bookworm), kernel 6.12.109+rpt-rpi-v8, aarch64 (64bit))
   memory: {'MemTotal': '416 MB', 'MemAvailable': '179 MB'}   thermal: temp=61.2'C
 throttled=0x0
 

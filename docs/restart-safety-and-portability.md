@@ -10,7 +10,7 @@ Verified live, not assumed:
 
 | Protection | Evidence |
 |---|---|
-| Everything comes back after a host reboot with nobody logged in | `loginctl show-user angela -p Linger` is `yes`, and both `hermes-gateway` and `hermes-voice-bridge` are `enabled` |
+| Everything comes back after a host reboot with nobody logged in | `loginctl show-user <your user> -p Linger` is `yes`, and both `hermes-gateway` and `hermes-voice-bridge` are `enabled` |
 | The bridge survives a gateway restart instead of being dragged down with it | The unit deliberately has no `Requires=hermes-gateway`, only `After=`/`Wants=`, and says so in a comment, because the bridge retries by itself |
 | The bridge itself always comes back | `Restart=always`, `RestartSec=5` |
 | A crash or a lost satellite cannot leave the system wedged | The main loop re-raises connection errors, so the process exits and systemd re-dials; `start()` reconnects on the next run |

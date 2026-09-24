@@ -1,6 +1,6 @@
 # Supported Devices
 
-The units this project supports, confirmed by Angela on 2026-09-23 against the live listings.
+The units this project supports, confirmed against the live listings on 2026-09-23.
 Everything else in the ReSpeaker and Seeed families is either excluded, with the reason recorded below,
 or on the watchlist pending vendor documentation.
 

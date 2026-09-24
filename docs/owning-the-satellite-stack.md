@@ -13,7 +13,7 @@ The repo had been correct all along; the damage was self-inflicted by the sync m
 the lesson is why the live tree is now a git checkout rather than a hand-synced copy: **match paths,
 never filenames.**
 
-Angela's direction, 2026-09-23: "at this point, we are taking inspiration from other projects, and
+Direction set 2026-09-23: "at this point, we are taking inspiration from other projects, and
 we will build and develop the future on our own."
 
 ## What is actually running, pinned
@@ -23,7 +23,7 @@ we will build and develop the future on our own."
 | Satellite software | `wyoming-satellite` commit `13bb024`, tag `v1.4.1-4-g13bb024`, dated 2025-04-25 | `github.com/rhasspy/wyoming-satellite` (**archived upstream**) |
 | Wyoming library | `wyoming 1.5.4` | the satellite's venv, frozen in `pi/vendor/pi-venv-freeze.txt` |
 | Wake engine | `wyoming-openwakeword` 2.1.0, TFLite models only | system packages plus our custom model dir |
-| Wake model | `hey_hermes` (community model 2338), threshold 0.35 | `/home/wyoming1/wake-models`, named by filename stem |
+| Wake model | a community TFLite model, e.g. `hey_hermes`, with its own threshold | the custom model directory, named by filename stem |
 | Audio driver | Seeed `seeed-voicecard` 0.3, tree fingerprint `a77f9c72fca4aa38ad6e4775072b0d4aa385ebea0c36f904fce66e2c521aa61d` | `/usr/src/seeed-voicecard-0.3`, vendored here |
 | Operating system | Debian 12 bookworm, arm64, 64-bit | Raspberry Pi OS on a Pi Zero 2 W |
 | Kernel | `6.12.109+rpt-rpi-v8` | the driver is built against this exact kernel |
@@ -83,7 +83,7 @@ real backstop and lives with the `remote-system-operations` procedure.
 3. Check out the satellite at `13bb024`, or copy `pi/vendor/native-satellite-13bb024` into place,
    then apply the core patch if the source came from upstream.
 4. Recreate the venv from `pi/vendor/pi-venv-freeze.txt`.
-5. Copy the wake model into `/home/wyoming1/wake-models`.
+5. Copy the wake model into the custom model directory.
 6. Install the units and drop-ins from `pi/systemd/`, then `daemon-reload`. Start order: LED service,
    wake engine, shim, then satellite.
 7. Copy the three scripts into `examples/`.
@@ -104,7 +104,7 @@ real backstop and lives with the `remote-system-operations` procedure.
 - The upstream repo is archived, so there are no security fixes coming. Our exposure is limited by
   the device listening on only SSH and the Wyoming port, with everything else on loopback.
 - The Pi venv pins are recorded here and nowhere else. Re-freeze after any deliberate change.
-- **The device layer is ours now.** Angela, 2026-09-23: "We will maintain our own software stack to
+- **The device layer is ours now.** Direction set 2026-09-23: "We will maintain our own software stack to
   support the respeaker devices, including the LED drivers, and update code as needed to keep within
   kernel updates as they happen." The plan for several devices lives in
   `docs/supported-devices.md`.
