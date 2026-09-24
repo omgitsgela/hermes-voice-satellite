@@ -28,8 +28,8 @@ Built for one specific installation (a Pi Zero 2 W called `wyoming1` in the hous
                  | HTTP loopback only: POST /v1/runs + SSE events
                  v
   Hermes Agent
-      gateway API server bound to 127.0.0.1:8642, with a "voice" model route
-      plugins: voice_satellite, hubitat, google, geolocation
+      gateway API server bound to 127.0.0.1:8642; the voice surface follows its default model
+      plugins: voice_satellite, hubitat, google, geolocation, mimo-voice, skill-enforcer, web/trafilatura
       a small set of core patches, see hermes/patches/
 ```
 
@@ -64,6 +64,7 @@ device and receive its audio. Everything else in the stack is loopback only.
 
 Hardware, as built:
 
+- The wake word is `hey_hermes` (see `docs/hardware/`)
 - A Raspberry Pi Zero 2 W with a **Seeed ReSpeaker 2-mic HAT** (`plughw:CARD=seeed2micvoicec`), WiFi only
 - A host machine that stays on, with enough CPU for `faster-whisper small.en` and Piper
 - A Hermes Agent install on that host, version current within a release or so
@@ -79,8 +80,9 @@ here) comes from the Piper voices release; the custom wake model is a community 
 2. Enable them. A plugin that merely sits in the directory is **not loaded**:
    `hermes plugins enable voice_satellite` and so on for each.
 3. Apply the configuration keys from `hermes/config/voice-surface.example.yaml` to
-   `~/.hermes/config.yaml`, including the `platform_toolsets.api_server` list.
-4. Apply the core patches: see `hermes/patches/README.md`.
+   `~/.hermes/config.yaml`. The surface deliberately has **no** `platform_toolsets.api_server` entry:
+   it inherits the default toolset list, which is how it runs at full parity.
+4. Apply the core patch: see `hermes/patches/README.md`.
 5. Restart the gateway and verify the surface resolves as expected (see Verify, below).
 
 ## Install: the device side
@@ -133,10 +135,16 @@ needs, where it lives, and what it is for. Read it before deploying.
 
 ## Surviving Hermes updates
 
-`hermes update` does not preserve local source changes. Our patches are uncommitted working-tree edits,
-so an update stashes them and the system runs unpatched until they are re-applied. Run
-`hermes/patches/check-patches.sh` after every update; it is read-only and tells you which patches are
-missing. See `docs/restart-safety-and-portability.md` for the planned hardening.
+`hermes update` does not preserve local source changes, and our remaining patch is an uncommitted
+working-tree edit, so an update stashes it and the check reports it missing. It is **one** patch,
+`cron/jobs.py`, which keeps a scheduled job from drifting to the bare-`custom` provider fallback when it
+snapshots its model. It is tracked upstream as #109765 with a fix proposed in #109773, so it can be retired
+once a release carries that.
+
+Run `hermes/patches/check-patches.sh` after every update; it is read-only and reports what is missing. See
+`docs/restart-safety-and-portability.md` for the planned hardening.
+## Documentation
+
 - [`docs/timers-and-alarms.md`](docs/timers-and-alarms.md) timers and alarms: design spec, not built yet
 - [`docs/satellite-http-config.md`](docs/satellite-http-config.md) configuration server for the satellite: feasibility research, not built
 - [`docs/owning-the-satellite-stack.md`](docs/owning-the-satellite-stack.md) what is pinned and vendored, our divergence from upstream, and how to rebuild the device
@@ -148,8 +156,9 @@ missing. See `docs/restart-safety-and-portability.md` for the planned hardening.
 ## Status and known gaps
 
 - Verified working as of 2026-09-22/23: wake word, follow-up mode, announcements, LED states.
-- **The voice surface runs at full parity with a normal Hermes conversation** (24 toolsets, 52 tools,
-  ~19k tokens of schema) on the gateway's default model, so it inherits the normal fallback chain.
+- **The voice surface runs at full parity with a normal Hermes conversation** on the gateway's default
+  model, so it inherits the normal fallback chain. Measured 2026-09-24 with this repository's own Verify
+  block: **21 toolsets, 19 tools, about 8.4k tokens of tool schema**.
   It is no longer narrowed, and it no longer pins a voice-specific model route.
 - **One satellite only.** `SATELLITE_HOST` is a single address and the session is a single session.
 - Machine-specific values are still hardcoded in `bridge/config.py`.
