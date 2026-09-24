@@ -26,6 +26,7 @@ import glob
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -67,6 +68,51 @@ def cards() -> list[dict]:
     return out
 
 
+def parse_hw_params(out: str) -> dict:
+    """Pull the RATE and CHANNELS ranges out of an arecord/aplay --dump-hw-params dump.
+
+    The dump prints hardware ranges, for example "RATE: [16000 48000]" or "CHANNELS: [2 2]". A card
+    that advertises only two channels cannot be captured mono on that node, which matters here
+    because our satellite captures mono and a device that is stereo-only needs its capture channel
+    chosen explicitly (see the device-profile list at the end of this report). Reading the range is
+    the difference between "this card works" and "this card works if you select a channel".
+    """
+    found = {"rates": None, "channels": None, "raw_lines": []}
+    for line in out.splitlines():
+        stripped = line.strip()
+        head = stripped.upper().split(":")[0].strip() if ":" in stripped else ""
+        if head not in ("RATE", "CHANNELS"):
+            continue
+        found["raw_lines"].append(stripped)
+        nums = [int(n) for n in re.findall(r"\d+", stripped.split(":", 1)[1] if ":" in stripped else "")]
+        if not nums:
+            continue
+        key = "rates" if head == "RATE" else "channels"
+        found[key] = (min(nums), max(nums)) if len(nums) > 1 else (nums[0], nums[0])
+    return found
+
+
+def measure_capture(card_id: str, rate: int, channels: int, seconds: int = 1) -> str:
+    """Actually capture a moment of audio and report what happened.
+
+    Reading hardware parameters tells you what the node advertises; only opening it tells you what
+    it does. This is what a new device should be judged on, and the checklist says to run this check
+    before starting the services for exactly that reason. Returns "" on success, or the reason it
+    failed. A busy card is reported as busy, never as unsupported.
+    """
+    binary = shutil.which("arecord")
+    if not binary:
+        return "arecord not installed"
+    out = run([binary, "-D", "plughw:CARD=" + card_id, "-r", str(rate), "-c", str(channels),
+               "-f", "S16_LE", "-d", str(seconds), "/dev/null"], timeout=15)
+    low = out.lower()
+    if "busy" in low:
+        return "in use by another process"
+    if "unknown" in low or "no such" in low or "unable" in low or "error" in low:
+        return out.splitlines()[0].strip()[:120] if out else "failed"
+    return ""
+
+
 def card_caps(card_id: str) -> dict:
     """Capture/playback formats for a card, by asking ALSA rather than guessing.
 
@@ -76,7 +122,10 @@ def card_caps(card_id: str) -> dict:
     devices we care about, so the busy case is named explicitly and we report what the card is in
     use AS, read from the satellite unit, which is the real answer for "what is this device doing".
     """
-    caps = {"capture": "", "playback": "", "capture_16k_mono": False, "busy": False, "in_use_as": ""}
+    caps = {"capture": "", "playback": "", "capture_16k_mono": False, "busy": False, "in_use_as": "",
+            "hw": {"rates": None, "channels": None, "raw_lines": []},
+            "capture_mono": None, "capture_stereo": None,
+            "measured_16k_mono": None, "measured_16k_stereo": None}
     for direction, tool in (("capture", "arecord"), ("playback", "aplay")):
         binary = shutil.which(tool)
         if not binary:
@@ -92,10 +141,21 @@ def card_caps(card_id: str) -> dict:
             continue
         caps[direction] = out[:600]
         if direction == "capture":
-            if "RATE: [16000]" in out.replace("  ", " ") or any(
-                "16000" in l for l in out.splitlines() if l.strip().upper().startswith("RATE")
-            ):
-                caps["capture_16k_mono"] = True
+            hw = parse_hw_params(out)
+            caps["hw"] = hw
+            lo, hi = hw["channels"] or (None, None)
+            # A hardware range is not the same as an achievable format, so record both, and say
+            # plainly when mono is impossible on this node rather than leaving it implied. (issue #34)
+            caps["capture_mono"] = (lo == 1) if lo is not None else None
+            caps["capture_stereo"] = (hi >= 2) if hi is not None else None
+            rate_lo, rate_hi = hw["rates"] or (None, None)
+            caps["capture_16k_mono"] = bool(
+                rate_lo is not None and rate_lo <= 16000 <= rate_hi
+                and (caps["capture_mono"] is not False)
+            )
+            # Measured, not advertised: only meaningful when nothing else holds the card.
+            caps["measured_16k_mono"] = measure_capture(card_id, 16000, 1) or "ok"
+            caps["measured_16k_stereo"] = measure_capture(card_id, 16000, 2) or "ok"
 
     # What the running stack actually opens, which is the useful fact when the card is busy.
     unit = run(["sh", "-c", "systemctl cat wyoming-satellite.service 2>/dev/null | grep ExecStart"])
@@ -182,9 +242,21 @@ def main() -> int:
     if suspect:
         caps = report["caps"]
         print()
-        print(f"  card '{suspect}' capture: 16 kHz mono available: {caps.get('capture_16k_mono')}")
+        hw = caps.get("hw") or {}
+        rates, channels = hw.get("rates"), hw.get("channels")
+        print(f"  card '{suspect}' hardware ranges: rates {rates or 'not reported'}, "
+              f"channels {channels or 'not reported'}")
+        print(f"  card '{suspect}' capture: 16 kHz mono available: {caps.get('capture_16k_mono')}"
+              f"   (mono {'yes' if caps.get('capture_mono') else 'NO' if caps.get('capture_mono') is False else '?'}"
+              f", stereo {'yes' if caps.get('capture_stereo') else 'no'})")
+        m_mono, m_stereo = caps.get("measured_16k_mono"), caps.get("measured_16k_stereo")
+        if m_mono or m_stereo:
+            print(f"  card '{suspect}' measured capture: 16k mono {m_mono or 'ok'}, 16k stereo {m_stereo or 'ok'}")
         for line in (caps.get("capture") or "").splitlines()[:6]:
             print(f"    {line.strip()}")
+        if caps.get("capture_mono") is False:
+            print("    NOTE: this node cannot capture mono. Choose a capture channel explicitly"
+                  " (see the device-profile list below), or the satellite will not get audio.")
         print(f"  card '{suspect}' playback: {'present' if caps.get('playback') else 'NOT REPORTED'}")
     print()
     print(f"  LED bus: spidev {report['spi_devices'] or 'none (our APA102 service cannot drive this device)'}")
