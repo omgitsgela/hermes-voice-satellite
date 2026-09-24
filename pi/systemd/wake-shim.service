@@ -13,7 +13,13 @@ Wants=wyoming-openwakeword.service
 Type=simple
 WorkingDirectory=/home/wyoming1/wyoming-satellite/examples
 # The satellite's virtualenv: this speaks the wyoming protocol and needs that package.
-ExecStart=/home/wyoming1/wyoming-satellite/.venv/bin/python3 /home/wyoming1/wyoming-satellite/examples/wake_shim.py
+#
+# --wake-name names the wake word in the synthetic Detection the shim injects. It is only ever
+# logged (the satellite treats any Detection as a wake), but leaving it at the shim's default made
+# the bridge log "wake word: ok_nabu" after an injected wake, naming a wake word this device no
+# longer uses and sending a future diagnosis after the wrong thing. It must match the satellite's
+# own --wake-word-name below, and scripts/test_pi_units_consistent.py fails if the two disagree.
+ExecStart=/home/wyoming1/wyoming-satellite/.venv/bin/python3 /home/wyoming1/wyoming-satellite/examples/wake_shim.py --wake-name 'hey_hermes'
 Restart=always
 RestartSec=3
 

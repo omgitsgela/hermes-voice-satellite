@@ -12,7 +12,8 @@ Wants=wyoming-openwakeword.service
 Type=simple
 WorkingDirectory=/home/wyoming1/wyoming-satellite/examples
 # The satellite's virtualenv: this speaks the wyoming protocol and needs that package.
-ExecStart=/home/wyoming1/wyoming-satellite/.venv/bin/python3 /home/wyoming1/wyoming-satellite/examples/wake_shim.py
+# --wake-name must match the satellite's --wake-word-name; see pi/systemd/wake-shim.service for why.
+ExecStart=/home/wyoming1/wyoming-satellite/.venv/bin/python3 /home/wyoming1/wyoming-satellite/examples/wake_shim.py --wake-name 'hey_hermes'
 Restart=always
 RestartSec=3
 

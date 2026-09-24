@@ -1001,6 +1001,25 @@ class VoiceLoop:
         _LOGGER.info("heard (%0.1fs speech, stt %0.2fs): %s", endpoint.speech_seconds,
                      stats.stt_seconds, transcript)
 
+        # The last line of defence against the device answering its own chime (issue #47). The drain in
+        # `capture_after_wake` removes the queued chime audio and the endpointer's blip filter rejects
+        # the rest, but on 2026-09-24 0.3 s got past both, transcribed as "beep", and a full turn went
+        # to the gateway and was spoken into the room. Dropping it here means the chime can no longer
+        # become words even when the earlier two layers miss.
+        #
+        # Silent on purpose: the incident's harm was that it replied out loud. A whole-utterance match,
+        # so "beep the horn" is still a question.
+        from bridge.config import NON_WORD_TRANSCRIPTS
+
+        if normalise(transcript) in {normalise(w) for w in NON_WORD_TRANSCRIPTS}:
+            stats.note = "non-word transcript"
+            _LOGGER.info("%r is a non-word, not speech; staying silent", transcript)
+            # Nobody is being answered, so release the gate capture_utterance raised, or an
+            # announcement arriving now waits out ANNOUNCE_TURN_MAX_AGE on the device's own chime.
+            self.turn_started_at = None
+            self.turns.append(stats)
+            return stats
+
         # Bridge-local spoken controls first: instant, and they work even when the gateway is
         # unreachable. Deliberately before the session reset, so a control never reaches the model.
         local_reply = self._local_command(transcript)
