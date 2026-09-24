@@ -28,7 +28,7 @@ we will build and develop the future on our own."
 | Operating system | Debian 12 bookworm, arm64, 64-bit | Raspberry Pi OS on a Pi Zero 2 W |
 | Kernel | `6.12.109+rpt-rpi-v8` | the driver is built against this exact kernel |
 | Audio hardware | card `seeed2micvoicec`, codec `tlv320aic3x`, opened as `plughw:CARD=seeed2micvoicec` | the Seeed 2-mic HAT |
-| LEDs | 3 x APA102 on `/dev/spidev0.0` | driven by our own service |
+| LEDs | 3 x APA102 on `/dev/spidev0.1` (bus 0, device 1) | driven by our own service |
 
 ## Our divergence from upstream, in full
 

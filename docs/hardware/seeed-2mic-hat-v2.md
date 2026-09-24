@@ -12,7 +12,7 @@
 | Codec driver | `tlv320aic3x`, present on I2C as `1-0018` |
 | Capture | `plughw:CARD=seeed2micvoicec,DEV=0`, 16 kHz mono, S16_LE |
 | Playback | same device, 22050 Hz mono S16_LE |
-| LEDs | 3 x APA102 on `/dev/spidev0.0` or `/dev/spidev0.1`, driven by our own service |
+| LEDs | 3 x APA102 on `/dev/spidev0.1` (bus 0, device 1; the Pi also exposes `/dev/spidev0.0` on CE0, which this service does not use), driven by our own service |
 | Host | Raspberry Pi Zero 2 W, 416 MB, Debian 12 arm64, kernel 6.12.109+rpt-rpi-v8 |
 
 **Revision trap.** Most guides and product pages, including upstream's own tutorial, describe the older
