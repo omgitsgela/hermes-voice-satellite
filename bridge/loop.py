@@ -704,7 +704,7 @@ class VoiceLoop:
         # restarts. Taking a local reference means a change lands on the next capture, which is
         # what docs/endpointing-profiles.md promises.
         endpoint = self._ep
-        endpoint.reset()
+        endpoint.begin_capture()
         announce = getattr(self, "_on_listening", None)
         if announce:
             announce()
@@ -773,6 +773,11 @@ class VoiceLoop:
         # and activations ran the whole CAPTURE_ACTIVATION_SECONDS cap instead of closing after a
         # silent 8 seconds. `deadline` stays as the outer wall-clock bound on everything else.
         # `capture_follow_up` already bounds itself this way, with a deadline a blip cannot extend.
+        # A new activation starts with a clean no-speech budget. It is cleared HERE, once per
+        # activation, rather than on every capture attempt: an attempt that ends as a blip must not
+        # buy the room more time, and an activation that ended with a full budget must not close the
+        # next one on its first frame (issue #47).
+        self._ep.begin_activation()
         no_speech_deadline = time.monotonic() + WAKE_NO_SPEECH_SECONDS
         deadline = time.monotonic() + CAPTURE_ACTIVATION_SECONDS
         while True:
@@ -881,6 +886,8 @@ class VoiceLoop:
         stale = await self._discard_queued_events()
         if stale:
             _LOGGER.info("follow-up: discarded %d stale event(s) left by our own playback", stale)
+        # This window is its own activation: clean budget, however the previous one ended.
+        self._ep.begin_activation()
         deadline = time.monotonic() + FOLLOW_UP_SECONDS
         handover = False
         try:

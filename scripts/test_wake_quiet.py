@@ -34,6 +34,9 @@ def check(label, got, want):
 async def main():
     global checks
     bridge = Bridge.__new__(Bridge)
+    # capture_after_wake scopes the no-speech budget on the endpointer, so the stub needs one.
+    from bridge.endpointing import Endpointer
+    bridge._ep = Endpointer(silence_ms=700, min_speech_ms=250)
     order = []
 
     async def discard():

@@ -26,12 +26,14 @@ from __future__ import annotations
 import asyncio
 import sys
 import time
+import types
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import bridge.config as config_module  # noqa: E402
 import bridge.loop as loop_module  # noqa: E402
+from bridge.endpointing import Endpointer  # noqa: E402
 from bridge.endpointing import EndpointResult  # noqa: E402
 from bridge.satellite import SatelliteClient  # noqa: E402
 
@@ -56,10 +58,20 @@ def silent_window() -> EndpointResult:
                           ended_by="no_speech", rejected=True)
 
 
+def _feeder(events: list):
+    """A scripted `_next`: hands out the queued events, then returns None."""
+    async def nxt(timeout):
+        return events.pop(0) if events else None
+    return nxt
+
+
 def make_loop(script: list[EndpointResult | None]):
     """A VoiceLoop with only the pieces capture_after_wake touches, plus a scripted capture."""
     loop = object.__new__(loop_module.VoiceLoop)
     loop.sat = SatelliteClient("127.0.0.1")
+    # capture_after_wake now scopes the no-speech budget on the endpointer, so the stub needs one.
+    from bridge.endpointing import Endpointer
+    loop._ep = Endpointer(silence_ms=700, min_speech_ms=250)
     calls: list[str] = []
 
     async def fake_capture(wake_word: str):
@@ -138,6 +150,7 @@ async def main() -> int:
     try:
         loop = object.__new__(loop_module.VoiceLoop)
         loop.sat = SatelliteClient("127.0.0.1")
+        loop._ep = Endpointer(silence_ms=700, min_speech_ms=250)
         attempts: list[int] = []
 
         async def blip_every_100ms(wake_word: str):
@@ -166,8 +179,6 @@ async def main() -> int:
     #    reset the no-speech budget: before this, each blip zeroed the frame count, `no_speech` could
     #    never fire, and only the wall-clock cap ended an activation. Measured live 2026-09-24: an
     #    activation with one stray blip ran 14.4s instead of 8s for exactly this reason.
-    from bridge.endpointing import Endpointer
-
     pattern = [True] * 4 + [False] * 96           # a rejected 0.08s blip every 2 s of frames
     ep = Endpointer(silence_ms=700, min_speech_ms=250)
 
@@ -201,6 +212,63 @@ async def main() -> int:
         problems += 1
     else:
         print("   OK: the blips accumulated towards the bound instead of resetting it")
+
+    # 7. The budget's scope, through the real capture path. This is the check the live test caught
+    #    and the offline one missed: `capture_utterance` called `reset()` on entry, which wiped the
+    #    budget that `_finish` had just carried, so each attempt started from zero and the 8 s bound
+    #    still took 14.5 s. Only visible across TWO attempts.
+    from wyoming.audio import AudioChunk
+
+    loop2 = object.__new__(loop_module.VoiceLoop)
+    loop2.sat = types.SimpleNamespace(eof=False)
+    loop2._ep = Endpointer(silence_ms=700, min_speech_ms=250)
+    loop2.turn_started_at = None
+    loop2._ep.begin_activation()
+    f_samples = loop2._ep.frame_samples
+    blip_frame = b"\x11\x22" * f_samples
+    quiet_frame = b"\x00\x00" * f_samples
+
+    class FramePlan:
+        """Feeds a planned run of frames, marking a 0.08 s blip at the end of the first burst."""
+
+        def __init__(self, plan):
+            self.plan = list(plan)
+
+        def is_speech(self, frame, rate):
+            return bool(self.plan.pop(0)) if self.plan else False
+
+    def event_for(decision):
+        return AudioChunk(audio=blip_frame if decision else quiet_frame,
+                          rate=16000, width=2, channels=1).event()
+
+    # Attempt 1: 255 quiet frames, then a 4-frame blip, then the silence that closes it as rejected.
+    first = ([False] * 255 + [True] * 4 + [False] * 40)
+    loop2._ep._vad = FramePlan(first)
+    queue = [event_for(d) for d in first]
+    loop2._next = _feeder(queue)
+    attempt1 = await loop2.capture_utterance("hey_hermes")
+    carried = loop2._ep._frames_seen
+
+    # Attempt 2: quiet only. If the budget survived, 8 s of accumulated frames is already nearly spent
+    # and `no_speech` arrives within ~100 frames. If it was cleared on entry, this finds nothing.
+    second = [False] * 140
+    loop2._ep._vad = FramePlan(second)
+    loop2._next = _feeder([event_for(d) for d in second])
+    attempt2 = await loop2.capture_utterance("hey_hermes")
+
+    print("\n7. the no-speech budget across two capture attempts")
+    print(f"   attempt 1: {'rejected blip' if attempt1 and attempt1.rejected else attempt1}"
+          f", {carried} frames carried")
+    print(f"   attempt 2: {attempt2.ended_by if attempt2 else 'nothing'}")
+    if not (attempt1 is not None and attempt1.rejected and carried > 200):
+        print("   FAIL: the first attempt did not end as a rejected blip with a carried budget")
+        problems += 1
+    elif attempt2 is None or attempt2.ended_by != "no_speech":
+        print("   FAIL: the budget did not survive the second attempt's entry - the 8 s bound will")
+        print("         still be defeated by a blip, as the live test showed")
+        problems += 1
+    else:
+        print("   OK: the blip's frames counted towards the bound across attempts")
 
     print(f"\n=== {'ALL CHECKS PASSED' if problems == 0 else f'{problems} PROBLEM(S)'} ===")
     return 1 if problems else 0

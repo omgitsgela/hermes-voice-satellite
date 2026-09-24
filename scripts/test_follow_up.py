@@ -30,6 +30,7 @@ sys.path.insert(0, str(ROOT))
 
 import bridge.config as config_module  # noqa: E402
 import bridge.loop as loop_module  # noqa: E402
+from bridge.endpointing import Endpointer  # noqa: E402
 from bridge.endpointing import EndpointResult  # noqa: E402
 from bridge.satellite import SatelliteClient  # noqa: E402
 
@@ -70,6 +71,8 @@ def bare_loop():
     loop.stop_requested = False
     loop.turn_started_at = None
     loop.turns = []
+    # capture_follow_up scopes the no-speech budget on the endpointer, so the stub needs one.
+    loop._ep = Endpointer(silence_ms=700, min_speech_ms=250)
     # A production-backed satellite stub that counts re-arm requests. RunSatellite stops the
     # stream and puts the satellite back to wake-word detection, which a closed window must always do.
     rearm = {"calls": 0}
