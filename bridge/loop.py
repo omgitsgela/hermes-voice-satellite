@@ -698,6 +698,17 @@ class VoiceLoop:
         Returns (endpoint, note). A None endpoint means the activation ended with no utterance,
         and the note says why.
         """
+        # The awake chime reaches the microphone as ordinary audio, and its echo is long enough for
+        # the endpointer to accept: measured 2026-09-24, a 0.3s chime transcribed as "beep" and
+        # started a turn. Ignore the opening moment and drop what is already queued, the way the
+        # follow-up window does. The device-side mute across the tone is the real fix; this is the
+        # bridge's own share of it (issue #47).
+        from bridge.config import WAKE_QUIET_SECONDS
+
+        await asyncio.sleep(WAKE_QUIET_SECONDS)
+        dropped = await self._discard_queued_events()
+        if dropped:
+            _LOGGER.info("wake: discarded %d event(s) of our own chime before listening", dropped)
         deadline = time.monotonic() + CAPTURE_ACTIVATION_SECONDS
         while True:
             remaining = deadline - time.monotonic()

@@ -40,6 +40,13 @@ VOICE_SESSION_ID = "voice-wyoming1"  # stable id, so the assistant has continuit
 # activation, so this is the only bound on an activation where nobody actually speaks. Chosen
 # 2026-09-22 after Michael reported the activation closing before he could speak.
 CAPTURE_ACTIVATION_SECONDS = 30.0
+# How much of the opening of a wake activation to ignore, so the device's own awake chime
+# and its echo are not taken as speech. Measured 2026-09-24: a 0.3s chime transcribed as
+# "beep" and started a turn (issue #47). Kept short on purpose, because a person usually waits
+# for the tone to finish before speaking, so this costs no real time. The device-side fix is to
+# mute the microphone across the tone at all, which is what actually removes the problem.
+WAKE_QUIET_SECONDS = 0.5
+
 
 # --- follow-up mode: keep listening after an answer --------------------------
 # Angela's request, 2026-09-22: a control mode which, when on, makes the device listen again
