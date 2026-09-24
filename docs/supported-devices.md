@@ -70,12 +70,39 @@ UDP transfer and USB DFU documented, Python and mobile SDKs, and **downloadable 
 GitHub Releases** (v0.1.4, published 2026-09-21). Only the raw datasheet, the mechanical drawing and
 Seeed's own wiki download row still lag.
 
-It stays off the buyer list for the one reason that survived, and the vendor states it: **it is a recorder,
-not a satellite.** Its firmware guide lists BLE real-time audio streaming as out of scope ("it does not
-stream live audio"), there is no on-device speech-to-text, audio is Opus mono at 32 kbps written to onboard
-storage, and the box contains **no speaker at all**. Becoming a satellite means writing a Zephyr Wyoming
-client from scratch and adding hardware, on a unit that costs more than the $38 complete Lite kit or the
-$68 XVF3800 with case.
+It stays off the buyer list, and the reason is not availability: it is a recorder rather than a satellite.
+The vendor's own documentation is the evidence, and the full list follows.
+
+**Why it will not work here, in order of how fatal each one is.** Every claim below is from the vendor's own
+firmware documentation, checked 2026-09-24.
+
+1. **There is no live audio path, and the vendor says so.** The firmware guide lists BLE real-time audio
+   streaming as out of scope: "the BLE link carries AT commands, file transfer frames, and an audio
+   energy-level visualization notify only. **It does not stream live audio.**" Audio goes PDM microphones
+   into preprocessing into an Opus encoder at 32 kbps mono and lands in storage. Our bridge needs a
+   continuous 16 kHz mono PCM stream arriving on a socket, and the Clip has no mode that produces one. A
+   file-transfer protocol is not a substitute: it moves finished recordings, not the microphone.
+2. **It is not a Pi peripheral either, so the HAT path is closed too.** USB on this device is CDC ACM
+   serial and mass storage. There is no USB Audio Class, so no ALSA card appears for
+   `wyoming-satellite` to capture from, and the charging base's USB-C is power to the base rather than an
+   audio datapath.
+3. **It cannot speak.** The box contains the Clip, a lapel clip, a magnetic patch, a charging base, a cable
+   and a lanyard. No speaker, and "audio output" in the specification means the stored file. A satellite
+   that cannot answer, chime or make an announcement is half a device, and this half is the half we need
+   most.
+4. **There is no wake word and no always-on listening.** It records when the button tells it to and stops
+   when told. The firmware's capability table has no wake-word engine, and idle current is quoted around
+   170 microamps, which is a device that sleeps rather than one that listens.
+5. **The intelligence sits off the device.** The same guide states plainly that there is no on-device
+   speech-to-text path, that the Clip writes Opus to storage and that transcription runs elsewhere, in
+   Seeed's app or their cloud. So it cannot host the wake or the speech stage of our stack either.
+6. **What turning it into a satellite would actually take.** A Wyoming client written in Zephyr against
+   Nordic's SDK, a real-time audio mode that its own firmware declares out of scope, and a speaker with
+   amplification added to a sealed enclosure with no accessible debug header. That is a project aimed at
+   the wrong shape, for more money than a complete, flashable, speaker-included kit.
+
+It is a reasonable product for what it is: a wearable meeting and interview recorder with local storage and
+a hosted transcription app. That is a separate purchase decision, and not a component of this system.
 
 ## Reference notes
 
@@ -88,6 +115,17 @@ enough RAM to run a wake word locally. That gives three supported hosts:
 - **Pi Zero 2 W** — what we run here, and the known-good build.
 - **Pi 3**, all models.
 - **Pi 4**, all models. The Pi 400 counts, being a Pi 4 in a keyboard.
+
+**Buying a Zero 2 W** (prices and stock checked 2026-09-24). The HAT is a push-on board, so the host needs
+a 40-pin header fitted before the HAT will seat. That is the trap with the bare board: it ships without one.
+
+- **Raspberry Pi Zero 2 W with Header**, SKU 102111003, $18.00, 40-pin header pre-soldered. **Out of stock**
+  on the day checked, with a notify option on the listing. The tidy option when it is available.
+  https://www.seeedstudio.com/Raspberry-Pi-Zero-2-W-with-Header-p-5935.html
+- **Raspberry Pi Zero 2 W Basic Kit**, SKU 114060101, $19.90, in stock. Board plus a mini-HDMI adapter, a
+  USB OTG adapter, a heatsink and a **loose 40-pin header**, so the header has to be soldered on before the
+  HAT fits. Worth the extra dollar only if the adapters are wanted.
+  https://www.seeedstudio.com/Raspberry-Pi-Zero-2-W-Basic-Kit-p-6352.html
 
 **Do not buy a Pi Zero or Zero W, the originals.** The `seeed-voicecard` driver supports them, so they
 appear on Seeed's list, but they cannot run this stack: not enough RAM for a local wake word and no
