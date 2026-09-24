@@ -64,6 +64,15 @@ Captured as patches in `pi/vendor/`. Nothing here is upstream behaviour.
 | `pi/vendor/pi-venv-freeze.txt` | the satellite venv, 16 packages, exact versions |
 | `pi/systemd/*.service` and `*-overrides.conf` | the units and drop-ins as deployed |
 
+Some of those units also exist as older single-file copies directly under `pi/`. **`pi/systemd/` is the
+authoritative set** and is what the install steps below use; the older copies are kept for reference and
+must not disagree with it. Since 2026-09-24 `scripts/test_pi_units_consistent.py` enforces that: it fails
+if the tracked unit files give different values to `--wake-word-name` or `--custom-model-dir`, or if any of
+them reintroduces `--vad`. The reason it exists is not theoretical: the legacy satellite copy still carried
+the retired `ok_nabu` wake word and the old awake-tone mute, and the legacy wake-service copy was missing
+the custom model directory, so a rebuild driven from those files would have produced a device that could
+not be woken by the configured word. Consolidating the duplicated copies is issue #45.
+
 Deliberately **not** vendored: the wake model binary (recorded above by name and source, since it is
 a 422 KB blob reproducible from the community library), and the gold SD card image, which is the
 real backstop and lives with the `remote-system-operations` procedure.
