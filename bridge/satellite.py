@@ -173,13 +173,29 @@ class SatelliteClient:
         """
         await self.close()
         self._client = AsyncTcpClient(self.host, self.port, connect_timeout=10.0)
-        self._eof = False
         while True:
             try:
                 self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-        await self.connect()
+        # `_eof` is cleared only once the new connection is actually up. It used to be cleared
+        # before the connect, so a failed reconnect left the client reporting itself healthy (eof
+        # False) with no reader task at all: the loop's `sat.eof` checks never fired, nothing
+        # retried, and the device stayed deaf until the next hourly refresh (issue #16).
+        #
+        # On failure the link is deliberately left dead. The loop checks `sat.eof` when it waits for
+        # a wake word, so it raises ConnectionError, and systemd restarts us into a fresh connection
+        # in seconds rather than leaving an inert device for up to an hour. That is the same
+        # recovery path `_enable_tcp_keepalive` documents for a peer that has gone away.
+        try:
+            await self.connect()
+        except BaseException as exc:
+            self._eof = True
+            _LOGGER.warning("reconnect to %s:%s failed (%s: %s); leaving the link marked dead so the "
+                            "loop notices instead of waiting for the next hourly refresh",
+                            self.host, self.port, type(exc).__name__, exc)
+            raise
+        self._eof = False
 
     async def __aenter__(self) -> "SatelliteClient":
         await self.connect()
