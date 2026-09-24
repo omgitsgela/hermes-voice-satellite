@@ -6,13 +6,14 @@ speech recognition, the model call and the speech synthesis, then speaks the ans
 device's own speaker. The same speaker also carries house announcements from Hermes and from home
 automation, queued behind any conversation already in progress.
 
-Built for one specific installation (a Pi Zero 2 W called `wyoming1` in the house, with the host
-`autumn` running Hermes), but laid out so the same setup can be deployed somewhere else.
+Written for one installation (a Pi Zero 2 W in the house, with a host running Hermes) and laid out so
+the same setup can be deployed elsewhere. Names, addresses and paths in this document are placeholders:
+substitute your own.
 
 ## Architecture
 
 ```
-  Pi Zero 2 W  ("wyoming1", the satellite: mic, speaker, LEDs only)
+  Raspberry Pi Zero 2 W  (the satellite: microphone, speaker, LEDs only)
     wyoming-satellite      mic capture, playback, wake-word client
     wyoming-openwakeword   the wake model itself (TFLite, custom model supported)
     wake-shim              proxy in front of the wake service; can inject a synthetic wake
@@ -20,7 +21,7 @@ Built for one specific installation (a Pi Zero 2 W called `wyoming1` in the hous
                  |
                  | wyoming protocol, tcp/10700
                  v
-  autumn  (host: everything that needs a CPU)
+  <host>  (everything that needs a CPU)
     hermes-voice-bridge    user service, ~/hermes-voice-bridge
       endpointing -> faster-whisper STT -> Hermes run API -> Piper TTS
       announcements on :8765, token authenticated, queued politely
@@ -57,22 +58,23 @@ device and receive its audio. Everything else in the stack is loopback only.
 | `hermes/patches/` | The one remaining core patch, as a diff, plus a checker |
 | `hermes/config/` | The voice-surface configuration keys, with placeholders instead of secrets |
 | `hermes/systemd/` | The bridge's user unit |
-| `skills/` | The skills that document how to operate and repair this system |
-| `docs/` | Restart safety, portability and extension notes |
+| `docs/` | Operating guides: hardware, restart safety, wake-word changes, timers and device support |
+
 
 ## Requirements
 
 Hardware, as built:
 
-- The wake word is `hey_hermes` (see `docs/hardware/`)
-- A Raspberry Pi Zero 2 W with a **Seeed ReSpeaker 2-mic HAT** (`plughw:CARD=seeed2micvoicec`), WiFi only
-- A host machine that stays on, with enough CPU for `faster-whisper small.en` and Piper
+- The wake word is whatever model you install. This build uses `hey_hermes`; see `docs/hardware/`
+- A Raspberry Pi Zero 2 W with a **Seeed ReSpeaker 2-mic HAT** (`plughw:CARD=<your card id>`), WiFi only
+- A host machine that stays on, with enough CPU for `faster-whisper small.en` and Piper. It is reached
+  by SSH and runs the bridge as a user service.
 - A Hermes Agent install on that host, version current within a release or so
 
 Software: Python 3 with the pinned set in `requirements.txt` (faster-whisper, piper-tts, wyoming,
 aiohttp, silero VAD, webrtcvad fallback). The Piper voice `en_US-hfc_male-medium` (61 MB, not committed
 here) comes from the Piper voices release; the custom wake model is a community TFLite file, see
-`skills/hermes-voice-bridge/references/switching-wake-words.md`.
+`docs/switching-wake-words.md`.
 
 ## Install: the Hermes side
 
@@ -93,7 +95,7 @@ here) comes from the Piper voices release; the custom wake model is a community 
    LED service bounces the satellite, and the satellite does not come back on its own.
 3. Put the wake model in the directory named by `--custom-model-dir` in the wake service drop-in, named
    after the wake word you want (`<name>.tflite`).
-4. Copy `sounds/` onto the device under `/home/wyoming1/sounds/`.
+4. Copy `sounds/` onto the device under the path your wake service expects, e.g. `~/sounds/`.
 
 ## Verify
 
@@ -105,7 +107,7 @@ journalctl --user -u hermes-voice-bridge -n 30
 # what the voice surface actually resolves (it runs at parity with a normal conversation,
 # so the tool_search bridge is expected here)
 cd ~/.hermes/hermes-agent && ./venv/bin/python - <<'PY'
-import sys; sys.path.insert(0, '/home/angela/.hermes/hermes-agent')
+import sys; sys.path.insert(0, '~/.hermes/hermes-agent')
 from hermes_cli.plugins import discover_plugins; discover_plugins(force=True)
 import model_tools
 from hermes_cli.config import load_config
