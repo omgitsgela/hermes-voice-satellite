@@ -139,9 +139,14 @@ async def main() -> int:
     )
     problems = check_prompt_clauses()
     async with gateway:
-        await ask(gateway, "Turn off the Christmas outlet")
-        await ask(gateway, "Turn off the Christmas outlet")
-        await ask(gateway, "What is the porch thermometer reading?")
+        # The action questions ACTUATE the real devices in the house. They are the ones that test
+        # the no-narration rule properly, since only an action reply invites "I verified it", but a
+        # check script that turns an outlet off every time it runs is a hazard rather than a test.
+        # Opt in with --include-actions.
+        if "--include-actions" in sys.argv:
+            await ask(gateway, "Turn off the Christmas outlet")
+            await ask(gateway, "Turn off the Christmas outlet")
+            await ask(gateway, "What is the porch thermometer reading?")
         for question, expected, what in FACT_CHECKS:
             problems += await ask_for_facts(gateway, question, expected, what)
         problems += await ask_neutral(gateway, NEUTRAL_QUESTION)
