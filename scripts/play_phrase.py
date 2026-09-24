@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -70,13 +71,29 @@ async def main() -> int:
             print(f"  snd services   : {snd_names}")
             print(f"  raw            : {info_msg!r}"[:400])
 
+        # The satellite plays for the connection it treats as its client. The bridge is that client
+        # while it runs, so playback from here is ignored and this script reports a false failure on
+        # a healthy system. Warn rather than let someone chase a hardware fault. (Issue #37.)
+        bridge_up = subprocess.run(["systemctl", "--user", "is-active", "hermes-voice-bridge"],
+                                   capture_output=True, text=True).stdout.strip()
+        if bridge_up == "active":
+            print("  NOTE: hermes-voice-bridge is running and holds the satellite's client connection.")
+            print("        Playback from this second connection is likely to be ignored, so a result")
+            print("        of 'not played' below may say nothing about the audio path. Stop the bridge")
+            print("        first, or announce through it instead.")
+
         print("\n=== 3. ARM THE SATELLITE, THEN STREAM IT TO THE SPEAKER ===")
         # Arm it the way the bridge and scripts/diag_followup_stream.py do. A satellite that is still
         # streaming can ignore the first message it receives, so playback sent without RunSatellite is
         # not reliably heard. This script is the sole connection, so arming here carries none of the
         # second-connection risk that keeps bridge/announce.py from sending it (issue #37).
         await sat.run()
-        played = await sat.play_wav(wav_path)
+        try:
+            played = await asyncio.wait_for(sat.play_wav(wav_path), timeout=45.0)
+        except asyncio.TimeoutError:
+            print("\n=== RESULT: no Played event within 45s ===")
+            print("  the audio was sent but the satellite never confirmed playback; see the note above")
+            return 1
         print(f"\n=== RESULT: satellite reported Played = {played} ===")
         print("  events seen:", sat.event_counts)
         if not played:
