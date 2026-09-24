@@ -1,10 +1,10 @@
-# Voice-surface configuration, as used by the reference installation.
+# Voice-surface configuration for this project.
 # Copy the keys you need into ~/.hermes/config.yaml. Contains no secrets.
 #
 # The plugins must ALSO be enabled by name, or discovery never sees them and their toolsets
 # resolve to nothing:
-#   hermes plugins enable voice_satellite   (and hubitat, google, geolocation, mimo-voice,
-#                                            skill-enforcer, web/trafilatura)
+#   hermes plugins enable voice_satellite
+# Add your own plugins beside it if you want them on the voice surface.
 
 plugins:
   enabled:
@@ -19,7 +19,7 @@ plugins:
 # An earlier version of this file shipped one listing six toolsets and four plugins, described as
 # "deliberately narrow". That is issue #20: it documented a surface that no longer exists, and anyone
 # following it would build the retired configuration. The `api_server` platform now inherits the
-# default toolset list, which in the reference installation carries 21 toolsets: browser, clarify,
+# default toolset list, which carries 21 toolsets in a stock install: browser, clarify,
 # code_execution, computer_use, connections, cronjob, delegation, file, geolocation, image_gen,
 # kanban, memory, messaging, session_search, skills, terminal, todo, tts, video, vision, web.
 #

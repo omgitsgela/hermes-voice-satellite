@@ -52,7 +52,7 @@ a sound in the room, which is what the announcement channel is for. Finally, pro
 upstream so the carried set shrinks; it is a general bug, not a voice feature.
 
 **B. Move machine-specific values into one config file.**
-`SATELLITE_HOST`, the Hubitat base URL, the announcement port, the NAS paths and the token paths are
+`SATELLITE_HOST`, any home-automation base URL you add, the announcement port, the NAS paths and the token paths are
 hardcoded in `bridge/config.py`. One `bridge/config/local.yaml` (git-ignored, with a committed
 `local.example.yaml`) turns "deploy on another host" from a code edit into a config edit.
 

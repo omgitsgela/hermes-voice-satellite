@@ -7,9 +7,7 @@ what it is for, and how to make a new one. Values are never written down here.
 |---|---|---|---|---|
 | Announcement token | `state/announce-token.txt` | the bridge, the `voice_satellite` plugin | Bearer token for the announcement endpoint and the follow-up control endpoint | 600 |
 | Hermes API server key | `~/.hermes/.env` as `API_SERVER_KEY` | the bridge | Authenticates the bridge's calls to Hermes on loopback 8642 | 600 |
-| Hubitat Maker API app | `~/.openclaw/secrets/hubitat-maker-api.json` | the `hubitat` plugin | `hubitat_base_url`, `app_id`, `access_token` for house device control | 600 |
-| Google Places API key | `~/google-places-api-key.txt` | the `google` plugin | `places_search`, for nearby shops and their hours | should be 600, observed 664 |
-| `XIAOMI_API_KEY` | `~/.hermes/.env` | the `mimo-voice` plugin | Only if you use the MiMo TTS/ASR providers instead of Piper and faster-whisper | 600 |
+| Anything your own plugins need | wherever that plugin reads it | that plugin | Optional: this project needs none of them | as required |
 
 Notes:
 

@@ -43,7 +43,7 @@ metadata {
 
     preferences {
         input name: "announceUrl", type: "text", title: "Announce endpoint URL",
-            defaultValue: "http://192.168.0.142:8765/announce", required: true
+            defaultValue: "http://localhost:8765/announce", required: true
         input name: "apiToken", type: "password", title: "API token",
             description: "Copy it from /home/angela/hermes-voice-bridge/state/announce-token.txt on autumn",
             required: true
