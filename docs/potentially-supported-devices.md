@@ -49,10 +49,14 @@ https://www.seeedstudio.com/ReSpeaker-XVF3800-With-Case-XIAO-ESP32S3-p-6628.html
 https://www.seeedstudio.com/reSpeaker-Flex-XVF3800-Circular-4-with-XIAO-ESP32S3-p-6739.html
 https://www.seeedstudio.com/reSpeaker-Flex-XVF3800-Linear-4-with-XIAO-ESP32S3-p-6736.html
 
-**The catch is software, not hardware.** These devices are the target of the ESPHome stack, which is what
-the successor project and Linux Voice Assistant use. Adopting one means adopting a different software
-architecture from ours, with our bridge and the Wyoming transport sitting out. That is a strategic decision
-tracked under #11, not a purchase decision, and it should be settled before money is spent here.
+**Settled 2026-09-23: we ship our own firmware on these devices, speaking Wyoming straight to the
+bridge.** So their value to us is not ESPHome support, it is that the microphone array, the LEDs and the
+buttons are documented and already driven from a microcontroller by someone else, which we can read as a
+reference. No ESPHome, no Linux Voice Assistant, no adoption of another stack: the device talks to our
+bridge exactly as the Pi does.
+
+The project's size makes this reasonable. Wyoming is JSON lines plus PCM audio, and 16 kHz mono is about
+32 KB/s, small enough for a microcontroller and trivially small over Wi-Fi.
 
 ## Watchlist: matches the schema, not usable yet
 
@@ -83,5 +87,7 @@ would leave us maintaining a vendor SDK just to change the colour of a light.
    like-for-like replacement and a fair baseline for any comparison.
 2. **A 4-mic or 6-mic I2S HAT from any brand matching the driver's overlays**, if one can be found at a sane
    price. Same path, no new software, better far-field pickup in principle.
-3. **Nothing from Path B until the architecture question in #11 is settled.** These are only interesting if
-   future satellites are self-contained units rather than a Pi and a board.
+3. **For firmware development, the reSpeaker Lite kit at $30.99.** Cheapest route to a flashed device
+   speaking our protocol, fewest unknowns, and it has a small LED and two buttons to exercise the control
+   path. The XVF3800 with XIAO at $66.99 is the natural second unit, since it brings on-chip echo
+   cancellation, which is our biggest feature gap.
