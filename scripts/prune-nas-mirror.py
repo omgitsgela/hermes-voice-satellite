@@ -34,9 +34,13 @@ def mirror_root():
 
 
 def tracked_files():
-    out = subprocess.run(["git", "-C", str(REPO), "ls-files"],
-                         capture_output=True, text=True).stdout
-    return {line.strip() for line in out.splitlines() if line.strip()}
+    result = subprocess.run(["git", "-C", str(REPO), "ls-files"],
+                            capture_output=True, text=True)
+    if result.returncode:
+        detail = result.stderr.strip() or f"git exited {result.returncode}"
+        print("prune: git ls-files failed: " + detail, file=sys.stderr)
+        return None
+    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
 
 
 def main():
@@ -46,6 +50,8 @@ def main():
         print("prune: NAS mirror not found, nothing done", file=sys.stderr)
         return 1
     tracked = tracked_files()
+    if tracked is None:
+        return 1
     extras = []
     for path in mirror.rglob("*"):
         rel = path.relative_to(mirror)
