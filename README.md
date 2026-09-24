@@ -158,6 +158,9 @@ Run `hermes/patches/check-patches.sh` after every update; it is read-only and re
 ## Status and known gaps
 
 - Verified working as of 2026-09-22/23: wake word, follow-up mode, announcements, LED states.
+- Behaviour worth knowing: **follow-up mode** keeps listening for about **fifteen seconds** after an answer,
+  so a conversation continues without repeating the wake word. **Announcements** queue behind any
+  conversation in progress, open with a distinct wake tone, and are spoken only when the room is quiet.
 - **The voice surface runs at full parity with a normal Hermes conversation** on the gateway's default
   model, so it inherits the normal fallback chain. Measured 2026-09-24 with this repository's own Verify
   block: **21 toolsets, 19 tools, about 8.4k tokens of tool schema**.
