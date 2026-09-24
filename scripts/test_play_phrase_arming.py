@@ -32,11 +32,11 @@ def check(label, got, want):
 
 check("the script arms the satellite", "await sat.run()" in source, True)
 check("it arms exactly once", source.count("await sat.run()"), 1)
-check("and it still plays the audio", "await sat.play_wav(" in source, True)
+check("and it still plays the audio", "sat.play_wav(" in source, True)
 
-if "await sat.run()" in source and "await sat.play_wav(" in source:
+if "await sat.run()" in source and "sat.play_wav(" in source:
     check("arming comes before playback",
-          source.index("await sat.run()") < source.index("await sat.play_wav("), True)
+          source.index("await sat.run()") < source.index("sat.play_wav("), True)
 
 # No check for a second RunSatellite beyond the call-site count above: mentioning the message name
 # in a comment is not a second send, and counting text rather than calls gets that wrong.

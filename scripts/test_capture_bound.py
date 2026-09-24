@@ -36,9 +36,15 @@ def check(label, got, want):
         failures.append(f"{label}: got {got!r}, wanted {want!r}")
 
 
+async def _nothing_queued():
+    """The new flow discards the opening moment first; a stub bridge has no queue to drain."""
+    return 0
+
+
 def bridge_with(capture):
     b = Loop.__new__(Loop)
     b.capture_utterance = capture
+    b._discard_queued_events = _nothing_queued
     return b
 
 
