@@ -177,7 +177,9 @@ class VoiceLoop:
         self.stt_model = stt_model
         self.stt_threads = stt_threads
         self.idle_reset_minutes = idle_reset_minutes
-        self._ep_kwargs = endpointer or {}
+        self._base_ep_kwargs = dict(endpointer or {})
+        self.endpointing_profile = self._load_endpointing_profile()
+        self._ep_kwargs = self._profiled_endpointing_kwargs(self.endpointing_profile)
         self._log_events = log_events
 
         self._state_file = STATE_FILE
@@ -221,6 +223,8 @@ class VoiceLoop:
             # than a copy, so a change made by voice or by the assistant is visible immediately.
             follow_up_get=lambda: self.follow_up,
             follow_up_set=self.set_follow_up,
+            endpointing_profile_get=lambda: self.endpointing_profile,
+            endpointing_profile_set=self.set_endpointing_profile,
         )
 
     # -- session handling ---------------------------------------------------
@@ -304,6 +308,54 @@ class VoiceLoop:
             self._state_file.write_text(f"{self.gateway.session_id}\n{time.time():.0f}\n")
         except OSError as exc:  # noqa: BLE001
             _LOGGER.warning("could not persist the conversation state: %s", exc)
+
+    # -- endpointing profile -------------------------------------------------
+
+    def _load_endpointing_profile(self) -> str:
+        """Read the persisted profile, failing safely to the standard timing."""
+        from bridge.config import ENDPOINTING_PROFILES, ENDPOINTING_PROFILE_STATE_FILE
+
+        try:
+            saved = ENDPOINTING_PROFILE_STATE_FILE.read_text().strip()
+        except FileNotFoundError:
+            return "standard"
+        except OSError as exc:  # noqa: BLE001
+            _LOGGER.warning("could not read %s: %s", ENDPOINTING_PROFILE_STATE_FILE, exc)
+            return "standard"
+        if saved not in ENDPOINTING_PROFILES:
+            _LOGGER.warning("ignoring unknown persisted endpointing profile %r", saved)
+            return "standard"
+        return saved
+
+    def _profiled_endpointing_kwargs(self, profile: str) -> dict:
+        """Overlay one validated profile onto the installation's base endpointer settings."""
+        from bridge.config import ENDPOINTING_PROFILES
+
+        if profile not in ENDPOINTING_PROFILES:
+            raise ValueError(f"unknown endpointing profile: {profile}")
+        result = dict(self._base_ep_kwargs)
+        result.update(ENDPOINTING_PROFILES[profile])
+        return result
+
+    def set_endpointing_profile(self, profile: str) -> str:
+        """Select and persist a bounded endpointing profile, then apply it to all capture paths."""
+        from bridge.config import ENDPOINTING_PROFILE_STATE_FILE
+
+        kwargs = self._profiled_endpointing_kwargs(profile)
+        replacement = Endpointer(**kwargs)
+        ENDPOINTING_PROFILE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        pending = ENDPOINTING_PROFILE_STATE_FILE.with_suffix(".tmp")
+        try:
+            pending.write_text(profile + "\n")
+            pending.replace(ENDPOINTING_PROFILE_STATE_FILE)
+        except OSError as exc:
+            pending.unlink(missing_ok=True)
+            raise OSError(f"could not persist endpointing profile: {exc}") from exc
+        self.endpointing_profile = profile
+        self._ep_kwargs = kwargs
+        self._ep = replacement
+        _LOGGER.info("endpointing profile set to %s", profile)
+        return profile
 
     # -- follow-up mode ------------------------------------------------------
 
@@ -646,7 +698,13 @@ class VoiceLoop:
         """
         if getattr(self, "turn_started_at", None) is None:
             self.turn_started_at = time.monotonic()
-        self._ep.reset()
+        # Bind the endpointer for the whole utterance. Resolving `self._ep` per chunk instead would
+        # let a profile change arriving mid-sentence swap the object underneath us: the new one
+        # starts empty, so the audio already buffered in the old one is dropped and the utterance
+        # restarts. Taking a local reference means a change lands on the next capture, which is
+        # what docs/endpointing-profiles.md promises.
+        endpoint = self._ep
+        endpoint.reset()
         announce = getattr(self, "_on_listening", None)
         if announce:
             announce()
@@ -658,7 +716,7 @@ class VoiceLoop:
                 continue
             if AudioChunk.is_type(event.type):
                 chunk = AudioChunk.from_event(event)
-                result = self._ep.process(chunk.audio)
+                result = endpoint.process(chunk.audio)
                 if result is not None:
                     return result
             elif Detection.is_type(event.type):

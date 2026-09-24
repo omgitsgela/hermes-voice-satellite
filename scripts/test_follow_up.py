@@ -31,6 +31,7 @@ sys.path.insert(0, str(ROOT))
 import bridge.config as config_module  # noqa: E402
 import bridge.loop as loop_module  # noqa: E402
 from bridge.endpointing import EndpointResult  # noqa: E402
+from bridge.satellite import SatelliteClient  # noqa: E402
 
 PROBLEMS = 0
 
@@ -69,11 +70,14 @@ def bare_loop():
     loop.stop_requested = False
     loop.turn_started_at = None
     loop.turns = []
-    # A satellite stub that counts re-arm requests. RunSatellite stops the stream and puts the
-    # satellite back to wake-word detection, which a closed window must always do.
+    # A production-backed satellite stub that counts re-arm requests. RunSatellite stops the
+    # stream and puts the satellite back to wake-word detection, which a closed window must always do.
     rearm = {"calls": 0}
 
-    class FakeSat:
+    class FakeSat(SatelliteClient):
+        def __init__(self):
+            super().__init__("127.0.0.1")
+
         async def run(self):
             rearm["calls"] += 1
 

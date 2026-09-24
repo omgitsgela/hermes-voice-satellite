@@ -77,6 +77,20 @@ FOLLOW_UP_WAKE_RETRY_SECONDS = 1.5
 # understood over a chime that is still ringing.
 FOLLOW_UP_QUIET_SECONDS = 1.2
 FOLLOW_UP_STATE_FILE = PROJECT_DIR / "state" / "follow-up-on"
+
+# Accessible endpointing profiles. The pause-tolerant profile allows deliberate mid-sentence pauses
+# while retaining finite no-speech and utterance limits. Standard preserves the command-line/default
+# endpointer values exactly. Profile names are an API and persisted state, so keep them stable.
+ENDPOINTING_PROFILE_STATE_FILE = PROJECT_DIR / "state" / "endpointing-profile"
+ENDPOINTING_PROFILES = {
+    "standard": {},
+    "pause_tolerant": {
+        "silence_ms": 1800,
+        "max_utterance_seconds": 25.0,
+        "no_speech_timeout_seconds": 12.0,
+    },
+}
+
 # Published while a follow-up window is open, so the device shows that it is listening for a reply
 # of its own accord rather than looking switched off. Handled by 2mic_leds on the Pi.
 FOLLOW_UP_LED = "led-followup"

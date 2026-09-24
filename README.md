@@ -155,6 +155,7 @@ Run `hermes/patches/check-patches.sh` after every update; it is read-only and re
 - [`docs/supported-devices.md`](docs/supported-devices.md) microphone devices worth buying and testing, with the compatibility reasoning and a test checklist
 - [`docs/hardware/`](docs/hardware/README.md) per-model hardware: identity, enclosure, wiring, service arguments and bring-up tests
 - [`docs/interruption.md`](docs/interruption.md) talking to a task that is already running: steer it, stop it, or ignore noise
+- [`docs/endpointing-profiles.md`](docs/endpointing-profiles.md) opt-in pause-tolerant listening for hesitant or slower speech
 - [`docs/agent-and-model-routing.md`](docs/agent-and-model-routing.md) choose either a model route alias or a complete named Hermes Bot/profile for every satellite conversation
 
 ## Status and known gaps

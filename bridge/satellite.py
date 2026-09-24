@@ -240,8 +240,11 @@ class SatelliteClient:
     async def next_event(self, timeout: float) -> Optional[Event]:
         """Next event, or None on timeout. Distinguish a closed link with `.eof`."""
         try:
-            event = await asyncio.wait_for(self._queue.get(), timeout)
-        except asyncio.TimeoutError:
+            if timeout <= 0:
+                event = self._queue.get_nowait()
+            else:
+                event = await asyncio.wait_for(self._queue.get(), timeout)
+        except (asyncio.QueueEmpty, asyncio.TimeoutError):
             return None
         if event is _EOF:
             self._eof = True

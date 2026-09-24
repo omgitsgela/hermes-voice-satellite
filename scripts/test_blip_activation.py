@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import bridge.loop as loop_module  # noqa: E402
 from bridge.endpointing import EndpointResult  # noqa: E402
+from bridge.satellite import SatelliteClient  # noqa: E402
 
 
 def blip(speech_seconds: float = 0.08) -> EndpointResult:
@@ -56,6 +57,7 @@ def silent_window() -> EndpointResult:
 def make_loop(script: list[EndpointResult | None]):
     """A VoiceLoop with only the pieces capture_after_wake touches, plus a scripted capture."""
     loop = object.__new__(loop_module.VoiceLoop)
+    loop.sat = SatelliteClient("127.0.0.1")
     calls: list[str] = []
 
     async def fake_capture(wake_word: str):
@@ -101,7 +103,7 @@ async def main() -> int:
     try:
         loop, calls = make_loop([blip(), blip(), blip(), blip()])
         endpoint, note = await loop.capture_after_wake("okay_nabu")
-        ok = endpoint is None and len(calls) == 1 and "only blips" in note
+        ok = endpoint is None and len(calls) == 0 and "only blips" in note
         print("\n3. endless blips (deadline 0 s)")
         print(f"   captures: {len(calls)}  result: {endpoint}  note: {note}")
         if not ok:

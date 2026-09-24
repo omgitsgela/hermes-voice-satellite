@@ -117,9 +117,10 @@ async def test_event_mapping(led):
     handler = object.__new__(led.LEDsEventHandler)   # bypass the transport-level base init
     handler.controller = controller
     handler.cli_args = args
+    handler._red_task = None
 
     from wyoming.event import Event
-    from wyoming.satellite import SatelliteDisconnected, StreamingStopped
+    from wyoming.satellite import SatelliteConnected, SatelliteDisconnected, StreamingStopped
 
     # A stopped stream is not work: it also happens for a blip with nothing to answer.
     await handler.handle_event(StreamingStopped().event())
@@ -148,10 +149,24 @@ async def test_event_mapping(led):
     assert len(strip.frames) == followup_frames, "the follow-up state kept animating"
     print("  follow-up: steady dim teal, no animation")
 
-    # The pre-existing states still map as before.
-    await handler.handle_event(SatelliteDisconnected().event())
-    assert strip.frames[-1][1:5] == (255, 0, 0, 100), "host-gone red regressed"
-    print("  mapping: stream stop dark, busy pulses, idle stops, follow-up teal, host-gone red")
+    # A disconnect schedules red but does not display it immediately. A reconnect cancels it.
+    with patch.object(led, "DISCONNECT_RED_GRACE_SECONDS", 0.05), \
+            patch.object(led, "_first_connect_this_boot", return_value=False):
+        await handler.handle_event(SatelliteDisconnected().event())
+        assert handler._red_task is not None, "disconnect did not schedule delayed red"
+        assert strip.frames[-1][1:4] != led._RED, "disconnect showed red immediately"
+
+        await handler.handle_event(SatelliteConnected().event())
+        await asyncio.sleep(0.08)
+        assert handler._red_task is None, "reconnect did not clear the delayed-red task"
+        assert strip.frames[-1][1:4] != led._RED, "cancelled delayed red still appeared"
+
+        # An outage that survives the grace period becomes visibly red.
+        await handler.handle_event(SatelliteDisconnected().event())
+        await asyncio.sleep(0.08)
+        assert strip.frames[-1][1:4] == led._RED, "sustained outage did not show red"
+
+    print("  mapping: stream stop dark, busy pulses, idle stops, follow-up teal, delayed host-gone red")
 
 
 def test_boot_gate(led, tmp_path):

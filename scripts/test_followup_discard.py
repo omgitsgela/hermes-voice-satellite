@@ -16,6 +16,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import bridge.loop as loop_module  # noqa: E402
+from bridge.satellite import SatelliteClient  # noqa: E402
 from wyoming.audio import AudioChunk  # noqa: E402
 
 Loop = next(obj for obj in vars(loop_module).values()
@@ -64,7 +65,14 @@ async def main() -> int:
     b._replay_buffer().append("stale")
     check("buffer cleared as well", await b._discard_queued_events(), 2)
 
-    # 4. the quiet interval actually calls it, since that is the whole point
+    # 4. the production SatelliteClient queue really drains with a zero timeout
+    b = Loop.__new__(Loop)
+    b.sat = SatelliteClient("127.0.0.1")
+    b.sat._queue.put_nowait(chunk_event())
+    check("real satellite queue discarded", await b._discard_queued_events(), 1)
+    check("real satellite queue empty", b.sat._queue.qsize(), 0)
+
+    # 5. the quiet interval actually calls it, since that is the whole point
     src = (pathlib.Path(__file__).resolve().parent.parent / "bridge" / "loop.py").read_text()
     quiet = src.index("await asyncio.sleep(FOLLOW_UP_QUIET_SECONDS)")
     check("discard happens after the quiet sleep",
