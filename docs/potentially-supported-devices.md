@@ -91,3 +91,50 @@ would leave us maintaining a vendor SDK just to change the colour of a light.
    speaking our protocol, fewest unknowns, and it has a small LED and two buttons to exercise the control
    path. The XVF3800 with XIAO at $66.99 is the natural second unit, since it brings on-chip echo
    cancellation, which is our biggest feature gap.
+
+
+## Verified 2026-09-23, while shopping the listings
+
+### Which Raspberry Pi models the HAT actually runs on
+
+From the driver's own README, the officially supported set is **Raspberry Pi 3 (all models), Raspberry Pi 4
+(all models), Raspberry Pi Zero and Zero W**, on **32-bit Raspberry Pi OS**, with **64-bit marked
+experimental**. The 2-Mics HAT is a 40-pin board, so it fits anything with a 40-pin header, but fitting is
+not the same as working:
+
+- **Raspberry Pi 5 is not supported.** It is not on the list, and the Pi 5's RP1 chip changed the audio and
+  GPIO plumbing. Treat it as unknown until we test one, not as a safe buy.
+- **Pi Zero and Zero W (the originals) are supported by the driver but too weak for our software**, which
+  needs a 64-bit OS and enough RAM to run a wake word. The floor for this project is a **Pi Zero 2 W**.
+- Our own Zero 2 W is not on Seeed's list either and works fine, so the list is conservative rather than
+  complete. For a buyer, quote the supported list and add the Zero 2 W as the known-good build.
+
+### Pricing trap on the Seeed listings
+
+The **"10+:" figure on a product page is a bulk price, not the unit price.** The 2-Mics HAT shows $11.99 at
+10 or more against $13.99 singly. Any list sent to a buyer should use single-unit prices, which is what
+`What to buy` above does.
+
+### reSpeaker Lite Voice Assistant Kit, full kit variant
+
+The full kit exists in **two variants**: with the XIAO ESP32S3 pre-soldered, or without it. Only the
+pre-soldered one has a processor. Order the wrong one and there is nothing to flash.
+
+### reSpeaker XMOS XVF3800 with XIAO ESP32S3
+
+The listing confirms more than we credited, and it makes this the target device for our own firmware:
+
+- **Dual modes, I2S or USB.** The I2S path means the ESP32 reads the array directly, so no USB firmware
+  conversion is needed in the MCU direction.
+- **On-board AEC, AGC, DoA, VAD, dereverberation, beamforming and noise suppression**, with 360 degree
+  far-field pickup to 5 metres.
+
+That is the whole hard part of voice capture done on the array and handed to the microcontroller as clean
+audio. It closes the echo cancellation gap (#1) in hardware rather than in our code, which is why this is
+the device to aim for rather than the cheapest one.
+
+### reSpeaker Clip
+
+Not supported, and it should not go on a buyer list yet. Its firmware, SDK and datasheet are all still
+marked **"coming soon"**, its processor is unpublished, and it is built as a recorder with onboard storage
+and BLE or Wi-Fi sync rather than as a wake-word satellite. It stays on the watchlist.
