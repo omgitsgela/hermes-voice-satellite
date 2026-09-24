@@ -162,6 +162,46 @@ async def main() -> int:
     finally:
         config_module.WAKE_NO_SPEECH_SECONDS = _orig_no_speech
 
+    # 6. At the endpointer level, which is where the 8 second bound actually lives. A blip must not
+    #    reset the no-speech budget: before this, each blip zeroed the frame count, `no_speech` could
+    #    never fire, and only the wall-clock cap ended an activation. Measured live 2026-09-24: an
+    #    activation with one stray blip ran 14.4s instead of 8s for exactly this reason.
+    from bridge.endpointing import Endpointer
+
+    pattern = [True] * 4 + [False] * 96           # a rejected 0.08s blip every 2 s of frames
+    ep = Endpointer(silence_ms=700, min_speech_ms=250)
+
+    class PatternVad:
+        def __init__(self):
+            self.i = 0
+
+        def is_speech(self, frame, rate):
+            value = pattern[self.i % len(pattern)]
+            self.i += 1
+            return value
+
+    ep._vad = PatternVad()
+    speech_frame = b"\x11\x22" * ep.frame_samples
+    quiet_frame = b"\x00\x00" * ep.frame_samples
+    result = None
+    frames = 0
+    for n in range(1, 3000):
+        frames = n
+        result = ep.process(speech_frame if pattern[(n - 1) % len(pattern)] else quiet_frame)
+        if result is not None and result.ended_by == "no_speech":
+            break
+    seconds = frames * 0.02
+    print("\n6. blips every 2s at the endpointer")
+    print(f"   no_speech after {frames} frames ({seconds:.1f}s of audio)")
+    # 8 s of frames is the endpointer's own window: 400 frames at 20 ms. The point is that the blips'
+    # frames COUNT towards it rather than restarting it.
+    if result is None or result.ended_by != "no_speech" or not (380 <= frames <= 430):
+        print(f"   FAIL: expected no_speech at about 400 frames, got "
+              f"{'nothing' if result is None else result.ended_by} at {frames}")
+        problems += 1
+    else:
+        print("   OK: the blips accumulated towards the bound instead of resetting it")
+
     print(f"\n=== {'ALL CHECKS PASSED' if problems == 0 else f'{problems} PROBLEM(S)'} ===")
     return 1 if problems else 0
 

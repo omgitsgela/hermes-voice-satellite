@@ -257,5 +257,12 @@ class Endpointer:
             rejected=reason != "max_length" and self._speech_frames < self._min_speech_frames,
         )
         _LOGGER.info("endpoint (%s): %s", reason, result)
+        # A rejected utterance is noise, not a turn, so its frames still count towards the no-speech
+        # budget. Resetting the count here is why a room producing a blip every few seconds could hold
+        # the stream open indefinitely: each blip ended the utterance and zeroed the clock, so
+        # `no_speech` never fired and only a wall-clock cap closed it (issue #47). Real speech still
+        # starts from zero, because it is the person finally saying something.
+        carried = self._frames_seen if result.rejected else 0
         self.reset()
+        self._frames_seen = carried
         return result
