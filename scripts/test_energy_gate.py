@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""The energy gate: a frame must be loud enough to be someone talking (issue #47).
+
+Measured on the device, 2026-09-24, 20 ms frames, this room, this preamp:
+
+    fan baseline        median RMS  191   max   422
+    YouTube at normal volume
+                        median RMS  197   max   871
+    the maintainer talking
+                        median RMS 1026   max  9343   (speech frames only: median 2994)
+
+Everything below is a restatement of those numbers as an assertion: 190 is what the room does, 3000
+is what a person does, and a frame at 190 must never be treated as speech no matter what the voice
+activity detector thinks of it. That matters because webrtcvad decides on spectral content, not
+energy, and a fan's blips are spectrally speech-like - twelve of them across one day, 0.08 s each.
+
+Run with the bridge venv:
+
+    .venv/bin/python scripts/test_energy_gate.py
+"""
+from __future__ import annotations
+
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
+import bridge.config as config_module  # noqa: E402
+from bridge.endpointing import Endpointer  # noqa: E402
+
+checks = 0
+failures: list[str] = []
+
+FAN_RMS = 190          # measured fan baseline
+VIDEO_RMS = 870        # the loudest single frame of a YouTube video at normal volume
+SPEECH_RMS = 3000      # measured speech frames
+
+
+def check(label: str, got, want) -> None:
+    global checks
+    checks += 1
+    if got != want:
+        failures.append(f"{label}: got {got!r}, wanted {want!r}")
+
+
+def frame_at(rms: int, samples: int = 320) -> bytes:
+    """A 20 ms frame whose RMS is exactly `rms` (alternating +rms/-rms, so RMS == amplitude)."""
+    import struct
+
+    return struct.pack("<hh", rms, -rms) * (samples // 2)
+
+
+class ScriptedVad:
+    """Says whatever the script says. `decisions` is consumed one frame at a time."""
+
+    def __init__(self, decisions: list[bool]) -> None:
+        self.decisions = list(decisions)
+        self.i = 0
+
+    def is_speech(self, frame: bytes, rate: int) -> bool:
+        value = self.decisions[self.i] if self.i < len(self.decisions) else False
+        self.i += 1
+        return value
+
+
+def build(decisions: list[bool]) -> Endpointer:
+    ep = Endpointer(silence_ms=700, min_speech_ms=250)
+    ep._vad = ScriptedVad(decisions)
+    return ep
+
+
+def feed(ep: Endpointer, rms: int, frames: int):
+    """Feed `frames` frames at the given level; return the first result, if any."""
+    for _ in range(frames):
+        result = ep.process(frame_at(rms))
+        if result is not None:
+            return result
+    return None
+
+
+def main() -> int:
+    # A "fan blip": four frames (0.08 s) that webrtcvad wrongly calls speech, followed by quiet.
+    # Twelve of these were logged in one day and every one was rejected only by luck of duration.
+    ep = build([True] * 4 + [False] * 100)
+    result = feed(ep, FAN_RMS, 8)
+    check("a fan-level blip does not even start an utterance", result, None)
+    check("the gate remembers the room floor from it", round(ep.gate.floor / 10) * 10, 190)
+
+    # A fan-level blip that lasts long enough to close an utterance if it were counted as speech.
+    # This is the check that proves the endpointer *consults* the gate rather than merely owning one:
+    # with the gate wired in, 0.4 s of fan-level "speech" never becomes an utterance; with the gate
+    # removed from the decision, it does, and is returned as an accepted utterance.
+    ep = build([True] * 20 + [False] * 50)
+    first = feed(ep, FAN_RMS, 20)
+    result = first if first is not None else feed(ep, FAN_RMS, 50)
+    check("0.4s of fan-level noise never becomes an utterance",
+          None if result is None else f"an utterance of {result.speech_seconds:.2f}s", None)
+
+    # The same shape at speech level must produce one, or the check above would pass for the wrong
+    # reason (an endpointer that returns nothing at all).
+    ep = build([True] * 20 + [False] * 50)
+    first = feed(ep, SPEECH_RMS, 20)
+    result = first if first is not None else feed(ep, FAN_RMS, 50)
+    check("the same shape at speech level does become an utterance",
+          result is not None and not result.rejected, True)
+
+    # The same shape as a real utterance: a burst of loud frames, then the room again as it ends.
+    # 20 speech frames at 20 ms = 0.4 s, above the 0.25 s minimum, closed by the trailing silence.
+    ep = build([True] * 20 + [False] * 60)
+    first = feed(ep, SPEECH_RMS, 20)
+    result = first if first is not None else feed(ep, FAN_RMS, 60)
+    check("real speech is not gated out", result is not None and not result.rejected, True)
+    if result is not None:
+        check("and its speech is counted, not discarded", round(result.speech_seconds, 2), 0.4)
+
+    # The threshold must sit above the room and well below a person, with room to spare.
+    ep = build([False] * 200)
+    feed(ep, FAN_RMS, 100)
+    threshold = ep.gate.threshold
+    check("threshold is above the loudest fan frame", threshold > 422, True)
+    check("threshold is above the loudest video frame", threshold > VIDEO_RMS, True)
+    check("threshold leaves speech at least 2x of margin", SPEECH_RMS / threshold >= 2.0, True)
+
+    # A long stretch of continuous speech must not drag the floor up to speech level, or the gate
+    # would deafen itself after ten seconds of talking.
+    ep = build([True] * 100 + [False] * 60)
+    for _ in range(12):
+        feed(ep, SPEECH_RMS, 100)
+        feed(ep, FAN_RMS, 60)
+    check("the floor stays at the room, not the speaker", ep.gate.floor < 600, True)
+    check("and speech still passes after that", ep.gate.passes(frame_at(SPEECH_RMS)), True)
+
+    # A silent room must not drive the floor to zero and the threshold with it.
+    ep = build([False] * 100)
+    feed(ep, 0, 100)
+    check("a dead-silent room leaves a sane threshold", ep.gate.threshold >= 400, True)
+
+    # And the shipped tuning must be the one the measurements justify: if someone lowers the ratio,
+    # the gate stops clearing the loudest video frame and quietly stops doing its job.
+    shipped = config_module.VOICE_ENERGY_GATE
+    check("the shipped ratio clears the video level with margin",
+          shipped["ratio"] * shipped["floor_default"] > VIDEO_RMS * 1.2, True)
+    check("the shipped default floor is the measured fan level",
+          round(shipped["floor_default"]), 190)
+
+    print(f"energy gate checks: {checks - len(failures)}/{checks} passed")
+    for failure in failures:
+        print(f"  FAIL: {failure}")
+    return 1 if failures else 0
+
+
+raise SystemExit(main())

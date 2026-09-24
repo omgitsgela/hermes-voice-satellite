@@ -40,6 +40,16 @@ VOICE_SESSION_ID = "voice-wyoming1"  # stable id, so the assistant has continuit
 # activation, so this is the only bound on an activation where nobody actually speaks. Chosen
 # 2026-09-22 after Michael reported the activation closing before he could speak.
 CAPTURE_ACTIVATION_SECONDS = 30.0
+
+# How long the person gets to produce real speech after a wake before the activation closes with
+# nothing. A *blip* must not extend this. Measured on the device, 2026-09-24: the room's fan produces
+# a short speech-like blip every few seconds, each blip ended the endpointer's own no-speech window
+# and restarted it, and activations therefore ran the full CAPTURE_ACTIVATION_SECONDS cap instead of
+# closing after a silent 8 seconds. Blips are noise; only real speech counts against this clock.
+# Same idea as the endpointer's own no-speech window, but held at the activation level where a blip's
+# restart cannot reach it. `capture_follow_up` already works this way, with a wall-clock deadline a
+# blip cannot move; this is the wake path getting the same treatment.
+WAKE_NO_SPEECH_SECONDS = 8.0
 # How much of the opening of a wake activation to ignore, so the device's own awake chime
 # and its echo are not taken as speech. Measured 2026-09-24: a 0.3s chime transcribed as
 # "beep" and started a turn (issue #47). Kept short on purpose, because a person usually waits
@@ -89,6 +99,36 @@ ENDPOINTING_PROFILES = {
         "max_utterance_seconds": 25.0,
         "no_speech_timeout_seconds": 12.0,
     },
+}
+
+# The energy gate: a frame must be loud enough to be a person before the voice activity detector's
+# opinion about it counts. webrtcvad decides on spectral content, not energy, which is why a room's
+# fan can produce speech-like frames while sitting far below speech level.
+#
+# Measured on the device, 2026-09-24, 20 ms frames, this room and this preamp:
+#     fan baseline      median RMS 191   max 422
+#     YouTube, normal volume
+#                       median RMS 197   max 871
+#     a person talking  median RMS 1026  max 9343   (speech frames only: median 2994)
+#
+# At ratio 6.0 the threshold lands near RMS 1140 on this hardware: above every fan frame, above the
+# loudest video frame, and still more than 2x below ordinary speech. `floor_default` is the measured
+# fan level, used until the window has enough samples to say for itself. The clamps are runaway
+# guards, not tuning: a dead-silent room must not drive the threshold to zero, and a long unbroken
+# monologue must not drag the floor up to speech level and deafen the gate.
+#
+# The gate makes the device *less* sensitive, never more: it can only reject frames the detector
+# already accepted. A quiet speaker who is being gated out needs this ratio lowered, which is a
+# deliberate change rather than a tweak, and the honest first move is to measure them the way the
+# numbers above were measured.
+VOICE_ENERGY_GATE = {
+    "ratio": 6.0,
+    "floor_default": 190.0,
+    "floor_min": 60.0,
+    "floor_max": 1000.0,
+    "window_frames": 1500,   # 30 s at 20 ms frames
+    "min_samples": 40,       # 0.8 s of non-speech before the floor is taken from the window
+    "threshold_min": 400.0,
 }
 
 # Published while a follow-up window is open, so the device shows that it is listening for a reply

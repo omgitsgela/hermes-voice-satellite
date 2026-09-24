@@ -36,10 +36,14 @@ def endpoint_for(profile: str):
     kwargs.update(config_module.ENDPOINTING_PROFILES[profile])
     endpoint = Endpointer(**kwargs)
     endpoint._vad = ScriptedVad(decisions)
-    frame = b"\x00\x00" * endpoint.frame_samples
+    # Audible frames for speech, silence for the rest. Digital silence no longer counts as speech at
+    # all: the energy gate rejects anything below the room's floor, so a fixture made of zero samples
+    # would test that the endpointer correctly hears nothing, which is not what this file is about.
+    speech_frame = b"\x11\x22" * endpoint.frame_samples
+    quiet_frame = b"\x00\x00" * endpoint.frame_samples
     result = None
-    for _ in decisions:
-        result = endpoint.process(frame)
+    for decision in decisions:
+        result = endpoint.process(speech_frame if decision else quiet_frame)
         if result is not None:
             break
     return result
