@@ -70,14 +70,24 @@ onboard storage and BLE or Wi-Fi sync rather than as a wake-word satellite. Revi
 **Bulk pricing.** Every "10+:" figure on a Seeed listing is a tier price. The HAT shows $11.99 against
 $14 singly, and the XVF3800 case shows $62.99 against $68. Quote single-unit prices to buyers.
 
-**Which Raspberry Pi.** The driver's own README supports **Pi 3 (all models), Pi 4 (all models), Pi Zero
-and Zero W**, on 32-bit Raspberry Pi OS, with 64-bit marked experimental. Two limits matter:
+**Which Raspberry Pi to use.** The HAT needs a 40-pin header, and this software needs a 64-bit OS with
+enough RAM to run a wake word locally. That gives three supported hosts:
 
-- **Raspberry Pi 5 is not supported.** Absent from the list, and the Pi 5's RP1 chip changed the audio and
-  GPIO plumbing. Unknown until tested, so not a safe buy.
-- **Pi Zero and Zero W are driver-supported but too weak for our software**, which needs a 64-bit OS and
-  enough RAM for a wake word. The floor for this project is a **Pi Zero 2 W**, which works even though
-  Seeed does not list it, so their list is conservative rather than complete.
+- **Pi Zero 2 W** — what we run here, and the known-good build.
+- **Pi 3**, all models.
+- **Pi 4**, all models. The Pi 400 counts, being a Pi 4 in a keyboard.
+
+**Do not buy a Pi Zero or Zero W, the originals.** The `seeed-voicecard` driver supports them, so they
+appear on Seeed's list, but they cannot run this stack: not enough RAM for a local wake word and no
+adequate 64-bit path. They are left off the list above rather than recommended-with-a-caveat, because a
+caveat reads as a suggestion and this purchase would be wasted.
+
+**The Pi 5 is not supported.** It is absent from the driver's own list, and its RP1 chip changed the audio
+and GPIO plumbing. Unknown until someone tests one, so not a safe buy.
+
+Seeed's list, for reference, is Pi 3, Pi 4, Pi Zero and Zero W on 32-bit Raspberry Pi OS with 64-bit marked
+experimental. That is a driver-level list, not a statement that a board can run this project, and our
+known-good build is not on it at all.
 
 **Revision trap on the Pi HAT.** Seeed's wiki for this board mostly documents the **older V1.x built on a
 WM8960 codec**. Ours is the **V2.0 with a TLV320AIC3104**, needing a different driver and overlay. The
