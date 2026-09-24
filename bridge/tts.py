@@ -113,8 +113,19 @@ class TtsStream:
                 "could not acquire the playback lock within 30s; something is holding it"
             ) from exc
         self._holds_lock = True
-        await self._send(self._AudioStart(rate=SND_FORMAT[0], width=SND_FORMAT[1],
-                                          channels=SND_FORMAT[2]).event())
+        try:
+            await self._send(self._AudioStart(rate=SND_FORMAT[0], width=SND_FORMAT[1],
+                                              channels=SND_FORMAT[2]).event())
+        except BaseException:
+            # `__aexit__` is NOT called when `__aenter__` raises, so the lock has to be handed back
+            # here. Without this a failed audio-start (satellite connection gone, or a cancellation
+            # mid-entry) held the process-wide playback lock forever: every later answer waited 30s
+            # and then failed, and the device looked simply stuck. Same failure class the note above
+            # records, on the path that note did not cover (issue #14). BaseException on purpose, so
+            # a CancelledError releases it too.
+            SatelliteClient.PLAYBACK_LOCK.release()
+            self._holds_lock = False
+            raise
         return self
 
     async def __aexit__(self, *exc) -> bool:
