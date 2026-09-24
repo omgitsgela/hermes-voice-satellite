@@ -24,7 +24,7 @@ Verified live, not assumed:
 |---|---|---|
 | Bridge process dies | systemd restarts it in 5 s; a turn in flight is lost | same, and say so in the room if a turn was lost |
 | Gateway restarted (planned) | In-flight turn errors, bridge exits, reconnects; the device is deaf for a few seconds | same. Optionally retry the interrupted turn once |
-| `hermes update` runs | **Five core patches are stashed and the surface silently degrades** (see below) | Patches detected, re-applied and verified automatically |
+| `hermes update` runs | **The one remaining core patch is stashed and its fix is lost** (see below) | Patches detected, re-applied and verified automatically |
 | Host reboots | Everything returns unattended | same (verified) |
 | Pi reboots or loses power | Services are enabled and come back; no RTC, so nothing time-based is trusted | same. The gold SD image stays the recovery path |
 | Pi SD card dies | Restore from the gold image, then re-copy `pi/` files | Keep a dated image and a checklist in this repo |
@@ -37,10 +37,7 @@ the only copy of them:
 
 | Patch | Voice-critical? |
 |---|---|
-| `toolsets.py` — the four names in `_HERMES_CORE_TOOLS` plus `skills_read` | Yes: without it those tools defer behind a `tool_search` bridge the surface does not carry, so they vanish |
-| `hermes_cli/tools_config.py` — `hubitat`, `google`, `voice_satellite` set default-off | Yes: without default-off, plugin toolsets switch on for every bundled platform |
-| `gateway/platforms/api_server.py` — drop stale provider `extra_body` when a route switches provider | Yes: the voice route runs a different provider from the global default, which is exactly the case that silently fell back to a paid lane |
-| `model_tools.py` — no bridge when the deferrable catalogue is empty | No: costs tokens and a detour, still works |
+| `cron/jobs.py` | Voice-critical? No. It preserves the requested provider when a scheduled job snapshots its model, so jobs stop drifting to the bare-`custom` fallback. Tracked upstream as #109765, with a fix proposed in #109773, so this patch should be retired when a release carries it. |
 | `cron/jobs.py` — store `requested_provider` | No: unrelated to voice |
 
 ## Proposed, in the order I would do it
@@ -77,7 +74,7 @@ promote it to `setup/verify-surface.sh` so an upgrade can be validated in one li
 **F. Document extension, and admit the limits.**
 Add `docs/EXTENDING.md` covering: adding a second satellite (currently **not** supported: one
 `SATELLITE_HOST`, one session file), adding a second room by running a second bridge on another port,
-adding a new tool (plugin, then the `_HERMES_CORE_TOOLS` line, then `_DEFAULT_OFF_TOOLSETS`, then the
+adding a new tool (enable the plugin, add its toolset to the platform list the surface inherits, then check the voice prompt still describes the widened surface). The `_HERMES_CORE_TOOLS` and `_DEFAULT_OFF_TOOLSETS` patch lines are gone with the narrow surface: the voice surface now runs at full parity, so there is nothing to widen by hand.
 platform toolset list), and the security posture that a new deployment must preserve (loopback API
 server, token-authenticated announcements, no LAN exposure of the agent surface).
 

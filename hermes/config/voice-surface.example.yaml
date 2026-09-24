@@ -3,37 +3,44 @@
 #
 # The plugins must ALSO be enabled by name, or discovery never sees them and their toolsets
 # resolve to nothing:
-#   hermes plugins enable voice_satellite     (and hubitat, google, geolocation)
+#   hermes plugins enable voice_satellite   (and hubitat, google, geolocation, mimo-voice,
+#                                            skill-enforcer, web/trafilatura)
 
 plugins:
   enabled:
     - geolocation
     - google
     - hubitat
+    - mimo-voice
+    - skill-enforcer
     - voice_satellite
+    - web/trafilatura
   entries:
+    skill-enforcer:
+      allow_tool_override: false
     voice_satellite:
       allow_tool_override: false
 
-# What the voice surface is allowed to see. Deliberately narrow, and deliberately without
-# `safe` (which brings image_gen, the one deferrable tool that drags in the tool_search bridge).
-platform_toolsets:
-  api_server:
-    - geolocation
-    - google
-    - hubitat
-    - skills_read
-    - voice_satellite
-    - web
+# The voice surface runs at FULL PARITY with every other Hermes surface, so there is deliberately no
+# narrow `platform_toolsets.api_server` override here.
+#
+# An earlier version of this file shipped one listing six toolsets and four plugins, described as
+# "deliberately narrow". That is issue #20: it documented a surface that no longer exists, and anyone
+# following it would build the retired configuration. The `api_server` platform now inherits the
+# default toolset list, which in the reference installation carries 21 toolsets: browser, clarify,
+# code_execution, computer_use, connections, cronjob, delegation, file, geolocation, image_gen,
+# kanban, memory, messaging, session_search, skills, terminal, todo, tts, video, vision, web.
+#
+# To narrow a surface on purpose, add a `platform_toolsets.api_server` list and accept that the voice
+# assistant loses those abilities.
 
 gateway:
   api_server:
     host: 127.0.0.1        # loopback ONLY. This is a full agent surface with tool access.
     port: 8642
-    model_routes:
-      voice:                # what answers on the device. Must be a provider that is not the
-        provider: deepseek  # global default, or patch 0003 matters (see hermes/patches/README.md).
-        model: deepseek-flash
+    # No `model_routes.voice` entry, on purpose. The voice surface follows the gateway default model
+    # and its fallback chain, so the device answers on whatever the gateway answers on. The earlier
+    # configuration pinned DeepSeek Flash here, which is no longer how it runs.
 
 # Hermes' own TTS/STT, for other platforms. The voice bridge runs its own Piper and
 # faster-whisper inside its own virtualenv and ignores these.
