@@ -423,7 +423,28 @@ class VoiceLoop:
 
     # -- event helpers ------------------------------------------------------
 
+    def _replay_buffer(self):
+        """Events the watcher saw but does not own, kept for whoever is waiting for them.
+
+        Created lazily rather than in __init__ so this stays a local change. Bounded, because a
+        buffer that grows without limit on a long task is its own bug.
+        """
+        buf = getattr(self, "_replay", None)
+        if buf is None:
+            from collections import deque
+
+            buf = deque(maxlen=32)
+            self._replay = buf
+        return buf
+
     async def _next(self, timeout: float):
+        # Draining the buffer first is what lets two tasks share one satellite queue: the
+        # interruption watcher and the turn both pull from the same socket, and the watcher used to
+        # drop anything it did not recognise, including the `played` event the turn was waiting for
+        # (issue #13).
+        buf = self._replay_buffer()
+        if buf:
+            return buf.popleft()
         return await self.sat.next_event(timeout)
 
     async def wait_for_wake(self, timeout: Optional[float] = None) -> str:
@@ -544,6 +565,12 @@ class VoiceLoop:
                     return
                 continue
             if not Detection.is_type(event.type):
+                # Hand it back rather than dropping it. While a task is running the turn is usually
+                # waiting for `played` from this same queue, and discarding it here made the answer
+                # look as though playback had failed, for the full 180 second timeout (issue #13).
+                # Wake detections are deliberately NOT buffered: the watcher owns those.
+                if Played.is_type(event.type):
+                    self._replay_buffer().append(event)
                 continue
             name = Detection.from_event(event).name
             _LOGGER.info("interruption: wake word %r while a task is running", name)
