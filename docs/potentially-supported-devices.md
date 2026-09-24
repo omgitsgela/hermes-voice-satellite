@@ -37,9 +37,10 @@ already exists for it, and the spare for the device we run costs $13.99.
 
 | Device | SKU | Price | Note |
 |---|---|---|---|
-| reSpeaker Lite Voice Assistant Kit (ESPHome target) | 110061601 | $30.99 | The clearest example of the class: an MCU device, not a peripheral |
+| reSpeaker Lite Voice Assistant Kit (ESPHome target) | 110061601 | **$30.99** | Cheapest flashable unit: array plus XIAO, no speaker or case |
+| reSpeaker Lite Voice Assistant Kit, **full kit** (array plus pre-soldered XIAO, mono enclosed speaker, acrylic enclosure) | 110061601 | **$38.00** | Best value in the list: seven dollars over the bare kit buys a speaker and an enclosure that cost more bought separately |
 | reSpeaker XVF3800 with XIAO ESP32S3 | 114993700 | $66.99 | Array plus ESP32S3 host on one board |
-| reSpeaker XVF3800 with XIAO ESP32S3, case | 114993702 | $67.99 | Same, cased |
+| reSpeaker XVF3800 with XIAO ESP32S3, case | 114993702 | **$67.99** ($62.99 at 10+) | The premium unit, and the one to aim for. Needs a speaker added |
 | reSpeaker Flex XVF3800 Circular-4 with XIAO | 100070894 | $60.90 | Split array on an FPC plus ESP32S3 host |
 | reSpeaker Flex XVF3800 Linear-4 with XIAO | 100026178 | $60.90 | Same, linear array |
 
@@ -87,7 +88,9 @@ would leave us maintaining a vendor SDK just to change the colour of a light.
    like-for-like replacement and a fair baseline for any comparison.
 2. **A 4-mic or 6-mic I2S HAT from any brand matching the driver's overlays**, if one can be found at a sane
    price. Same path, no new software, better far-field pickup in principle.
-3. **For firmware development, the reSpeaker Lite kit at $30.99.** Cheapest route to a flashed device
+3. **For firmware development, the reSpeaker Lite full kit at $38.** Seven dollars over the bare kit adds
+   the mono enclosed speaker and the acrylic enclosure, which cost more bought separately, so this is the
+   turnkey starting point. Cheapest route to a flashed device
    speaking our protocol, fewest unknowns, and it has a small LED and two buttons to exercise the control
    path. The XVF3800 with XIAO at $66.99 is the natural second unit, since it brings on-chip echo
    cancellation, which is our biggest feature gap.
@@ -138,3 +141,20 @@ the device to aim for rather than the cheapest one.
 Not supported, and it should not go on a buyer list yet. Its firmware, SDK and datasheet are all still
 marked **"coming soon"**, its processor is unpublished, and it is built as a recorder with onboard storage
 and BLE or Wi-Fi sync rather than as a wake-word satellite. It stays on the watchlist.
+
+
+### Unit prices, confirmed by Angela from the live listings 2026-09-23
+
+Single-unit prices, which is what a buyer actually pays. Everything in the tables above is a single-unit
+figure unless marked otherwise.
+
+- ReSpeaker 2-Mics Pi HAT V2.0, $14 ($11.99 at 10 or more)
+- reSpeaker Lite Voice Assistant Kit, $31
+- reSpeaker Lite Voice Assistant Kit, full kit with pre-soldered XIAO, mono enclosed speaker and acrylic
+  enclosure, **$38**
+- reSpeaker XMOS XVF3800 with XIAO ESP32S3, case version, $68 ($62.99 at 10 or more)
+- reSpeaker XMOS XVF3800 with XIAO ESP32S3, no case, about $67 ($61.99 at 10 or more)
+
+The **full kit is the value pick**: $38 against $31 for the bare kit, so seven dollars buys the speaker and
+the enclosure, and it is the only option in the list that arrives as a complete, flashable device. The
+XVF3800 case version at $68 is the premium choice for its on-chip echo cancellation and beamforming.
