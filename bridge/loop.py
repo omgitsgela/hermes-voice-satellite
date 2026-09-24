@@ -700,7 +700,21 @@ class VoiceLoop:
         """
         deadline = time.monotonic() + CAPTURE_ACTIVATION_SECONDS
         while True:
-            endpoint = await self.capture_utterance(wake_word)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None, (f"only blips in {CAPTURE_ACTIVATION_SECONDS:.0f}s "
+                              f"after the wake word")
+            try:
+                endpoint = await asyncio.wait_for(self.capture_utterance(wake_word),
+                                                  timeout=remaining)
+            except asyncio.TimeoutError:
+                # The cap is a wall-clock bound, not a count of blips. capture_utterance waits up to
+                # 30s for events of its own and only returns when the endpointer finishes, so
+                # without this a wake that produced an unending stream of noise held the microphone
+                # far past the advertised window, and the deadline below was never reached because
+                # the loop never came round again (issue #36).
+                return None, (f"nothing said in {CAPTURE_ACTIVATION_SECONDS:.0f}s "
+                              f"after the wake word")
             if endpoint is None:
                 return None, "capture returned nothing"
             if endpoint.ended_by == "no_speech":
