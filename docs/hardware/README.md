@@ -38,7 +38,7 @@ These are the parts that do not change per model. The full detail is in
    full path: `/usr/sbin` is not on the PATH in a non-login SSH, and `which dkms` will mislead you).
 3. Install the satellite at the pinned revision, with our core patch, from the vendored source in
    `pi/vendor/native-satellite-13bb024/`.
-4. Copy the wake model into `/home/wyoming1/wake-models` and point the wake service's
+4. Copy the wake model into the custom model directory and point the wake service's
    `--custom-model-dir` at it. The model is named by its filename stem.
 5. Install the units and drop-ins from `pi/systemd/`, then `daemon-reload`. Start order: LED service,
    wake engine, shim, then satellite. Restarting the shim or the LED service **bounces the satellite**,
