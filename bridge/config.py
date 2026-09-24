@@ -138,6 +138,26 @@ FOLLOW_UP_STATUS_PHRASES = (
     "is follow up mode on", "is follow up on", "follow up mode status", "check follow up mode",
 )
 
+# What the device's own chime sounds like once it has been through the microphone and speech-to-text.
+# Observed live on 2026-09-24: a false wake captured the wake tone, the endpointer accepted 0.3 s of it,
+# transcription produced "beep", and the answer was spoken into the room (issue #47).
+#
+# A whole-utterance match, for the same reason as the stop phrases, and NOT a length guard: the
+# interruption path uses INTERRUPT_MIN_CHARS, but on a wake-triggered turn "yes", "no" and "stop" are
+# legitimate four-character replies, so dropping on length alone would swallow real answers. Only an
+# utterance that is nothing but one of these is discarded, which leaves "beep the horn" and "ding the
+# car again" as questions for the model. Length is the tool the follow-up and interruption paths use,
+# and it is the right one there; here it is not.
+#
+# This is a second layer, not the mechanism: the first fix is the drain in `capture_after_wake`, and
+# the device-side answer is to mute the microphone across the awake tone the way the core patch does
+# for the done tone. Keep the list short and evidence-based, and never add a word a person could
+# plausibly mean.
+NON_WORD_TRANSCRIPTS = (
+    "beep", "beeps", "beep beep", "boop", "boops", "bleep", "bleeps", "blip", "blips",
+    "ding", "dings", "ding ding", "tone", "tones", "buzz", "buzzer", "chime",
+)
+
 # Spoken answers: everything a small speaker cannot convey is banned, and the answer is
 # kept short so the first words start playing while the rest is still being generated.
 VOICE_INSTRUCTIONS = (
