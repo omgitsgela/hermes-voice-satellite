@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import sys
+
+from wyoming.wake import Detection
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -93,7 +95,11 @@ async def main() -> int:
     check("stop -> stopped", outcome, "stopped")
     check("  stop called on the run", gw.stops, ["run-123"])
     check("  no steer", gw.steers, [])
-    check("  spoken acknowledgement", loop.said, ["Stopped."])
+    # The handler decides; the WATCHER speaks, and only after it has set stop_playback. Speaking
+    # from inside the handler would block on the playback lock held by the answer being stopped, up
+    # to the 30 second acquire timeout, with the audio still playing (issue #15). So an empty
+    # acknowledgement here is the contract, not a regression.
+    check("  no acknowledgement from the handler (the caller speaks, issue #15)", loop.said, [])
 
     # 3. Other whole-utterance stop forms behave the same, via the existing strict matcher.
     for phrase in ("okay stop", "stop it", "stop now", "please stop", "just stop",

@@ -532,7 +532,10 @@ class VoiceLoop:
             self.stop_requested = False
             stopped = await self.gateway.stop()
             _LOGGER.info("interruption: stop heard mid-task; gateway stop accepted=%s", stopped)
-            await self.say("Stopped.")
+            # The reply is spoken by the CALLER, after it has set stop_playback. Speaking it here
+            # would block on the playback lock held by the very answer being interrupted: up to the
+            # 30 second acquire timeout, with the answer still playing throughout, because the flag
+            # that stops it had not been set yet (issue #15).
             return "stopped"
         if reply:
             _LOGGER.info("interruption: control phrase mid-task, answering locally")
@@ -610,7 +613,11 @@ class VoiceLoop:
             # 2026-09-23 by interrupting during an answer.
             await self._end_capture()
             if outcome == "stopped":
+                # Set the flag FIRST, then speak. The answer's stream holds the playback lock until
+                # it notices this flag, so a reply spoken before it waits out the whole 30 second
+                # acquire timeout while the audio it is meant to interrupt keeps playing (issue #15).
                 state.stop_playback = True
+                await self.say("Stopped.")
                 return
 
     async def _end_capture(self) -> None:
