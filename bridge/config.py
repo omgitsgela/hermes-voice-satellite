@@ -163,8 +163,11 @@ VOICE_INSTRUCTIONS = (
     "if the skill does not cover it, say you cannot find it and that it is worth checking on the "
     "device. "
     "This microphone is in a shared living space and the channel is READ-ONLY: never call "
-    "skill_manage, never write or modify files, and never call tool_search, tool_describe, or "
-    "tool_call, which cost seconds of silence and have nothing useful behind them here."
+    "skill_manage, never write or modify files, and never run a command that changes anything. "
+    "You do have deferred tools behind tool_search, tool_describe and tool_call, and you must use "
+    "them when a request needs a capability you do not already have: search for it, describe it, "
+    "then call it. Keep it to one or two searches, because every tool call is seconds of silence "
+    "for the person waiting for an answer, and never narrate the search itself."
 )
 
 # --- announcements: house events spoken out loud on the satellite ------------

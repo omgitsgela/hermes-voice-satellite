@@ -96,6 +96,32 @@ async def ask_neutral(gateway, question: str) -> int:
     return 0
 
 
+def check_prompt_clauses() -> int:
+    """Static checks on the prompt text itself, so a regression fails without a gateway or a key.
+
+    The prompt used to forbid `tool_search`, `tool_describe` and `tool_call` outright, which is the
+    only route to a deferred tool, while the voice surface runs at full parity and depends on those
+    tools being reachable (issue #18). Pin both halves: discovery allowed, writes still refused.
+    """
+    problems = 0
+    if "never call tool_search" in VOICE_INSTRUCTIONS:
+        print("  FAIL: the prompt forbids tool_search again; deferred tools become unreachable")
+        problems += 1
+    for needed in ("tool_search", "tool_describe", "tool_call"):
+        if needed not in VOICE_INSTRUCTIONS:
+            print(f"  FAIL: the prompt no longer mentions {needed}")
+            problems += 1
+    if "never write or modify files" not in VOICE_INSTRUCTIONS:
+        print("  FAIL: the read-only rule is gone; this surface must not write")
+        problems += 1
+    if "never call skill_manage" not in VOICE_INSTRUCTIONS:
+        print("  FAIL: the no-skill_manage rule is gone")
+        problems += 1
+    if problems == 0:
+        print("  OK: discovery permitted, writes still refused")
+    return problems
+
+
 async def main() -> int:
     print("prompt in use now (excerpt):")
     for line in VOICE_INSTRUCTIONS.split("  "):
@@ -111,7 +137,7 @@ async def main() -> int:
         instructions=VOICE_INSTRUCTIONS,
         run_timeout=120.0,
     )
-    problems = 0
+    problems = check_prompt_clauses()
     async with gateway:
         await ask(gateway, "Turn off the Christmas outlet")
         await ask(gateway, "Turn off the Christmas outlet")
