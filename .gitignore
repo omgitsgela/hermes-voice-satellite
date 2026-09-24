@@ -22,3 +22,5 @@ __pycache__/
 *.bak-wakeword-*
 *.pre-*
 .worktrees/
+# private operating notes: these live in ~/.hermes/skills, not in a published repo
+skills/
