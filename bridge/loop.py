@@ -740,6 +740,29 @@ class VoiceLoop:
         except Exception as exc:  # noqa: BLE001 - a missed retry must never cost the window
             _LOGGER.debug("could not repeat the wake request: %s", exc)
 
+    async def _discard_queued_events(self) -> int:
+        """Throw away events already waiting for us, without waiting for any of them.
+
+        Used after the follow-up quiet interval. A satellite that is already streaming keeps
+        sending audio, so the device's own done tone arrives as ordinary chunks. Sleeping through
+        the interval only *delays* reading them, and the endpointer then treats its own chime as
+        speech: it can close the window on a word nobody said (issue #40). Discarding is the point;
+        the sleep stays because the chime should finish playing first.
+
+        Drains the replay buffer too, so nothing skipped during a task reappears here.
+        """
+        dropped = 0
+        buf = self._replay_buffer()
+        while buf:
+            buf.popleft()
+            dropped += 1
+        while True:
+            event = await self._next(0)
+            if event is None:
+                break
+            dropped += 1
+        return dropped
+
     async def capture_follow_up(self) -> tuple[Optional[EndpointResult], str]:
         """Listen for a reply with no wake word, bounded by FOLLOW_UP_SECONDS.
 
@@ -770,6 +793,12 @@ class VoiceLoop:
         from bridge.config import FOLLOW_UP_QUIET_SECONDS
 
         await asyncio.sleep(FOLLOW_UP_QUIET_SECONDS)
+        # The chime has finished, but its samples are still queued. Sleep only delayed reading them,
+        # and the endpointer counted them as speech, so the window could close on a word nobody said
+        # (issue #40). Discard them now, then listen to what is actually the room.
+        stale = await self._discard_queued_events()
+        if stale:
+            _LOGGER.info("follow-up: discarded %d stale event(s) left by our own playback", stale)
         deadline = time.monotonic() + FOLLOW_UP_SECONDS
         handover = False
         try:
