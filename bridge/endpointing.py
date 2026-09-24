@@ -27,8 +27,10 @@ Two offsets are reported, because conflating them caused a bad test once:
 
 from __future__ import annotations
 
+import array
 import collections
 import logging
+import math
 from dataclasses import dataclass
 from typing import Deque, Optional
 
@@ -66,6 +68,76 @@ class EndpointResult:
                 + (", REJECTED" if self.rejected else ""))
 
 
+class EnergyGate:
+    """Reject frames too quiet to be a person, judged against the room's own floor.
+
+    webrtcvad decides on spectral content, not energy, so a room's fan can produce frames it calls
+    speech while sitting far below anyone's voice. Measured on the device, 2026-09-24: fan baseline
+    median RMS 191 with a floor max of 422, a YouTube video at normal volume peaking at 871, and the
+    maintainer talking at 1026 median rising to 9343. A fan blip was logged every few seconds.
+
+    The floor is a low percentile of recent frames the detector did NOT call speech, so the estimate
+    comes from the room rather than from the speaker, and a long monologue cannot drag it up: pauses
+    keep feeding it. Until the window has `min_samples`, `floor_default` is used, which is the
+    measured fan level for this hardware rather than a guess.
+
+    This gate can only make the device less sensitive, never more.
+    """
+
+    def __init__(self, *, ratio: float = 6.0, floor_default: float = 190.0,
+                 floor_min: float = 60.0, floor_max: float = 1000.0,
+                 window_frames: int = 1500, min_samples: int = 40,
+                 threshold_min: float = 400.0, percentile: float = 0.20) -> None:
+        self.ratio = ratio
+        self.floor_default = floor_default
+        self.floor_min = floor_min
+        self.floor_max = floor_max
+        self.min_samples = min_samples
+        self.threshold_min = threshold_min
+        self.percentile = percentile
+        self.floor = floor_default
+        self._window: Deque[float] = collections.deque(maxlen=window_frames)
+
+    @property
+    def threshold(self) -> float:
+        """Speech must clear this. Always at or above threshold_min, whatever the room does."""
+        return max(self.threshold_min, self.floor * self.ratio)
+
+    def observe(self, frame: bytes, detector_says_speech: bool) -> float:
+        """Record one frame's level and return it. Only non-speech frames inform the floor."""
+        level = frame_rms(frame)
+        if not detector_says_speech:
+            self._window.append(level)
+            self._recompute_floor()
+        return level
+
+    def _recompute_floor(self) -> None:
+        if len(self._window) < self.min_samples:
+            return
+        ordered = sorted(self._window)
+        index = max(0, min(len(ordered) - 1, int(len(ordered) * self.percentile) - 1))
+        self.floor = min(self.floor_max, max(self.floor_min, ordered[index]))
+
+    def passes_rms(self, level: float) -> bool:
+        return level > self.threshold
+
+    def passes(self, frame: bytes) -> bool:
+        return self.passes_rms(frame_rms(frame))
+
+
+def frame_rms(frame: bytes) -> float:
+    """Root-mean-square level of one 16-bit mono frame, in sample units."""
+    usable = len(frame) - (len(frame) % 2)
+    if usable <= 0:
+        return 0.0
+    samples = array.array("h")
+    samples.frombytes(frame[:usable])
+    total = 0
+    for value in samples:
+        total += value * value
+    return math.sqrt(total / len(samples))
+
+
 class Endpointer:
     """Streaming VAD endpointer. Feed it audio, get back one utterance at a time."""
 
@@ -85,6 +157,13 @@ class Endpointer:
         self.frame_bytes = self.frame_samples * 2
 
         self._vad = webrtcvad.Vad(vad_aggressiveness)
+        # The energy gate sits alongside the detector rather than replacing it: the detector still
+        # decides what looks like speech, and the gate decides whether it is loud enough to be a
+        # person. Deliberately NOT reset by reset(), which runs after every utterance: the room's
+        # floor is a property of the room, not of the utterance.
+        from bridge.config import VOICE_ENERGY_GATE
+
+        self.gate = EnergyGate(**VOICE_ENERGY_GATE)
         self._silence_frames = max(1, silence_ms // frame_ms)
         self._min_speech_frames = max(1, min_speech_ms // frame_ms)
         self._max_frames = max(1, int(max_utterance_seconds * 1000 / frame_ms))
@@ -122,7 +201,12 @@ class Endpointer:
 
     def _process_frame(self, frame: bytes) -> Optional[EndpointResult]:
         self._frames_seen += 1
-        is_speech = self._vad.is_speech(frame, self.rate)
+        # The detector's opinion, then the level test. `observe` is called for every frame so the
+        # room's floor keeps being measured even while someone is mid-sentence, and it only counts
+        # frames the detector called non-speech towards that estimate.
+        looks_like_speech = self._vad.is_speech(frame, self.rate)
+        level = self.gate.observe(frame, looks_like_speech)
+        is_speech = looks_like_speech and self.gate.passes_rms(level)
 
         if not self._in_speech:
             if is_speech:

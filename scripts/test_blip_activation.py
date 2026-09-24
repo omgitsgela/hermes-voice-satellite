@@ -25,10 +25,12 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import bridge.config as config_module  # noqa: E402
 import bridge.loop as loop_module  # noqa: E402
 from bridge.endpointing import EndpointResult  # noqa: E402
 from bridge.satellite import SatelliteClient  # noqa: E402
@@ -125,6 +127,40 @@ async def main() -> int:
         problems += 1
     else:
         print("   OK: unchanged from before the fix")
+
+    # 5. The fan case (2026-09-24). Blips arriving every 100 ms must close the activation at the
+    #    no-speech bound. Before this, each blip restarted the endpointer's own no-speech window, so
+    #    an empty activation with a fan in the room ran the full 30 second cap every time.
+    from bridge.config import WAKE_NO_SPEECH_SECONDS as _orig_no_speech
+
+    config_module.WAKE_NO_SPEECH_SECONDS = 0.3
+    loop_module.CAPTURE_ACTIVATION_SECONDS = 30.0
+    try:
+        loop = object.__new__(loop_module.VoiceLoop)
+        loop.sat = SatelliteClient("127.0.0.1")
+        attempts: list[int] = []
+
+        async def blip_every_100ms(wake_word: str):
+            attempts.append(1)
+            await asyncio.sleep(0.1)
+            return blip()
+
+        loop.capture_utterance = blip_every_100ms  # type: ignore[method-assign]
+        started = time.monotonic()
+        endpoint, note = await loop.capture_after_wake("hey_hermes")
+        elapsed = time.monotonic() - started
+        # The quiet interval (0.5 s) plus the 0.3 s bound, nowhere near the 30 s cap.
+        ok = (endpoint is None and elapsed < 3.0 and len(attempts) <= 6
+              and "no words in" in note)
+        print("\n5. blips every 100ms, bound 0.3s")
+        print(f"   elapsed: {elapsed:.2f}s  captures: {len(attempts)}  note: {note}")
+        if not ok:
+            print("   FAIL: blips extended the activation past the no-speech bound")
+            problems += 1
+        else:
+            print("   OK: closed on the no-speech bound instead of the 30s cap")
+    finally:
+        config_module.WAKE_NO_SPEECH_SECONDS = _orig_no_speech
 
     print(f"\n=== {'ALL CHECKS PASSED' if problems == 0 else f'{problems} PROBLEM(S)'} ===")
     return 1 if problems else 0

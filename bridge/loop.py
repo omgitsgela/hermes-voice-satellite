@@ -761,12 +761,19 @@ class VoiceLoop:
         # started a turn. Ignore the opening moment and drop what is already queued, the way the
         # follow-up window does. The device-side mute across the tone is the real fix; this is the
         # bridge's own share of it (issue #47).
-        from bridge.config import WAKE_QUIET_SECONDS
+        from bridge.config import WAKE_NO_SPEECH_SECONDS, WAKE_QUIET_SECONDS
 
         await asyncio.sleep(WAKE_QUIET_SECONDS)
         dropped = await self._discard_queued_events()
         if dropped:
             _LOGGER.info("wake: discarded %d event(s) of our own chime before listening", dropped)
+        # Two clocks, deliberately. `no_speech_deadline` is how long the person has to produce real
+        # speech, and a blip must not move it: measured 2026-09-24, this room's fan produces a blip
+        # every few seconds, each one ended the endpointer's own no-speech window and restarted it,
+        # and activations ran the whole CAPTURE_ACTIVATION_SECONDS cap instead of closing after a
+        # silent 8 seconds. `deadline` stays as the outer wall-clock bound on everything else.
+        # `capture_follow_up` already bounds itself this way, with a deadline a blip cannot extend.
+        no_speech_deadline = time.monotonic() + WAKE_NO_SPEECH_SECONDS
         deadline = time.monotonic() + CAPTURE_ACTIVATION_SECONDS
         while True:
             remaining = deadline - time.monotonic()
@@ -793,6 +800,12 @@ class VoiceLoop:
             if not endpoint.rejected:
                 return endpoint, ""
             _LOGGER.info("ignoring a %0.2fs blip and still listening", endpoint.speech_seconds)
+            if time.monotonic() >= no_speech_deadline:
+                # Nothing but noise since the wake. Close rather than sit here for the full cap: the
+                # person either spoke or they did not, and holding the microphone open on a fan is
+                # what made every empty activation run 30 seconds.
+                return None, (f"no words in {WAKE_NO_SPEECH_SECONDS:.0f}s after the wake word, "
+                              f"only blips")
             if time.monotonic() >= deadline:
                 return None, (f"only blips in {CAPTURE_ACTIVATION_SECONDS:.0f}s "
                               f"after the wake word")
