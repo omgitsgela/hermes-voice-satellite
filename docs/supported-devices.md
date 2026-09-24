@@ -58,12 +58,24 @@ would leave us maintaining a vendor SDK just to change the colour of a light.
 
 ## Watchlist
 
-**reSpeaker Clip**, wearable AI recorder: https://www.seeedstudio.com/respeaker-clip-wearable-ai-recorder.html
+**reSpeaker Clip**, wearable AI recorder, SKU 100020126, $75.90 in stock at the Seeed US warehouse
+(checked 2026-09-24): https://www.seeedstudio.com/respeaker-clip-wearable-ai-recorder.html
 
-Fits the integrated-device shape on paper, with open-source firmware and programmable button logic and
-display content. Not supported and **not to go on a buyer list**, because its firmware, SDK and datasheet
-are all still marked "coming soon", its processor is unpublished, and it is built as a recorder with
-onboard storage and BLE or Wi-Fi sync rather than as a wake-word satellite. Revisit when the SDK ships.
+**Re-checked 2026-09-24 and rejected on the evidence, not on availability.** An earlier version of this
+entry said the Clip's firmware, SDK and datasheet were all "coming soon" and its processor unpublished.
+Two of those three were wrong. The processor is a **nRF5340 + nRF7002** pair, published in the wiki spec
+table and tagged on the product page, and the firmware SDK has been public since January. It is a
+**public Apache-2.0 Zephyr repository** (`github.com/Seeed-Studio/reSpeaker_Clip`) with the AT protocol,
+UDP transfer and USB DFU documented, Python and mobile SDKs, and **downloadable signed firmware on its
+GitHub Releases** (v0.1.4, published 2026-09-21). Only the raw datasheet, the mechanical drawing and
+Seeed's own wiki download row still lag.
+
+It stays off the buyer list for the one reason that survived, and the vendor states it: **it is a recorder,
+not a satellite.** Its firmware guide lists BLE real-time audio streaming as out of scope ("it does not
+stream live audio"), there is no on-device speech-to-text, audio is Opus mono at 32 kbps written to onboard
+storage, and the box contains **no speaker at all**. Becoming a satellite means writing a Zephyr Wyoming
+client from scratch and adding hardware, on a unit that costs more than the $38 complete Lite kit or the
+$68 XVF3800 with case.
 
 ## Reference notes
 
@@ -100,3 +112,10 @@ pre-soldered** has a processor. The others have nothing to flash.
 upgrades, and it ships device-tree overlays and mixer state for **2, 4, 6 and 8 microphone** arrays. Any
 HAT matching one of those should work without new driver code. See `hardware/seeed-2mic-hat-v2.md` for the
 unit in service and `device-reports/baseline-seeed-2mic-hat-v2.md` for its measured baseline.
+
+**Verify a device against the vendor's repository, not the wiki's Resources table.** The Clip entry above
+was wrong for months because a "Coming soon" row on Seeed's wiki was read as the state of the SDK while the
+firmware source, its protocol documentation and signed release binaries were already public on GitHub. A
+vendor wiki is a convenience index and lags; the repository and its releases are the artifact. Check the
+repo, the releases page and the product page's own spec tags before writing an availability claim into this
+document, and date the claim when it is price or stock.
