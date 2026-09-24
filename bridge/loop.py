@@ -818,6 +818,11 @@ class VoiceLoop:
                 stats.note = note
                 _LOGGER.info("%s", note)
                 self.turns.append(stats)
+            # A wake with nothing said, or a plain false wake, still leaves the satellite streaming,
+            # and a streaming satellite ignores its own wake word: the device goes deaf silently
+            # until the link refreshes. Re-arm it, and use the silent re-arm rather than the empty
+            # transcript because nobody spoke and the device should stay quiet (issue #12).
+            await self._rearm_wake_word()
             return stats
         # Everything from here on is the part that answers the question.
         processing_started = time.perf_counter()
