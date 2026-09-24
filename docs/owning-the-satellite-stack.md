@@ -72,9 +72,14 @@ real backstop and lives with the `remote-system-operations` procedure.
 
 1. Flash Raspberry Pi OS 64-bit (bookworm). 64-bit matters: audio enhancements and local wake word
    detection require it.
-2. Build and install the audio driver from `pi/vendor/seeed-voicecard-0.3` (`install.sh`). **It is
-   not installed with DKMS**, so a kernel upgrade will silently remove the sound card and it must be
-   rebuilt afterwards. This is the single most likely way this device breaks on its own.
+2. Build and install the audio driver from `pi/vendor/seeed-voicecard-0.3` (`install.sh`). **The driver
+   is DKMS-installed**, so a kernel upgrade rebuilds it automatically and the sound card returns on its
+   own. Verified 2026-09-23: the loaded module is
+   `/lib/modules/<kernel>/updates/dkms/snd-soc-seeed-voicecard.ko.xz`, `dkms status` lists
+   `seeed-voicecard/0.3` for three kernels, and `/usr/src/seeed-voicecard-0.3/dkms.conf` sets
+   `AUTOINSTALL="yes"`. Confirm with `/usr/sbin/dkms status`, noting the full path: `/usr/sbin` is not on
+   the PATH in a non-login SSH, which is what made an earlier version of this document claim the
+   opposite.
 3. Check out the satellite at `13bb024`, or copy `pi/vendor/native-satellite-13bb024` into place,
    then apply the core patch if the source came from upstream.
 4. Recreate the venv from `pi/vendor/pi-venv-freeze.txt`.
