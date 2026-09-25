@@ -43,8 +43,8 @@ def register(ctx) -> None:
 
 def _bridge_available() -> bool:
     try:
-        from .timer_tool import TOKEN_FILE
-        return TOKEN_FILE.is_file()
+        from .timer_tool import _token
+        return bool(_token())
     except Exception:
         return False
 

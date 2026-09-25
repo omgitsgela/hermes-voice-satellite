@@ -49,17 +49,17 @@ echo "=== destination: $DEST"
 # The runner lives in the repo at pi/outbound_satellite.py. A staging directory that holds a copy next to
 # this script also works, which is how the first hand deployment was done.
 if [ -f "$HERE/outbound_satellite.py" ]; then
-    RUNNER_SRC="$HERE/outbound_satellite.py"
+    RUNNER_DIR="$HERE"
 else
-    RUNNER_SRC="$REPO/pi/outbound_satellite.py"
+    RUNNER_DIR="$REPO/pi"
 fi
 
-for f in outbound_satellite.py; do
-    if [ ! -f "$RUNNER_SRC" ]; then
-        echo "FAIL: no outbound_satellite.py beside this script, and none at $RUNNER_SRC" >&2
+for f in outbound_satellite.py config_agent.py device_apply.py volume_control.py; do
+    if [ ! -f "$RUNNER_DIR/$f" ]; then
+        echo "FAIL: missing device module $RUNNER_DIR/$f" >&2
         exit 1
     fi
-    cp "$RUNNER_SRC" "$DEST/$f"
+    cp "$RUNNER_DIR/$f" "$DEST/$f"
     chmod 0644 "$DEST/$f"
     echo "  copied $f"
 done
@@ -112,7 +112,7 @@ fi
 
 echo
 echo "=== verification (read back from the card) ==="
-for f in outbound_satellite.py; do
+for f in outbound_satellite.py config_agent.py device_apply.py volume_control.py; do
     bytes=$(wc -c < "$DEST/$f" | tr -d ' ')
     printf '  %-34s %s bytes  mode %s\n' "$f" "$bytes" "$(stat -c %a "$DEST/$f")"
 done

@@ -110,6 +110,10 @@ def rewrite(parser: configparser.ConfigParser, *, name: str, priority: int) -> N
     # stop the Pi ever activating the profile.
     for key in ("interface-name", "mac-address", "cloned-mac-address", "master", "slave-type"):
         strip_to_blank(parser, "connection", key)
+    # NetworkManager stores the adapter restriction and cloned identity here,
+    # not in [connection]. A source adapter denylist is not portable either.
+    for key in ("mac-address", "cloned-mac-address", "mac-address-denylist"):
+        strip_to_blank(parser, "wifi", key)
     parser.set("connection", "id", name)
     parser.set("connection", "uuid", str(uuid.uuid4()))
     parser.set("connection", "autoconnect", "true")

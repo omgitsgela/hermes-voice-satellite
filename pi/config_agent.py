@@ -147,9 +147,22 @@ class DeviceConfigAgent:
             generation = data.get("generation")
             if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
                 raise DeviceConfigError("generation must be a positive integer")
-            if generation <= int(self.state.get("generation", 0)):
+            current_generation = int(self.state.get("generation", 0))
+            if generation < current_generation:
                 return self.current_report()
+            if generation == current_generation:
+                # Healthy generations remain idempotent, including after restart.
+                # Retry only error/unapplied state, once per redelivery (no loop).
+                desired = self.state.get("desired") or {}
+                actual = self.state.get("actual") or {}
+                unapplied = any(actual.get(key) != value for key, value in desired.items())
+                if self.state.get("health") == "healthy" or (
+                    self.state.get("health") != "error" and not unapplied
+                ):
+                    return self.current_report()
             settings = _validate_settings(data.get("settings"))
+            if generation == current_generation and settings != self.state.get("desired"):
+                raise DeviceConfigError("same generation has different settings")
         except DeviceConfigError as exc:
             return self.current_report(health="error", error=str(exc))
 
