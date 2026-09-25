@@ -680,7 +680,9 @@ class VoiceLoop:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 return False
-            event = await self._next(remaining)
+            # Recheck replay promptly if the watcher receives Played while this
+            # consumer is already blocked on the satellite queue.
+            event = await self._next(min(remaining, 0.5))
             if event is None:
                 if self.sat.eof:
                     return False
@@ -754,7 +756,8 @@ class VoiceLoop:
         from bridge.config import INTERRUPT_CAPTURE_SECONDS
 
         while not state.done:
-            event = await self._next(0.5)
+            # Replay belongs to the turn, never to the watcher that populated it.
+            event = await self.sat.next_event(0.5)
             if event is None:
                 if self.sat.eof:
                     return

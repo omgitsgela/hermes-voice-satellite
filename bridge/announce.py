@@ -328,6 +328,9 @@ class Announcer:
 
         try:
             item = self._enqueue(text=text, source=source, key=key, sound=sound)
+            if key:
+                # Only accepted messages may suppress retries after queue pressure.
+                self._recent[f"{key}|{text}"] = time.monotonic()
         except asyncio.QueueFull:
             self.dropped += 1
             _LOGGER.warning("announcement queue full; dropping %r from %s", text[:60], source)
@@ -527,7 +530,6 @@ class Announcer:
         if fingerprint in self._recent:
             self._recent[fingerprint] = now
             return True
-        self._recent[fingerprint] = now
         return False
 
     # -- speaking ------------------------------------------------------------
