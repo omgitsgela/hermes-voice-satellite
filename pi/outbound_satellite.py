@@ -27,14 +27,13 @@ Design rules from the pre-implementation review, each visible in the code below:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import pathlib
 import random
 import ssl
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from wyoming.event import Event, async_read_event, async_write_event

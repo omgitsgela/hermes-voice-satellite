@@ -44,6 +44,11 @@ loopback: 10400 (shim), 10401 (openwakeword), 10402 (shim control), 10500
 That split is deliberate and worth protecting: **the device adds nothing to the LAN except SSH and
 the one port the bridge dials into.** Every internal control path is loopback.
 
+**That port is going away too** (issue #61): when the device dials the bridge instead of being dialled, it
+needs no listener at all, which is what makes a device behind somebody else's NAT - or on a network you do
+not control - a supported shape rather than a compromise. Everything below about a management interface on
+the host still holds; only the direction of the voice connection changes.
+
 ### The fact that decides this
 
 ```

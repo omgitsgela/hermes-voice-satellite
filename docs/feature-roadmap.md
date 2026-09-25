@@ -156,6 +156,7 @@ expectation, 2026-09-23: a feature enhancement belongs on the Issues page, not o
 | [#10](https://github.com/omgitsgela/hermes-voice-satellite/issues/10) | Volume control by voice, with a hard floor that is never zero |
 | [#11](https://github.com/omgitsgela/hermes-voice-satellite/issues/11) | Multi-satellite configuration and management: onboarding, updates, options at fleet scale |
 | [#26](https://github.com/omgitsgela/hermes-voice-satellite/issues/26) | Optional slower-speaking accessibility mode for utterance endpointing |
+| [#61](https://github.com/omgitsgela/hermes-voice-satellite/issues/61) | **Connection inversion: devices dial the bridge.** The umbrella issue for the registry, the transport decision, enrolment and identity, and the licensing constraint |
 
 #10 is a maintainer request rather than a gap against the successor project, and it is filed
 here all the same: this index is the list of what we intend to build, whatever the source of the idea.
