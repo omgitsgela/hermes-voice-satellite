@@ -44,25 +44,33 @@ def make_apply_adapter(volume: Optional[AlsaVolume] = None):
         problems: list[str] = []
 
         if "playback_volume" in settings:
+            # The setting arrives on the USER scale (1-100), where 1 is the quietest this
+            # hardware can be. AlsaVolume works in RAW, which is what the ALSA control
+            # takes, so the conversion happens here and nowhere else on this side.
             requested = settings["playback_volume"]
+            raw = alsa.user_to_raw(requested)
             try:
-                level = alsa.apply(requested)
+                applied_raw = alsa.apply(raw)
             except VolumeCommandError as exc:
                 # Do not report a level we did not set. The caller turns this into an
                 # error report, and the plane will show the device as unconverged.
                 problems.append(f"playback_volume: {exc}")
             else:
-                applied["playback_volume"] = level
-                if level != requested:
+                # Report back on the user scale, so the number means the same thing on the
+                # bridge as it does on the device and convergence compares like with like.
+                applied_user = alsa.raw_to_user(applied_raw)
+                applied["playback_volume"] = applied_user
+                if applied_user != requested:
                     # Worth surfacing: the floor raised the requested level, and a
                     # silently corrected setting is how someone concludes the setting
                     # "does not work".
                     problems.append(
-                        f"playback_volume was raised from {requested} to {level} by the "
+                        f"playback_volume was raised from {requested} to {applied_user} by the "
                         "audible floor; the device must stay audible"
                     )
                     log.warning(
-                        "playback_volume %s was raised to %s by the floor", requested, level,
+                        "playback_volume %s was raised to %s by the floor (raw %s)",
+                        requested, applied_user, applied_raw,
                     )
 
         for name in settings:

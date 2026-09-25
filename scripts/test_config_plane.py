@@ -75,12 +75,17 @@ def main() -> int:
 
         report = plane.report(
             "kitchen-1", generation=1,
-            actual={**first["desired"], "playback_volume": 54},
+            # Deliberately 5 away, not 1: playback_volume carries a one-unit round-trip
+            # tolerance (see below), so a 1-unit difference is converged by design and
+            # would not test drift at all.
+            actual={**first["desired"], "playback_volume": 50},
             health="healthy", error=None,
         )
         check("reported state records generation and health",
               report["reported_generation"] == 1 and report["health"] == "healthy", report)
-        check("drift is explicit", report["converged"] is False and report["drift"] == {"playback_volume": {"desired": 55, "reported": 54}}, report)
+        check("drift is explicit",
+              report["converged"] is False
+              and report["drift"] == {"playback_volume": {"desired": 55, "reported": 50}}, report)
 
         listed = plane.list_devices(connected_ids={"kitchen-1"})
         check("fleet inventory exposes connectivity", listed[0]["connected"] is True, listed)
@@ -98,6 +103,43 @@ def main() -> int:
         except ConfigValidationError:
             invalid_id = True
         check("device IDs cannot escape their namespace", invalid_id)
+
+        # playback_volume survives a user->raw->user round trip through an integer ALSA
+        # percentage, which shifts by one for 49 of the 100 values. Without a tolerance
+        # those settings report permanent drift and never converge, which teaches whoever
+        # reads the fleet view to ignore drift.
+        tol = ConfigPlane(pathlib.Path(tmp) / "tol.json")
+        tol.set_desired("kitchen-1", {"playback_volume": 50}, expected_generation=0)
+
+        rep = tol.report("kitchen-1", generation=1, actual={"playback_volume": 51},
+                         health="healthy", error=None)
+        check("a one-unit round-trip difference on playback_volume is not drift",
+              rep["drift"] == {} and rep["converged"] is True, rep)
+
+        rep = tol.report("kitchen-1", generation=1, actual={"playback_volume": 49},
+                         health="healthy", error=None)
+        check("and the difference counts in either direction",
+              rep["drift"] == {} and rep["converged"] is True, rep)
+
+        rep = tol.report("kitchen-1", generation=1, actual={"playback_volume": 55},
+                         health="healthy", error=None)
+        check("a real difference is still reported as drift",
+              "playback_volume" in rep["drift"] and rep["converged"] is False, rep)
+
+        # The tolerance is per setting: a setting without one must still match exactly, or
+        # the tolerance would quietly spread to every integer in the schema.
+        tol.set_desired("kitchen-1", {"mic_gain": 78}, expected_generation=1)
+        rep = tol.report("kitchen-1", generation=1,
+                         actual={"playback_volume": 50, "mic_gain": 79},
+                         health="healthy", error=None)
+        check("a setting without a tolerance still matches exactly",
+              "mic_gain" in rep["drift"] and "playback_volume" not in rep["drift"], rep)
+
+        # A never-reported setting is drift, not agreement - the tolerance must not make a
+        # missing value look present.
+        rep = tol.report("kitchen-1", generation=1, actual={}, health="healthy", error=None)
+        check("an unreported setting is still drift despite the tolerance",
+              "playback_volume" in rep["drift"], rep)
 
     if problems:
         print("\nFAILURES")

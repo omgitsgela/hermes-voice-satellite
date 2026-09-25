@@ -19,7 +19,12 @@ import wave
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from bridge.announce import Announcement, Announcer  # noqa: E402
-from bridge.volume import ALARM_MIN_PERCENT, FLOOR_PERCENT, MAX_PERCENT  # noqa: E402
+from bridge.volume import (  # noqa: E402
+    ALARM_MIN_PERCENT,
+    FLOOR_PERCENT,
+    MAX_PERCENT,
+    USER_MIN,
+)
 
 problems: list[str] = []
 checks = 0
@@ -79,7 +84,10 @@ async def main() -> int:
         tone = make_wav(pathlib.Path(tmp) / "alarm-tone.wav", 0.05)
 
         # ---------------------------------------------------- an alarm raises a quiet room
-        h = Harness(tmp, start_level=FLOOR_PERCENT)
+        # Start at the QUIETEST USER LEVEL, which is what an alarm has to raise. Starting at
+        # the raw floor no longer exercises anything: alarm_minimum is on the user scale, and
+        # the raw floor maps to user 1, so a room at user 50 is already at the minimum.
+        h = Harness(tmp, start_level=USER_MIN)
         item = Announcement(id="a1", text="x", source="alarm", key="k", sound="alarm",
                             received_at=0.0)
         h.announcer._build_wav = lambda _item: speech
@@ -91,11 +99,11 @@ async def main() -> int:
         # file from running - so a single breakage looked like a shorter, quieter pass.
         first_set = h.history[0] if h.history else None
         last_set = h.history[-1] if h.history else None
-        check("an alarm raises a room set at the floor",
-              first_set == max(ALARM_MIN_PERCENT, FLOOR_PERCENT), h.history)
-        check("the raised level is above the floor, so it is actually audible",
-              first_set is not None and first_set > FLOOR_PERCENT, h.history)
-        check("the alarm level is restored afterwards", last_set == FLOOR_PERCENT, h.history)
+        check("an alarm raises a room set to the quietest level",
+              first_set == max(ALARM_MIN_PERCENT, USER_MIN), h.history)
+        check("the raised level is above the quietest, so it is actually audible",
+              first_set is not None and first_set > USER_MIN, h.history)
+        check("the alarm level is restored afterwards", last_set == USER_MIN, h.history)
         check("the alarm still played", len(h.sat.played) == 1, h.sat.played)
 
         # ---------------------------------------------------- it never lowers a loud room

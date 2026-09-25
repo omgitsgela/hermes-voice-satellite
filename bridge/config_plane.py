@@ -34,6 +34,13 @@ DEVICE_SETTING_SCHEMA: dict[str, dict[str, Any]] = {
     "playback_volume": {
         "type": "integer", "minimum": 0, "maximum": 100,
         "default": 55, "apply": "immediate",
+        # The bridge speaks a user scale (1-100 over what the hardware can do) while the
+        # device sets an integer ALSA percentage, so the round trip user->raw->user shifts
+        # by one for 49 of the 100 values. Without a tolerance those settings would report
+        # permanent drift and `converged: false` forever, which is worse than useless: it
+        # teaches whoever reads the fleet view to ignore drift altogether.
+        # The setting IS converged, at the resolution the hardware can express.
+        "round_trip_tolerance": 1,
     },
     "led_brightness": {
         "type": "integer", "minimum": 0, "maximum": 100,
@@ -56,6 +63,21 @@ class ConfigValidationError(ValueError):
 
 class ConfigConflict(RuntimeError):
     """The writer supplied a stale desired-state generation."""
+
+
+def values_agree(name: str, wanted: Any, reported: Any) -> bool:
+    """Whether a reported value counts as the desired one.
+
+    Exact for everything except settings the hardware round-trips through a coarser scale,
+    where a whole-number difference of one is the same instruction arriving back.
+    """
+    if reported is None:
+        return False
+    tolerance = DEVICE_SETTING_SCHEMA.get(name, {}).get("round_trip_tolerance", 0)
+    if tolerance and isinstance(wanted, (int, float)) and isinstance(reported, (int, float)):
+        return not isinstance(wanted, bool) and not isinstance(reported, bool) \
+            and abs(wanted - reported) <= tolerance
+    return wanted == reported
 
 
 def _utc_now() -> str:
@@ -278,7 +300,7 @@ class ConfigPlane:
         drift = {
             name: {"desired": wanted, "reported": reported.get(name)}
             for name, wanted in desired.items()
-            if reported.get(name) != wanted
+            if not values_agree(name, wanted, reported.get(name))
         }
         result = {
             **record,

@@ -64,16 +64,41 @@ check("the level was persisted for reboot survival",
 fake = FakeAmixer()
 adapter = make_apply_adapter(AlsaVolume(card="seeed2micvoicec", control="PCM", floor=25, runner=fake))
 actual, health, error = adapter({"playback_volume": 0})
-check("a zero request is applied as the floor, not as zero",
-      actual.get("playback_volume") == 25, actual)
-check("a total absence of zero in what reached amixer",
-      not any("0%" in part for c in fake.calls for part in c), fake.calls)
+# The setting is on the USER scale now, so zero is refused up to user 1 - the quietest
+# this hardware can be - and user 1 maps to the raw floor of 25 on this test device.
+check("a zero request is reported as the quietest USER level",
+      actual.get("playback_volume") == 1, actual)
+check("a zero request reaches amixer as the raw floor, never 0%",
+      any("25%" in part for c in fake.calls for part in c)
+      and not any("0%" in part for c in fake.calls for part in c), fake.calls)
 check("the floor adjustment is reported rather than silent",
-      error is not None and "floor" in error, error)
-check("the report says what it was raised from and to",
-      "0" in error and "25" in error, error)
+      error is not None and "raised" in error, error)
+check("the report says what it was raised from and to, on the user scale",
+      "from 0 to 1" in error, error)
 check("the adjusted level is still healthy, because it was applied",
       health == "healthy", health)
+
+# ---------------------------------------------------------------- the user range maps
+
+# The whole point of the user scale: the middle of it is the middle of what the hardware
+# can do, not the middle of the raw range. On a floor of 25 the usable range is 25..100,
+# so user 50 must land near raw 63 - NOT raw 50, which would be almost the bottom.
+fake_mid = FakeAmixer()
+adapter_mid = make_apply_adapter(
+    AlsaVolume(card="seeed2micvoicec", control="PCM", floor=25, runner=fake_mid))
+actual_mid, _h, _e = adapter_mid({"playback_volume": 50})
+sent = [part for c in fake_mid.calls for part in c if part.endswith("%")]
+check("user 50% maps into the middle of the USABLE range, not the middle of raw",
+      bool(sent) and 60 <= int(sent[0].rstrip("%")) <= 65, sent)
+check("user 50% is reported back as 50%", actual_mid.get("playback_volume") == 50, actual_mid)
+
+fake_top = FakeAmixer()
+adapter_top = make_apply_adapter(
+    AlsaVolume(card="seeed2micvoicec", control="PCM", floor=25, runner=fake_top))
+actual_top, _h, _e = adapter_top({"playback_volume": 100})
+sent_top = [part for c in fake_top.calls for part in c if part.endswith("%")]
+check("user 100% reaches full raw volume", sent_top and sent_top[0] == "100%", sent_top)
+check("user 100% is reported back as 100%", actual_top.get("playback_volume") == 100, actual_top)
 
 # ---------------------------------------------------------------- a failure is not a success
 
@@ -147,8 +172,12 @@ async def agent_round_trip() -> None:
             "generation": 1,
             "settings": {"playback_volume": 0},
         }))
-        check("zero through the whole chain lands on the floor",
-              report.data["actual"].get("playback_volume") == 25, report.data)
+        # On the user scale a zero request is refused up to user 1; the raw floor is what
+        # user 1 maps to, and that is what amixer must receive.
+        check("zero through the whole chain lands on the quietest user level",
+              report.data["actual"].get("playback_volume") == 1, report.data)
+        check("zero through the whole chain reaches amixer as the raw floor",
+              any("25%" in part for c in fake2.calls for part in c), fake2.calls)
         check("zero never reaches amixer as 0%",
               not any("0%" in part for c in fake2.calls for part in c), fake2.calls)
 

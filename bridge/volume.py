@@ -159,45 +159,103 @@ def clamp(percent: object) -> int:
     return level
 
 
-def ten_scale_to_percent(level: int) -> int:
-    """Map the spoken 1-10 scale onto the USABLE range, not onto 10-100 percent.
+# -- the user scale, and the raw scale it maps onto ---------------------------
+#
+# There are two numbers for volume and confusing them is the whole difficulty.
+#
+# RAW is what the ALSA control takes. On this device the measured floor is 50 raw, so
+# raw runs 50..100 and nothing below 50 can be heard.
+#
+# USER is what a person speaks and what the configuration plane carries: 1..100, where
+# 1 is the quietest the hardware can go and 100 is full volume. Both spoken scales live
+# on it - "50 percent" and "level 5" are positions on the same range, one finer than the
+# other - so they cannot drift apart.
+#
+# Angela's correction, 2026-09-25: both scales must span the USABLE range. Before this,
+# a raw floor of 50 meant "set volume to 30%" was clamped and reported as an error, so
+# half the percentage scale was dead and every value in it did the same thing.
+#
+# The configuration plane speaks USER too, deliberately: a fleet API that reported raw
+# ALSA numbers would be meaningless across devices with different measured floors.
 
-    Level 1 is the floor and level 10 is full volume, so the scale spans what can
-    actually be heard. Mapping 1 to "10 percent" instead would make the bottom of the
-    user's own scale effectively silent, which is the failure this issue is about.
-    """
-    if isinstance(level, bool) or not isinstance(level, int):
-        raise VolumeError("the volume scale takes whole numbers from 1 to 10")
-    if not 1 <= level <= 10:
-        raise VolumeError("the volume scale takes whole numbers from 1 to 10")
-    span = MAX_PERCENT - FLOOR_PERCENT
-    return clamp(FLOOR_PERCENT + round((level - 1) * span / 9))
+USER_MIN = 1
+USER_MAX = 100
 
 
-def percent_to_ten_scale(percent: int) -> int:
-    """The inverse, for speaking a level back in the terms the user thinks in."""
+def clamp_user(user: object) -> int:
+    """Force anything onto the user range. 0 and below become the quietest level."""
+    if isinstance(user, bool) or not isinstance(user, (int, float)):
+        log.warning("refusing a non-numeric user volume %r; using the quietest", user)
+        return USER_MIN
+    return max(USER_MIN, min(USER_MAX, int(user)))
+
+
+#: Kept for the internal call sites written before the name became public.
+_clamp_user = clamp_user
+
+
+def user_percent_to_raw(user: object) -> int:
+    """Map the user range onto what the hardware can actually do."""
+    level = _clamp_user(user)
     span = MAX_PERCENT - FLOOR_PERCENT
     if span <= 0:
-        return 1
-    level = round((clamp(percent) - FLOOR_PERCENT) / span * 9) + 1
-    return max(1, min(10, level))
+        return FLOOR_PERCENT
+    return clamp(FLOOR_PERCENT + round((level - USER_MIN) * span / (USER_MAX - USER_MIN)))
 
 
-def step(current: int, delta: int) -> int:
-    """Move a whole number of ten-scale levels. Cannot cross the floor."""
-    level = percent_to_ten_scale(current) + int(delta)
+def raw_to_user_percent(raw: object) -> int:
+    """The inverse, for reporting a measured raw level back to a person or a client."""
+    span = MAX_PERCENT - FLOOR_PERCENT
+    if span <= 0:
+        return USER_MIN
+    user = round((clamp(raw) - FLOOR_PERCENT) / span * (USER_MAX - USER_MIN)) + USER_MIN
+    return max(USER_MIN, min(USER_MAX, user))
+
+
+def ten_scale_to_percent(level: int) -> int:
+    """The 1-10 scale, as ten samples of the user range. Returns RAW.
+
+    Level 1 is the quietest the hardware can go and level 10 is full volume. Because it
+    is the user range sampled ten times rather than a second mapping, level 5 and
+    "user 45%" cannot disagree.
+    """
+    if isinstance(level, bool) or not isinstance(level, int) or not 1 <= level <= 10:
+        raise VolumeError("the volume scale takes whole numbers from 1 to 10")
+    user = USER_MIN + round((level - 1) * (USER_MAX - USER_MIN) / 9)
+    return user_percent_to_raw(user)
+
+
+def percent_to_ten_scale(user: object) -> int:
+    """The inverse, for speaking a level back in the terms the user thinks in."""
+    level = _clamp_user(user)
+    return max(1, min(10, round((level - USER_MIN) / (USER_MAX - USER_MIN) * 9) + 1))
+
+
+def user_for_ten_level(level: int) -> int:
+    """Level 1..10 -> user 1..100. Used by stepping, which moves on the user scale."""
+    if isinstance(level, bool) or not isinstance(level, int) or not 1 <= level <= 10:
+        raise VolumeError("the volume scale takes whole numbers from 1 to 10")
+    return USER_MIN + round((level - 1) * (USER_MAX - USER_MIN) / 9)
+
+
+def step(current_user: object, delta: int) -> int:
+    """Move a whole number of ten-scale levels, on the USER scale. Cannot cross the floor."""
+    level = percent_to_ten_scale(current_user) + int(delta)
     level = max(1, min(10, level))
-    return ten_scale_to_percent(level)
+    return user_for_ten_level(level)
 
 
-def alarm_percent(current: int) -> int:
-    """The level an alarm should play at. Upward-only override (Angela, 2026-09-25).
+def alarm_percent(current_user: object) -> int:
+    """The USER level an alarm should play at. Upward-only (Angela, 2026-09-25).
 
     An alarm at a level too quiet to notice is useless, so a quiet room is raised to
     the alarm minimum. A room already louder than that is left alone, because lowering
     it would be the override behaving as a surprise rather than a safeguard.
+
+    On the user scale, like every other user-facing number, so the minimum means the
+    same thing on hardware with a different measured floor.
     """
-    return clamp(max(clamp(current), ALARM_MIN_PERCENT))
+    return _clamp_user(max(_clamp_user(current_user), ALARM_MIN_PERCENT))
 
 
 def describe_percent(percent: int) -> str:
@@ -297,55 +355,64 @@ def parse_volume_command(text: str) -> Optional[VolumeIntent]:
     if value == 0:
         # The headline case from the issue: "set volume to 0" must be understood and
         # refused-in-place rather than fall through to the model or, worse, be obeyed.
-        # Recognised as a command, raised to the floor, and flagged so the reply can say why.
-        return VolumeIntent(kind="set", percent=FLOOR_PERCENT, clamped=True, scale="percent")
+        # Recognised as a command, raised to the quietest level, and flagged so the reply
+        # can say why. Zero is not a position on the user scale, which starts at 1.
+        return VolumeIntent(kind="set", percent=USER_MIN, clamped=True, scale="percent")
 
     if unit is not None:
-        scale, requested = "percent", value
-    elif value <= 10:
-        # A bare small number is the scale the issue describes: "set volume to 7" is level
-        # seven, not seven percent. Seven percent is not a usable level, and the ten scale
-        # already maps 1 onto the floor, so this form can never be clamped.
-        return VolumeIntent(kind="set", percent=ten_scale_to_percent(value),
-                            clamped=False, scale="ten")
-    else:
-        # A bare large number can only be a percentage; "level 40" does not exist.
-        scale, requested = "percent", value
+        # A percentage is a position on the USER range, not a raw ALSA value. "30%" means
+        # 30% of what this hardware can do, which is raw 65 here - not raw 30, which is
+        # silence on this device and would have to be clamped.
+        if value > USER_MAX:
+            # Asking for more than the maximum plainly means "as loud as it goes", which
+            # is what it gets, so there is nothing surprising to explain.
+            return VolumeIntent(kind="set", percent=USER_MAX, clamped=False, scale="percent")
+        return VolumeIntent(kind="set", percent=value, clamped=False, scale="percent")
 
-    return VolumeIntent(kind="set", percent=clamp(requested),
-                        clamped=requested < FLOOR_PERCENT, scale=scale)
+    if value <= 10:
+        # A bare small number is the scale the issue describes: "set volume to 7" is level
+        # seven, not seven percent.
+        level = max(USER_MIN, min(10, value))
+        return VolumeIntent(kind="set", percent=user_for_ten_level(level),
+                            clamped=False, scale="ten")
+
+    # A bare large number can only be a percentage; "level 40" does not exist.
+    capped = value > USER_MAX
+    return VolumeIntent(kind="set", percent=USER_MAX if capped else value,
+                        clamped=False, scale="percent")
 
 
 def resolve(intent: VolumeIntent, current_percent: int) -> tuple[int, str]:
-    """Turn an intent into (new level, one short spoken line).
+    """Turn an intent into (new USER level, one short spoken line).
 
     This is the only place that decides a resulting level, and it cannot return
-    anything below the floor for any input. That property is what the test suite
-    pins: whatever the current level and whatever the request, the device stays
-    audible.
+    anything below USER_MIN for any input, which maps to the measured floor. That
+    property is what the test suite pins: whatever the current level and whatever the
+    request, the device stays audible.
     """
     if intent is None:
         raise VolumeError("no intent to resolve")
 
+    current = _clamp_user(current_percent)
+
     if intent.kind == "query":
-        level = clamp(current_percent)
-        return level, f"Volume {percent_to_ten_scale(level)} out of 10. {level} percent."
+        return current, f"Volume {percent_to_ten_scale(current)} out of 10. {current} percent."
 
     if intent.kind == "step":
-        level = step(current_percent, intent.direction * intent.steps)
-        if level == clamp(current_percent):
+        level = step(current, intent.direction * intent.steps)
+        if level == current:
             if intent.direction < 0:
                 return level, "Already at the quietest level."
             return level, "Already at full volume."
         return level, describe_percent(level)
 
     if intent.kind == "set":
-        level = clamp(intent.percent if intent.percent is not None else FLOOR_PERCENT)
+        level = _clamp_user(intent.percent if intent.percent is not None else USER_MIN)
         if intent.clamped:
             # Say why, because the user asked for something and did not get it.
             return level, f"Zero would be silent. {describe_percent(level)}"
         if intent.scale == "ten":
-            return level, f"Volume {percent_to_ten_scale(level)} out of 10."
+            return level, describe_percent(level)
         return level, f"Volume {level} percent."
 
     raise VolumeError(f"unknown intent kind {intent.kind!r}")
@@ -354,6 +421,8 @@ def resolve(intent: VolumeIntent, current_percent: int) -> tuple[int, str]:
 __all__ = [
     "ALARM_MIN_PERCENT", "CARD", "CALIBRATION_FILE", "CONTROL", "DEFAULT_CARD",
     "DEFAULT_CONTROL", "FLOOR_PERCENT", "MAX_PERCENT", "VolumeError", "VolumeIntent",
-    "alarm_percent", "clamp", "describe_percent", "parse_volume_command",
-    "percent_to_ten_scale", "reload_calibration", "resolve", "step", "ten_scale_to_percent",
+    "USER_MAX", "USER_MIN",
+    "alarm_percent", "clamp", "clamp_user", "describe_percent", "parse_volume_command",
+    "percent_to_ten_scale", "raw_to_user_percent", "reload_calibration", "resolve", "step",
+    "ten_scale_to_percent", "user_for_ten_level", "user_percent_to_raw",
 ]

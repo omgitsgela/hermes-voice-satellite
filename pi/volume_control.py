@@ -51,6 +51,16 @@ CALIBRATION_FILE = Path(
 #: set together, so they cannot disagree in normal use.
 _PERCENT = re.compile(r"\[(\d{1,3})%\]")
 
+#: The user scale, which is what a person speaks and what the configuration plane
+#: carries. 1 is the quietest this hardware can be and 100 is full volume, so the same
+#: number means the same thing on a device with a different measured floor.
+#:
+#: `clamp()` and `set()` below work in RAW, which is what the ALSA control takes. The two
+#: are different numbers and confusing them is the bug worth guarding against, so the
+#: conversion lives in exactly two small functions and nothing else does arithmetic.
+USER_MIN = 1
+USER_MAX = 100
+
 #: Where Debian-family systems keep these tools. `alsactl` lives in **/usr/sbin**, which is
 #: in systemd's default service PATH but NOT in a normal login shell's. Resolving against
 #: PATH alone therefore means the volume works under the service and the persistence
@@ -147,6 +157,26 @@ class AlsaVolume:
         return cls(**kwargs)
 
     # -- the clamp ------------------------------------------------------------
+
+    def user_to_raw(self, user: object) -> int:
+        """A person's 1-100 onto this device's actual raw range."""
+        if isinstance(user, bool) or not isinstance(user, (int, float)):
+            log.warning("refusing a non-numeric user volume %r; using the quietest", user)
+            level = USER_MIN
+        else:
+            level = max(USER_MIN, min(USER_MAX, int(user)))
+        span = MAX_PERCENT - self.floor
+        if span <= 0:
+            return self.floor
+        return self.clamp(self.floor + round((level - USER_MIN) * span / (USER_MAX - USER_MIN)))
+
+    def raw_to_user(self, raw: object) -> int:
+        """The inverse, for reporting a measured raw level back to the bridge."""
+        span = MAX_PERCENT - self.floor
+        if span <= 0:
+            return USER_MIN
+        user = round((self.clamp(raw) - self.floor) / span * (USER_MAX - USER_MIN)) + USER_MIN
+        return max(USER_MIN, min(USER_MAX, user))
 
     def clamp(self, percent: object) -> int:
         """Raise to the floor, cap at maximum. Cannot return anything silent."""

@@ -94,8 +94,13 @@ async def main() -> int:
             "generation": 1,
             "settings": {"playback_volume": 0},
         }))
-        check("a zero through the runner lands on the floor",
-              report.data["actual"].get("playback_volume") == 25, report.data)
+        # User scale: zero is refused up to user 1, which maps to the raw floor of 25 on
+        # this fake device. The reported number is the user one; the raw floor is what
+        # amixer must actually be told.
+        check("a zero through the runner lands on the quietest user level",
+              report.data["actual"].get("playback_volume") == 1, report.data)
+        check("a zero through the runner reaches amixer as the raw floor",
+              any("25%" in part for call in fake2.calls for part in call), fake2.calls)
         check("a zero through the runner never reaches amixer as 0%",
               not any("0%" in part for call in fake2.calls for part in call), fake2.calls)
 
