@@ -97,14 +97,65 @@ python3 calibrate-volume.py --show
 The script is stdlib-only and imports nothing from this repository, on purpose: it has to
 run on an embedded device with no dependency chain. Copy it across on its own.
 
-### Until it is calibrated
+### The measurement, taken 2026-09-25 on `wyoming1`
 
-The bridge and the device both use **placeholder** values (floor 25%, alarm minimum 60%,
-control `PCM`, card `seeed2micvoicec`). These are conservative, not measured. Both sides log
-a line at startup saying so, because a placeholder that nobody mentions becomes permanent.
+| Value | Result |
+|---|---|
+| `control` | **`PCM`** |
+| `floor_percent` | **50** |
+| `alarm_min_percent` | **70** |
 
-The placeholders are safe by construction: they are above zero, so the device stays audible
-even before anyone has listened.
+**Which control.** The device's own microphone identified it objectively: moving `PCM` from
+100% to 5% changed the recorded level by **89%**, so the speaker plainly follows it. `Line`
+also affects the output (a 30% swing) and is deliberately left at the HAT's value of 78% as
+part of the fixed gain path. `HP`, `HP DAC` and `HPCOM` had **no measurable effect** (98-100%
+unchanged) despite names that suggest they would, which is exactly why the issue said not to
+guess from the name.
+
+**The floor, by ear.** Six descending tones, 2.5 s each: 100%, 70%, 50%, 35%, 25%, 15%.
+Result: 100% unmistakably loud, **50% the softest level that could be heard at all**, and
+35/25/15 entirely inaudible.
+
+**Why the microphone was the wrong instrument for this part.** It put the floor near 20-25%,
+because it sits centimetres from the speaker and hears near-field output that a person across
+the room cannot. It is excellent for identifying the control and useless for the floor. Issue
+#10 asks for the floor "by ear" for precisely this reason, and the by-ear figure is the one
+that is stored.
+
+**The consequence, stated plainly.** With a floor of 50%, the spoken 1-10 scale spans 50-100%,
+so levels 1-5 all sit in the quiet half. That is the honest cost of a floor that is actually
+audible on this hardware, and a lower floor would let the device be set to a level nobody can
+hear, which is the failure this feature exists to prevent. If the quiet half feels too
+compressed in practice the fix is a lower `Line` gain stage, not a lower floor.
+
+**Alarm minimum 70%.** Angela decided alarms may override upward so an alarm is always
+audible. With the floor at 50% (barely audible), an alarm at the floor would be useless, so
+the minimum sits at 70%, which the same test showed as clearly audible.
+
+### Where the measurement is stored
+
+Neither copy is committed, because `state/` is gitignored, which is right for runtime
+measurement.
+
+| Where | Path |
+|---|---|
+| Bridge | `state/volume-calibration.json` |
+| Device | `/home/wyoming1/.local/state/hermes-voice-satellite/volume.json` |
+
+Pin `VOICE_VOLUME_CALIBRATION` on the device so both resolve the same file (see above).
+
+### Before calibration, and on new hardware
+
+With no calibration file both sides fall back to conservative **placeholders** (floor 25%,
+alarm minimum 60%, control `PCM`) and log a line at startup saying so, because a placeholder
+nobody mentions becomes permanent.
+
+They are **not portable**. The 50% figure is this HAT, this codec and this room. A different
+speaker, a different `Line` gain or a different enclosure will measure differently, and a
+floor carried over from another device is a guess wearing a measurement's clothes.
+
+The placeholders are safe by construction: above zero, so the device stays audible even before
+anyone has listened.
 
 ### The calibration path must be pinned, and why
 
