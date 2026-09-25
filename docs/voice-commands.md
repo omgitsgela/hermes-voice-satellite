@@ -1,5 +1,7 @@
 # Voice commands
 
+**Where this sits:** stage 6 think / bridge-local of the voice pipeline. The end-to-end map, and every other stage, is in `docs/architecture.md`.
+
 What you can say to the satellite, what happens, and why some things are deliberately not
 matched.
 

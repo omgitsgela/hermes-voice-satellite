@@ -1,14 +1,25 @@
-"""Wyoming client for the `wyoming1` voice satellite.
+"""Wyoming session for one satellite connection.
+
+This is the protocol, not the transport, and the distinction matters: `connect()` dials a
+device, but the device now dials US. The direction change did not fork the protocol -
+`bridge/lease.py` subclasses `SatelliteClient` and overrides only the connection lifecycle
+and the two I/O primitives (`send`, `next_event`), so this session logic runs unchanged over
+a connection that arrived instead of one that was dialled. The older dial-out shape stays
+reachable for rollback; see `docs/outbound-link.md` and `docs/architecture.md`.
 
 Protocol derived from the satellite's own source (`reference/satellite.py`), whose
-`WakeStreamingSatellite` class at line 1198 is the state machine we must match. Our
-satellite runs with `--wake-uri tcp://127.0.0.1:10400 --wake-word-name ok_nabu`, so it
-uses that class (not `AlwaysStreamingSatellite`, not `VadStreamingSatellite`).
+`WakeStreamingSatellite` class at line 1198 is the state machine we must match. The device
+runs `--wake-uri tcp://127.0.0.1:10400 --wake-word-name hey_hermes`, so it uses that class
+(not `AlwaysStreamingSatellite`, not `VadStreamingSatellite`).
+
+Note on the wake URI: port 10400 is the wake **shim** (`pi/wake_shim.py`), not the wake
+engine. The shim holds that port and forwards to `wyoming-openwakeword` on 10401, which is
+what lets the bridge open the microphone on demand for follow-up mode.
 
 Handshake, exactly as the satellite implements it:
 
     us  -> satellite   RunSatellite            satellite unpauses and waits for its wake word
-    sat -> us          Detection               the local wake word fired (ok_nabu)
+    sat -> us          Detection               the local wake word fired (hey_hermes)
     sat -> us          RunPipeline             start_stage=ASR end_stage=TTS snd_format=22050/2/1
     sat -> us          AudioChunk *            raw mic PCM: 16 kHz, S16_LE, mono
     us  -> satellite   Transcript              ends the utterance; satellite plays done-wav and

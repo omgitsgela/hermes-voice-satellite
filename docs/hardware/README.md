@@ -1,5 +1,7 @@
 # Hardware: supported devices, their enclosures and their bring-up
 
+**Where this sits:** stage 1 capture of the voice pipeline. The end-to-end map, and every other stage, is in `docs/architecture.md`.
+
 One file per supported ReSpeaker model. The point is that someone rebuilding this device, or adding a
 new one, has the wiring, the software configuration and the gotchas in one place instead of
 rediscovering them.

@@ -1,5 +1,7 @@
 # Supported Devices
 
+**Where this sits:** stage 1 capture of the voice pipeline. The end-to-end map, and every other stage, is in `docs/architecture.md`.
+
 The units this project supports, confirmed against the live listings on 2026-09-23.
 Everything else in the ReSpeaker and Seeed families is either excluded, with the reason recorded below,
 or on the watchlist pending vendor documentation.

@@ -1,5 +1,7 @@
 # Owning the satellite stack
 
+**Where this sits:** stage 1-3 device of the voice pipeline. The end-to-end map, and every other stage, is in `docs/architecture.md`.
+
 **Role change, 2026-09-24 (issue #61).** The satellite stops being a Wyoming *server* that the bridge dials
 and becomes a Wyoming *client* that dials the bridge. Nothing in the vendored stack changes, and the patches
 below still apply exactly as they are; what changes is the outer transport, which is ours either way. The

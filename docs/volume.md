@@ -1,5 +1,7 @@
 # Volume control
 
+**Where this sits:** stage 8 play of the voice pipeline. The end-to-end map, and every other stage, is in `docs/architecture.md`.
+
 Issue #10. Voice control of the satellite's output level, with one rule that governs the
 whole design.
 

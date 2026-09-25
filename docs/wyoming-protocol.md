@@ -1,5 +1,7 @@
 # The Wyoming protocol: what we rely on, and what we could
 
+**Where this sits:** stage 3 stream of the voice pipeline. The end-to-end map, and every other stage, is in `docs/architecture.md`.
+
 Reviewed 2026-09-23 against the protocol repository **`github.com/OHF-Voice/wyoming`** (note the org:
 this project lived under `rhasspy` when we adopted it). Our Python dependency is `wyoming` 1.5.4, pinned
 in the satellite's venv. This is the transport for everything we do: the bridge talks to the satellite,

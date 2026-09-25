@@ -1,5 +1,7 @@
 # Interruption: talking to a task that is already running
 
+**Where this sits:** stage across 4-7 of the voice pipeline. The end-to-end map, and every other stage, is in `docs/architecture.md`.
+
 Built 2026-09-23. a real incident, which this exists to fix:
 
 > I had it turn on christmas lights, but my husband was pranking me and turned them off remotely.

@@ -1,5 +1,7 @@
 # Timers and alarms
 
+**Where this sits:** stage 6 think / bridge-local of the voice pipeline. The end-to-end map, and every other stage, is in `docs/architecture.md`.
+
 Design spec, written 2026-09-23, and **since implemented**. Lines marked as verified were measured
 on the host and the satellite on 2026-09-23 rather than assumed.
 

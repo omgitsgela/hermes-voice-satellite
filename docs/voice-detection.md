@@ -1,5 +1,7 @@
 # Voice detection: which detector decides the device hears a person
 
+**Where this sits:** stage 4 endpoint of the voice pipeline. The end-to-end map, and every other stage, is in `docs/architecture.md`.
+
 The endpointer turns a continuous microphone stream into one trimmed utterance per turn. It asks two
 questions about every 20 ms frame, and they are different questions:
 

@@ -1,5 +1,7 @@
 # The outbound link: the device dials the bridge
 
+**Where this sits:** stage 3 stream of the voice pipeline. The end-to-end map, and every other stage, is in `docs/architecture.md`.
+
 This is the device half of the connection inversion. The bridge keeps a registry of devices that dial in,
 and this is what makes a device dial. It is the reason a satellite works on a network nobody can reach into:
 there is no inbound path to arrange, no port forward on either side, and no fixed device address to track.
