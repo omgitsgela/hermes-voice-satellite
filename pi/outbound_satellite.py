@@ -27,6 +27,7 @@ Design rules from the pre-implementation review, each visible in the code below:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import pathlib
@@ -81,6 +82,12 @@ class LinkConfig:
     #: every attempt looks successful (review finding, issue #63).
     healthy_after: float = 30.0
     ssl_context: Optional[ssl.SSLContext] = None
+    #: Where this device's own Wyoming satellite listens. The relay pipes the outbound link to it, so the
+    #: audio stays in the service that already does it well rather than being reimplemented here.
+    local_host: str = "127.0.0.1"
+    local_port: int = 10700
+    #: Relay to the local satellite. Off is only useful for a device with no local satellite to relay to.
+    relay: bool = True
 
     def registration_payload(self) -> Dict[str, Any]:
         return {
@@ -130,6 +137,9 @@ def load_config_from_env(environ: Optional[Dict[str, str]] = None) -> LinkConfig
         capabilities=tuple(c for c in env.get("VOICE_CAPABILITIES", "led,speaker,microphone").split(",") if c),
         boot_id=pathlib.Path("/proc/sys/kernel/random/boot_id").read_text().strip()
         if pathlib.Path("/proc/sys/kernel/random/boot_id").exists() else "",
+        local_host=env.get("VOICE_LOCAL_SATELLITE_HOST", "127.0.0.1").strip() or "127.0.0.1",
+        local_port=int(env.get("VOICE_LOCAL_SATELLITE_PORT", "10700")),
+        relay=env.get("VOICE_RELAY", "1").strip().lower() not in ("0", "false", "no", "off"),
         ssl_context=_ssl_context_from_env(env),
     )
 
@@ -176,6 +186,7 @@ class BridgeLink:
         self.writer: Optional[asyncio.StreamWriter] = None
         self._write_lock = asyncio.Lock()
         self._stopping = False
+        self._local_writer: Optional[asyncio.StreamWriter] = None
         self._generation = 0
         self._backoff_index = 0
         self._rng = random.Random()
@@ -286,7 +297,12 @@ class BridgeLink:
         if self.on_registered is not None:
             await _maybe_await(self.on_registered(self.config.registration_payload()))
 
-        await self._pump()
+        if self.config.relay:
+            # Carry what the bridge says to this device's own satellite, and what the satellite says back.
+            # See _serve_local for why this is a pipe and not a second implementation of the audio.
+            await self._serve_local()
+        else:
+            await self._pump()
 
     async def _handshake(self) -> None:
         """describe -> info -> register -> ok, with every step bounded."""
@@ -349,6 +365,78 @@ class BridgeLink:
                 continue
             if self.on_event is not None:
                 await _maybe_await(self.on_event(event))
+
+    # -- the local relay ---------------------------------------------------------
+
+    async def _serve_local(self) -> None:
+        """Pipe the outbound link to this device's own Wyoming satellite.
+
+        The audio lives in the satellite service already running on this device: wake word, microphone
+        capture, playback, the LEDs, all of it tuned here over months. Reimplementing that state machine on
+        the far side of a socket would mean two copies to keep in step, and this project has already paid
+        once for two code paths disagreeing about who owns a socket. So the link becomes a transparent pipe
+        to the existing service, and the bridge sees exactly the satellite it has always talked to, with one
+        difference: this device opened the connection instead of waiting to be dialled.
+
+        Returns when either end stops, which the caller treats as the link ending and reconnects from.
+        """
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(self.config.local_host, self.config.local_port),
+                timeout=self.config.connect_timeout,
+            )
+        except (OSError, asyncio.TimeoutError) as exc:
+            log.error(
+                "the link is up but there is no local satellite at %s:%s to relay to (%s); the bridge will "
+                "see a device that registers and then says nothing",
+                self.config.local_host, self.config.local_port, exc,
+            )
+            # Hold the link open anyway rather than returning immediately: dropping it would make the device
+            # reconnect in a loop over a fault that is not the bridge's, and a held link is a useful state
+            # (the bridge knows this device is present) even when nothing can be relayed.
+            await self._pump()
+            return
+
+        self._local_writer = writer
+        self.on_event = self.relay_event_to_local
+        log.info("relaying to the local satellite at %s:%s",
+                 self.config.local_host, self.config.local_port)
+        upstream = asyncio.ensure_future(self._local_to_bridge(reader))
+        try:
+            await self._pump()          # bridge -> this device -> the local satellite
+        finally:
+            self.on_event = None
+            self._local_writer = None
+            upstream.cancel()
+            with contextlib.suppress(BaseException):
+                await upstream
+            try:
+                writer.close()
+            except Exception:  # noqa: BLE001 - best effort on a socket that is already ending
+                pass
+
+    async def _local_to_bridge(self, reader: asyncio.StreamReader) -> None:
+        """Everything the satellite says goes up the outbound link, until either end stops."""
+        while True:
+            event = await async_read_event(reader)
+            if event is None:
+                log.info("the local satellite closed the connection")
+                return
+            if not await self.send(event):
+                return
+
+    async def relay_event_to_local(self, event: Event) -> None:
+        """One event from the bridge, written straight to the local satellite."""
+        writer = self._local_writer
+        if writer is None:
+            return
+        try:
+            await asyncio.wait_for(_write_event(event, writer), timeout=self.config.write_timeout)
+        except (ConnectionError, OSError, asyncio.TimeoutError, asyncio.IncompleteReadError) as exc:
+            # Drop the local connection rather than wedge: the next pass reconnects both ends.
+            log.warning("could not write to the local satellite (%s); dropping that connection",
+                        type(exc).__name__)
+            self._local_writer = None
 
     def _require_reader(self) -> asyncio.StreamReader:
         if self.reader is None:

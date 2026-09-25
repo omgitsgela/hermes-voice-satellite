@@ -142,6 +142,16 @@ class Announcer:
 
     # -- lifecycle -----------------------------------------------------------
 
+    def use_connection(self, sat) -> None:
+        """Point announcements at the conversation's current connection.
+
+        The announcer speaks on the loop's connection rather than opening its own (see the module
+        docstring). That reference is taken at construction, so when the loop swaps the satellite underneath
+        it, a lease replacing a dialled client, announcements have to be told. Without this they keep talking
+        into a socket that has been replaced.
+        """
+        self._sat = sat
+
     async def start(self) -> None:
         self._token = self._load_token()
         app = web.Application()

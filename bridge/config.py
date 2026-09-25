@@ -40,6 +40,11 @@ REGISTRY_ALLOW_UNAUTHENTICATED = os.environ.get("VOICE_REGISTRY_ALLOW_UNAUTHENTI
 # every device, because a device that is away can only get in by dialling us (issue #61). The dial retry
 # exists so a device that comes home is picked up exactly as before.
 REGISTRY_WAIT_RETRY_SECONDS = float(os.environ.get("VOICE_REGISTRY_WAIT_RETRY_SECONDS", "30"))
+# How long to wait for a device to dial in before falling back to dialling the configured satellite. Both
+# shapes are supported during the migration, and a device that dials in is preferred (it is the newer shape,
+# and two clients competing for one device is what the one-client rule exists to prevent). Waiting a moment
+# first stops the bridge from grabbing a device that is about to dial us itself.
+REGISTRY_LEASE_WAIT_SECONDS = float(os.environ.get("VOICE_REGISTRY_LEASE_WAIT_SECONDS", "30"))
 
 # Taken from the satellite's own ExecStart flags, so these are its real formats:
 #   --mic-command 'arecord -D plughw:CARD=seeed2micvoicec,DEV=0 -r 16000 -c 1 -f S16_LE -t raw'

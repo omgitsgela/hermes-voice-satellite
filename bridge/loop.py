@@ -181,6 +181,9 @@ class VoiceLoop:
         self.endpointing_profile = self._load_endpointing_profile()
         self._ep_kwargs = self._profiled_endpointing_kwargs(self.endpointing_profile)
         self._log_events = log_events
+        # The device we are serving, when one dialled in and was leased (issue #61). None means `self.sat` is
+        # the client that dials the satellite at its configured address.
+        self.leased = None
 
         self._state_file = STATE_FILE
         # Follow-up mode: when on, the device listens again straight after it answers, so a
@@ -1244,15 +1247,14 @@ class VoiceLoop:
         # do not need the satellite to be connected, so they no longer wait for it.
         await self.announcer.start()
 
-        # Now obtain a satellite the old way, if we can. When the registry is on and nothing is reachable
-        # we stay up and keep listening instead of exiting for systemd to restart, which is what makes a
-        # device that is away able to reach us at all.
-        try:
+        # Now obtain something to talk to. With the registry off this is exactly as it always was: dial the
+        # satellite, and let a failure exit for systemd to restart. With it on, a device that dialled in is
+        # preferred and a failure to acquire is waited out rather than fatal, because a device that is away
+        # can only reach us by dialling in and the listeners have to outlive its absence.
+        if REGISTRY_ENABLED:
+            await self._acquire_a_satellite()
+        else:
             await self.sat.connect()
-        except (OSError, ConnectionError) as exc:
-            if not REGISTRY_ENABLED:
-                raise
-            await self._wait_for_a_satellite(exc)
         info = await self.sat.describe()
         if info is not None:
             name = getattr(getattr(info, "satellite", None), "name", "?")
@@ -1272,47 +1274,117 @@ class VoiceLoop:
         # The satellite cannot tell anyone it is connected, so the host does it.
         await self.say_startup_tone()
 
-    async def _wait_for_a_satellite(self, first_error: Exception) -> None:
-        """Stay up and keep listening while no satellite can be reached.
+    def _use_satellite(self, satellite, *, leased: bool) -> None:
+        """Point the loop, and everything that speaks on its connection, at this satellite.
 
-        Exiting for systemd to restart us is the right shape when the device is a dial target at a fixed
-        address, and it is what this used to do. It is the wrong shape for the inversion (issue #61): a
-        device that is away can only get in by dialling US, so our listeners have to outlive the absence
-        of every device. Nothing else changes while we wait: we keep retrying the direct dial, so a device
-        that comes back to the home network is picked up exactly as before.
-
-        Only reached with the registry enabled. With it off, a failed connect still exits for systemd,
-        which is the long-standing behaviour and the reason the restart delay is set where it is.
+        The announcer holds the conversation's connection by reference (see bridge/announce.py), so swapping
+        the satellite under the loop has to reach it too, or announcements keep talking into a socket that a
+        lease has replaced.
         """
-        from bridge.config import (REGISTRY_WAIT_RETRY_SECONDS, SATELLITE_HOST, SATELLITE_PORT)
+        self.sat = satellite
+        self.leased = satellite if leased else None
+        announcer = getattr(self, "announcer", None)
+        if announcer is not None:
+            announcer.use_connection(satellite)
+
+    def _first_ready_device(self):
+        """The first device that has finished registering, if any."""
+        if self.registry is None:
+            return None
+        ready = self.registry.connections(ready_only=True)
+        if not ready:
+            return None
+        if len(ready) > 1:
+            _LOGGER.info(
+                "%d devices are ready; leasing %s and leaving the rest registered (one conversation at a "
+                "time)", len(ready), ready[0].device_id,
+            )
+        return ready[0]
+
+    async def _acquire_a_satellite(self) -> None:
+        """Take hold of a satellite, preferring a device that dialled in.
+
+        A lease is checked first every time round: it is the newer shape, and two clients competing for one
+        device is exactly what the one-client rule exists to prevent. The direct dial remains the fallback so
+        a device that does not run the outbound runner is served exactly as before.
+
+        The dial happens immediately on the first pass rather than after the lease wait, because that is what
+        this bridge has always done at startup and a device in the room should not wait out a timeout it has
+        no part in. After a failed dial the wait applies, and the dial is retried slowly.
+        """
+        from bridge.config import (REGISTRY_LEASE_WAIT_SECONDS, REGISTRY_WAIT_RETRY_SECONDS,
+                                   SATELLITE_HOST, SATELLITE_PORT)
+        from bridge.lease import LeasedSatellite
+
+        waited = 0.0
+        first_pass = True
+        while True:
+            connection = self._first_ready_device()
+            if connection is not None:
+                lease = LeasedSatellite(connection, log_events=self._log_events)
+                self._use_satellite(lease, leased=True)
+                await lease.connect()
+                return
+
+            if first_pass or waited >= REGISTRY_LEASE_WAIT_SECONDS:
+                waited = 0.0
+                try:
+                    await self.sat.connect()
+                except (OSError, ConnectionError) as exc:
+                    _LOGGER.debug(
+                        "no device has dialled in, and %s:%s did not answer either: %s",
+                        SATELLITE_HOST, SATELLITE_PORT, exc,
+                    )
+                else:
+                    _LOGGER.info(
+                        "dialled the satellite at %s:%s: no device has dialled in",
+                        SATELLITE_HOST, SATELLITE_PORT,
+                    )
+                    return
+            first_pass = False
+
+            _LOGGER.info(
+                "no satellite yet; staying up and listening for a device to dial in (%s:%s did not answer "
+                "either)", SATELLITE_HOST, SATELLITE_PORT,
+            )
+            await asyncio.sleep(REGISTRY_WAIT_RETRY_SECONDS)
+            waited += REGISTRY_WAIT_RETRY_SECONDS
+
+    async def _reacquire_after_loss(self, exc: Exception) -> None:
+        """Replace a dead satellite without leaving the process.
+
+        In registry mode a lost link is not a reason to exit. A device that dialled in owns its socket and
+        returns when it reconnects, and exiting would take the listeners down with it, which is the defect
+        that made this whole shape necessary. So drop what we had, build a fresh client for the dial
+        fallback, and acquire again. Nothing here reloads Whisper or Piper: only the link is replaced.
+        """
+        from bridge.config import SATELLITE_HOST, SATELLITE_PORT
+        from bridge.satellite import SatelliteClient
 
         _LOGGER.warning(
-            "no satellite at %s:%s (%s); staying up and listening for a device to dial in instead of "
-            "exiting", SATELLITE_HOST, SATELLITE_PORT, first_error,
+            "lost the %s (%s); re-acquiring rather than exiting",
+            "lease on a device that dialled in" if self.leased else "dialled satellite", exc,
         )
-        announced: set = set()
-        while True:
-            await asyncio.sleep(REGISTRY_WAIT_RETRY_SECONDS)
-            try:
-                await self.sat.connect()
-            except (OSError, ConnectionError) as exc:
-                # A registered device is worth saying out loud even though nothing leases it yet: it is
-                # the difference between "the bridge is up and nobody is here" and "the device got in".
-                registered = set(self.registry.connected_devices()) if self.registry else set()
-                if registered - announced:
-                    announced |= registered
-                    _LOGGER.info(
-                        "device registered and waiting to be leased: %s (leasing is the next step of "
-                        "phase 4; meanwhile this bridge keeps dialling the home address)",
-                        ", ".join(sorted(registered)),
-                    )
-                _LOGGER.debug("still no satellite at %s:%s: %s", SATELLITE_HOST, SATELLITE_PORT, exc)
-                continue
-            _LOGGER.info("satellite reachable again at %s:%s", SATELLITE_HOST, SATELLITE_PORT)
-            return
+        try:
+            await self.sat.close()
+        except Exception:  # noqa: BLE001 - a dead link is already dead
+            pass
+        self._use_satellite(
+            SatelliteClient(SATELLITE_HOST, SATELLITE_PORT, log_events=self._log_events), leased=False
+        )
+        await self._acquire_a_satellite()
+        # Re-arm: the device only reports wake words once the host has said it is ready.
+        await self.sat.run()
+        _LOGGER.info(
+            "re-acquired %s", "a device that dialled in" if self.leased else "the dialled satellite"
+        )
 
     async def _on_device_registered(self, slot) -> None:
-        """A device completed the handshake. Nothing leases it to a conversation yet (phase 4)."""
+        """A device completed the handshake and is available to be leased.
+
+        The lease itself is taken by `_acquire_a_satellite`, at startup or after a link loss. This hook only
+        reports what arrived, so a registration is visible in the log even while the loop is elsewhere.
+        """
         identity = getattr(slot, "identity", None)
         _LOGGER.info(
             "device registered: id=%s name=%s area=%s version=%s protocol=%s capabilities=%s",
@@ -1398,7 +1470,15 @@ class VoiceLoop:
                 continue
             except (ConnectionError, TimeoutError) as exc:
                 _LOGGER.error("connection problem: %s", exc)
-                raise
+                from bridge.config import REGISTRY_ENABLED
+                if not REGISTRY_ENABLED:
+                    # The long-standing shape: exit and let systemd start a fresh process, with the connect
+                    # tone and the model reload that go with it. Unchanged for the dialled path.
+                    raise
+                # A device that dialled in owns its socket, so a lost link is not ours to re-establish:
+                # wait for it to come back, keeping the listeners and the warm models.
+                await self._reacquire_after_loss(exc)
+                continue
             except Exception as exc:  # noqa: BLE001 - one bad turn must not end the loop
                 _LOGGER.exception("turn failed: %s", exc)
                 await asyncio.sleep(1.0)

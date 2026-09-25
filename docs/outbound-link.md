@@ -41,7 +41,28 @@ sudo systemctl enable --now outbound-satellite
 
 3. The unit deliberately does not order itself against the older satellite service. That service still
    serves the dial-in path while the bridge supports both shapes, and the runner carries no audio yet, so
-   they coexist without contending for the microphone.
+   they coexist without contending for the microphone. Once the relay is running the two do share the
+   audio device, because the relay hands the bridge's events to that same satellite service: it is the
+   satellite doing the listening and the speaking, exactly as before, just reached over an outbound socket.
+
+## What it does
+
+The link registers, holds the connection, answers pings, reconnects with capped jitter, and then **relays**.
+
+Relaying is the audio: once registered, the runner connects to the satellite service running on the same
+device and becomes a transparent pipe between it and the bridge, in both directions.
+
+That is a deliberate choice rather than a missing implementation. The audio path on a device is not just
+"socket in, sound out": it is wake-word detection, microphone capture, playback, the chime, the LED states,
+and months of tuning against a real room. Writing a second copy of that on the far side of a socket would be
+two implementations to keep in step, and this project has already paid once for two code paths disagreeing
+about who owns a socket. The device keeps the audio it is already good at, and the outbound link carries it.
+
+So the bridge sees exactly the satellite it has always talked to, with one difference: the device opened the
+connection instead of waiting to be dialled. That also means `describe`, `run-satellite`, audio up and down,
+`played`, and the LED events all work unchanged, because the thing answering them is the same service as
+before. Set `VOICE_RELAY=0` to turn the relay off, which is only useful on a device that has no local
+satellite to relay to.
 
 ## Verifying it
 
@@ -64,10 +85,10 @@ the evidence that a device's own reconnect is not undone by its stale handler.
 
 ## What it does not do yet
 
-**Audio.** This link registers, holds the connection, answers pings and reconnects with capped jitter, and
-nothing else. Sending microphone audio and playing speech over it, and the bridge side of running a
-conversation on a registered device, are the remaining work. Until then a device that dials in is tracked
-but silent, and the older dial-in path is still the one that carries a conversation.
+**Standalone audio.** The relay carries a conversation only when the device also runs its own satellite
+service, which is the case on the Pi and is why this works today. A device with no local satellite (the ESP32
+firmware in #44, say) has to speak Wyoming itself, which is its own piece of work. A second device being
+conversed with at the same time as the first is also not supported: the bridge leases one at a time.
 
 ## TLS, and why the listener may be unauthenticated in the meantime
 

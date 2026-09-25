@@ -255,6 +255,10 @@ class SatelliteConnection:
         self.peer = describe_peer(writer)
 
         self._queue: asyncio.Queue[Event] = asyncio.Queue(maxsize=self.limits.max_events)
+        # Set when this connection ends, so a reader blocked on the queue can be woken without cancelling a
+        # queue read. Cancelling one after an item has been handed over loses that item, and a lost audio
+        # chunk or a lost `played` event is a real defect rather than a theoretical one.
+        self.closed_event = asyncio.Event()
         self._queued_bytes = 0
         self._waiters: List[Tuple[str, Optional[Callable[[Event], bool]], asyncio.Future]] = []
         self._write_lock = asyncio.Lock()
@@ -363,6 +367,7 @@ class SatelliteConnection:
         if self.closed:
             return
         self.closed = True
+        self.closed_event.set()
         try:
             self.writer.close()
         except Exception:  # pragma: no cover - best effort
@@ -664,6 +669,9 @@ class RegistrationHandler(AsyncEventHandler):
             return
         connection = self.connection
         connection.closed = True
+        # Wake anything reading the connection: a lease blocked on the queue has to learn that the device
+        # is gone, or it sits there until its own timeout expires.
+        connection.closed_event.set()
         removed = self.registry.unregister(connection.device_id, connection.generation)
         log.info(
             "device %s disconnected (generation %s, %s)",
