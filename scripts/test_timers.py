@@ -99,6 +99,54 @@ async def main() -> int:
         cancelled = fresh.cancel_timer(all_timers=True)
         check("cancel all removes every timer", len(cancelled) == 2 and fresh.list_timers() == [])
 
+        # Setting and cancelling are writes too: if the save fails, memory must not
+        # disagree with the disk. A phantom timer fires but never survives a restart; a
+        # cancelled timer that was only dropped from memory comes back and fires.
+        import errno
+        from unittest.mock import patch
+
+        durable = pathlib.Path(tmp) / "durable-timers.json"
+        shelf = TimerManager(state_path=durable, on_expire=on_expire, now=lambda: now[0], max_timers=10)
+        kept = shelf.set_timer(600, "keep me")
+        disk_before = durable.read_bytes()
+
+        with patch.object(shelf, "_save", side_effect=OSError(errno.ENOSPC, "disk full")):
+            try:
+                shelf.set_timer(30, "phantom")
+                set_failed = False
+            except OSError:
+                set_failed = True
+        check("a timer that cannot be persisted reports the failure", set_failed)
+        check("a failed set leaves no in-memory phantom timer",
+              [t["id"] for t in shelf.list_timers()] == [kept["id"]],
+              [t["label"] for t in shelf.list_timers()])
+        check("a failed set leaves the file untouched", durable.read_bytes() == disk_before)
+
+        with patch.object(shelf, "_save", side_effect=OSError(errno.ENOSPC, "disk full")):
+            try:
+                shelf.cancel_timer(timer_id=kept["id"])
+                cancel_failed = False
+            except OSError:
+                cancel_failed = True
+        check("a cancel that cannot be persisted reports the failure", cancel_failed)
+        check("a failed cancel does not drop a timer that is still on disk",
+              [t["id"] for t in shelf.list_timers()] == [kept["id"]],
+              [t["label"] for t in shelf.list_timers()])
+        check("a failed cancel leaves the file untouched", durable.read_bytes() == disk_before)
+
+        recovered = shelf.set_timer(30, "after recovery")
+        check("setting a timer works once storage recovers",
+              [t["label"] for t in shelf.list_timers()] == ["after recovery", "keep me"],
+              [t["label"] for t in shelf.list_timers()])
+        check("and the reader of the file agrees",
+              [t["label"] for t in TimerManager(
+                  state_path=durable, on_expire=on_expire, now=lambda: now[0],
+                  max_timers=10).list_timers()] == ["after recovery", "keep me"])
+        check("a cancel works once storage recovers",
+              [t["id"] for t in shelf.cancel_timer(timer_id=recovered["id"])] == [recovered["id"]]
+              and [t["id"] for t in shelf.list_timers()] == [kept["id"]],
+              [t["label"] for t in shelf.list_timers()])
+
     print(f"\ntimer checks: {checks - len(problems)}/{checks} passed")
     return 1 if problems else 0
 

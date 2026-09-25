@@ -25,7 +25,7 @@ class TimerRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     fired.append(timer["id"])
                     delivered.set()
 
-                def save():
+                def save(*_args):
                     if unavailable:
                         failed.set()
                         raise OSError("simulated storage outage")

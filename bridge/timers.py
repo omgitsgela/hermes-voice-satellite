@@ -107,11 +107,12 @@ class TimerManager:
                 _LOGGER.warning("ignoring malformed timer record: %r", item)
         return sorted(valid, key=lambda item: (item["due_at"], item["id"]))
 
-    def _save(self) -> None:
+    def _save(self, timers: Optional[list[dict]] = None) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         pending = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
+        published = self._timers if timers is None else timers
         try:
-            pending.write_text(json.dumps({"version": 1, "timers": self._timers}, indent=2) + "\n")
+            pending.write_text(json.dumps({"version": 1, "timers": published}, indent=2) + "\n")
             pending.chmod(0o600)
             pending.replace(self.state_path)
         except OSError:
@@ -137,9 +138,12 @@ class TimerManager:
             "due_at": created + seconds,
             "duration_seconds": seconds,
         }
-        self._timers.append(item)
-        self._timers.sort(key=lambda timer: (timer["due_at"], timer["id"]))
-        self._save()
+        candidate = sorted([*self._timers, item], key=lambda timer: (timer["due_at"], timer["id"]))
+        # Publish only what is on disk. A timer that exists in memory but not in the file
+        # fires once and then disappears on the next restart, which reads as a timer that
+        # silently never went off.
+        self._save(candidate)
+        self._timers = candidate
         self._signal_change()
         return dict(item)
 
@@ -161,10 +165,10 @@ class TimerManager:
         if selectors != 1:
             raise ValueError("provide exactly one of id, label, or all")
         if all_timers:
-            cancelled, self._timers = self._timers, []
+            cancelled, remaining = self._timers, []
         elif timer_id:
             cancelled = [timer for timer in self._timers if timer["id"] == timer_id]
-            self._timers = [timer for timer in self._timers if timer["id"] != timer_id]
+            remaining = [timer for timer in self._timers if timer["id"] != timer_id]
         else:
             needle = " ".join(str(label).lower().split())
             matches = [timer for timer in self._timers if needle in timer["label"].lower()]
@@ -172,9 +176,13 @@ class TimerManager:
                 raise ValueError("label matches more than one timer; cancel by id")
             cancelled = matches
             ids = {timer["id"] for timer in matches}
-            self._timers = [timer for timer in self._timers if timer["id"] not in ids]
+            remaining = [timer for timer in self._timers if timer["id"] not in ids]
         if cancelled:
-            self._save()
+            # Same rule as set_timer, and it matters more here: a cancel that only reached
+            # memory comes back to life on the next restart, and a timer the owner asked to
+            # cancel going off anyway is worse than one that fails to be set.
+            self._save(remaining)
+            self._timers = remaining
             self._signal_change()
         return [dict(timer) for timer in cancelled]
 
@@ -185,15 +193,12 @@ class TimerManager:
             return 0
         due.sort(key=lambda item: (item["due_at"], item["id"]))
         due_ids = {timer["id"] for timer in due}
-        previous = self._timers
-        self._timers = [timer for timer in self._timers if timer["id"] not in due_ids]
-        # Remove first, atomically, so a restart cannot announce the same expiry twice.
-        try:
-            self._save()
-        except OSError:
-            # No await has occurred: restore the uncommitted removal for retry.
-            self._timers = previous
-            raise
+        remaining = [timer for timer in self._timers if timer["id"] not in due_ids]
+        # Remove first, atomically, so a restart cannot announce the same expiry twice, and
+        # publish the removal only once it is on disk. Otherwise a failed save leaves the
+        # timer gone from memory and still due in the file.
+        self._save(remaining)
+        self._timers = remaining
         for timer in due:
             lateness = max(0.0, now - timer["due_at"])
             if lateness:
