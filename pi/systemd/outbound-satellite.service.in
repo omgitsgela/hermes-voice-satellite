@@ -18,7 +18,7 @@
 
 [Unit]
 Description=Outbound link from this satellite to the Hermes voice bridge
-After=network-online.target
+After=network-online.target wyoming-satellite.service
 Wants=network-online.target
 
 [Service]

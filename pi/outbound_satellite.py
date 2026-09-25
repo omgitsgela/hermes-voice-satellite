@@ -88,6 +88,10 @@ class LinkConfig:
     local_port: int = 10700
     #: Relay to the local satellite. Off is only useful for a device with no local satellite to relay to.
     relay: bool = True
+    #: How long to wait between attempts to reach the local satellite. On a boot this service and the
+    #: satellite start together and the satellite is the slower of the two, so the first attempt usually
+    #: loses the race.
+    local_retry_seconds: float = 5.0
 
     def registration_payload(self) -> Dict[str, Any]:
         return {
@@ -380,22 +384,26 @@ class BridgeLink:
 
         Returns when either end stops, which the caller treats as the link ending and reconnects from.
         """
-        try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(self.config.local_host, self.config.local_port),
-                timeout=self.config.connect_timeout,
-            )
-        except (OSError, asyncio.TimeoutError) as exc:
-            log.error(
-                "the link is up but there is no local satellite at %s:%s to relay to (%s); the bridge will "
-                "see a device that registers and then says nothing",
-                self.config.local_host, self.config.local_port, exc,
-            )
-            # Hold the link open anyway rather than returning immediately: dropping it would make the device
-            # reconnect in a loop over a fault that is not the bridge's, and a held link is a useful state
-            # (the bridge knows this device is present) even when nothing can be relayed.
-            await self._pump()
-            return
+        reader = writer = None
+        while reader is None:
+            try:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(self.config.local_host, self.config.local_port),
+                    timeout=self.config.connect_timeout,
+                )
+            except (OSError, asyncio.TimeoutError) as exc:
+                # Nothing is listening yet, which is the normal case on a boot: this service and the satellite
+                # start together and the satellite is the slower of the two. Keep the bridge link open and
+                # keep trying. Holding a link that can never relay anything, which is what this used to do
+                # after one failed attempt, leaves the bridge talking to a device that says nothing.
+                log.warning(
+                    "no local satellite at %s:%s yet (%s); retrying in %.0fs",
+                    self.config.local_host, self.config.local_port, exc, self.config.local_retry_seconds,
+                )
+                await self._sleep(self.config.local_retry_seconds)
+                if not self.connected:
+                    # The bridge link died while we waited. Let the caller reconnect both ends together.
+                    return
 
         self._local_writer = writer
         self.on_event = self.relay_event_to_local
@@ -411,7 +419,8 @@ class BridgeLink:
             with contextlib.suppress(BaseException):
                 await upstream
             try:
-                writer.close()
+                if writer is not None:
+                    writer.close()
             except Exception:  # noqa: BLE001 - best effort on a socket that is already ending
                 pass
 
