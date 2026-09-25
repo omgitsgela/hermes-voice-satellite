@@ -66,6 +66,13 @@ The device is inert unless the bridge dials in, and the bridge is not reachable 
 server is loopback, the wake shim's control port is loopback, and the announcement endpoint requires a
 token.
 
+**Two connection shapes exist in this design, and the second one is being built.** Today the **device is the
+server**: it listens on 10700 and the bridge dials it, which is why the device needs a reachable address.
+The decided direction (issue #61) **inverts that**: satellites dial the bridge, the bridge runs a Wyoming
+server with a registry of connected devices, and nothing has to reach the device at all. The event
+vocabulary is identical either way. A local bridge stays the most private option; a bridge on a public
+endpoint terminates TLS in the bridge itself and authenticates each device with its own credential.
+
 **The satellite's own Wyoming listener is a different matter.** `wyoming-satellite` binds
 `tcp://0.0.0.0:10700`, so any device on the LAN can reach it, and Wyoming has no authentication or
 encryption by design: it is meant for a trusted network and must never be exposed to the internet. Treat
@@ -224,6 +231,11 @@ it.
 - [`docs/wake-word-licensing.md`](docs/wake-word-licensing.md) which wake word models may be used commercially, and the terms attached to each source
 
 ## Status and known gaps
+
+- **Connection direction is being inverted (issue #61).** Satellites will dial the bridge, which will run a
+  Wyoming server and keep a device registry, so a device needs no reachable address and no port forwarding.
+  Decided 2026-09-24, reviewed before implementation, and not yet built: today the bridge still dials the
+  device. The migration keeps both shapes available until the new path is proven on one device.
 
 - Verified working as of 2026-09-22/23: wake word, follow-up mode, announcements, LED states.
 - Behaviour worth knowing: **follow-up mode** keeps listening for about **fifteen seconds** after an answer,
