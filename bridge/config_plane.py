@@ -285,7 +285,8 @@ class ConfigPlane:
             raise ConfigValidationError("health must be healthy, degraded, error, or unknown")
         if error is not None and (not isinstance(error, str) or len(error) > 500):
             raise ConfigValidationError("error must be null or a string no longer than 500 characters")
-        record = self._record(device_id)
+        candidate = deepcopy(self._state)
+        record = self._record(device_id, state=candidate)
         record.update({
             "reported_generation": generation,
             "reported": clean,
@@ -293,7 +294,11 @@ class ConfigPlane:
             "last_error": error,
             "reported_at": _utc_now(),
         })
-        self._save()
+        # A report is accepted only once it is on disk, for the same reason as set_desired:
+        # otherwise a failed save leaves the fleet view claiming a health that the disk never
+        # saw, and the next reader of the file disagrees with the screen.
+        self._save(candidate)
+        self._state = candidate
         return self._public(record)
 
     def get_device(self, device_id: str, *, connected: Optional[bool] = None) -> dict[str, Any]:

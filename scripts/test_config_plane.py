@@ -141,6 +141,44 @@ def main() -> int:
         check("an unreported setting is still drift despite the tolerance",
               "playback_volume" in rep["drift"], rep)
 
+        # A report is a write like any other: acceptance means durable persistence.
+        # Publishing the new reported state in memory before the save succeeds makes a
+        # failed save look converged, and the fleet view then disagrees with the disk.
+        import errno
+        from unittest.mock import patch
+
+        dur = ConfigPlane(pathlib.Path(tmp) / "durable.json")
+        dur.ensure_device("kitchen-1")
+        dur.report("kitchen-1", generation=1, actual={"playback_volume": 55},
+                   health="healthy", error=None)
+        before = dur.get_device("kitchen-1")
+        disk_before = (pathlib.Path(tmp) / "durable.json").read_bytes()
+        with patch.object(dur, "_save", side_effect=OSError(errno.ENOSPC, "disk full")):
+            try:
+                dur.report("kitchen-1", generation=1, actual={"playback_volume": 10},
+                           health="error", error="simulated outage")
+                rejected = False
+            except OSError:
+                rejected = True
+        check("a report that cannot be persisted is reported as failed", rejected)
+        after = dur.get_device("kitchen-1")
+        check("a failed report does not publish health in memory",
+              (after["health"], after["reported"]) == (before["health"], before["reported"]),
+              f"before={before['health']}/{before['reported']} after={after['health']}/{after['reported']}")
+        check("a failed report does not publish drift in memory",
+              after["converged"] == before["converged"], after)
+        check("a failed report leaves the file untouched",
+              (pathlib.Path(tmp) / "durable.json").read_bytes() == disk_before)
+        recovered = dur.report("kitchen-1", generation=1, actual={"playback_volume": 55},
+                               health="healthy", error=None)
+        check("the same report succeeds once storage recovers",
+              recovered["health"] == "healthy"
+              and recovered["reported"] == {"playback_volume": 55}
+              and recovered["last_error"] is None, recovered)
+        check("the recovered report is what a fresh reader sees",
+              ConfigPlane(pathlib.Path(tmp) / "durable.json").get_device("kitchen-1")["health"]
+              == "healthy")
+
     if problems:
         print("\nFAILURES")
         for problem in problems:
