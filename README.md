@@ -174,6 +174,26 @@ once a release carries that.
 
 Run `hermes/patches/check-patches.sh` after every update; it is read-only and reports what is missing. See
 `docs/restart-safety-and-portability.md` for the planned hardening.
+
+## Keeping the repository and your installation in step
+
+A change is not finished when it works on your machine. Four things move together, in one pass:
+
+1. **The code**, committed and pushed here. This repository is authoritative for content: the bridge,
+   the device files, the document that covers the job, and one issue per work item.
+2. **The running system**, meaning your device and your host, deployed and restarted as the change
+   needs, then verified as running code rather than as a file on disk. A fix that is committed but
+   never deployed leaves the room on old code; a value changed on the device or in your host's config
+   but never committed is drift that the next rebuild or restore loses silently.
+3. **The documentation**, in the guide that covers the job, with the roadmap's issue index updated
+   when a work item is added. Written generally, as the rest of this repository is.
+4. **Your own private notes**, wherever you keep them: the real addresses, ids, model names and build
+   details belong there, not here.
+
+If one of the four cannot happen in the same session, say so and do it first next time. A running
+system that no longer matches this repository looks healthy right up until something is rebuilt from
+it.
+
 ## Documentation
 
 - [`docs/timers-and-alarms.md`](docs/timers-and-alarms.md) timers and alarms: design spec, not built yet

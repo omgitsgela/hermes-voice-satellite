@@ -19,3 +19,7 @@ Notes:
   putting it on the LAN would hand house control to anything on the network.
 - Never put any of these in a chat message, a note, a commit, or a log line. The bridge itself never
   logs the key it reads.
+- **Never keep a copy of a secret inside the repository tree.** A backup copy of the announcement
+  token belongs outside it, where a `git add -A` cannot reach it, and the copy is a convenience only:
+  it goes stale the moment the token is rotated, and the file the bridge reads stays the source of
+  truth.
