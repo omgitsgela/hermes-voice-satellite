@@ -16,7 +16,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from pi.volume_control import AlsaVolume, VolumeCommandError
+try:  # package import in the repo's tests; sibling import when installed beside the runner
+    from .volume_control import AlsaVolume, VolumeCommandError
+except ImportError:  # pragma: no cover - this is the path the device actually takes
+    from volume_control import AlsaVolume, VolumeCommandError
 
 log = logging.getLogger("pi.device_apply")
 

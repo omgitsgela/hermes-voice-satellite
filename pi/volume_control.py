@@ -51,6 +51,25 @@ CALIBRATION_FILE = Path(
 #: set together, so they cannot disagree in normal use.
 _PERCENT = re.compile(r"\[(\d{1,3})%\]")
 
+#: Where Debian-family systems keep these tools. `alsactl` lives in **/usr/sbin**, which is
+#: in systemd's default service PATH but NOT in a normal login shell's. Resolving against
+#: PATH alone therefore means the volume works under the service and the persistence
+#: silently fails when the same code is run from a shell - and persistence is exactly the
+#: "survives a reboot" requirement, so a quiet failure there is the worst kind.
+_STANDARD_BIN_DIRS = ("/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin")
+
+
+def resolve_binary(binary: str) -> Optional[str]:
+    """PATH first, then the standard sbin/bin locations, or None if it is genuinely absent."""
+    found = shutil.which(binary)
+    if found:
+        return found
+    for directory in _STANDARD_BIN_DIRS:
+        candidate = Path(directory) / binary
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
 
 class VolumeCommandError(RuntimeError):
     """amixer refused or is unavailable. Raised rather than reported as success."""
@@ -139,8 +158,10 @@ class AlsaVolume:
     # -- commands -------------------------------------------------------------
 
     def _run(self, argv: list[str]) -> subprocess.CompletedProcess:
-        if shutil.which(argv[0]) is None:
+        resolved = resolve_binary(argv[0])
+        if resolved is None:
             raise VolumeCommandError(f"{argv[0]} is not installed on this device")
+        argv = [resolved, *argv[1:]]
         try:
             return self.runner(argv, capture_output=True, text=True, timeout=self.timeout, check=False)
         except (OSError, subprocess.TimeoutExpired) as exc:
