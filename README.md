@@ -229,13 +229,18 @@ it.
 - [`docs/endpointing-profiles.md`](docs/endpointing-profiles.md) opt-in pause-tolerant listening for hesitant or slower speech
 - [`docs/agent-and-model-routing.md`](docs/agent-and-model-routing.md) choose either a model route alias or a complete named Hermes Bot/profile for every satellite conversation
 - [`docs/wake-word-licensing.md`](docs/wake-word-licensing.md) which wake word models may be used commercially, and the terms attached to each source
+- [`docs/outbound-link.md`](docs/outbound-link.md) the device dials the bridge: the bootstrap file it carries, installing the service so it dials on boot, and what it does not do yet
 
 ## Status and known gaps
 
-- **Connection direction is being inverted (issue #61).** Satellites will dial the bridge, which will run a
-  Wyoming server and keep a device registry, so a device needs no reachable address and no port forwarding.
-  Decided 2026-09-24, reviewed before implementation, and not yet built: today the bridge still dials the
-  device. The migration keeps both shapes available until the new path is proven on one device.
+- **Connection direction is being inverted (issue #61).** Satellites dial the bridge, which runs a Wyoming
+  server and keeps a device registry, so a device needs no reachable address and no port forwarding anywhere.
+  Decided 2026-09-24, reviewed before implementation, and **partly built**: a device can dial in, register and
+  be tracked, the bridge stays up and keeps listening with no device present instead of exiting for a restart,
+  and the device-side service that dials on every boot is in `pi/systemd/` with `scripts/deploy-to-card.sh`
+  installing it. What is **not** built yet: leasing a registered device, so a device that dials in is tracked
+  but carries no audio, and the older dial-in path is still the one that carries a conversation. The migration
+  keeps both shapes available until the new path is proven on one device.
 
 - Verified working as of 2026-09-22/23: wake word, follow-up mode, announcements, LED states.
 - Behaviour worth knowing: **follow-up mode** keeps listening for about **fifteen seconds** after an answer,

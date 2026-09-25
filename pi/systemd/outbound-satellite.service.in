@@ -1,0 +1,34 @@
+# The device side of the inverted shape: the satellite dials the bridge.
+#
+# This is a template. Substitute before installing on a device (scripts/deploy-to-card.sh does this when
+# it writes a card, and the same substitutions apply to a live device):
+#
+#   __ENV_FILE__  the device's bootstrap file, e.g. /home/<user>/bridge-link.env
+#   __PYTHON__    an interpreter that can import `wyoming` (on a Pi built with pi/script, that is the
+#                 satellite's own virtualenv, NOT the system python3)
+#   __RUNNER__    the installed path of pi/outbound_satellite.py
+#
+# Install by writing it to /etc/systemd/system/outbound-satellite.service and enabling it, which creates
+# the multi-user.target.wants symlink. Nothing else has to reach the device: the link is outbound, so a
+# device on any network that can reach the bridge gets its voice link without a port forward anywhere.
+#
+# It deliberately does not order itself against the satellite service. That service still serves the
+# dial-in path while the bridge supports both shapes, and this runner carries no audio yet, so the two
+# coexist and neither is a dependency of the other. They stop coexisting when the migration finishes.
+
+[Unit]
+Description=Outbound link from this satellite to the Hermes voice bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=__ENV_FILE__
+ExecStart=__PYTHON__ __RUNNER__
+# The link reconnects by itself, with capped jitter and a backoff that only resets after the connection
+# has been healthy for a while, so this outer restart covers real death only.
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
