@@ -8,11 +8,12 @@ import json
 import pathlib
 import sys
 import tempfile
+import wave
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.announce import Announcer  # noqa: E402
-from bridge.config import ALARM_CHIME, TIMER_CHIME  # noqa: E402
+from bridge.announce import Announcer, _concat_wavs  # noqa: E402
+from bridge.config import ALARM_CHIME, ANNOUNCE_SOUNDS, SND_FORMAT, TIMER_CHIME  # noqa: E402
 
 
 class Sat:
@@ -95,6 +96,36 @@ async def main() -> int:
             check("timer and alarm sounds are audibly distinct assets",
                   hashlib.sha256(TIMER_CHIME.read_bytes()).digest() !=
                   hashlib.sha256(ALARM_CHIME.read_bytes()).digest())
+
+        # Existence is not enough. _concat_wavs RAISES on a format mismatch, so a tone in the wrong
+        # format would make every timer and alarm announcement fail at run time while every unit test
+        # still passed. Exercise the real helper against the real files.
+        # NOTE: import these at module scope, never inside this function. A function-local `import
+        # tempfile` makes tempfile local for the WHOLE function and shadows the module-level import the
+        # test body already depends on, so the test dies with UnboundLocalError before reaching here.
+        target = (SND_FORMAT[0], SND_FORMAT[1], SND_FORMAT[2])
+        with tempfile.TemporaryDirectory() as tmp:
+            speech = pathlib.Path(tmp) / "speech.wav"
+            with wave.open(str(speech), "wb") as handle:
+                handle.setnchannels(target[2])
+                handle.setsampwidth(target[1])
+                handle.setframerate(target[0])
+                handle.writeframes(b"\x00" * target[0] * target[1] * target[2])
+
+            for name, path in ANNOUNCE_SOUNDS.items():
+                if path is None:
+                    continue
+                with wave.open(str(path)) as handle:
+                    actual = (handle.getframerate(), handle.getsampwidth(), handle.getnchannels())
+                check(f"{name} tone matches the satellite playback format",
+                      actual == target, f"{path.name} is {actual}, playback expects {target}")
+                out = pathlib.Path(tmp) / f"out-{name}.wav"
+                try:
+                    _concat_wavs([path, speech], out)
+                except Exception as exc:  # noqa: BLE001 - a mismatch here is the defect under test
+                    check(f"{name} tone concatenates with speech", False, f"{type(exc).__name__}: {exc}")
+                else:
+                    check(f"{name} tone concatenates with speech", out.stat().st_size > 0, out)
 
     print(f"\ntimer API checks: {checks - len(problems)}/{checks} passed")
     return 1 if problems else 0
