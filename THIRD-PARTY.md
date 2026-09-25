@@ -1,0 +1,74 @@
+# Third-party components and their licences
+
+This is a good-faith inventory, not legal advice, and it is dated: every licence below was checked on
+**2026-09-24** and licences do change. Verify at the source before relying on an entry.
+
+The project's own code is licensed under the PolyForm Noncommercial License 1.0.0, in [`LICENSE`](LICENSE).
+Nothing here is re-licensed by that file.
+
+## A. Redistributed in this repository
+
+These are the components whose files actually ship in this repository. Each keeps its own licence, and a
+redistributor must preserve those notices.
+
+| Path | Component | Licence | Verified how |
+|---|---|---|---|
+| `pi/vendor/seeed-voicecard-0.3/` (53 files) | `respeaker/seeed-voicecard`, the audio driver for the Pi HATs | **GPL-3.0** | the vendored `LICENSE` file is the GNU GPL v3 text; the GitHub API reports `GPL-3.0` |
+| `pi/vendor/native-satellite-13bb024/` (46 files) | `rhasspy/wyoming-satellite` at commit `13bb024`, our vendored copy with the local patch already applied | **MIT** | the GitHub API reports `MIT`; the upstream `LICENSE.md` is the MIT text, copyright 2023 Michael Hansen. The licence text now travels with the vendored copy at `pi/vendor/native-satellite-13bb024/LICENSE.md` |
+| `reference/` | upstream copies of the satellite's own files, kept for protocol truth | **MIT** | same project and licence as above |
+
+**Why this matters for the licence split.** The GPL-3.0 driver is somebody else's copyleft code: it stays
+GPL-3.0, it cannot be made non-commercial, and this project's licence does not reach it. It is kept as
+separate vendored files rather than merged into our own source. If you redistribute this repository, keep
+the GPL text beside those files and keep the MIT notice beside the vendored satellite.
+
+**If you are running the driver or the vendored satellite on a device**, do not strip those notices when
+you copy files on to the device. They are small files; there is no reason to remove them.
+
+## B. Installed, not redistributed
+
+`requirements.txt` pins the Python environment. The installer fetches these from PyPI, so their licences
+are the terms you accept by installing them, not terms this repository imposes.
+
+| Component | Licence | Verified how |
+|---|---|---|
+| `wyoming`, the protocol library | MIT | GitHub API on `rhasspy/wyoming` and `OHF-Voice/wyoming` |
+| `wyoming-openwakeword`, the wake service | Apache-2.0 | GitHub API on `rhasspy/wyoming-openwakeword` |
+| `openwakeword`, the wake model library | Apache-2.0 | GitHub API on `dscripka/openWakeWord`, and its `LICENSE` file |
+| `piper` and `piper-tts`, speech synthesis | MIT | GitHub API on `rhasspy/piper` |
+| `faster-whisper`, speech recognition | MIT | GitHub API on `SYSTRAN/faster-whisper` |
+| Whisper models | MIT | GitHub API on `openai/whisper` |
+| `hermes-agent` | MIT | per the project's own package metadata |
+
+The remaining packages in `requirements.txt` are transitive or auxiliary (numpy, aiohttp, onnxruntime,
+ctranslate2, tokenizers, protobuf, webrtcvad, pysilero-vad and so on). Their licences are recorded in each
+package's own metadata after install; every one of them is permissive in the versions pinned here, but
+that was not individually re-verified for this file. To inspect what is actually installed:
+
+```bash
+python -c "import importlib.metadata as m; \
+  print('\n'.join(f'{d.metadata[\"Name\"]}: {d.metadata.get(\"License\") or \"see LICENSE\"}' for d in m.distributions()))"
+```
+
+## C. Models and voices fetched at install
+
+Neither the wake word model nor the voice is redistributed in this repository. Both carry terms of their
+own, and **both defaults are non-commercial**:
+
+- **The recommended wake word model** comes from the community library of the hosted openWakeWord
+  trainer, whose terms license such models for personal and non-commercial use only. Full detail, with the
+  terms quoted: [`docs/wake-word-licensing.md`](docs/wake-word-licensing.md).
+- **The recommended voice**, `en_US-hfc_male-medium`, is published in the Piper voices collection, and its
+  model card records its training dataset as **CC BY-NC-SA 4.0**, a non-commercial licence. Treat the voice
+  as non-commercial. Piper voices differ from each other here, so check the model card of whichever voice
+  you choose: <https://huggingface.co/rhasspy/piper-voices>.
+
+So the default configuration of this project as a whole is a non-commercial one. A commercial deployment
+needs a wake model and a voice whose own terms allow it, and
+[`docs/wake-word-licensing.md`](docs/wake-word-licensing.md) sets out the routes for the wake model.
+
+## D. Keeping this file honest
+
+When a vendored component is added, removed or updated, update the table above in the same change: the
+path, the licence and what was checked. A stale inventory is worse than none, because it looks like a
+review.

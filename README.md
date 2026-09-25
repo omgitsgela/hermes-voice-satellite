@@ -174,9 +174,11 @@ Two separate things, and only one of them has restrictions:
   such restriction. Before deploying commercially, read
   [`docs/wake-word-licensing.md`](docs/wake-word-licensing.md): it sets out which source carries which
   terms, and the one case that needs care, which is compiling a model into a published firmware image.
-- **This repository's own code.** There is no licence file here yet, so no licence is granted for the
-  code itself. That is a maintainer decision that has not been made rather than an omission from this
-  section.
+- **This repository's own code.** Licensed under the **PolyForm Noncommercial License 1.0.0**: see
+  [`LICENSE`](LICENSE). Personal, hobby, research and non-profit use, which also means this project as
+  shipped is a non-commercial one. [`THIRD-PARTY.md`](THIRD-PARTY.md) sets out what is redistributed here
+  under other licences (the GPL-3.0 audio driver, the MIT vendored satellite) and what is fetched at
+  install time instead.
 
 ## Surviving Hermes updates
 
