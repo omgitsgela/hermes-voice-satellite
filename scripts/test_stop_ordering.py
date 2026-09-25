@@ -83,7 +83,8 @@ async def main():
     bridge.capture_utterance = capture_utterance
     bridge._end_capture = end_capture
     bridge.say = say
-    bridge._next = next_event
+    # The watcher owns the direct satellite read, not the shared replay helper (#82).
+    bridge.sat.next_event = next_event
 
     error = None
     task = asyncio.create_task(bridge._watch_for_interruption(state))

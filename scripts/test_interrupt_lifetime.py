@@ -45,11 +45,11 @@ class HangingLoop:
 
     @property
     def sat(self):
-        class _S:
-            eof = False
-        return _S()
+        # The interruption watcher reads the satellite directly, so it cannot consume a
+        # Played event it just handed back to the turn's replay buffer (issue #82).
+        return self
 
-    async def _next(self, timeout: float):
+    async def next_event(self, timeout: float):
         self.reads += 1
         if self.reads == 1:
             # The mid-task wake word that started it: the device was still speaking.
