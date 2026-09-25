@@ -106,6 +106,33 @@ a line at startup saying so, because a placeholder that nobody mentions becomes 
 The placeholders are safe by construction: they are above zero, so the device stays audible
 even before anyone has listened.
 
+### The calibration path must be pinned, and why
+
+**The satellite runs its services as `root`.** None of the units sets `User=` — not this one,
+not `wyoming-satellite`, not `wake-shim`, not `2mic_leds`. So `Path.home()` is `/root` for the
+service, while a person running the calibration is logged in as `wyoming1` and gets
+`/home/wyoming1`.
+
+Unpinned, those two paths differ, and the failure is silent and total: the measurement is
+written where the running service never looks, so the floor stays at its placeholder and the
+calibration appears to have done nothing at all.
+
+Pin it explicitly in the device's bootstrap file, on **both** sides:
+
+```
+VOICE_VOLUME_CALIBRATION=/home/wyoming1/.local/state/hermes-voice-satellite/volume.json
+VOICE_DEVICE_CONFIG_STATE=/home/wyoming1/.local/state/hermes-voice-satellite/config.json
+```
+
+`VOICE_VOLUME_CALIBRATION` is the variable both the calibration script and
+`pi/volume_control.py` honour, so the writer and the reader resolve the same path regardless
+of who runs them. `scripts/test_volume_calibration.py` pins that agreement, including
+evaluating the reader in a subprocess so its module-level constant is built with the variable
+actually set. Without that check a measurement could sit on disk being correctly ignored.
+
+Create the directory as `wyoming1` (1000:1000, mode `0700`) so the person can write the
+measurement and `root` can read it.
+
 ### After calibrating
 
 The calibrated values are module constants, because `clamp()` is on the hot path for every
