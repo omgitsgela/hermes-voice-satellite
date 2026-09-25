@@ -103,7 +103,7 @@ run on an embedded device with no dependency chain. Copy it across on its own.
 |---|---|
 | `control` | **`PCM`** |
 | `floor_percent` | **50** |
-| `alarm_min_percent` | **70** |
+| `alarm_min_percent` | **50** |
 
 **Which control.** The device's own microphone identified it objectively: moving `PCM` from
 100% to 5% changed the recorded level by **89%**, so the speaker plainly follows it. `Line`
@@ -122,15 +122,46 @@ the room cannot. It is excellent for identifying the control and useless for the
 #10 asks for the floor "by ear" for precisely this reason, and the by-ear figure is the one
 that is stored.
 
-**The consequence, stated plainly.** With a floor of 50%, the spoken 1-10 scale spans 50-100%,
-so levels 1-5 all sit in the quiet half. That is the honest cost of a floor that is actually
-audible on this hardware, and a lower floor would let the device be set to a level nobody can
-hear, which is the failure this feature exists to prevent. If the quiet half feels too
-compressed in practice the fix is a lower `Line` gain stage, not a lower floor.
+### Two scales, both spanning what the hardware can do
 
-**Alarm minimum 70%.** Angela decided alarms may override upward so an alarm is always
-audible. With the floor at 50% (barely audible), an alarm at the floor would be useless, so
-the minimum sits at 70%, which the same test showed as clearly audible.
+There are two numbers for volume, and confusing them is the whole difficulty.
+
+**Raw** is what the ALSA control takes. On this device the floor is raw 50, so raw runs 50-100
+and nothing below 50 is audible.
+
+**User** is what a person speaks and what the configuration plane carries: 1-100, where 1 is
+the quietest the hardware can go and 100 is full volume.
+
+Both spoken scales are positions on the user range, so they agree by construction:
+
+| User | Raw | Say | Means |
+|---|---|---|---|
+| 1% / level 1 | 50 | the quietest | the measured floor |
+| 50% / level 5 | 75 | halfway | halfway up what the hardware can do |
+| 100% / level 10 | 100 | full | full volume |
+
+The 1-10 scale is simply the user range sampled ten times, not a second mapping that has to be
+kept in step with the first.
+
+**This was a correction.** The first version mapped the percentage scale onto raw directly, so
+with a floor of 50 every value from 1% to 50% meant the same thing and was reported back as a
+clamp - half the percentage scale was dead. Angela's point: both scales should exist *within*
+the measured range, so "volume 30%" is 30% of what this hardware can do.
+
+The configuration plane carries the user scale too, deliberately. A fleet API that reported raw
+ALSA numbers would be meaningless across devices with different measured floors.
+
+**One consequence, handled.** The user->raw->user round trip passes through an integer ALSA
+percentage, so it shifts by one for 49 of the 100 values. `playback_volume` therefore carries a
+`round_trip_tolerance` of 1 in the configuration schema, or those settings would report
+permanent drift and never converge - which teaches whoever reads the fleet view to ignore drift
+altogether. The setting is converged, at the resolution the hardware can express.
+
+**Alarm minimum 50%, on the user scale.** Angela decided alarms may override upward so an alarm
+is always audible. User 50% maps to raw 75 here, comfortably above the raw 70 that the sweep
+showed as clearly audible, and well above the raw 50 floor where the device can only just be
+heard. Stored on the user scale so the same number means the same thing on hardware with a
+different floor.
 
 ### Where the measurement is stored
 

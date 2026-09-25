@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Volume control checks (issue #10).
+"""Volume parsing, the raw clamp, and the alarm override (issue #10).
 
-The rule under test, which is the whole point: **no spoken command may silence the
-device.** A voice device at zero is unreachable, because you cannot talk it back up
-if you cannot hear it confirm anything.
+Companion to `test_volume_virtual_range.py`, which owns the user/raw mapping and the
+"both scales agree" property. This file covers what that one does not:
+
+  * which utterances are volume commands at all, and which must fall through to the model
+  * the raw `clamp()`, the last line of defence for anything bypassing the user scale
+  * the 1-10 scale's raw values and its rejection of nonsense
+  * the alarm override's upward-only behaviour
+  * that every reply is one short spoken line
 
 Run with the bridge interpreter:
 
@@ -20,12 +25,17 @@ from bridge.volume import (  # noqa: E402
     ALARM_MIN_PERCENT,
     FLOOR_PERCENT,
     MAX_PERCENT,
+    USER_MAX,
+    USER_MIN,
     VolumeError,
+    alarm_percent,
     clamp,
     parse_volume_command,
+    raw_to_user_percent,
     resolve,
-    step,
     ten_scale_to_percent,
+    user_for_ten_level,
+    user_percent_to_raw,
 )
 
 problems: list[str] = []
@@ -39,197 +49,197 @@ def check(label: str, condition: bool, detail="") -> None:
         problems.append(f"{label}: {detail}")
 
 
-# ---------------------------------------------------------------- the floor
+# ---------------------------------------------------------------- raw sanity
 
-check("the floor is above zero, so no level can mean silence", FLOOR_PERCENT > 0, FLOOR_PERCENT)
-check("the floor is a whole percentage", isinstance(FLOOR_PERCENT, int), FLOOR_PERCENT)
-check("the floor leaves a usable range above it", FLOOR_PERCENT < MAX_PERCENT, FLOOR_PERCENT)
-check("max is 100 percent", MAX_PERCENT == 100, MAX_PERCENT)
-check("the alarm override sits at or above the floor",
-      ALARM_MIN_PERCENT >= FLOOR_PERCENT, (ALARM_MIN_PERCENT, FLOOR_PERCENT))
-check("the alarm override is at or below full volume",
-      ALARM_MIN_PERCENT <= MAX_PERCENT, ALARM_MIN_PERCENT)
+check("the raw floor is above zero", FLOOR_PERCENT > 0, FLOOR_PERCENT)
+check("the raw floor leaves usable room above it", FLOOR_PERCENT < MAX_PERCENT, FLOOR_PERCENT)
+check("full volume is 100", MAX_PERCENT == 100, MAX_PERCENT)
 
-# clamp is the single choke point; every path must go through it.
+
+# ---------------------------------------------------------------- the raw clamp
+
+# The user scale maps USER_MIN..USER_MAX onto floor..100, so nothing a person says can
+# produce a raw value below the floor. This clamp is for everything that does NOT go
+# through the user scale: a direct configuration-plane write, a future caller, a bug.
 check("clamp refuses zero", clamp(0) == FLOOR_PERCENT, clamp(0))
-check("clamp refuses negative levels", clamp(-40) == FLOOR_PERCENT, clamp(-40))
-check("clamp refuses a level below the floor", clamp(FLOOR_PERCENT - 1) == FLOOR_PERCENT)
-check("clamp passes a level above the floor through", clamp(FLOOR_PERCENT + 5) == FLOOR_PERCENT + 5)
+check("clamp refuses a negative", clamp(-40) == FLOOR_PERCENT, clamp(-40))
+check("clamp refuses just below the floor", clamp(FLOOR_PERCENT - 1) == FLOOR_PERCENT)
+check("clamp passes a level above the floor", clamp(FLOOR_PERCENT + 5) == FLOOR_PERCENT + 5)
 check("clamp caps above maximum", clamp(999) == MAX_PERCENT, clamp(999))
-check("clamp is idempotent", clamp(clamp(0)) == clamp(0), clamp(clamp(0)))
+check("clamp is idempotent on a refusal", clamp(clamp(0)) == clamp(0))
+check("clamp refuses a non-number rather than coercing it",
+      clamp("loud") == FLOOR_PERCENT and clamp(None) == FLOOR_PERCENT,
+      (clamp("loud"), clamp(None)))
+check("clamp refuses a boolean rather than treating True as 1",
+      clamp(True) == FLOOR_PERCENT, clamp(True))
 
-# ---------------------------------------------------------------- the 1-10 scale
 
-# The scale must span the USABLE range: 1 is the floor, not 10 percent. A "1" that
-# meant near-silence would defeat the purpose of the scale.
-check("level 1 on the ten scale is the floor, not near-silence",
-      ten_scale_to_percent(1) == FLOOR_PERCENT, ten_scale_to_percent(1))
-check("level 10 on the ten scale is full volume",
-      ten_scale_to_percent(10) == MAX_PERCENT, ten_scale_to_percent(10))
-check("the ten scale is monotonic",
-      all(ten_scale_to_percent(n) < ten_scale_to_percent(n + 1) for n in range(1, 10)))
-check("the ten scale never dips below the floor",
+# ---------------------------------------------------------------- the 1-10 scale, in raw
+
+check("level 1 is the raw floor", ten_scale_to_percent(1) == FLOOR_PERCENT,
+      ten_scale_to_percent(1))
+check("level 10 is full raw volume", ten_scale_to_percent(10) == MAX_PERCENT,
+      ten_scale_to_percent(10))
+check("the scale is strictly increasing",
+      all(ten_scale_to_percent(n) < ten_scale_to_percent(n + 1) for n in range(1, 10)),
+      [ten_scale_to_percent(n) for n in range(1, 11)])
+check("no level maps below the raw floor",
       all(ten_scale_to_percent(n) >= FLOOR_PERCENT for n in range(1, 11)))
-check("the ten scale never exceeds the maximum",
+check("no level maps above raw maximum",
       all(ten_scale_to_percent(n) <= MAX_PERCENT for n in range(1, 11)))
-for bad in (0, 11, -1):
+
+for bad in (0, 11, -1, 1.5, True, "5", None):
     try:
         ten_scale_to_percent(bad)
-        check(f"the ten scale rejects {bad}", False, "accepted")
+        check(f"the ten scale rejects {bad!r}", False, "accepted")
     except VolumeError:
-        check(f"the ten scale rejects {bad}", True)
+        check(f"the ten scale rejects {bad!r}", True)
 
-# ---------------------------------------------------------------- stepping
 
-check("stepping up from the floor moves up", step(FLOOR_PERCENT, +1) > FLOOR_PERCENT)
-check("stepping down from the floor stays at the floor, never zero",
-      step(FLOOR_PERCENT, -1) == FLOOR_PERCENT, step(FLOOR_PERCENT, -1))
-check("stepping down from just above the floor lands on the floor, not below it",
-      step(FLOOR_PERCENT + 1, -1) >= FLOOR_PERCENT, step(FLOOR_PERCENT + 1, -1))
-check("stepping up from maximum stays at maximum", step(MAX_PERCENT, +1) == MAX_PERCENT)
-check("stepping by two works", step(FLOOR_PERCENT, +2) > step(FLOOR_PERCENT, +1))
-check("a large downward step still cannot reach silence", step(MAX_PERCENT, -999) == FLOOR_PERCENT)
+# ---------------------------------------------------------------- parsed forms
 
-# ---------------------------------------------------------------- parsing
+# Absolute, ten-scale. The intent carries the USER level: level 7 is user 67, which maps
+# to raw 83 on this device. The two are different numbers and mixing them up is the bug
+# this whole file exists to catch.
+for text, user_level in (("set volume to 7", user_for_ten_level(7)),
+                         ("set the volume to 3", user_for_ten_level(3)),
+                         ("volume to 10", USER_MAX)):
+    intent = parse_volume_command(text)
+    check(f"{text!r} parses as an absolute ten-scale set at user {user_level}",
+          intent is not None and intent.kind == "set" and intent.percent == user_level,
+          intent)
 
-absolute_cases = [
-    ("set volume to 7", ten_scale_to_percent(7)),
-    ("set the volume to 3", ten_scale_to_percent(3)),
-    ("volume to 10", ten_scale_to_percent(10)),
-    ("set volume to 40%", 40),
-    ("set volume to 40 percent", 40),
-    ("volume 100 percent", 100),
-    ("set volume to 65", 65),          # a bare number above the ten scale reads as a percentage
-]
-for text, expected in absolute_cases:
-    result = parse_volume_command(text)
-    check(f"{text!r} parses as an absolute set",
-          result is not None and result.kind == "set" and result.percent == expected,
-          f"got {result!r}, expected percent {expected}")
+# Absolute, percentage: a position on the user range, taken as asked.
+for text, user_level in (("set volume to 40%", 40), ("set volume to 40 percent", 40),
+                         ("volume 100 percent", 100), ("set volume to 65", 65),
+                         ("set volume to 30%", 30)):
+    intent = parse_volume_command(text)
+    check(f"{text!r} parses as user {user_level}%",
+          intent is not None and intent.kind == "set" and intent.percent == user_level,
+          intent)
 
-for text in ("what's the volume", "whats the volume", "what is the volume", "volume status"):
-    result = parse_volume_command(text)
-    check(f"{text!r} is a query", result is not None and result.kind == "query", result)
-
+# Relative
 for text, direction in (("volume up", +1), ("volume down", -1),
                         ("turn the volume up", +1), ("turn the volume down", -1),
                         ("louder", +1), ("quieter", -1)):
-    result = parse_volume_command(text)
+    intent = parse_volume_command(text)
     check(f"{text!r} is a relative step",
-          result is not None and result.kind == "step" and result.direction == direction, result)
+          intent is not None and intent.kind == "step" and intent.direction == direction,
+          intent)
 
-result = parse_volume_command("volume up by two")
-check("'by two' becomes a two-step move",
-      result is not None and result.kind == "step" and result.steps == 2, result)
-result = parse_volume_command("volume down by 3")
-check("'by 3' becomes a three-step move",
-      result is not None and result.kind == "step" and result.steps == 3, result)
+# Queries
+for text in ("what's the volume", "whats the volume", "what is the volume", "volume status"):
+    intent = parse_volume_command(text)
+    check(f"{text!r} is a query", intent is not None and intent.kind == "query", intent)
 
-# Not volume commands: must not be swallowed away from the model.
-#
-# "turn it up" is here on purpose. It probably does mean the device volume, but "it"
-# could be music playing on the same device and the bridge cannot tell the difference.
-# A mis-heard bridge-local command is worse than the assistant taking an extra second,
-# so the ambiguous form deliberately falls through.
+# Step counts
+intent = parse_volume_command("volume up by two")
+check("'by two' becomes two steps",
+      intent is not None and intent.kind == "step" and intent.steps == 2, intent)
+intent = parse_volume_command("volume down by 3")
+check("'by 3' becomes three steps",
+      intent is not None and intent.kind == "step" and intent.steps == 3, intent)
+
+
+# ---------------------------------------------------------------- what is NOT a volume command
+
+# Conservative on purpose: a bridge-local command that changes the room on a mis-heard
+# phrase is worse than the assistant taking an extra second. "turn it up" is here because
+# "it" could be music playing on the same device and the bridge cannot tell.
 for text in ("turn on follow up mode", "what is the weather", "play some music",
-             "set a timer for 5 minutes", "turn it up", "turn it down", "", "   "):
+             "set a timer for 5 minutes", "turn it up", "turn it down", "", "   ",
+             "stop", "what time is it", "the volume of the box", "spin up a server"):
     check(f"{text!r} is not treated as a volume command",
           parse_volume_command(text) is None, parse_volume_command(text))
 
-# ------------------------------------------------------- the zero command (#10's headline)
+check("a non-string is not a volume command", parse_volume_command(None) is None)
 
-result = parse_volume_command("set volume to 0")
-check("'set volume to 0' is recognised as a command, not ignored", result is not None, result)
-check("'set volume to 0' is clamped to the floor, not refused into silence",
-      result is not None and result.kind == "set" and result.percent == FLOOR_PERCENT, result)
-check("'set volume to 0' is flagged as clamped so the reply can say so",
-      result is not None and result.clamped is True, result)
 
-result = parse_volume_command("set volume to 0%")
-check("'set volume to 0%' is also clamped, not ignored",
-      result is not None and result.percent == FLOOR_PERCENT and result.clamped, result)
+# ---------------------------------------------------------------- zero, refused
 
-below = FLOOR_PERCENT - 1
-if below >= 1:
-    result = parse_volume_command(f"set volume to {below}%")
-    check("a percentage below the floor is clamped too",
-          result is not None and result.percent == FLOOR_PERCENT and result.clamped, result)
+intent = parse_volume_command("set volume to 0")
+check("'set volume to 0' is recognised, not ignored", intent is not None, intent)
+check("'set volume to 0' lands on the quietest USER level",
+      intent is not None and intent.percent == USER_MIN, intent)
+check("'set volume to 0' is flagged so the reply can explain",
+      intent is not None and intent.clamped is True, intent)
 
-# A request that is already valid must NOT be reported as clamped, or the spoken
-# reply would wrongly claim it changed the number.
-result = parse_volume_command("set volume to 60%")
-check("a level above the floor is not flagged as clamped",
-      result is not None and result.clamped is False, result)
+intent = parse_volume_command("set volume to 0%")
+check("'set volume to 0%' is refused the same way",
+      intent is not None and intent.percent == USER_MIN and intent.clamped, intent)
 
-# ---------------------------------------------------------------- resolve + speak
+# The quietest level itself is a normal request, NOT a clamp: it is a position on the
+# scale. Getting this wrong would make the reply claim it changed a number it did not.
+intent = parse_volume_command("set volume to 1%")
+check("1% is an ordinary request, not a clamp",
+      intent is not None and intent.percent == USER_MIN and intent.clamped is False, intent)
 
-# resolve() turns an intent into (new_percent, spoken_line) given the current level.
+# Above the top is a silent cap: asking for more than full plainly means "full".
+intent = parse_volume_command("set volume to 150%")
+check("above 100% is capped, not refused",
+      intent is not None and intent.percent == USER_MAX, intent)
 
-level, speech = resolve(parse_volume_command("set volume to 7"), MAX_PERCENT)
-check("an absolute set lands on the requested level",
-      level == ten_scale_to_percent(7), level)
-check("the reply speaks the level in the user's own terms, as a ten-scale value",
-      "7" in speech, speech)
 
-level, speech = resolve(parse_volume_command("set volume to 40%"), MAX_PERCENT)
-check("an absolute percentage lands on that percentage", level == 40, level)
-check("a percentage reply mentions the percentage", "40" in speech, speech)
+# ---------------------------------------------------------------- stepping behaves
 
-level, speech = resolve(parse_volume_command("volume up"), 50)
-check("a relative step moves up from the current level", level > 50, level)
-check("a step reply states the resulting level",
-      str(level) in speech or "out of" in speech, speech)
+check("stepping up from the quietest moves up",
+      user_for_ten_level(2) > USER_MIN, user_for_ten_level(2))
+check("stepping down from the quietest stays at the quietest, never past it",
+      resolve(parse_volume_command("volume down"), USER_MIN)[0] == USER_MIN)
+check("stepping up from full stays at full",
+      resolve(parse_volume_command("volume up"), USER_MAX)[0] == USER_MAX)
 
-level, speech = resolve(parse_volume_command("volume down"), FLOOR_PERCENT)
-check("a downward step at the floor keeps the floor and does not go silent",
-      level == FLOOR_PERCENT, level)
-check("the reply says it is already at the quietest level",
-      "quiet" in speech.lower() or "lowest" in speech.lower(), speech)
 
-# The clamp must be spoken, not silent: the user asked for 0 and must learn why not.
-level, speech = resolve(parse_volume_command("set volume to 0"), 60)
-check("clamping to the floor still reports the resulting level", level == FLOOR_PERCENT, level)
-check("the clamped reply explains that zero is not allowed",
-      "silent" in speech.lower() or "zero" in speech.lower(), speech)
+# ---------------------------------------------------------------- the alarm override
 
-level, speech = resolve(parse_volume_command("what's the volume"), 42)
-check("a query changes nothing", level == 42, level)
-check("a query reply states the current level", "42" in speech, speech)
-
-# Every reply is one short line, because it is spoken.
-for text, current in (("set volume to 7", 50), ("set volume to 0", 50), ("what's the volume", 30),
-                      ("volume up", FLOOR_PERCENT), ("volume down", FLOOR_PERCENT)):
-    _, speech = resolve(parse_volume_command(text), current)
-    check(f"the reply to {text!r} is one short line",
-          "\n" not in speech and len(speech) <= 60, repr(speech))
-
-# ---------------------------------------------------------------- no path to silence
-
-# The property that matters most: whatever the current level and whatever the request,
-# resolve() can never return a level that is zero or below the floor.
-requests = ["set volume to 0", "set volume to 0%", "volume down", "volume down by 9",
-            "quieter", "volume down by two", "set volume to 1%"]
-for text in requests:
-    for current in (0, 1, FLOOR_PERCENT, FLOOR_PERCENT + 1, 50, MAX_PERCENT, 1000, -10):
-        intent = parse_volume_command(text)
-        if intent is None:
-            continue
-        result_level, _ = resolve(intent, current)
-        check(f"{text!r} from current={current} cannot reach silence",
-              result_level >= FLOOR_PERCENT, f"got {result_level}")
-
-# The alarm override is upward-only: it raises a too-quiet level and never lowers a loud one.
-from bridge.volume import alarm_percent  # noqa: E402
-
-check("an alarm raises a level that is too quiet to hear",
-      alarm_percent(FLOOR_PERCENT) == max(ALARM_MIN_PERCENT, FLOOR_PERCENT),
-      alarm_percent(FLOOR_PERCENT))
+check("an alarm minimum sits inside the user range",
+      USER_MIN <= ALARM_MIN_PERCENT <= USER_MAX, ALARM_MIN_PERCENT)
+check("an alarm raises a level too quiet to hear",
+      alarm_percent(USER_MIN) == max(ALARM_MIN_PERCENT, USER_MIN), alarm_percent(USER_MIN))
 check("an alarm never lowers a level the user set louder",
-      alarm_percent(MAX_PERCENT) == MAX_PERCENT, alarm_percent(MAX_PERCENT))
-check("an alarm at the user's normal level is left alone",
-      alarm_percent(90) == 90, alarm_percent(90))
-check("an alarm can never be silent",
-      alarm_percent(0) >= max(ALARM_MIN_PERCENT, FLOOR_PERCENT), alarm_percent(0))
+      alarm_percent(USER_MAX) == USER_MAX, alarm_percent(USER_MAX))
+check("an alarm leaves a loud room alone",
+      alarm_percent(USER_MAX - 1) == USER_MAX - 1, alarm_percent(USER_MAX - 1))
+check("an alarm cannot be silent",
+      alarm_percent(0) >= ALARM_MIN_PERCENT, alarm_percent(0))
+check("an alarm maps to more than the raw floor, so it is actually louder",
+      user_percent_to_raw(alarm_percent(USER_MIN)) > FLOOR_PERCENT,
+      user_percent_to_raw(alarm_percent(USER_MIN)))
+
+
+# ---------------------------------------------------------------- reply shape
+
+# Every reply is spoken aloud, so it is one short line. It reports the resulting level in
+# the terms the person used: a ten-scale request is answered on the ten scale, a
+# percentage in percent. So this checks the SPOKEN form, not the internal user number -
+# asserting the reply contains the user level would wrongly demand "Volume 67 out of 10".
+spoken_cases = [
+    ("set volume to 7", 50, "7"),          # ten-scale request, ten-scale answer
+    ("set volume to 30%", 50, "30"),       # percentage request, percentage answer
+    ("what's the volume", 30, "30"),       # the query reports the current percentage
+    ("set volume to 1%", 50, "1"),
+]
+for text, current, expect in spoken_cases:
+    level, say = resolve(parse_volume_command(text), current)
+    check(f"the reply to {text!r} is one short line",
+          "\n" not in say and 0 < len(say) <= 60, repr(say))
+    check(f"the reply to {text!r} speaks the resulting level as {expect!r}",
+          expect in say, f"level {level} (user), said {say!r}")
+
+# The two cases with nothing to report say exactly that, and name no number at all.
+check("a downward step already at the bottom says so",
+      "quietest" in resolve(parse_volume_command("volume down"), USER_MIN)[1].lower(),
+      resolve(parse_volume_command("volume down"), USER_MIN)[1])
+check("an upward step already at the top says so",
+      "full" in resolve(parse_volume_command("volume up"), USER_MAX)[1].lower(),
+      resolve(parse_volume_command("volume up"), USER_MAX)[1])
+
+# Zero is refused with an explanation, never silently obeyed.
+_, say = resolve(parse_volume_command("set volume to 0"), 50)
+check("the reply to zero explains why it was not obeyed",
+      "silent" in say.lower() or "zero" in say.lower(), repr(say))
+check("the reply to zero is still one short line",
+      "\n" not in say and len(say) <= 60, repr(say))
 
 print(f"volume checks: {checks - len(problems)}/{checks} passed")
 for problem in problems:

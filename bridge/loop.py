@@ -222,9 +222,15 @@ class VoiceLoop:
         from bridge.config_plane import ConfigPlane
 
         self.config_plane = ConfigPlane(FLEET_CONFIG_STATE_FILE)
-        # The device the configuration plane addresses. One bridge serves one device today;
-        # when a fleet is live this becomes the leased device's id rather than a default.
-        self.device_id = VOICE_SESSION_ID
+        # The device the configuration plane addresses. Empty until a device registers, at
+        # which point `_adopt_device` sets it to the id that device actually used.
+        #
+        # This used to be VOICE_SESSION_ID, which is a SESSION id and not a device id. The
+        # consequence was silent and total: a spoken volume command wrote a configuration
+        # record for a device called "voice-wyoming1" that does not exist, the dispatch then
+        # found no connection under that name, and the reply told the user it could not
+        # reach the device - while every piece involved looked correctly wired.
+        self.device_id = ""
         self.volume = 0
         self._load_volume(self)
 
@@ -466,32 +472,54 @@ class VoiceLoop:
     def _load_volume(self, target) -> int:
         """Adopt the recorded playback level, clamped, so a restart resumes it.
 
-        The floor is applied on the way in as well as on the way out: a stored value
-        below it means something wrote one directly, and resuming a value that cannot be
-        heard would reproduce the exact failure this feature exists to prevent.
+        The value is on the USER scale (1..100), where 1 is the quietest this hardware can
+        be, so it is clamped on the USER scale. Using the raw clamp() here was a real bug:
+        it treated a user value as a raw ALSA one and raised anything under the raw floor
+        (50 here) up to it, so a stored 30 came back as 50 and the bottom half of the
+        scale was unreachable from a restart.
         """
-        from bridge.volume import FLOOR_PERCENT, clamp
+        from bridge.volume import USER_MIN, clamp_user
 
-        level = FLOOR_PERCENT
+        level = USER_MIN
+        if not self.device_id:
+            # No device has registered yet, so there is nobody whose level to resume. The
+            # quietest level is the right placeholder: quiet, but audible.
+            target.volume = level
+            return level
         try:
             record = self.config_plane.get_device(self.device_id)
         except KeyError:
             # The normal first-run case: no device has been enrolled yet, so there is no
             # stored level. Logged at info, not as a warning, because a warning on every
             # fresh install trains people to ignore warnings.
-            _LOGGER.info("no stored volume yet; starting at the floor of %d%%", level)
+            _LOGGER.info("no stored volume yet; starting at the quietest level (%d%%)", level)
             record = None
         except Exception as exc:  # noqa: BLE001 - a config problem must not stop the boot
-            _LOGGER.warning("could not read the stored volume (%s); using the floor", exc)
+            _LOGGER.warning("could not read the stored volume (%s); using the quietest", exc)
             record = None
         if record is not None:
             stored = (record.get("desired") or {}).get("playback_volume")
             if isinstance(stored, int) and not isinstance(stored, bool):
-                level = clamp(stored)
+                level = clamp_user(stored)
             elif stored is not None:
                 _LOGGER.warning("ignoring an unusable stored playback_volume %r", stored)
         target.volume = level
         return level
+
+    def _adopt_device(self, device_id: str) -> None:
+        """Follow the device we are actually serving, by the id it registered with.
+
+        Called on registration and on lease. Without this the loop addresses a device that
+        does not exist, which breaks configured volume in a way that looks like a network
+        problem rather than a naming one.
+        """
+        device_id = str(device_id or "").strip()
+        if not device_id or device_id == self.device_id:
+            return
+        previous = self.device_id or "(none)"
+        self.device_id = device_id
+        level = self._load_volume(self)
+        _LOGGER.info("now addressing device %s (was %s); volume %d%%", device_id, previous, level)
 
     async def _set_volume(self, level: int) -> bool:
         """Record a level durably and tell the device. True only if both happened.
@@ -500,10 +528,14 @@ class VoiceLoop:
         unreachable still converges when it reconnects, and the tracked value only moves
         once the write is recorded. If the device cannot be told, the caller says so
         rather than claiming a change nobody applied.
-        """
-        from bridge.volume import clamp
 
-        level = clamp(level)
+        The level is on the USER scale, so it is clamped on that scale. Clamping it with
+        the raw clamp() would push every quiet level up to the raw floor and make the
+        bottom of the user's scale unreachable - the bug this comment exists to prevent.
+        """
+        from bridge.volume import clamp_user
+
+        level = clamp_user(level)
         try:
             self.config_plane.set_desired(
                 self.device_id, {"playback_volume": level}, expected_generation=None
@@ -1445,6 +1477,10 @@ class VoiceLoop:
             if connection is not None:
                 lease = LeasedSatellite(connection, log_events=self._log_events)
                 self._use_satellite(lease, leased=True)
+                # Address the device we just leased. A bridge that is talking to this
+                # device must name it the way the registry does, or configured volume and
+                # any other desired state will be filed under a name nobody answers to.
+                self._adopt_device(connection.device_id)
                 await lease.connect()
                 return
 
@@ -1546,6 +1582,9 @@ class VoiceLoop:
         reports what arrived, so a registration is visible in the log even while the loop is elsewhere.
         """
         identity = getattr(slot, "identity", None)
+        # Address this device from now on. Done first, so the desired-state dispatch below
+        # and every later spoken command use the id that actually exists in the registry.
+        self._adopt_device(slot.device_id)
         _LOGGER.info(
             "device registered: id=%s name=%s area=%s version=%s protocol=%s capabilities=%s",
             slot.device_id,

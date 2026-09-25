@@ -16,7 +16,11 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from bridge.config_plane import ConfigPlane  # noqa: E402
 from bridge.loop import VoiceLoop  # noqa: E402
-from bridge.volume import FLOOR_PERCENT, MAX_PERCENT  # noqa: E402
+# NOTE: `loop.volume` is a USER value (1..100), not a raw ALSA one. Comparing it against
+# FLOOR_PERCENT/MAX_PERCENT was comparing two different scales - it passed only because
+# the raw floor of 50 happens to be a legal user value and the assertions were >= rather
+# than ==. That kind of pass is worse than a failure, so the user bounds are used now.
+from bridge.volume import USER_MAX, USER_MIN  # noqa: E402
 
 
 class Sat:
@@ -87,9 +91,9 @@ async def main() -> int:
         loop = make_loop(tmp)
         reply = await loop._volume_command("set volume to 0")
         check("'set volume to 0' does not silence the device",
-              loop.volume >= FLOOR_PERCENT, loop.volume)
+              loop.volume >= USER_MIN, loop.volume)
         check("'set volume to 0' tells the device a level above zero",
-              loop.dispatched[-1][1] >= FLOOR_PERCENT, loop.dispatched)
+              loop.dispatched[-1][1] >= USER_MIN, loop.dispatched)
         check("'set volume to 0' explains itself", 
               "silent" in reply.lower() or "zero" in reply.lower(), reply)
 
@@ -113,7 +117,7 @@ async def main() -> int:
         check("the recorded level and the tracked level agree after a failed dispatch",
               loop.volume == recorded, (loop.volume, recorded))
         check("a failed dispatch is still recorded durably, so it converges later",
-              recorded >= FLOOR_PERCENT, recorded)
+              recorded >= USER_MIN, recorded)
 
         # ---------------------------------------------- no spoken request can silence it
         requests = ["set volume to 0", "set volume to 0%", "volume down", "volume down by 9",
@@ -121,22 +125,22 @@ async def main() -> int:
         for text in requests:
             loop = make_loop(tmp)
             # Start as quiet as the floor allows, the worst case.
-            loop.volume = FLOOR_PERCENT
+            loop.volume = USER_MIN
             await loop._volume_command(text)
-            check(f"{text!r} from the floor stays audible", loop.volume >= FLOOR_PERCENT, loop.volume)
+            check(f"{text!r} from the quietest stays audible", loop.volume >= USER_MIN, loop.volume)
             if loop.dispatched:
                 check(f"{text!r} never sends a silent level to the device",
-                      loop.dispatched[-1][1] >= FLOOR_PERCENT, loop.dispatched)
+                      loop.dispatched[-1][1] >= USER_MIN, loop.dispatched)
 
         # Start loud, step all the way down, and confirm it stops at the floor.
         loop = make_loop(tmp)
-        loop.volume = MAX_PERCENT
+        loop.volume = USER_MAX
         for _ in range(30):
             await loop._volume_command("volume down")
-        check("stepping down repeatedly stops at the floor and never below",
-              loop.volume == FLOOR_PERCENT, loop.volume)
+        check("stepping down repeatedly stops at the quietest and never below",
+              loop.volume == USER_MIN, loop.volume)
         check("every level sent to the device during the sweep was audible",
-              all(level >= FLOOR_PERCENT for _id, level in loop.dispatched), loop.dispatched)
+              all(level >= USER_MIN for _id, level in loop.dispatched), loop.dispatched)
 
         # ---------------------------------------------- persistence
         loop = make_loop(tmp)
@@ -171,7 +175,7 @@ async def main() -> int:
         loader.device_id = "kitchen-1"
         loaded = loader._load_volume(loader)
         check("a stored zero is raised to the floor on load, not resumed as silence",
-              loaded >= FLOOR_PERCENT, loaded)
+              loaded >= USER_MIN, loaded)
         check("the loop's tracked level is the raised one, not the stored zero",
               loader.volume == loaded, (loader.volume, loaded))
 
@@ -181,7 +185,65 @@ async def main() -> int:
         loader2.config_plane = ConfigPlane(hostile)
         loader2.device_id = "kitchen-1"
         check("a stored level below the floor is raised on load",
-              loader2._load_volume(loader2) >= FLOOR_PERCENT, loader2.volume)
+              loader2._load_volume(loader2) >= USER_MIN, loader2.volume)
+
+        # ---------------------------------------------- the loop addresses the real device
+        #
+        # A spoken volume command must be filed under the id the device registered with. The
+        # loop used to hold VOICE_SESSION_ID, which is a SESSION id: the write created a
+        # config record for a device that does not exist, the dispatch then found no
+        # connection under that name, and the reply told the user it could not reach the
+        # device. Every piece looked correctly wired, so nothing caught it.
+        loop = make_loop(tmp)
+        loop.device_id = ""          # the state before any device has registered
+        loop.volume = 0
+        adopted = loop._load_volume(loop)
+        check("with no device registered the level is the quietest, not a raw default",
+              adopted == USER_MIN, adopted)
+
+        loop._adopt_device("kitchen-1")
+        check("the loop adopts the id the device registered with",
+              loop.device_id == "kitchen-1", loop.device_id)
+
+        await loop._volume_command("set volume to 50%")
+        check("after adopting, a spoken command is dispatched to that device",
+              bool(loop.dispatched) and loop.dispatched[-1][0] == "kitchen-1",
+              loop.dispatched)
+        check("and the record exists under the real device id",
+              loop.config_plane.get_device("kitchen-1")["desired"].get("playback_volume") == 50,
+              loop.config_plane.get_device("kitchen-1")["desired"])
+
+        # Adopting the same device twice is a no-op, and adopting a different one re-reads
+        # that device's own stored level rather than keeping the previous device's.
+        before_volume = loop.volume
+        loop._adopt_device("kitchen-1")
+        check("re-adopting the same device changes nothing", loop.volume == before_volume,
+              loop.volume)
+
+        # The WIRING, not just the helper. Calling _adopt_device directly passes even when
+        # nothing calls it - which is precisely how the unwired hardware adapter (#68) hid,
+        # and removing the adoption call from registration did NOT fail this suite until
+        # this check existed. Registration must be what triggers it.
+        from bridge.registry import DeviceIdentity
+
+        class FakeSlot:
+            device_id = "bench-2"
+            identity = DeviceIdentity(device_id="bench-2", name="Bench")
+
+        wired = make_loop(tmp)
+        wired.device_id = ""
+        wired.volume = 0
+        wired.registry = None
+        await wired._on_device_registered(FakeSlot())
+        check("registration itself makes the loop adopt the device id",
+              wired.device_id == "bench-2", wired.device_id)
+        check("and it picks up that device's stored level rather than the previous one",
+              wired.volume == USER_MIN, wired.volume)
+
+        # A device that reconnects keeps the same id, so adoption stays a no-op.
+        await wired._on_device_registered(FakeSlot())
+        check("a reconnecting device does not disturb the adopted id",
+              wired.device_id == "bench-2", wired.device_id)
 
     print(f"volume integration checks: {checks - len(problems)}/{checks} passed")
     for problem in problems:

@@ -66,6 +66,17 @@ than the requested one, with the reason in `last_error`. See `docs/volume.md`. T
 `wake_word`, `wake_threshold`, `mic_gain` and `led_brightness` are staged only, and the device reports
 `degraded` rather than pretending otherwise.
 
+**`playback_volume` is on a USER scale of 1-100, not a raw ALSA percentage.** 1 is the quietest this
+hardware can be and 100 is full volume, so the same number means the same thing on a device with a
+different measured floor. On the current device a floor of raw 50 means user 50% is raw 75 - halfway up
+what the hardware can actually do. Raw ALSA numbers would make this API meaningless across a fleet.
+
+It also carries a **`round_trip_tolerance` of 1**, visible in `GET /config/schema`, because the
+user→raw→user round trip passes through an integer ALSA percentage and shifts by one for 49 of the 100
+values. Without it those settings would report permanent drift and never converge, which is worse than
+useless: it teaches whoever reads the fleet view to ignore `drift` altogether. Convergence means
+"the same instruction arrived back", not "the integers are identical".
+
 Rejected inputs, all `400`: unknown setting name, wrong JSON type (a string where an integer is required,
 and note that `true` is rejected for a numeric field rather than coerced to `1`), out of range, value
 outside an enum, and a `wake_word` containing anything but lowercase letters, digits, `_` and `-`.

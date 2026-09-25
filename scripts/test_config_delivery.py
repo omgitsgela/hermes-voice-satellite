@@ -60,6 +60,10 @@ async def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         loop = VoiceLoop.__new__(VoiceLoop)
         loop.config_plane = ConfigPlane(pathlib.Path(tmp) / "fleet.json")
+        # The loop tracks which device it is addressing; registration sets it (see
+        # _adopt_device). A bare loop built with __new__ has to provide it, or registration
+        # fails on a missing attribute before it can do its work.
+        loop.device_id = ""
         slot = FakeSlot("kitchen-1")
         loop.registry = FakeRegistry(slot)
 
