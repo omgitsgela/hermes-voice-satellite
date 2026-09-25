@@ -1194,40 +1194,22 @@ class VoiceLoop:
         # The gateway client's aiohttp session must be opened explicitly; nothing else does
         # it, and every call (including health) fails without it.
         await self.gateway.open()
-        await self.sat.connect()
-        info = await self.sat.describe()
-        if info is not None:
-            name = getattr(getattr(info, "satellite", None), "name", "?")
-            _LOGGER.info("satellite: %s", name)
-        _LOGGER.info("gateway health: %s", await self.gateway.health())
-        # Tell the satellite we are ready; it arms its wake word and stops being inert.
-        await self.sat.run()
 
-        # Pre-warm the slow parts, off the event loop, so the first real turn is not noticeably
-        # slower than the rest (Whisper model load is seconds, Piper's ~1 s).
-        from bridge.tts import load_voice
-
-        await asyncio.to_thread(self._model)
-        await asyncio.to_thread(load_voice)
-        _LOGGER.info("stt and tts models warm")
-
-        # Announcements speak on this same connection, serialised with answers by the playback
-        # lock, so the two can never talk over each other.
-        await self.announcer.start()
-
-        # The inverted shape (issue #61): a device may dial us instead of being dialled. Off by default,
-        # and on purpose it cannot break the voice path: a failure here is logged and the loop carries on
-        # dialling the satellite as before.
+        # Listeners come up BEFORE the satellite (phase 4 of #61). Announcements and the registry must be
+        # available whether or not any device is reachable, because a device that is away can only be
+        # reached by dialling IN. Both used to sit behind the connect below, which is why the whole
+        # bridge went down with the satellite and nothing was listening on 8765 or 10701 while it was
+        # away: a device could not have registered even if it tried.
         from bridge.config import (REGISTRY_ALLOW_UNAUTHENTICATED, REGISTRY_CREDENTIALS_FILE,
                                    REGISTRY_DUPLICATE_POLICY, REGISTRY_ENABLED, REGISTRY_HOST,
                                    REGISTRY_PORT)
-        from bridge.registry import CredentialConfigError, load_credential_lookup
 
         self.registry = None
         self.registry_server = None
         if REGISTRY_ENABLED:
             try:
-                from bridge.registry import RegistryServer, SatelliteRegistry
+                from bridge.registry import (CredentialConfigError, RegistryServer, SatelliteRegistry,
+                                             load_credential_lookup)
 
                 # A credential file that is present but unusable stops the listener rather than silently
                 # downgrading it to believing whatever a device claims (review finding, issue #62).
@@ -1258,8 +1240,76 @@ class VoiceLoop:
                 _LOGGER.error("could not start the registry listener: %s", exc)
                 self.registry_server = None
 
+        # Announcements bind their HTTP endpoint here and hold this loop's connection by reference; they
+        # do not need the satellite to be connected, so they no longer wait for it.
+        await self.announcer.start()
+
+        # Now obtain a satellite the old way, if we can. When the registry is on and nothing is reachable
+        # we stay up and keep listening instead of exiting for systemd to restart, which is what makes a
+        # device that is away able to reach us at all.
+        try:
+            await self.sat.connect()
+        except (OSError, ConnectionError) as exc:
+            if not REGISTRY_ENABLED:
+                raise
+            await self._wait_for_a_satellite(exc)
+        info = await self.sat.describe()
+        if info is not None:
+            name = getattr(getattr(info, "satellite", None), "name", "?")
+            _LOGGER.info("satellite: %s", name)
+        _LOGGER.info("gateway health: %s", await self.gateway.health())
+        # Tell the satellite we are ready; it arms its wake word and stops being inert.
+        await self.sat.run()
+
+        # Pre-warm the slow parts, off the event loop, so the first real turn is not noticeably
+        # slower than the rest (Whisper model load is seconds, Piper's ~1 s).
+        from bridge.tts import load_voice
+
+        await asyncio.to_thread(self._model)
+        await asyncio.to_thread(load_voice)
+        _LOGGER.info("stt and tts models warm")
+
         # The satellite cannot tell anyone it is connected, so the host does it.
         await self.say_startup_tone()
+
+    async def _wait_for_a_satellite(self, first_error: Exception) -> None:
+        """Stay up and keep listening while no satellite can be reached.
+
+        Exiting for systemd to restart us is the right shape when the device is a dial target at a fixed
+        address, and it is what this used to do. It is the wrong shape for the inversion (issue #61): a
+        device that is away can only get in by dialling US, so our listeners have to outlive the absence
+        of every device. Nothing else changes while we wait: we keep retrying the direct dial, so a device
+        that comes back to the home network is picked up exactly as before.
+
+        Only reached with the registry enabled. With it off, a failed connect still exits for systemd,
+        which is the long-standing behaviour and the reason the restart delay is set where it is.
+        """
+        from bridge.config import (REGISTRY_WAIT_RETRY_SECONDS, SATELLITE_HOST, SATELLITE_PORT)
+
+        _LOGGER.warning(
+            "no satellite at %s:%s (%s); staying up and listening for a device to dial in instead of "
+            "exiting", SATELLITE_HOST, SATELLITE_PORT, first_error,
+        )
+        announced: set = set()
+        while True:
+            await asyncio.sleep(REGISTRY_WAIT_RETRY_SECONDS)
+            try:
+                await self.sat.connect()
+            except (OSError, ConnectionError) as exc:
+                # A registered device is worth saying out loud even though nothing leases it yet: it is
+                # the difference between "the bridge is up and nobody is here" and "the device got in".
+                registered = set(self.registry.connected_devices()) if self.registry else set()
+                if registered - announced:
+                    announced |= registered
+                    _LOGGER.info(
+                        "device registered and waiting to be leased: %s (leasing is the next step of "
+                        "phase 4; meanwhile this bridge keeps dialling the home address)",
+                        ", ".join(sorted(registered)),
+                    )
+                _LOGGER.debug("still no satellite at %s:%s: %s", SATELLITE_HOST, SATELLITE_PORT, exc)
+                continue
+            _LOGGER.info("satellite reachable again at %s:%s", SATELLITE_HOST, SATELLITE_PORT)
+            return
 
     async def _on_device_registered(self, slot) -> None:
         """A device completed the handshake. Nothing leases it to a conversation yet (phase 4)."""

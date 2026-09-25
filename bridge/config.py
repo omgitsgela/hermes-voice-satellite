@@ -35,6 +35,11 @@ REGISTRY_CREDENTIALS_FILE = Path(__file__).resolve().parent.parent / "state" / "
 # (review finding, issue #62). Trusted networks only.
 REGISTRY_ALLOW_UNAUTHENTICATED = os.environ.get("VOICE_REGISTRY_ALLOW_UNAUTHENTICATED", "").strip().lower() in (
     "1", "true", "yes", "on")
+# How often the bridge retries the direct dial to the satellite while it is staying up without one. With
+# the registry enabled, a failed connect no longer exits: the listeners have to outlive the absence of
+# every device, because a device that is away can only get in by dialling us (issue #61). The dial retry
+# exists so a device that comes home is picked up exactly as before.
+REGISTRY_WAIT_RETRY_SECONDS = float(os.environ.get("VOICE_REGISTRY_WAIT_RETRY_SECONDS", "30"))
 
 # Taken from the satellite's own ExecStart flags, so these are its real formats:
 #   --mic-command 'arecord -D plughw:CARD=seeed2micvoicec,DEV=0 -r 16000 -c 1 -f S16_LE -t raw'

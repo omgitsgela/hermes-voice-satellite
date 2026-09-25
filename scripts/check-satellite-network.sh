@@ -12,10 +12,10 @@ set -u
 
 BRIDGE_HOST="${BRIDGE_HOST:-192.168.0.142}"
 # Ports worth testing from the device's side. 22 is the host's SSH, 8765 is the bridge's announcement
-# endpoint (the one service it exposes on the LAN today), and 10700 is the satellite port today and the
-# registry listener after issue #61 lands. Testing the satellite's own port from the device proves nothing,
-# which is what the first version of this script got wrong.
-BRIDGE_PORTS="${BRIDGE_PORTS:-22 8765 10700}"
+# endpoint, and 10701 is the registry listener the inversion adds. The device's own 10700 is deliberately
+# absent: testing a port the device itself owns proves nothing about the network, which is what the first
+# version of this script got wrong.
+BRIDGE_PORTS="${BRIDGE_PORTS:-22 8765 10701}"
 
 echo "=== identity ==="
 echo "  host:     $(hostname)"
@@ -33,8 +33,15 @@ echo "  default route: $(ip route show default | head -1)"
 echo "  saved profiles and their priorities:"
 for f in /etc/NetworkManager/system-connections/*.nmconnection; do
     [ -f "$f" ] || continue
-    priority=$(grep -m1 '^autoconnect-priority=' "$f" 2>/dev/null | cut -d= -f2)
-    printf '    %-34s priority=%s\n' "$(basename "$f" .nmconnection)" "${priority:-<none>}"
+    name=$(basename "$f" .nmconnection)
+    # These files are root-only mode 600. If we cannot read one, say so: reporting an empty value would
+    # read as "no priority set", which is a different (and misleading) statement.
+    if [ -r "$f" ]; then
+        priority=$(grep -m1 '^autoconnect-priority=' "$f" 2>/dev/null | cut -d= -f2)
+        printf '    %-34s priority=%s\n' "$name" "${priority:-<none>}"
+    else
+        printf '    %-34s (needs root to read)\n' "$name"
+    fi
 done
 
 echo
@@ -48,16 +55,29 @@ fi
 for port in $BRIDGE_PORTS; do
     case "$port" in
         22)    what="host SSH" ;;
-        8765)  what="bridge announcements (today)" ;;
-        10700) what="voice port: the satellite's today, the registry listener after #61" ;;
+        8765)  what="bridge announcements" ;;
+        10701) what="registry listener (the inversion's port)" ;;
         *)     what="" ;;
     esac
-    if timeout 4 sh -c "</dev/tcp/$BRIDGE_HOST/$port" 2>/dev/null; then
+    # bash is invoked explicitly, and not for style: /dev/tcp is a bash feature and this device's /bin/sh
+    # is dash, so "sh -c '</dev/tcp/...'" fails every time and reports every port as closed.
+    if timeout 4 bash -c "exec 3<>/dev/tcp/$BRIDGE_HOST/$port" 2>/dev/null; then
         printf '  port %-6s open        %s\n' "$port" "$what"
     else
         printf '  port %-6s not open    %s\n' "$port" "$what"
     fi
 done
+
+echo
+echo "=== is the voice link doing anything? ==="
+echo "  services:        satellite=$(systemctl is-active wyoming-satellite 2>/dev/null) shim=$(systemctl is-active wake-shim 2>/dev/null) leds=$(systemctl is-active 2mic_leds 2>/dev/null)"
+if systemctl list-unit-files 2>/dev/null | grep -q outbound-satellite; then
+    echo "  outbound runner: $(systemctl is-active outbound-satellite 2>/dev/null) (the inverted mode)"
+else
+    echo "  outbound runner: installed on disk, not yet enabled as a service (phase 5)"
+fi
+echo "  listening:"
+ss -lntp 2>/dev/null | grep -E "10700|10400|10500" | sed 's/^/    /' || echo "    nothing on the voice ports"
 
 echo
 echo "=== what this means ==="
