@@ -143,6 +143,39 @@ def main() -> int:
     feed(ep, 0, 100)
     check("a dead-silent room leaves a sane threshold", ep.gate.threshold >= 400, True)
 
+    # ---------------------------------------------------------------- a busy office
+    # Measured from Angela's three samples on 2026-09-25, a computer centre with a fan and other
+    # people: the room's non-speech floor is ~540 (against 142-190 at home) and its loud frames
+    # reach ~930, while her speech sits at ~1040. The room and the voice are only ~11% apart.
+    #
+    # The old shape - the room's 20th percentile times 6 - put the threshold at ~3240, ABOVE the
+    # person, and the device answered nothing. That is the failure this section pins: the gate must
+    # track the room's LOUD behaviour with a small margin, not multiply its quiet stretches.
+    #
+    # This does NOT require the room to be silenced. The design already accepts that loud non-speech
+    # leaks (see the video note below): one leaked frame is 0.02 s and the 0.25 s minimum is what
+    # stops it becoming a turn. Being deaf to the person is the worse failure.
+    OFFICE_ROOM = 540        # 20th percentile of the office's non-speech frames
+    OFFICE_ROOM_LOUD = 930   # its loudest non-speech frames
+    OFFICE_SPEECH = 1040     # Angela's speech median in that room
+    ep = build([False] * 400)
+    feed(ep, OFFICE_ROOM, 300)
+    check("a busy office does not push the threshold above the speaker",
+          ep.gate.threshold < OFFICE_SPEECH, True)
+    check("so the speaker is heard in that office",
+          ep.gate.passes(frame_at(OFFICE_SPEECH)), True)
+    check("while the room's ordinary level is still refused",
+          ep.gate.passes(frame_at(OFFICE_ROOM)), False)
+
+    # The ceiling itself, pushed past anywhere a person could be. The point is not that such a room
+    # exists but that the gate fails SAFE when it does: whatever the room does, the gate never ends
+    # up above a human, because being deaf to the person is the worse failure. Without the ceiling
+    # this is the room that silently turns the device into furniture.
+    ep = build([False] * 400)
+    feed(ep, 1500, 300)
+    check("even a room louder than a person cannot push the threshold above one",
+          ep.gate.threshold <= 1000, True)
+
     # And the shipped tuning must be the one the measurements justify.
     shipped = config_module.VOICE_ENERGY_GATE
     LEARNED_FLOOR = 142     # what the gate actually learns from this room's fan audio
