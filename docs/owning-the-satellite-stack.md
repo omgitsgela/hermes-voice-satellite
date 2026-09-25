@@ -1,5 +1,11 @@
 # Owning the satellite stack
 
+**Role change, 2026-09-24 (issue #61).** The satellite stops being a Wyoming *server* that the bridge dials
+and becomes a Wyoming *client* that dials the bridge. Nothing in the vendored stack changes, and the patches
+below still apply exactly as they are; what changes is the outer transport, which is ours either way. The
+device-side runner is `pi/outbound_satellite.py`, it is not wired into systemd yet, and the older server
+shape stays available for rollback until the new path is proven on hardware.
+
 Recorded 2026-09-23. **Why this file exists:** we run upstream voice satellite software that is now
 archived, and we had already modified it. One modification was a 7-line edit to the satellite's own
 core file living only as an uncommitted change on the Pi. If that card had died, the fix would have
