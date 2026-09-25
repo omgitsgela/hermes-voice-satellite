@@ -190,9 +190,18 @@ not enter the audio ingress queue, and a `hermes.config.*` event never reaches t
 | `hermes.config.desired` | host → device | `{schema_version, device_id, generation, settings}` |
 | `hermes.config.reported` | device → host | `{generation, actual, health, error}` |
 
-The device applies a desired event only when `generation` is strictly greater than the generation it has
-already confirmed; an equal or lower generation is a no-op that returns the current report. This is what
-makes redelivery safe, and it is why a reconnect can simply be re-sent the current desired state.
+The device applies newer desired generations and never applies older ones. For the same generation,
+healthy state is a no-op, including after restart. If the last result was `error`, or was not healthy
+and some desired values remain unapplied (including staged settings with no adapter), redelivery
+retries the adapter **once per event**, without a background retry loop. Retry settings must exactly
+match the stored desired settings; changing them requires a new generation. A fully applied but
+degraded result is not retried just for an unrelated diagnostic.
+
+The accepted generation, desired values, actual values and health are persisted together. Thus a
+restart preserves both the retry eligibility of failed/staged settings and the idempotence of healthy
+ones; installing a new adapter can reconcile staged settings on the next redelivery. Adapters must
+safely support reapplying desired values, including values already applied by a partially successful
+attempt. A callback exception does not advance the accepted generation.
 
 If the device's `device_id` disagrees with the desired event's, the event is refused with
 `health: "error"` and nothing is applied: a device must not accept another device's settings.

@@ -87,11 +87,11 @@ def register(ctx) -> None:
 
 
 def _bridge_available() -> bool:
-    """Available when the bridge's token file exists, which is the same host the bridge runs on."""
+    """Available when request authentication can resolve a nonempty token."""
     try:
-        from .voice_tool import TOKEN_FILE
+        from .voice_tool import _token
 
-        return TOKEN_FILE.is_file()
+        return bool(_token())
     except Exception:  # noqa: BLE001 - never let availability checking break registration
         return False
 

@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -48,9 +47,23 @@ for name, source in SHIPPED.items():
     check(f"{name} exists in the repo", source.is_file(), source)
 
 with tempfile.TemporaryDirectory() as tmp:
-    flat = pathlib.Path(tmp)
-    for name, source in SHIPPED.items():
-        shutil.copy2(source, flat / name)
+    rootfs = pathlib.Path(tmp)
+    flat = rootfs / "home/wyoming1/wyoming-satellite/examples"
+    flat.mkdir(parents=True)
+    # Exercise the real installer, never a hand-maintained copy of its inventory.
+    for deployment in ("fresh", "update"):
+        if deployment == "update":
+            for name in SHIPPED:
+                (flat / name).write_text("# stale installed artifact\n")
+        installed = subprocess.run(
+            ["sh", str(ROOT / "scripts/deploy-to-card.sh"), str(rootfs)],
+            capture_output=True, text=True, timeout=30,
+        )
+        check(f"{deployment} installer succeeds", installed.returncode == 0, installed.stderr)
+        for name, source in SHIPPED.items():
+            target = flat / name
+            check(f"{deployment} installs current {name}",
+                  target.is_file() and target.read_bytes() == source.read_bytes())
 
     check("the simulated device directory contains no package structure",
           not (flat / "__init__.py").exists() and not (flat / "pi").exists())
