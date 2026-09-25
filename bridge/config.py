@@ -106,21 +106,35 @@ ENDPOINTING_PROFILES = {
 # fan can produce speech-like frames while sitting far below speech level.
 #
 # Measured on the device, 2026-09-24, 20 ms frames, this room and this preamp:
-#     fan baseline      median RMS 191   max 422
+#     fan baseline      median RMS 191    max 422
 #     YouTube, normal volume
-#                       median RMS 197   max 871
-#     a person talking  median RMS 1026  max 9343   (speech frames only: median 2994)
+#                       median RMS 197    max 871
+#     a person talking  median RMS 1026   max 9343   (speech frames only: median 2994)
 #
-# At ratio 6.0 the threshold lands near RMS 1140 on this hardware: above every fan frame, above the
-# loudest video frame, and still more than 2x below ordinary speech. `floor_default` is the measured
-# fan level, used until the window has enough samples to say for itself. The clamps are runaway
-# guards, not tuning: a dead-silent room must not drive the threshold to zero, and a long unbroken
-# monologue must not drag the floor up to speech level and deafen the gate.
+# The floor is the 20th percentile of recent non-speech frames, which on the real fan recording learns
+# 142 rather than the 191 median. At ratio 6.0 that puts the threshold near RMS 852: above the loudest
+# fan frame (422) by 2x, and below speech by 3.5x.
+#
+# What the gate is for, and what it is not for. It rejects the fan, which is the room's permanent
+# baseline and the thing that was keeping the microphone open. It does NOT reliably reject a video:
+# the loudest single video frame here measured 871, just over the threshold, and a louder video would
+# put more frames over it. What stops a video becoming a turn is the 0.25 s minimum - one frame is
+# 0.02 s, so isolated leaks cannot form an utterance - and beyond that it is an echo-cancellation
+# problem, not a threshold problem.
+#
+# Ratio 8.0 was tried on 2026-09-24 and reverted the same day, which is worth not repeating. It made
+# the threshold 1136 and put it cleanly above that video frame, but that buys no behaviour change,
+# because duration was already doing the work, while it cuts speech's headroom from 3.5x to 2.6x.
+# Headroom above the threshold is what protects a quiet voice, a tired one, or someone further from
+# the device, and that is worth more than a tidier number.
+#
+# `floor_default` is used until the window has enough samples to speak for itself; the clamps are
+# runaway guards, not tuning. A dead-silent room must not drive the threshold to zero, and a long
+# unbroken monologue must not drag the floor up to speech level and deafen the gate.
 #
 # The gate makes the device *less* sensitive, never more: it can only reject frames the detector
-# already accepted. A quiet speaker who is being gated out needs this ratio lowered, which is a
-# deliberate change rather than a tweak, and the honest first move is to measure them the way the
-# numbers above were measured.
+# already accepted. A quiet speaker who is being gated out needs this ratio lowered, and the honest
+# first move is to measure them the way the numbers above were measured.
 VOICE_ENERGY_GATE = {
     "ratio": 6.0,
     "floor_default": 190.0,
