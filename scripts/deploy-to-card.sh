@@ -1,12 +1,17 @@
 #!/bin/sh
 # Put the device-side files onto a mounted satellite SD card.
 #
-#   sudo udisksctl mount -b /dev/sdd2          # prints the mount point, e.g. /media/<user>/rootfs
-#   sh deploy-to-card.sh /media/<user>/rootfs
+#   udisksctl mount -b /dev/sdd2          # prints the mount point, e.g. /run/media/<user>/rootfs
+#   sh deploy-to-card.sh /run/media/<user>/rootfs
 #
 # Run this ON THE MACHINE HOLDING THE CARD (a laptop with a reader), not on the bridge host. Idempotent:
 # re-running copies the same files again and changes nothing else. It does not switch the device over to
 # the new shape - that is a deliberate, separate step (migration phase 5).
+#
+# Mounting as your own user needs no sudo when the host has a polkit rule allowing udisks2 mount/unmount
+# for removable media: an SSH session has no active desktop seat, which is why a plain `udisksctl mount`
+# fails without one. The files on the card are owned by uid 1000, which is your uid locally, so the copy
+# itself never needs root either.
 #
 # The files land where the rest of our device-side code lives, a sibling of the wake shim and the LED
 # service, so a rebuild from the gold image only needs this script re-run.
@@ -69,5 +74,5 @@ done
 printf '  %-32s %s bytes  mode %s\n' "bridge-link.env" "$(wc -c < "$ENV_FILE" | tr -d ' ')" "$(stat -c %a "$ENV_FILE")"
 
 echo
-echo "Done. Unmount before removing the card:  sudo udisksctl unmount -b /dev/sdd2"
+echo "Done. Unmount before removing the card:  udisksctl unmount -b /dev/sdd2"
 echo "Nothing on the device uses these files yet; the device still boots in its server shape."
