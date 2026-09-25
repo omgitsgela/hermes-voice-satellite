@@ -3,6 +3,10 @@
 The satellite is a Wyoming *server*: we dial out to it. All audio processing
 (VAD, STT, TTS) happens here on `autumn`; the Pi only does mic capture,
 wake word, and playback.
+
+That direction is being inverted (issue #61): a device may instead dial *us*, and we keep a registry of
+who is connected. The listener lives under "the registry listener" below and is off by default, because
+the voice loop still dials the satellite.
 """
 
 import os
@@ -11,6 +15,21 @@ from pathlib import Path
 # --- the satellite ---------------------------------------------------------
 SATELLITE_HOST = "192.168.0.149"
 SATELLITE_PORT = 10700
+
+# --- the registry listener (issue #61, migration phase 2) ------------------
+# Lets a device dial in and register. OFF by default: the voice loop still dials the satellite, and the
+# worker that leases a registered device to a conversation is migration phase 4. Turning this on today
+# accepts and registers devices and does nothing else with them, which is useful for testing the
+# handshake and nothing more.
+REGISTRY_ENABLED = os.environ.get("VOICE_REGISTRY_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+REGISTRY_HOST = os.environ.get("VOICE_REGISTRY_HOST", "127.0.0.1")
+REGISTRY_PORT = int(os.environ.get("VOICE_REGISTRY_PORT", "10701"))
+# reject = refuse a second connection from a device that is already connected; replace = close the old one
+# and keep the new. Either way exactly one connection per device is ever writable.
+REGISTRY_DUPLICATE_POLICY = os.environ.get("VOICE_REGISTRY_DUPLICATE_POLICY", "replace")
+# fingerprint -> device_id. Absent means the listener believes what a device claims, which is only
+# acceptable on a trusted network: never expose this listener to the internet without this file.
+REGISTRY_CREDENTIALS_FILE = Path(__file__).resolve().parent.parent / "state" / "device-credentials.json"
 
 # Taken from the satellite's own ExecStart flags, so these are its real formats:
 #   --mic-command 'arecord -D plughw:CARD=seeed2micvoicec,DEV=0 -r 16000 -c 1 -f S16_LE -t raw'
