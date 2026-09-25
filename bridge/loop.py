@@ -475,8 +475,14 @@ class VoiceLoop:
         level = FLOOR_PERCENT
         try:
             record = self.config_plane.get_device(self.device_id)
-        except Exception:  # noqa: BLE001 - a config problem must not stop the boot
-            _LOGGER.warning("could not read the stored volume; using the floor")
+        except KeyError:
+            # The normal first-run case: no device has been enrolled yet, so there is no
+            # stored level. Logged at info, not as a warning, because a warning on every
+            # fresh install trains people to ignore warnings.
+            _LOGGER.info("no stored volume yet; starting at the floor of %d%%", level)
+            record = None
+        except Exception as exc:  # noqa: BLE001 - a config problem must not stop the boot
+            _LOGGER.warning("could not read the stored volume (%s); using the floor", exc)
             record = None
         if record is not None:
             stored = (record.get("desired") or {}).get("playback_volume")
