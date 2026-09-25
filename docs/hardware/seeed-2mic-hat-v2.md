@@ -53,7 +53,7 @@ From the satellite unit on the device, with the reason each one is there:
     --event-uri 'tcp://127.0.0.1:10500'       how the bridge drives the LEDs
     --awake-wav  ~/sounds/awake.wav
     --done-wav   ~/sounds/done.wav
-    --mic-seconds-to-mute-after-awake-wav 0.1
+    --mic-seconds-to-mute-after-awake-wav 0.4
     --tts-played-command '/usr/bin/python3 .../examples/led_cmd.py idle'
 
 The unit also has an `ExecStartPre` that plays `power-on.wav` exactly once per boot, gated by a `/run`
