@@ -45,6 +45,7 @@ REPOS = {
     "wyoming": "https://github.com/OHF-Voice/wyoming",
     "seeed-voicecard": "https://github.com/respeaker/seeed-voicecard",
     "linux-voice-assistant": "https://github.com/OHF-Voice/linux-voice-assistant",
+    "silero-vad": "https://github.com/snakers4/silero-vad",
 }
 
 # Why each upstream matters to this project. Hand-maintained: this is judgement, not something git
@@ -56,12 +57,19 @@ WHY = {
     "wyoming": "the protocol library the transport is built on",
     "seeed-voicecard": "the audio driver, so a kernel change can be answered with a diff",
     "linux-voice-assistant": "the successor project, watched for feature ideas",
+    "silero-vad": "the voice detector. It decides whether the device hears a person, so it is the "
+                  "one dependency whose disappearance would stop the product working",
 }
 
 # Facts about our own use of an upstream, which git cannot report. Hand-maintained.
 NOTES = {
     "wyoming-satellite": "our vendored snapshot is `13bb024` from 2025-04-25, so check the mirrored "
                          "commits here before assuming our copy is current",
+    "silero-vad": "the ONNX model we actually run is vendored in `bridge/vendor/` and tracked in our "
+                  "own repository with its checksum (`docs/voice-detection.md`), because a detector "
+                  "that decides whether the device hears its owner must not depend on an asset "
+                  "living inside someone else's wheel. This mirror is the source of record for "
+                  "regenerating and checking that file, not a runtime dependency",
 }
 
 

@@ -191,7 +191,29 @@ VOICE_ENERGY_GATE = {
     "window_frames": 1500,   # 30 s at 20 ms frames
     "min_samples": 40,       # 0.8 s of non-speech before the floor is taken from the window
     "threshold_min": 400.0,
+    # The gate must never climb above the person it is listening for. Without this the threshold is
+    # purely a property of the ROOM, so a busy office (floor ~540 there, against 142-190 at home)
+    # produced 3240 and went deaf to a speaker sitting at 1040. Measured speech is 1026 at home and
+    # 1040-1723 in that office, so a ceiling just under the quietest of those keeps the gate below
+    # the human in every room measured so far.
+    "threshold_max": 1000.0,
+    "percentile": 0.20,      # the room's QUIET stretches: robust to speech the detector misses
 }
+
+# Which voice activity detector the endpointer uses.
+#
+# `silero` is the default because the comparison in scripts/test_silero_vad.py is not close: on the
+# same noise, webrtcvad calls 100% of a loud room "speech" while Silero calls none of it speech at
+# any level measured. Choosing the detector is choosing whether the device works in a busy room.
+#
+# `webrtcvad` stays reachable on purpose. Every measurement this project took before 2026-09-25 was
+# taken with it, and being able to run the old detector turns a comparison into a config change
+# rather than an argument.
+VOICE_DETECTOR = "silero"
+
+# Silero's speech probability above which a window counts as voice. 0.5 is the model's own default;
+# lower catches quieter speech and raises false positives.
+SILERO_THRESHOLD = 0.5
 
 # Published while a follow-up window is open, so the device shows that it is listening for a reply
 # of its own accord rather than looking switched off. Handled by 2mic_leds on the Pi.

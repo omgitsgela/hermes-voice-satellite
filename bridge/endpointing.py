@@ -87,21 +87,38 @@ class EnergyGate:
     def __init__(self, *, ratio: float = 6.0, floor_default: float = 190.0,
                  floor_min: float = 60.0, floor_max: float = 1000.0,
                  window_frames: int = 1500, min_samples: int = 40,
-                 threshold_min: float = 400.0, percentile: float = 0.20) -> None:
+                 threshold_min: float = 400.0, threshold_max: float = 1000.0,
+                 percentile: float = 0.20) -> None:
         self.ratio = ratio
         self.floor_default = floor_default
         self.floor_min = floor_min
         self.floor_max = floor_max
         self.min_samples = min_samples
         self.threshold_min = threshold_min
+        self.threshold_max = threshold_max
         self.percentile = percentile
         self.floor = floor_default
         self._window: Deque[float] = collections.deque(maxlen=window_frames)
 
     @property
     def threshold(self) -> float:
-        """Speech must clear this. Always at or above threshold_min, whatever the room does."""
-        return max(self.threshold_min, self.floor * self.ratio)
+        """Speech must clear this.
+
+        Floored so a dead-silent room cannot drive it to zero, and CEILINGED so a loud one cannot
+        drive it above the person being listened for. The ceiling is the part that was missing, and
+        its absence is not theoretical: `floor` and `ratio` are both properties of the ROOM, so a
+        busy office whose floor learns ~540 produced a threshold of ~3240 and the device stopped
+        hearing Angela altogether, while the same person in a quiet room was heard fine. Being deaf
+        to the person is the worse failure, so the person wins any disagreement with the room.
+
+        `threshold_max` is an absolute level rather than a learned one on purpose. A learned
+        speech level would be the natural pairing, but the estimate would have to come from frames
+        the detector called speech, and the detector misses speech - measured 2026-09-25, raising
+        the floor percentile to 0.85 let exactly those missed frames dominate the estimate and the
+        gate clamped itself to its loudest cap. The low percentile plus a fixed ceiling keeps the
+        room estimate robust and bounds the failure at a number a person can be measured against.
+        """
+        return min(self.threshold_max, max(self.threshold_min, self.floor * self.ratio))
 
     def observe(self, frame: bytes, detector_says_speech: bool) -> float:
         """Record one frame's level and return it. Only non-speech frames inform the floor."""
@@ -187,7 +204,16 @@ class Endpointer:
         self.frame_samples = rate * frame_ms // 1000
         self.frame_bytes = self.frame_samples * 2
 
-        self._vad = webrtcvad.Vad(vad_aggressiveness)
+        # The detector is selectable (see VOICE_DETECTOR in config). Silero is the default because
+        # webrtcvad calls a loud room "speech"; `webrtcvad` remains reachable so the two can be
+        # compared by configuration rather than by argument.
+        from bridge.config import SILERO_THRESHOLD, VOICE_DETECTOR
+        from bridge.silero_vad import make_vad
+
+        self._vad = make_vad(
+            VOICE_DETECTOR, rate=rate, aggressiveness=vad_aggressiveness,
+            threshold=SILERO_THRESHOLD,
+        )
         # The energy gate sits alongside the detector rather than replacing it: the detector still
         # decides what looks like speech, and the gate decides whether it is loud enough to be a
         # person. Deliberately NOT reset by reset(), which runs after every utterance: the room's
