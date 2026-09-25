@@ -124,6 +124,37 @@ class EnergyGate:
     def passes(self, frame: bytes) -> bool:
         return self.passes_rms(frame_rms(frame))
 
+    def stats(self) -> dict:
+        """A snapshot of what this gate currently believes about the room.
+
+        Added because the gate's decision was invisible. A turn could fail with "nothing said
+        after the wake word" and nothing on the box recorded whether the detector or the gate
+        had refused the frames, or what the room looked like when it happened. That gap is what
+        made a real mis-calibration take a day to find instead of one turn.
+
+        The percentiles matter as much as the threshold: the floor is a LOW percentile of
+        non-speech frames, while the thing the gate exists to reject (a fan) is loud at its
+        peaks. Seeing p20 next to max shows whether the estimate is tracking the room's quiet
+        stretches or its actual noise.
+        """
+        window = sorted(self._window)
+
+        def pct(p: float) -> float:
+            if not window:
+                return 0.0
+            index = max(0, min(len(window) - 1, int(len(window) * p) - 1))
+            return window[index]
+
+        return {
+            "floor": self.floor,
+            "threshold": self.threshold,
+            "samples": len(window),
+            "p20": pct(0.20),
+            "p50": pct(0.50),
+            "p90": pct(0.90),
+            "max": window[-1] if window else 0.0,
+        }
+
 
 def frame_rms(frame: bytes) -> float:
     """Root-mean-square level of one 16-bit mono frame, in sample units."""
@@ -185,6 +216,14 @@ class Endpointer:
         self._first_speech_frame: Optional[int] = None
         self._speech_started_at_frame: Optional[int] = None
         self._frames_seen = 0
+        # Per-utterance diagnostics. The detector and the energy gate can each refuse a frame,
+        # and the two failures need OPPOSITE fixes: a high `gate_rejected` means the level gate
+        # is deaf to the speaker, a low `vad_speech` means the spectral detector is. Keeping
+        # them apart is the whole point - a single "speech" count cannot tell them apart.
+        self._vad_speech_frames = 0
+        self._gate_rejected_frames = 0
+        self._accepted_frames = 0
+        self._speech_levels: list[float] = []
 
     # -- scope of the no-speech budget ---------------------------------------
 
@@ -228,7 +267,17 @@ class Endpointer:
         # frames the detector called non-speech towards that estimate.
         looks_like_speech = self._vad.is_speech(frame, self.rate)
         level = self.gate.observe(frame, looks_like_speech)
-        is_speech = looks_like_speech and self.gate.passes_rms(level)
+        gate_ok = self.gate.passes_rms(level)
+        is_speech = looks_like_speech and gate_ok
+
+        # Attribute the refusal, not just the outcome.
+        if looks_like_speech:
+            self._vad_speech_frames += 1
+            self._speech_levels.append(level)
+            if not gate_ok:
+                self._gate_rejected_frames += 1
+        if is_speech:
+            self._accepted_frames += 1
 
         if not self._in_speech:
             if is_speech:
@@ -279,6 +328,7 @@ class Endpointer:
             rejected=reason != "max_length" and self._speech_frames < self._min_speech_frames,
         )
         _LOGGER.info("endpoint (%s): %s", reason, result)
+        self._log_levels()
         # A rejected utterance is noise, not a turn, so its frames still count towards the no-speech
         # budget. Resetting the count here is why a room producing a blip every few seconds could hold
         # the stream open indefinitely: each blip ended the utterance and zeroed the clock, so
@@ -288,3 +338,33 @@ class Endpointer:
         self.reset()
         self._frames_seen = carried
         return result
+
+    def _log_levels(self) -> None:
+        """Say who refused the frames, and what the room looked like while it happened.
+
+        A failed turn and an empty room both end in "nothing said after the wake word", so
+        without this line the two are indistinguishable from the outside - and they have
+        opposite fixes. `gate_rejected` against `vad_speech` is the discriminator:
+
+        * `vad_speech` high, `gate_rejected` nearly as high -> the level gate is deaf to this
+          speaker in this room. Tuning the gate (or its ratio) is the fix.
+        * `vad_speech` low -> the spectral detector never accepted the voice, and no amount of
+          gate tuning will help; that is a detector/aggressiveness/audio-path problem.
+
+        The room percentiles are printed next to it because the floor is a LOW percentile of
+        non-speech frames while a fan is loud at its peaks, so p20 alone can hide an
+        over-tight threshold. `thr` is what speech must beat.
+        """
+        gate = self.gate.stats()
+        levels = sorted(self._speech_levels)
+        median = levels[len(levels) // 2] if levels else 0.0
+        loudest = levels[-1] if levels else 0.0
+        _LOGGER.info(
+            "  levels: room p20=%.0f p50=%.0f p90=%.0f max=%.0f (n=%d) | floor=%.0f thr=%.0f"
+            " | frames: vad_speech=%d gate_rejected=%d accepted=%d"
+            " | vad_speech_rms med=%.0f max=%.0f",
+            gate["p20"], gate["p50"], gate["p90"], gate["max"], gate["samples"],
+            gate["floor"], gate["threshold"],
+            self._vad_speech_frames, self._gate_rejected_frames, self._accepted_frames,
+            median, loudest,
+        )
