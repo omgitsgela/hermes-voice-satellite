@@ -1,0 +1,302 @@
+"""Versioned declarative configuration state for voice-satellite fleets.
+
+The plane stores only allowlisted, non-secret settings. It never accepts shell
+commands or arbitrary paths. Devices apply desired state separately and report
+actual state back with the generation they observed.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable, Optional
+
+SCHEMA_VERSION = 1
+_DEVICE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+_WAKE_WORD = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+DEVICE_SETTING_SCHEMA: dict[str, dict[str, Any]] = {
+    "wake_word": {
+        "type": "string", "pattern": _WAKE_WORD.pattern,
+        "default": "hey_hermes", "apply": "wake_service_restart",
+    },
+    "wake_threshold": {
+        "type": "number", "minimum": 0.05, "maximum": 0.99,
+        "default": 0.35, "apply": "wake_service_restart",
+    },
+    "mic_gain": {
+        "type": "integer", "minimum": 0, "maximum": 100,
+        "default": 78, "apply": "immediate",
+    },
+    "playback_volume": {
+        "type": "integer", "minimum": 0, "maximum": 100,
+        "default": 55, "apply": "immediate",
+    },
+    "led_brightness": {
+        "type": "integer", "minimum": 0, "maximum": 100,
+        "default": 40, "apply": "led_service_restart",
+    },
+    "locale": {
+        "type": "string", "enum": ["en-US"], "default": "en-US",
+        "apply": "next_turn",
+    },
+    "update_channel": {
+        "type": "string", "enum": ["stable", "beta"], "default": "stable",
+        "apply": "next_update_check",
+    },
+}
+
+
+class ConfigValidationError(ValueError):
+    """A desired/reported setting does not satisfy the public schema."""
+
+
+class ConfigConflict(RuntimeError):
+    """The writer supplied a stale desired-state generation."""
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _validate_device_id(device_id: str) -> str:
+    candidate = str(device_id or "").strip().lower()
+    if not _DEVICE_ID.fullmatch(candidate):
+        raise ConfigValidationError(
+            "device_id must be 1-64 lowercase letters, digits, dots, dashes, or underscores"
+        )
+    return candidate
+
+
+def validate_settings(values: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(values, dict):
+        raise ConfigValidationError("settings must be a JSON object")
+    clean: dict[str, Any] = {}
+    for name, value in values.items():
+        spec = DEVICE_SETTING_SCHEMA.get(name)
+        if spec is None:
+            raise ConfigValidationError(f"unknown device setting: {name}")
+        kind = spec["type"]
+        if kind == "integer":
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ConfigValidationError(f"{name} must be an integer")
+        elif kind == "number":
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ConfigValidationError(f"{name} must be a number")
+            value = float(value)
+        elif kind == "string":
+            if not isinstance(value, str):
+                raise ConfigValidationError(f"{name} must be a string")
+        else:  # pragma: no cover - schema author error
+            raise RuntimeError(f"unsupported schema type {kind}")
+        if "minimum" in spec and value < spec["minimum"]:
+            raise ConfigValidationError(f"{name} must be at least {spec['minimum']}")
+        if "maximum" in spec and value > spec["maximum"]:
+            raise ConfigValidationError(f"{name} must be at most {spec['maximum']}")
+        if "enum" in spec and value not in spec["enum"]:
+            raise ConfigValidationError(f"{name} must be one of {spec['enum']}")
+        if name == "wake_word" and not _WAKE_WORD.fullmatch(value):
+            raise ConfigValidationError("wake_word contains unsupported characters")
+        clean[name] = value
+    return clean
+
+
+class ConfigPlane:
+    """Atomic desired/reported state with optimistic generation checks."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        self._state = self._load()
+
+    def schema(self) -> dict[str, Any]:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "device_settings": DEVICE_SETTING_SCHEMA,
+            "persistence": "atomic JSON, mode 0600",
+        }
+
+    def _empty(self) -> dict[str, Any]:
+        return {"schema_version": SCHEMA_VERSION, "devices": {}}
+
+    def _load(self) -> dict[str, Any]:
+        try:
+            raw = json.loads(self.path.read_text())
+        except FileNotFoundError:
+            return self._empty()
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ConfigValidationError(f"could not read configuration state: {exc}") from exc
+        if not isinstance(raw, dict) or raw.get("schema_version") != SCHEMA_VERSION:
+            raise ConfigValidationError("unsupported configuration-state schema")
+        if not isinstance(raw.get("devices"), dict):
+            raise ConfigValidationError("configuration state has no devices object")
+        return raw
+
+    def _save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w") as handle:
+                json.dump(self._state, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_name, self.path)
+            os.chmod(self.path, 0o600)
+        except BaseException:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
+
+    def _record(self, device_id: str) -> dict[str, Any]:
+        device_id = _validate_device_id(device_id)
+        devices = self._state["devices"]
+        return devices.setdefault(device_id, {
+            "device_id": device_id,
+            "metadata": {},
+            "generation": 0,
+            "desired": {},
+            "reported_generation": None,
+            "reported": {},
+            "health": "unknown",
+            "last_error": None,
+            "desired_updated_at": None,
+            "reported_at": None,
+        })
+
+    def ensure_device(
+        self, device_id: str, *, metadata: Optional[dict[str, Any]] = None
+    ) -> dict[str, Any]:
+        """Create a newly enrolled device with the complete safe default profile."""
+        record = self._record(device_id)
+        clean_metadata: dict[str, Any] = {}
+        if metadata is not None:
+            if not isinstance(metadata, dict):
+                raise ConfigValidationError("metadata must be a JSON object")
+            for name in ("name", "area", "firmware_version", "boot_id"):
+                value = metadata.get(name)
+                if value is not None:
+                    if not isinstance(value, str) or len(value) > 128:
+                        raise ConfigValidationError(f"metadata {name} must be a short string")
+                    clean_metadata[name] = value
+            capabilities = metadata.get("capabilities")
+            if capabilities is not None:
+                if (not isinstance(capabilities, list)
+                        or len(capabilities) > 32
+                        or not all(isinstance(item, str) and len(item) <= 32
+                                   for item in capabilities)):
+                    raise ConfigValidationError("metadata capabilities must be a short string list")
+                clean_metadata["capabilities"] = list(capabilities)
+
+        changed = record.get("metadata") != clean_metadata
+        record["metadata"] = clean_metadata
+        if int(record["generation"]) == 0:
+            record["desired"] = {
+                name: spec["default"] for name, spec in DEVICE_SETTING_SCHEMA.items()
+            }
+            record["generation"] = 1
+            record["desired_updated_at"] = _utc_now()
+            changed = True
+        if changed:
+            self._save()
+        return self._public(record)
+
+    def set_desired(
+        self,
+        device_id: str,
+        patch: dict[str, Any],
+        *,
+        expected_generation: Optional[int] = None,
+    ) -> dict[str, Any]:
+        clean = validate_settings(patch)
+        if not clean:
+            raise ConfigValidationError("at least one setting is required")
+        record = self._record(device_id)
+        current = int(record["generation"])
+        if expected_generation is not None and expected_generation != current:
+            raise ConfigConflict(
+                f"expected generation {expected_generation}, current generation is {current}"
+            )
+        desired = dict(record["desired"])
+        desired.update(clean)
+        record["desired"] = desired
+        record["generation"] = current + 1
+        record["desired_updated_at"] = _utc_now()
+        self._save()
+        return self._public(record)
+
+    def report(
+        self,
+        device_id: str,
+        *,
+        generation: int,
+        actual: dict[str, Any],
+        health: str,
+        error: Optional[str],
+    ) -> dict[str, Any]:
+        if isinstance(generation, bool) or not isinstance(generation, int) or generation < 0:
+            raise ConfigValidationError("reported generation must be a non-negative integer")
+        clean = validate_settings(actual)
+        if health not in {"healthy", "degraded", "error", "unknown"}:
+            raise ConfigValidationError("health must be healthy, degraded, error, or unknown")
+        if error is not None and (not isinstance(error, str) or len(error) > 500):
+            raise ConfigValidationError("error must be null or a string no longer than 500 characters")
+        record = self._record(device_id)
+        record.update({
+            "reported_generation": generation,
+            "reported": clean,
+            "health": health,
+            "last_error": error,
+            "reported_at": _utc_now(),
+        })
+        self._save()
+        return self._public(record)
+
+    def get_device(self, device_id: str, *, connected: Optional[bool] = None) -> dict[str, Any]:
+        device_id = _validate_device_id(device_id)
+        record = self._state["devices"].get(device_id)
+        if record is None:
+            raise KeyError(device_id)
+        return self._public(record, connected=connected)
+
+    def list_devices(self, *, connected_ids: Iterable[str] = ()) -> list[dict[str, Any]]:
+        connected = {_validate_device_id(item) for item in connected_ids}
+        return [
+            self._public(self._state["devices"][device_id], connected=device_id in connected)
+            for device_id in sorted(self._state["devices"])
+        ]
+
+    @staticmethod
+    def _public(record: dict[str, Any], *, connected: Optional[bool] = None) -> dict[str, Any]:
+        desired = dict(record.get("desired") or {})
+        reported = dict(record.get("reported") or {})
+        drift = {
+            name: {"desired": wanted, "reported": reported.get(name)}
+            for name, wanted in desired.items()
+            if reported.get(name) != wanted
+        }
+        result = {
+            **record,
+            "desired": desired,
+            "reported": reported,
+            "drift": drift,
+            "converged": (
+                record.get("reported_generation") == record.get("generation")
+                and not drift
+                and record.get("health") == "healthy"
+            ),
+        }
+        if connected is not None:
+            result["connected"] = bool(connected)
+        return result
+
+
+__all__ = [
+    "SCHEMA_VERSION", "DEVICE_SETTING_SCHEMA", "ConfigPlane",
+    "ConfigValidationError", "ConfigConflict", "validate_settings",
+]

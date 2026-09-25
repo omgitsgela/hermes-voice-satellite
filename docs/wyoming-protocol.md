@@ -60,16 +60,32 @@ changes is which side accepts the socket, plus a **registration step that the pr
 
 The full design, prerequisites and acceptance criteria live in issue #61.
 
-### Our registration extension
+### Our registration and configuration extension
 
-The protocol has no registration, so we add three events. They are an extension, and a client that predates
-them simply never registers, which is why the listener drops a connection that says nothing.
+The protocol has no registration and no configuration channel, so we add five events. They are an
+extension, and a client that predates them simply never registers, which is why the listener drops a
+connection that says nothing.
 
 | Event | Direction | Carries |
 |---|---|---|
 | `hermes.register` | device → bridge | `device_id`, `name`, `area`, `firmware_version`, `protocol_version`, `capabilities`, `boot_id` |
 | `hermes.register.ok` | bridge → device | the accepted `device_id`, `protocol_version`, `name`, `area` |
 | `hermes.register.refused` | bridge → device | a human-readable `reason` |
+| `hermes.config.desired` | bridge → device | `schema_version`, `device_id`, `generation`, `settings` |
+| `hermes.config.reported` | device → bridge | `generation`, `actual`, `health`, `error` |
+
+The two configuration events ride the same socket once registration has succeeded. They are the reason
+the inverted shape can be configured at all without giving the Pi a listening port of its own: the bridge
+already owns this connection, so desired state travels down it and reported state comes back.
+
+**They are handled out of band.** A `hermes.config.*` event is routed to a control callback and never
+enters the connection's audio ingress queue, and never reaches the local satellite relay. Audio and
+control share a socket but not a code path, so a malformed report is a logged warning rather than a
+dropped audio chunk. `scripts/test_registry.py` check 14 and `scripts/test_outbound_runner.py` check 12
+pin exactly that split.
+
+The full contract — schema, bounds, status codes, generation semantics, and the device-side application
+model — is `docs/configuration-plane.md`. Do not restate it here; that document is the authority.
 
 The order on a new connection:
 

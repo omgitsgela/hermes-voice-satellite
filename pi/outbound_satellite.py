@@ -5,11 +5,17 @@ The device stops being a Wyoming *server* and becomes a Wyoming *client*: it ope
 bridge, registers, and then carries everything over that socket - microphone audio, wake detections, the
 transcript, playback, the LED events and the announcement path.
 
-**Not wired into systemd yet.** Nothing runs this file, and the running device still starts
-`wyoming-satellite` in its server shape. This is the transport half of phase 3: the connection, the
-handshake, the refusal path, and reconnect behaviour, all testable against a fake bridge
-(`scripts/test_outbound_runner.py`). The half that still needs the device is feeding the local microphone
-and speaker through `send()` and `on_event`, which needs the hardware to validate.
+**Installable as a service, and the relay carries the audio.** `pi/systemd/outbound-satellite.service.in`
+is the unit, `docs/outbound-link.md` is the install procedure, and `_serve_local()` is the relay: once
+registered, this process connects to the `wyoming-satellite` service already running on the same device
+and becomes a transparent pipe to it in both directions. That is deliberate - wake word, capture,
+playback, the chime and the LEDs stay in the service that already does them well, so there is exactly one
+code path that owns the audio device.
+
+The connection, handshake, refusal path, reconnect behaviour, relay teardown and the configuration
+control plane are all covered offline against a fake bridge (`scripts/test_outbound_runner.py`).
+Deploying the relay on a real device and verifying it against real hardware is the part that still needs
+the device, not writing it.
 
 Design rules from the pre-implementation review, each visible in the code below:
 
@@ -38,6 +44,11 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from wyoming.event import Event, async_read_event, async_write_event
+
+try:  # package import in tests; sibling import when systemd executes this file directly
+    from .config_agent import CONFIG_DESIRED_EVENT, DeviceConfigAgent
+except ImportError:  # pragma: no cover - exercised by the installed script entrypoint
+    from config_agent import CONFIG_DESIRED_EVENT, DeviceConfigAgent
 
 log = logging.getLogger("pi.outbound")
 
@@ -92,6 +103,7 @@ class LinkConfig:
     #: satellite start together and the satellite is the slower of the two, so the first attempt usually
     #: loses the race.
     local_retry_seconds: float = 5.0
+    config_state_path: pathlib.Path = pathlib.Path.home() / ".local/state/hermes-voice-satellite/config.json"
 
     def registration_payload(self) -> Dict[str, Any]:
         return {
@@ -144,6 +156,10 @@ def load_config_from_env(environ: Optional[Dict[str, str]] = None) -> LinkConfig
         local_host=env.get("VOICE_LOCAL_SATELLITE_HOST", "127.0.0.1").strip() or "127.0.0.1",
         local_port=int(env.get("VOICE_LOCAL_SATELLITE_PORT", "10700")),
         relay=env.get("VOICE_RELAY", "1").strip().lower() not in ("0", "false", "no", "off"),
+        config_state_path=pathlib.Path(
+            env.get("VOICE_DEVICE_CONFIG_STATE", "").strip()
+            or (pathlib.Path.home() / ".local/state/hermes-voice-satellite/config.json")
+        ),
         ssl_context=_ssl_context_from_env(env),
     )
 
@@ -177,12 +193,15 @@ class BridgeLink:
         on_registered: Optional[Callable[[Dict[str, Any]], Any]] = None,
         on_disconnected: Optional[Callable[[str], Any]] = None,
         stats: Optional[LinkStats] = None,
+        config_agent: Optional[DeviceConfigAgent] = None,
     ) -> None:
         self.config = config
         self.on_event = on_event
         self.on_registered = on_registered
         self.on_disconnected = on_disconnected
         self.stats = stats or LinkStats()
+        self.config_agent = config_agent or DeviceConfigAgent(
+            config.config_state_path, device_id=config.device_id)
 
         self.connected = False
         self.registered = False
@@ -367,6 +386,11 @@ class BridgeLink:
             if event.type == "ping":
                 await self.send(Event(type="pong"))
                 continue
+            if event.type == CONFIG_DESIRED_EVENT:
+                report = await self.config_agent.apply_event(event)
+                if not await self.send(report):
+                    raise ConnectionError("could not return the configuration report")
+                continue
             if self.on_event is not None:
                 await _maybe_await(self.on_event(event))
 
@@ -409,18 +433,32 @@ class BridgeLink:
         self.on_event = self.relay_event_to_local
         log.info("relaying to the local satellite at %s:%s",
                  self.config.local_host, self.config.local_port)
-        upstream = asyncio.ensure_future(self._local_to_bridge(reader))
+        upstream = asyncio.create_task(self._local_to_bridge(reader))
+        downstream = asyncio.create_task(
+            self._pump()
+        )  # bridge -> this device -> the local satellite
+        tasks = {upstream, downstream}
         try:
-            await self._pump()          # bridge -> this device -> the local satellite
+            done, _pending = await asyncio.wait(
+                tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+            # Propagate a relay error to the run loop. A clean EOF simply returns,
+            # and either outcome tears down both legs so they reconnect together.
+            for task in done:
+                await task
         finally:
             self.on_event = None
             self._local_writer = None
-            upstream.cancel()
-            with contextlib.suppress(BaseException):
-                await upstream
+            for task in tasks:
+                task.cancel()
+            for task in tasks:
+                with contextlib.suppress(BaseException):
+                    await task
             try:
                 if writer is not None:
                     writer.close()
+                    with contextlib.suppress(BaseException):
+                        await writer.wait_closed()
             except Exception:  # noqa: BLE001 - best effort on a socket that is already ending
                 pass
 
@@ -442,10 +480,15 @@ class BridgeLink:
         try:
             await asyncio.wait_for(_write_event(event, writer), timeout=self.config.write_timeout)
         except (ConnectionError, OSError, asyncio.TimeoutError, asyncio.IncompleteReadError) as exc:
-            # Drop the local connection rather than wedge: the next pass reconnects both ends.
+            # End the paired relay rather than silently dropping every later event.
+            # _serve_local races both directions and will reconnect both legs together.
             log.warning("could not write to the local satellite (%s); dropping that connection",
                         type(exc).__name__)
-            self._local_writer = None
+            if self._local_writer is writer:
+                self._local_writer = None
+            with contextlib.suppress(Exception):
+                writer.close()
+            raise ConnectionError("the local satellite write failed") from exc
 
     def _require_reader(self) -> asyncio.StreamReader:
         if self.reader is None:
@@ -505,7 +548,7 @@ async def _maybe_await(value: Any) -> Any:
 
 
 def main() -> int:
-    """Run the link. Used by a systemd unit once phase 4 wires the audio path through it."""
+    """Run the link. This is what the installed systemd unit executes."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     config = load_config_from_env()
     link = BridgeLink(config)

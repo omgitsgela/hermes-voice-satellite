@@ -19,6 +19,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import bridge.loop as loop_module  # noqa: E402
 from bridge.announce import Announcer  # noqa: E402
+from bridge.endpointing import EndpointResult  # noqa: E402
 
 Loop = next(obj for obj in vars(loop_module).values()
             if isinstance(obj, type) and hasattr(obj, "_watch_for_interruption"))
@@ -61,6 +62,51 @@ def gate_is_active(bridge) -> bool:
     return probe._turn_is_active()
 
 
+def make_early_return_bridge(transcript: str, local_reply: str = ""):
+    bridge = Loop.__new__(Loop)
+    bridge.gateway = types.SimpleNamespace(session_id="announce-gate-test")
+    bridge.turns = []
+    bridge.turn_started_at = None
+    bridge._speaking = False
+    bridge.follow_up = False
+    bridge.leased = None
+
+    class Sat:
+        async def send(self, _event):
+            pass
+
+    bridge.sat = Sat()
+
+    async def wait_for_wake():
+        return "hey_hermes"
+
+    async def capture_after_wake(_wake_word):
+        bridge.turn_started_at = time.monotonic()
+        return EndpointResult(
+            audio=b"\0\0" * 8000,
+            rate=16000,
+            duration=0.5,
+            speech_seconds=0.5,
+            first_speech_at=0,
+            speech_absolute_at=0,
+            ended_by="silence",
+        ), ""
+
+    async def transcribe(_audio):
+        return transcript
+
+    async def say(_text):
+        pass
+
+    bridge.wait_for_wake = wait_for_wake
+    bridge.capture_after_wake = capture_after_wake
+    bridge.transcribe = transcribe
+    bridge.say = say
+    bridge._local_command = lambda _text: local_reply
+    bridge.rotate_session = lambda _reason: None
+    return bridge
+
+
 async def main() -> int:
     # 1. opening the microphone raises the gate
     bridge = make_bridge()
@@ -85,6 +131,18 @@ async def main() -> int:
     # 3. with no turn, the announcer sees an idle room
     bridge = make_bridge()
     check("idle room is not gated", gate_is_active(bridge), False)
+
+    # 4. Every successful early return after capture releases the gate (#51).
+    cases = (
+        ("empty transcript", "", ""),
+        ("local control", "is follow up mode on", "Follow-up mode is off."),
+        ("spoken session reset", "start a new conversation", ""),
+    )
+    for label, transcript, local_reply in cases:
+        bridge = make_early_return_bridge(transcript, local_reply)
+        await bridge.one_turn()
+        check(f"{label} clears timestamp", bridge.turn_started_at, None)
+        check(f"{label} releases announcement gate", gate_is_active(bridge), False)
 
     print(f"announce gate checks: {checks - len(failures)}/{checks} passed")
     for f in failures:

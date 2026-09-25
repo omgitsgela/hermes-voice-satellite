@@ -16,11 +16,16 @@ from pathlib import Path
 SATELLITE_HOST = "192.168.0.149"
 SATELLITE_PORT = 10700
 
-# --- the registry listener (issue #61, migration phase 2) ------------------
-# Lets a device dial in and register. OFF by default: the voice loop still dials the satellite, and the
-# worker that leases a registered device to a conversation is migration phase 4. Turning this on today
-# accepts and registers devices and does nothing else with them, which is useful for testing the
-# handshake and nothing more.
+# --- the registry listener (issue #61) -------------------------------------
+# Lets a device dial in and register. OFF by default, because the loop falls back to dialling the
+# satellite at its configured address when no device has dialled in.
+#
+# On is not handshake-only any more. A registered device is leaseable by the voice loop, carries real
+# conversations over the leased connection, and receives declarative desired state from the
+# configuration plane (bridge/config_plane.py) with its reported actual state flowing back.
+#
+# What is still missing before this can replace the dial-in shape: listener-side authentication that
+# is not the trusted-network override, and device-side cutover. See issue #61.
 REGISTRY_ENABLED = os.environ.get("VOICE_REGISTRY_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
 REGISTRY_HOST = os.environ.get("VOICE_REGISTRY_HOST", "127.0.0.1")
 REGISTRY_PORT = int(os.environ.get("VOICE_REGISTRY_PORT", "10701"))
@@ -54,6 +59,7 @@ SND_FORMAT = (22050, 2, 1)   # what aplay expects from us
 
 # --- local paths -----------------------------------------------------------
 PROJECT_DIR = Path(__file__).resolve().parent.parent
+FLEET_CONFIG_STATE_FILE = PROJECT_DIR / "state" / "fleet-config.json"
 VOICES_DIR = PROJECT_DIR / "voices"
 PIPER_VOICE_NAME = "en_US-hfc_male-medium"          # Angela's pick; also Hermes' platform voice
 VOICE_MODEL = VOICES_DIR / f"{PIPER_VOICE_NAME}.onnx"
@@ -318,6 +324,14 @@ ANNOUNCE_TOKEN_ENV = "VOICE_ANNOUNCE_TOKEN"   # set this to override the file
 # Everything else keeps the existing tones: the satellite's own awake.wav and done.wav are option
 # C, "c-low-fourth", and are deliberately untouched. Only announcements use A.
 ANNOUNCE_CHIME = PROJECT_DIR / "sounds" / "candidates" / "awake-a-warm-fifth.wav"
+TIMER_CHIME = PROJECT_DIR / "pi" / "vendor" / "native-satellite-13bb024" / "sounds" / "timer_finished.wav"
+ALARM_CHIME = PROJECT_DIR / "sounds" / "alarm.wav"
+ANNOUNCE_SOUNDS = {
+    "none": None,
+    "chime": ANNOUNCE_CHIME,
+    "timer": TIMER_CHIME,
+    "alarm": ALARM_CHIME,
+}
 ANNOUNCE_LOG = PROJECT_DIR / "logs" / "announcements.jsonl"
 ANNOUNCE_MAX_CHARS = 400          # beyond this a spoken announcement is almost certainly a bug
 ANNOUNCE_MAX_QUEUE = 5            # beyond this callers get 503 and the text is dropped

@@ -184,6 +184,8 @@ class VoiceLoop:
         # The device we are serving, when one dialled in and was leased (issue #61). None means `self.sat` is
         # the client that dials the satellite at its configured address.
         self.leased = None
+        self.registry = None
+        self.registry_server = None
 
         self._state_file = STATE_FILE
         # Follow-up mode: when on, the device listens again straight after it answers, so a
@@ -216,6 +218,10 @@ class VoiceLoop:
         self.turn_started_at: Optional[float] = None
 
         from bridge.announce import Announcer
+        from bridge.config import FLEET_CONFIG_STATE_FILE
+        from bridge.config_plane import ConfigPlane
+
+        self.config_plane = ConfigPlane(FLEET_CONFIG_STATE_FILE)
 
         # Shares the loop's satellite connection: see bridge/announce.py for why it does not open
         # its own.
@@ -228,6 +234,9 @@ class VoiceLoop:
             follow_up_set=self.set_follow_up,
             endpointing_profile_get=lambda: self.endpointing_profile,
             endpointing_profile_set=self.set_endpointing_profile,
+            config_plane=self.config_plane,
+            connected_device_ids=self._connected_device_ids,
+            config_dispatch=self._dispatch_device_config,
         )
 
     # -- session handling ---------------------------------------------------
@@ -1019,6 +1028,7 @@ class VoiceLoop:
         if not transcript:
             stats.note = "empty transcript"
             await self.say("I didn't catch that.")
+            self.turn_started_at = None
             self.turns.append(stats)
             return stats
         _LOGGER.info("heard (%0.1fs speech, stt %0.2fs): %s", endpoint.speech_seconds,
@@ -1050,6 +1060,7 @@ class VoiceLoop:
             stats.note = "local control"
             _LOGGER.info("local control: %s", local_reply)
             await self.say(local_reply)
+            self.turn_started_at = None
             self.turns.append(stats)
             return stats
 
@@ -1058,6 +1069,7 @@ class VoiceLoop:
             self.rotate_session("spoken new-conversation")
             stats.note = "session rotated on request"
             await self.say("Starting a new conversation.")
+            self.turn_started_at = None
             self.turns.append(stats)
             return stats
 
@@ -1230,10 +1242,11 @@ class VoiceLoop:
                 self.registry_server = RegistryServer(
                     self.registry, REGISTRY_HOST, REGISTRY_PORT,
                     credential_lookup=lookup, on_registered=self._on_device_registered,
+                    on_control_event=self._on_device_control_event,
                 )
                 await self.registry_server.start()
                 _LOGGER.info(
-                    "registry listening on %s:%s (devices may dial in; nothing leases them yet)",
+                    "registry listening on %s:%s (registered devices are leaseable and receive desired state)",
                     REGISTRY_HOST, REGISTRY_PORT,
                 )
             except CredentialConfigError as exc:
@@ -1379,6 +1392,44 @@ class VoiceLoop:
             "re-acquired %s", "a device that dialled in" if self.leased else "the dialled satellite"
         )
 
+    def _connected_device_ids(self):
+        if self.registry is None:
+            return ()
+        return tuple(self.registry.connected_devices())
+
+    async def _dispatch_device_config(self, device_id: str, record: dict) -> bool:
+        """Send one durable desired-state generation over a live registered connection."""
+        if self.registry is None:
+            return False
+        slot = self.registry.get(device_id)
+        connection = getattr(slot, "connection", None) if slot is not None else None
+        if connection is None:
+            return False
+        from bridge.registry import CONFIG_DESIRED_EVENT
+
+        return await connection.send(Event(type=CONFIG_DESIRED_EVENT, data={
+            "schema_version": 1,
+            "device_id": device_id,
+            "generation": record["generation"],
+            "settings": record["desired"],
+        }))
+
+    async def _on_device_control_event(self, device_id: str, event: Event) -> bool:
+        """Persist a device's reported configuration without putting it in the audio queue."""
+        from bridge.registry import CONFIG_REPORTED_EVENT
+
+        if event.type != CONFIG_REPORTED_EVENT:
+            return False
+        data = dict(event.data or {})
+        self.config_plane.report(
+            device_id,
+            generation=data.get("generation"),
+            actual=data.get("actual"),
+            health=data.get("health"),
+            error=data.get("error"),
+        )
+        return True
+
     async def _on_device_registered(self, slot) -> None:
         """A device completed the handshake and is available to be leased.
 
@@ -1395,6 +1446,10 @@ class VoiceLoop:
             getattr(identity, "protocol_version", "?"),
             ",".join(getattr(identity, "capabilities", ()) or ()) or "-",
         )
+        metadata = identity.as_dict() if identity is not None else {}
+        record = self.config_plane.ensure_device(slot.device_id, metadata=metadata)
+        if not await self._dispatch_device_config(slot.device_id, record):
+            _LOGGER.warning("device %s registered but desired state could not be dispatched", slot.device_id)
 
     async def say_startup_tone(self) -> None:
         """Play the "connected" tone, so the device can report the host link out loud.

@@ -24,6 +24,7 @@ The checks map to the migration's acceptance criteria:
  11  the registration handshake is refused for an unsupported protocol version
  12  the credential file fails closed: absent needs an explicit opt-in, broken always refuses (#62)
  13  registration validation rejects what the contract does not allow
+ 14  configuration reports are handled out of band and never leak into audio
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from wyoming.event import Event, async_read_event, async_write_event  # noqa: E402
 
 from bridge.registry import (  # noqa: E402
+    CONFIG_REPORTED_EVENT,
     PROTOCOL_VERSION,
     REGISTER_EVENT,
     REGISTER_OK_EVENT,
@@ -476,6 +478,34 @@ async def t_validation_contract() -> None:
         assert "only letters" in reply.data.get("reason", "")
 
         assert len(h.registry) == 0, "none of those should have created a slot"
+    finally:
+        await h.stop()
+
+
+@check("14", "configuration reports are handled out of band and never leak into audio")
+async def t_configuration_report_control_event() -> None:
+    seen: list[tuple[str, dict]] = []
+
+    async def on_control(device_id: str, event: Event) -> bool:
+        seen.append((device_id, dict(event.data)))
+        return event.type == CONFIG_REPORTED_EVENT
+
+    h = Harness()
+    await h.start(on_control_event=on_control)
+    try:
+        dev = await h.device()
+        assert (await dev.register("kitchen-1")).type == REGISTER_OK_EVENT
+        report = {
+            "generation": 3,
+            "actual": {"mic_gain": 78},
+            "health": "healthy",
+            "error": None,
+        }
+        await dev.send(CONFIG_REPORTED_EVENT, report)
+        await asyncio.sleep(0.05)
+        connection = h.registry.get("kitchen-1").connection
+        assert seen == [("kitchen-1", report)]
+        assert connection.get_nowait() is None, "control reports must not enter the audio queue"
     finally:
         await h.stop()
 

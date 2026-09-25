@@ -1,7 +1,24 @@
 # A configuration server for the satellite
 
-Feasibility research, 2026-09-23. **Status: researched and documented, not built. Decisions are
-parked deliberately; do not re-raise them until asked.**
+Feasibility research, 2026-09-23. **Status: the recommended design has since been built.**
+
+This document is kept as the record of *why* the recommendation was what it was. For the interface
+itself — endpoints, schema, status codes, wire events, and how the gateway drives it — read
+`docs/configuration-plane.md`. Do not treat the "decisions parked" section below as current: the
+decisions were made, and they went the recommended way.
+
+What was actually built, against this document's recommendation:
+
+- a settings and fleet surface on the **host**, on the port the bridge already listens on (`/configure`,
+  `/config/*`), not a new LAN listener on the Pi;
+- an **allowlist of named settings with server-side validators**, never a shell and never a free-form
+  command field;
+- changes applied to the Pi through the **control channel the bridge already owns** (`hermes.config.*`
+  over the registered connection), so the Pi gains no new listening port;
+- the same bearer-token authentication as announcements.
+
+Still open against this document's other recommendations: narrowing the Pi's `NOPASSWD: ALL`, and the
+device-side hardware adapter that turns staged settings into actual `amixer`/LED/service changes.
 
 Her request, verbatim:
 

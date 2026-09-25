@@ -12,9 +12,15 @@
 # the multi-user.target.wants symlink. Nothing else has to reach the device: the link is outbound, so a
 # device on any network that can reach the bridge gets its voice link without a port forward anywhere.
 #
-# It deliberately does not order itself against the satellite service. That service still serves the
-# dial-in path while the bridge supports both shapes, and this runner carries no audio yet, so the two
-# coexist and neither is a dependency of the other. They stop coexisting when the migration finishes.
+# It prefers the satellite service without requiring it. The unit is ordered After= the satellite so the
+# relay usually finds its peer already listening, but it deliberately does not Require= it, because
+# _serve_local() retries until the satellite appears: this service and the satellite start together on a
+# boot and the satellite is the slower of the two. A hard dependency would turn that ordinary race into a
+# failed unit.
+#
+# The two do share the audio device, by design: the relay hands the bridge's events to the satellite
+# service, which is what does the listening and the speaking. The dial-in path on that service keeps
+# working alongside this link while the bridge supports both shapes, so nothing is lost during cutover.
 
 [Unit]
 Description=Outbound link from this satellite to the Hermes voice bridge
