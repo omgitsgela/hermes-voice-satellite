@@ -30,6 +30,11 @@ REGISTRY_DUPLICATE_POLICY = os.environ.get("VOICE_REGISTRY_DUPLICATE_POLICY", "r
 # fingerprint -> device_id. Absent means the listener believes what a device claims, which is only
 # acceptable on a trusted network: never expose this listener to the internet without this file.
 REGISTRY_CREDENTIALS_FILE = Path(__file__).resolve().parent.parent / "state" / "device-credentials.json"
+# Running the listener with no authentication has to be asked for explicitly. Without this flag, a missing
+# or unreadable credential file stops the listener instead of quietly accepting self-claimed identities
+# (review finding, issue #62). Trusted networks only.
+REGISTRY_ALLOW_UNAUTHENTICATED = os.environ.get("VOICE_REGISTRY_ALLOW_UNAUTHENTICATED", "").strip().lower() in (
+    "1", "true", "yes", "on")
 
 # Taken from the satellite's own ExecStart flags, so these are its real formats:
 #   --mic-command 'arecord -D plughw:CARD=seeed2micvoicec,DEV=0 -r 16000 -c 1 -f S16_LE -t raw'

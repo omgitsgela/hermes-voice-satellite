@@ -89,6 +89,15 @@ Rules that are part of the contract:
   disagrees with the authenticated identity is refused.
 - **An unknown credential is a refusal, not a trusted device.** A listener configured with a credential
   lookup never falls back to believing a device that presented none.
+- **What the credential is, today.** The listener is plain TCP: there is no TLS server and no certificate
+  verification yet, so `peer_fingerprint()` returns the literal `unauthenticated` and a `sha256:...` map
+  cannot match anything. Two consequences, and they are the reason this is written down rather than implied:
+  with a credential file present, **every plain-TCP device is refused**; without one, the listener accepts a
+  device's self-claimed identity, and that mode now requires the explicit
+  `VOICE_REGISTRY_ALLOW_UNAUTHENTICATED=1` opt-in rather than being what happens when a file is missing. A
+  credential file that is present but unreadable or malformed **stops the listener from starting** instead of
+  quietly downgrading it. Mutual TLS, which is what makes the credential map meaningful, is a binding part of
+  issue #61 and is not built.
 - **Registration is time-bound** (ten seconds by default). A socket that connects and claims nothing is
   closed.
 - **A version mismatch is refused with a reason** naming the version the bridge speaks, so an old device is

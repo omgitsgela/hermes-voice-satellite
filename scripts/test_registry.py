@@ -22,6 +22,8 @@ The checks map to the migration's acceptance criteria:
   9  playback locks are per device, not per process
  10  a device that never registers is dropped at the deadline
  11  the registration handshake is refused for an unsupported protocol version
+ 12  the credential file fails closed: absent needs an explicit opt-in, broken always refuses (#62)
+ 13  registration validation rejects what the contract does not allow
 """
 
 from __future__ import annotations
@@ -330,6 +332,18 @@ async def t_bounded_queue() -> None:
         assert connection.queued_bytes <= 64, f"bytes must stay bounded, saw {connection.queued_bytes}"
         assert connection.stats.events_dropped >= 1, "drops must be counted, not silent"
         assert connection.stats.events_received >= 8, "every event must be counted on arrival"
+
+        # Bounded is not the same as empty: the events that fit must still be retrievable, with their
+        # payloads intact, or a queue that drops everything would satisfy the assertions above.
+        kept = []
+        while True:
+            event = connection.get_nowait()
+            if event is None:
+                break
+            kept.append(event)
+        assert len(kept) == 2, f"the two queued events must be retrievable, got {len(kept)}"
+        assert all(e.type == "audio-chunk" and len(e.payload) == 16 for e in kept)
+        assert len(kept) + connection.stats.events_dropped == connection.stats.events_received
     finally:
         await h.stop()
 
@@ -383,6 +397,85 @@ async def t_protocol_version() -> None:
         reply = await dev.register("kitchen-1", protocol_version=PROTOCOL_VERSION + 1)
         assert reply is not None and reply.type == REGISTER_REFUSED_EVENT
         assert "protocol version" in reply.data.get("reason", "")
+    finally:
+        await h.stop()
+
+
+@check("12", "the credential file fails closed: absent needs an opt-in, broken always refuses")
+async def t_credential_file() -> None:
+    import json
+    import tempfile
+    from bridge.registry import CredentialConfigError, load_credential_lookup
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = pathlib.Path(tmp) / "device-credentials.json"
+
+        # Absent, with no explicit opt-in: refuse. Absence is not consent to run unauthenticated (#62).
+        try:
+            load_credential_lookup(path)
+            raise AssertionError("a missing credential file must not silently allow unauthenticated mode")
+        except CredentialConfigError as exc:
+            assert "no credential file" in str(exc)
+
+        # Absent, with the explicit opt-in: trusted-network mode, and the caller gets None.
+        assert load_credential_lookup(path, allow_unauthenticated=True) is None
+
+        # Present but malformed: refuse, always. This is the regression that was filed as #62.
+        path.write_text("{ this is not json")
+        try:
+            load_credential_lookup(path, allow_unauthenticated=True)
+            raise AssertionError("a malformed credential file must refuse, even with the opt-in set")
+        except CredentialConfigError as exc:
+            assert "unusable" in str(exc)
+
+        # Present but not an object, and present but empty: also refuse.
+        path.write_text('["not", "a", "mapping"]')
+        try:
+            load_credential_lookup(path)
+            raise AssertionError("a non-object credential file must refuse")
+        except CredentialConfigError:
+            pass
+        path.write_text("{}")
+        try:
+            load_credential_lookup(path)
+            raise AssertionError("an empty credential file must refuse rather than allow nobody in silence")
+        except CredentialConfigError:
+            pass
+
+        # Valid: the mapping is used, and an unknown fingerprint resolves to None (refused by the caller).
+        path.write_text(json.dumps({"sha256:abc": "kitchen-1"}))
+        lookup = load_credential_lookup(path)
+        assert lookup is not None
+        assert lookup("sha256:abc") == "kitchen-1"
+        assert lookup("sha256:something-else") is None
+
+
+@check("13", "registration validation rejects what the contract does not allow")
+async def t_validation_contract() -> None:
+    h = Harness()
+    await h.start()
+    try:
+        dev = await h.device()
+        # A dictionary is not "a list of strings": it used to register as its keys.
+        reply = await dev.register("kitchen-1", capabilities={"a": 1, "b": 2})
+        assert reply is not None and reply.type == REGISTER_REFUSED_EVENT
+        assert "list of strings" in reply.data.get("reason", "")
+
+        dev2 = await h.device()
+        reply = await dev2.register("kitchen-1", capabilities=["led", 7])
+        assert reply is not None and reply.type == REGISTER_REFUSED_EVENT
+
+        dev3 = await h.device()
+        reply = await dev3.register("x" * 65)
+        assert reply is not None and reply.type == REGISTER_REFUSED_EVENT
+        assert "longer than" in reply.data.get("reason", "")
+
+        dev4 = await h.device()
+        reply = await dev4.register("kitchen 1; rm -rf /")
+        assert reply is not None and reply.type == REGISTER_REFUSED_EVENT
+        assert "only letters" in reply.data.get("reason", "")
+
+        assert len(h.registry) == 0, "none of those should have created a slot"
     finally:
         await h.stop()
 

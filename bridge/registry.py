@@ -1,8 +1,8 @@
 """Device registry for the inverted connection shape (issue #61, migration phase 2).
 
-**This module is not wired into the running bridge yet.** Nothing in `bridge/loop.py` imports it, so the
-live voice path is unchanged and still dials the satellite. It exists so the registry's semantics are
-settled and tested with fake devices before any real device is asked to dial in.
+**Wired into the bridge behind `VOICE_REGISTRY_ENABLED`, off by default**, and not yet carrying voice
+traffic: the voice loop still dials the satellite, and the worker that leases a registered device to a
+conversation is migration phase 4. Everything here is exercised by `scripts/test_registry.py`.
 
 What it provides:
 
@@ -32,7 +32,10 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import hashlib
+import json
 import logging
+import pathlib
+import re
 import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
@@ -51,6 +54,66 @@ REGISTER_REFUSED_EVENT = "hermes.register.refused"
 
 #: A device that connects and claims nothing is dropped after this long.
 REGISTRATION_TIMEOUT_SECONDS = 10.0
+
+# Registration field limits. These are not decoration: without them a peer that can reach the listener
+# can create arbitrary identities and grow the registry without bound (review finding on #61).
+MAX_DEVICE_ID_CHARS = 64
+MAX_NAME_CHARS = 64
+MAX_BOOT_ID_CHARS = 128
+MAX_CAPABILITIES = 32
+MAX_CAPABILITY_CHARS = 32
+DEVICE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+class CredentialConfigError(Exception):
+    """The credential configuration is present but unusable.
+
+    Deliberately distinct from "there is no credential configuration": the first must stop the listener
+    from starting (fail closed), the second is only allowed with an explicit trusted-network opt-in. A
+    typo or a partial write in a credential file must never quietly downgrade a listener to believing
+    whatever a device claims.
+    """
+
+
+def load_credential_lookup(
+    path: pathlib.Path, *, allow_unauthenticated: bool = False
+) -> Optional[Callable[[str], Optional[str]]]:
+    """Build the fingerprint -> device_id lookup from a JSON file, or None for trusted-network mode.
+
+    - File absent and `allow_unauthenticated` is True: returns None, and the caller must warn loudly.
+    - File absent and `allow_unauthenticated` is False: raises `CredentialConfigError`. Absence is not
+      consent to run unauthenticated.
+    - File present but unreadable or malformed: raises `CredentialConfigError`, always, so a broken file
+      cannot open the door.
+    - File present and valid: returns the lookup. An unknown fingerprint is refused by the caller.
+    """
+    if not path.is_file():
+        if allow_unauthenticated:
+            return None
+        raise CredentialConfigError(
+            f"no credential file at {path}, and unauthenticated registration was not explicitly enabled. "
+            "Either provide the file or set VOICE_REGISTRY_ALLOW_UNAUTHENTICATED=1 on a trusted network."
+        )
+    try:
+        raw = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise CredentialConfigError(
+            f"credential file {path} is present but unusable: {type(exc).__name__}: {exc}. Refusing to "
+            "start the listener rather than accepting self-claimed identities."
+        ) from exc
+    if not isinstance(raw, dict):
+        raise CredentialConfigError(
+            f"credential file {path} must be a JSON object mapping fingerprint to device id"
+        )
+    mapping = {str(k): str(v) for k, v in raw.items() if str(k).strip() and str(v).strip()}
+    if not mapping:
+        raise CredentialConfigError(f"credential file {path} contains no usable entries")
+
+    def lookup(fingerprint: str) -> Optional[str]:
+        return mapping.get(fingerprint)
+
+    log.info("registry credentials loaded from %s: %d device(s)", path, len(mapping))
+    return lookup
 
 
 class RegistrationError(Exception):
@@ -85,6 +148,12 @@ class DeviceIdentity:
         device_id = str(data.get("device_id") or "").strip()
         if not device_id:
             raise RegistrationError("no device_id in the registration payload")
+        if len(device_id) > MAX_DEVICE_ID_CHARS:
+            raise RegistrationError(f"device_id is longer than {MAX_DEVICE_ID_CHARS} characters")
+        if not DEVICE_ID_PATTERN.match(device_id):
+            raise RegistrationError(
+                "device_id may contain only letters, digits, dot, dash and underscore"
+            )
         if authenticated_id is not None and device_id != authenticated_id:
             raise RegistrationError(
                 f"device_id {device_id!r} does not match the authenticated identity {authenticated_id!r}"
@@ -100,9 +169,25 @@ class DeviceIdentity:
                 f"(this bridge speaks {PROTOCOL_VERSION})"
             )
 
+        # The contract says "a list of strings", so check that rather than coercing whatever arrives: a
+        # dict would otherwise register as its keys, and an integer as a string nobody meant to send.
         capabilities = data.get("capabilities") or ()
-        if isinstance(capabilities, str) or not isinstance(capabilities, Iterable):
+        if isinstance(capabilities, (str, bytes, dict)) or not isinstance(capabilities, Iterable):
             raise RegistrationError("capabilities must be a list of strings")
+        capabilities = tuple(capabilities)
+        if len(capabilities) > MAX_CAPABILITIES:
+            raise RegistrationError(f"more than {MAX_CAPABILITIES} capabilities is not accepted")
+        for entry in capabilities:
+            if not isinstance(entry, str) or len(entry) > MAX_CAPABILITY_CHARS:
+                raise RegistrationError(
+                    f"capability {entry!r} is not a string of at most {MAX_CAPABILITY_CHARS} characters"
+                )
+
+        for field_name, limit in (("name", MAX_NAME_CHARS), ("area", MAX_NAME_CHARS),
+                                  ("boot_id", MAX_BOOT_ID_CHARS), ("firmware_version", MAX_NAME_CHARS)):
+            value = data.get(field_name)
+            if value is not None and len(str(value)) > limit:
+                raise RegistrationError(f"{field_name} is longer than {limit} characters")
 
         return cls(
             device_id=device_id,
@@ -110,7 +195,7 @@ class DeviceIdentity:
             area=str(data.get("area") or ""),
             firmware_version=str(data.get("firmware_version") or ""),
             protocol_version=protocol_version,
-            capabilities=tuple(str(c) for c in capabilities),
+            capabilities=capabilities,
             boot_id=str(data.get("boot_id") or ""),
         )
 

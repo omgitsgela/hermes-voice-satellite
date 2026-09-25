@@ -17,7 +17,10 @@ Checks:
   4  a dropped connection reconnects and re-registers
   5  ping is answered with pong, so an idle link stays honest
   6  the backoff grows with consecutive failures and is capped
+ 6b  an accept-then-drop bridge accumulates backoff rather than retrying at the base rate (#63)
   7  a stalled write fails the link instead of hanging the device
+  8  the bootstrap configuration is exactly what the device needs
+  9  a stale write failure does not tear down a newer connection (#64)
 """
 
 from __future__ import annotations
@@ -58,12 +61,14 @@ class FakeBridge:
     """The host's half of the contract, with the failure modes a real bridge has."""
 
     def __init__(self, *, refuse_reason: str | None = None, drop_on_register: bool = False,
-                 stop_reading: bool = False) -> None:
+                 drop_every_register: bool = False, stop_reading: bool = False) -> None:
         self.refuse_reason = refuse_reason
         self.drop_on_register = drop_on_register
+        self.drop_every_register = drop_every_register
         self.stop_reading = stop_reading
         self.port = free_port()
         self.connections = 0
+        self.connection_times: list[float] = []
         self.registrations: list[dict] = []
         self.received: list[Event] = []
         self.writers: list[asyncio.StreamWriter] = []
@@ -86,6 +91,7 @@ class FakeBridge:
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         self.connections += 1
+        self.connection_times.append(asyncio.get_running_loop().time())
         self.writers.append(writer)
         await write_event(writer, Event(type="describe"))
         while True:
@@ -107,6 +113,11 @@ class FakeBridge:
                     writer, Event(type=REGISTER_OK_EVENT, data={"device_id": event.data.get("device_id")})
                 )
                 self.registered.set()
+                if self.drop_every_register:
+                    # A bridge that accepts the handshake and then closes, every time: the flapping case
+                    # filed as #63.
+                    writer.close()
+                    return
                 if self.drop_on_register and self._drops == 0:
                     # Drop the first accepted connection, the way a bridge restarted mid-session would.
                     self._drops += 1
@@ -190,6 +201,14 @@ async def t_handshake() -> None:
     await bridge.start()
     link = BridgeLink(config_for(bridge.port))
     runner = LinkRunner(link)
+    # What the world looked like at the moment readiness was reported. A callback fired at TCP connect
+    # would show zero registrations here, which is the failure this check exists to catch.
+    observed: list[tuple[int, bool, bool, dict]] = []
+
+    async def observe(payload: dict) -> None:
+        observed.append((len(bridge.registrations), link.registered, link.connected, dict(payload)))
+
+    link.on_registered = observe
     try:
         await runner.start()
         await asyncio.wait_for(bridge.registered.wait(), TIMEOUT)
@@ -200,7 +219,11 @@ async def t_handshake() -> None:
         assert payload["area"] == "kitchen"
         assert payload["protocol_version"] == 1
         assert link.registered and link.connected
-        assert len(runner.registered_payloads) == 1, "readiness must be reported exactly once"
+        assert len(observed) == 1, "readiness must be reported exactly once"
+        registrations, registered_flag, connected_flag, reported = observed[0]
+        assert registrations == 1, "readiness must not be reported before the bridge processed the register"
+        assert registered_flag and connected_flag
+        assert reported["device_id"] == "kitchen-1"
     finally:
         await runner.stop()
         await bridge.stop()
@@ -241,7 +264,10 @@ async def t_refusal() -> None:
         assert bridge.connections == 1, (
             f"a refusal must not be retried on the short timer, saw {bridge.connections} connections"
         )
-        assert link.stats.last_backoff <= link.config.refused_backoff
+        # The refusal path waits on the fixed long timer rather than the jittered reconnect backoff, so
+        # last_backoff staying at zero is the correct expectation here. The connection count above is what
+        # proves there was no short retry.
+        assert link.stats.last_backoff == 0.0, "a refusal must not consume the jittered backoff"
     finally:
         await runner.stop()
         await bridge.stop()
@@ -337,6 +363,64 @@ async def t_config_from_env() -> None:
         raise AssertionError("a device with no identity or endpoint must refuse to start")
     except SystemExit:
         pass
+
+
+@check("6b", "an accept-then-drop bridge accumulates backoff instead of retrying at the base interval")
+async def t_flapping_backoff() -> None:
+    # Filed as #63: the reset used to happen on every handshake, so a bridge that accepts and immediately
+    # closes produced a tight retry loop forever. This drives the real run loop rather than calling
+    # _next_backoff directly.
+    bridge = FakeBridge(drop_every_register=True)
+    await bridge.start()
+    link = BridgeLink(config_for(bridge.port, backoff_base=0.05, backoff_max=1.0, healthy_after=30.0))
+    runner = LinkRunner(link)
+    try:
+        await runner.start()
+        deadline = asyncio.get_running_loop().time() + 8
+        while asyncio.get_running_loop().time() < deadline and link._backoff_index < 4:
+            await asyncio.sleep(0.05)
+        assert bridge.connections >= 4, f"expected several attempts, saw {bridge.connections}"
+        assert link._backoff_index >= 4, (
+            f"the backoff must grow across a flapping link, index={link._backoff_index}"
+        )
+        gaps = [b - a for a, b in zip(bridge.connection_times, bridge.connection_times[1:])]
+        assert len(gaps) >= 3, f"need a few gaps to compare, got {gaps}"
+        assert gaps[-1] > gaps[0], f"attempts must space out, gaps={[round(g, 3) for g in gaps]}"
+        assert link.stats.registrations >= 4, "each attempt did register; that is what made it look healthy"
+    finally:
+        await runner.stop()
+        await bridge.stop()
+
+
+@check("9", "a stale write failure does not tear down a newer connection")
+async def t_stale_write_teardown() -> None:
+    # Filed as #64: send() saved a local writer reference but tore down unconditionally, so a write that
+    # failed on a superseded socket closed the replacement the run loop had already installed.
+    bridge = FakeBridge(stop_reading=True)
+    await bridge.start()
+    link = BridgeLink(config_for(bridge.port, write_timeout=0.5))
+    runner = LinkRunner(link)
+    try:
+        await runner.start()
+        await asyncio.wait_for(bridge.registered.wait(), TIMEOUT)
+        old_writer = link.writer
+        assert old_writer is not None
+        # A write that cannot complete, because the bridge has stopped reading.
+        stale = asyncio.create_task(
+            link.send(Event(type="audio-chunk", payload=b"\x00" * (8 * 1024 * 1024)))
+        )
+        await asyncio.sleep(0.1)
+        # Meanwhile the run loop reconnects and installs a new generation.
+        reader2, new_writer = await asyncio.open_connection("127.0.0.1", bridge.port)
+        link.writer, link.reader, link.connected = new_writer, reader2, True
+        assert not await stale, "the stale write must fail"
+        assert link.writer is new_writer, "the live connection must still be installed"
+        assert not new_writer.is_closing(), "a stale failure must not close the live connection"
+        assert link.connected, "the link must still be up after a superseded write fails"
+        new_writer.close()
+    finally:
+        await runner.stop()
+        await bridge.stop()
 
 
 # ---------------------------------------------------------------- runner

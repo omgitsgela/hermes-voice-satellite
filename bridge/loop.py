@@ -1218,8 +1218,10 @@ class VoiceLoop:
         # The inverted shape (issue #61): a device may dial us instead of being dialled. Off by default,
         # and on purpose it cannot break the voice path: a failure here is logged and the loop carries on
         # dialling the satellite as before.
-        from bridge.config import (REGISTRY_CREDENTIALS_FILE, REGISTRY_DUPLICATE_POLICY, REGISTRY_ENABLED,
-                                   REGISTRY_HOST, REGISTRY_PORT)
+        from bridge.config import (REGISTRY_ALLOW_UNAUTHENTICATED, REGISTRY_CREDENTIALS_FILE,
+                                   REGISTRY_DUPLICATE_POLICY, REGISTRY_ENABLED, REGISTRY_HOST,
+                                   REGISTRY_PORT)
+        from bridge.registry import CredentialConfigError, load_credential_lookup
 
         self.registry = None
         self.registry_server = None
@@ -1227,13 +1229,19 @@ class VoiceLoop:
             try:
                 from bridge.registry import RegistryServer, SatelliteRegistry
 
-                self.registry = SatelliteRegistry(duplicate_policy=REGISTRY_DUPLICATE_POLICY)
-                lookup = _load_credential_lookup(REGISTRY_CREDENTIALS_FILE)
+                # A credential file that is present but unusable stops the listener rather than silently
+                # downgrading it to believing whatever a device claims (review finding, issue #62).
+                lookup = load_credential_lookup(
+                    REGISTRY_CREDENTIALS_FILE, allow_unauthenticated=REGISTRY_ALLOW_UNAUTHENTICATED
+                )
                 if lookup is None:
                     _LOGGER.warning(
-                        "registry listener has no credential file at %s: it will believe what a device "
-                        "claims. Trusted networks only.", REGISTRY_CREDENTIALS_FILE,
+                        "registry listener is running WITHOUT authentication because "
+                        "VOICE_REGISTRY_ALLOW_UNAUTHENTICATED is set and there is no credential file at "
+                        "%s: any peer that can reach it may claim any device identity. Trusted networks "
+                        "only.", REGISTRY_CREDENTIALS_FILE,
                     )
+                self.registry = SatelliteRegistry(duplicate_policy=REGISTRY_DUPLICATE_POLICY)
                 self.registry_server = RegistryServer(
                     self.registry, REGISTRY_HOST, REGISTRY_PORT,
                     credential_lookup=lookup, on_registered=self._on_device_registered,
@@ -1243,6 +1251,9 @@ class VoiceLoop:
                     "registry listening on %s:%s (devices may dial in; nothing leases them yet)",
                     REGISTRY_HOST, REGISTRY_PORT,
                 )
+            except CredentialConfigError as exc:
+                _LOGGER.error("registry listener NOT started: %s", exc)
+                self.registry_server = None
             except Exception as exc:  # noqa: BLE001 - the voice path must not depend on this
                 _LOGGER.error("could not start the registry listener: %s", exc)
                 self.registry_server = None
@@ -1352,30 +1363,6 @@ class VoiceLoop:
         await self.announcer.stop()
         await self.gateway.close()
         await self.sat.close()
-
-
-def _load_credential_lookup(path: Path):
-    """A fingerprint -> device_id lookup, or None when there is no credential file.
-
-    The file is `{"sha256:<fingerprint>": "<device_id>"}`. None means the listener accepts whatever a
-    device claims, which is only acceptable on a trusted network, and the caller warns about it.
-    """
-    if not path.is_file():
-        return None
-    try:
-        import json
-
-        raw = json.loads(path.read_text())
-    except (OSError, ValueError) as exc:
-        _LOGGER.error("could not read the credential file %s: %s", path, exc)
-        return None
-    mapping = {str(k): str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
-
-    def lookup(fingerprint: str) -> Optional[str]:
-        return mapping.get(fingerprint)
-
-    _LOGGER.info("registry credentials loaded: %d device(s)", len(mapping))
-    return lookup
 
 
 async def _main() -> int:

@@ -46,8 +46,11 @@ the one port the bridge dials into.** Every internal control path is loopback.
 
 **That port is going away too** (issue #61): when the device dials the bridge instead of being dialled, it
 needs no listener at all, which is what makes a device behind somebody else's NAT - or on a network you do
-not control - a supported shape rather than a compromise. Everything below about a management interface on
-the host still holds; only the direction of the voice connection changes.
+not control - a supported shape rather than a compromise. The qualification that matters, and it is in the
+issue rather than here: an outbound connection still needs a **reachable destination**, so the bridge has to
+be on the same LAN, on a private overlay, behind an authenticated tunnel, or listening with TLS on a public
+endpoint. Everything below about a management interface on the host still holds; only the direction of the
+voice connection changes.
 
 ### The fact that decides this
 

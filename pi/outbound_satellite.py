@@ -76,6 +76,10 @@ class LinkConfig:
     backoff_base: float = 1.0
     backoff_max: float = 60.0
     refused_backoff: float = 300.0
+    #: How long a connection must stay up before the reconnect backoff is reset. Without this, a bridge
+    #: that accepts the handshake and then immediately drops produces a tight retry loop forever, because
+    #: every attempt looks successful (review finding, issue #63).
+    healthy_after: float = 30.0
     ssl_context: Optional[ssl.SSLContext] = None
 
     def registration_payload(self) -> Dict[str, Any]:
@@ -185,6 +189,7 @@ class BridgeLink:
     async def run(self) -> None:
         """Connect, register, serve, and reconnect until stopped. Never returns on its own."""
         while not self._stopping:
+            started = time.monotonic()
             try:
                 await self._connect_and_serve()
                 ended = "the bridge closed the connection"
@@ -207,6 +212,15 @@ class BridgeLink:
                 ended = f"unexpected {type(exc).__name__}: {exc}"
                 self.stats.last_error = ended
                 log.exception("unexpected failure in the bridge link")
+
+            # Reset the backoff only after a connection has actually stayed up. Resetting it on the
+            # handshake alone means an accept-then-drop bridge keeps every retry at the base interval
+            # (review finding, issue #63).
+            if time.monotonic() - started >= self.config.healthy_after:
+                if self._backoff_index:
+                    log.info("bridge link was healthy for %.0fs; resetting the reconnect backoff",
+                             self.config.healthy_after)
+                self._backoff_index = 0
 
             self._teardown()
             if self.on_disconnected is not None:
@@ -239,7 +253,10 @@ class BridgeLink:
                     "that waits on a full TCP buffer stops servicing its own microphone.",
                     self.config.write_timeout, type(exc).__name__,
                 )
-                self._teardown()
+                # Tear down only the socket this write was using. If the run loop has already replaced it,
+                # this failure belongs to a dead generation and must not close the live connection
+                # (review finding, issue #64).
+                self._teardown(writer)
                 return False
             self.stats.events_sent += 1
             return True
@@ -260,9 +277,9 @@ class BridgeLink:
         self.registered = True
         self._generation += 1
         self.stats.registrations += 1
-        # A successful registration is the only thing that resets the backoff, so a flapping link keeps
-        # backing off instead of settling into a tight retry loop.
-        self._backoff_index = 0
+        # The backoff is deliberately NOT reset here: a connection that registers and then dies must keep
+        # accumulating backoff, or an accept-then-drop bridge produces a tight retry loop (issue #63). The
+        # reset happens in run() only after the link has been healthy for healthy_after seconds.
         log.info(
             "registered with the bridge as %s (generation %s)", self.config.device_id, self._generation
         )
@@ -338,14 +355,29 @@ class BridgeLink:
             raise ConnectionError("not connected")
         return self.reader
 
-    def _teardown(self) -> None:
-        self.connected = False
-        self.registered = False
-        writer, self.writer = self.writer, None
-        self.reader = None
-        if writer is not None:
+    def _teardown(self, writer: Optional[asyncio.StreamWriter] = None) -> None:
+        """Close the link, or just the dead socket a failed write was using.
+
+        With no argument this is the run loop's own teardown: the current connection has ended. With a
+        writer argument it is a write failure, and it must only clear the link when that writer is still
+        the current one. Otherwise a stale failure from generation N closes generation N+1, which the run
+        loop has already installed (review finding, issue #64).
+        """
+        if writer is not None and writer is not self.writer:
             try:
                 writer.close()
+            except Exception:  # pragma: no cover - best effort
+                pass
+            log.debug("a stale write failed on a superseded socket; the live connection is untouched")
+            return
+
+        self.connected = False
+        self.registered = False
+        current, self.writer = self.writer, None
+        self.reader = None
+        if current is not None:
+            try:
+                current.close()
             except Exception:  # pragma: no cover - best effort
                 pass
 
