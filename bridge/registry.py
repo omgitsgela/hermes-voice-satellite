@@ -1,8 +1,13 @@
 """Device registry for the inverted connection shape (issue #61, migration phase 2).
 
-**Wired into the bridge behind `VOICE_REGISTRY_ENABLED`, off by default**, and not yet carrying voice
-traffic: the voice loop still dials the satellite, and the worker that leases a registered device to a
-conversation is migration phase 4. Everything here is exercised by `scripts/test_registry.py`.
+**Wired into the bridge behind `VOICE_REGISTRY_ENABLED`, off by default.** A registered device is
+leaseable by the voice loop and carries real conversations over the leased connection
+(`bridge/lease.py`, acquired in `bridge/loop.py`). The registry also carries the configuration control
+plane: desired state goes down, reported actual state comes back (`hermes.config.desired` /
+`hermes.config.reported`), and those control events are handled out of band so they never enter the
+audio queue.
+
+Everything here is exercised by `scripts/test_registry.py`.
 
 What it provides:
 
@@ -14,7 +19,8 @@ What it provides:
 - `DeviceSlot` — the state that must survive a reconnect: identity, metadata, desired state, playback lock,
   active-turn gate, last seen.
 - `SatelliteRegistry` — generation-safe install and removal, with an explicit duplicate policy.
-- `RegistryServer` — a Wyoming TCP listener whose handler registers a device and then dispatches.
+- `RegistryServer` — a Wyoming TCP listener whose handler registers a device and then dispatches, with an
+  optional `on_control_event` hook for non-audio control-plane events.
 
 Design rules this enforces, each from the pre-implementation review:
 
@@ -51,6 +57,8 @@ PROTOCOL_VERSION = 1
 REGISTER_EVENT = "hermes.register"
 REGISTER_OK_EVENT = "hermes.register.ok"
 REGISTER_REFUSED_EVENT = "hermes.register.refused"
+CONFIG_DESIRED_EVENT = "hermes.config.desired"
+CONFIG_REPORTED_EVENT = "hermes.config.reported"
 
 #: A device that connects and claims nothing is dropped after this long.
 REGISTRATION_TIMEOUT_SECONDS = 10.0
@@ -565,6 +573,7 @@ class RegistrationHandler(AsyncEventHandler):
         authenticated_id: Optional[str] = None,
         require_credential: bool = False,
         on_registered: Optional[Callable[[DeviceSlot], Any]] = None,
+        on_control_event: Optional[Callable[[str, Event], Any]] = None,
         registration_timeout: float = REGISTRATION_TIMEOUT_SECONDS,
     ) -> None:
         super().__init__(reader, writer)
@@ -572,6 +581,7 @@ class RegistrationHandler(AsyncEventHandler):
         self.authenticated_id = authenticated_id
         self.require_credential = require_credential
         self.on_registered = on_registered
+        self.on_control_event = on_control_event
         self.registration_timeout = registration_timeout
         self.connection: Optional[SatelliteConnection] = None
         self.slot: Optional[DeviceSlot] = None
@@ -609,6 +619,16 @@ class RegistrationHandler(AsyncEventHandler):
             # that never registers.
             return True
 
+        if event.type == CONFIG_REPORTED_EVENT:
+            if self.on_control_event is not None:
+                try:
+                    result = self.on_control_event(self.connection.device_id, event)
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception as exc:  # noqa: BLE001 - a bad report must not kill voice transport
+                    log.warning("could not process configuration report from %s: %s",
+                                self.connection.device_id, exc)
+            return True
         self.connection.deliver(event)
         return True
 
@@ -697,6 +717,7 @@ class RegistryServer:
         *,
         credential_lookup: Optional[Callable[[str], Optional[str]]] = None,
         on_registered: Optional[Callable[[DeviceSlot], Any]] = None,
+        on_control_event: Optional[Callable[[str, Event], Any]] = None,
         registration_timeout: float = REGISTRATION_TIMEOUT_SECONDS,
     ) -> None:
         self.registry = registry
@@ -704,6 +725,7 @@ class RegistryServer:
         self.port = port
         self.credential_lookup = credential_lookup
         self.on_registered = on_registered
+        self.on_control_event = on_control_event
         self.registration_timeout = registration_timeout
         self._server: Optional[AsyncTcpServer] = None
 
@@ -721,6 +743,7 @@ class RegistryServer:
             authenticated_id=authenticated_id,
             require_credential=self.credential_lookup is not None,
             on_registered=self.on_registered,
+            on_control_event=self.on_control_event,
             registration_timeout=self.registration_timeout,
         )
 

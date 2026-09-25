@@ -124,6 +124,42 @@ async def send_control(port: int, command: str) -> str:
     return reply
 
 
+class FragmentedEventReader:
+    """Release a Wyoming header now and its declared body only when the test says so."""
+
+    def __init__(self, header: bytes, body: bytes) -> None:
+        self.header = header
+        self.body = body
+        self.header_seen = asyncio.Event()
+        self.release_body = asyncio.Event()
+        self.sent = False
+
+    async def readline(self) -> bytes:
+        if self.sent:
+            return b""
+        self.sent = True
+        self.header_seen.set()
+        return self.header
+
+    async def readexactly(self, _length: int) -> bytes:
+        await self.release_body.wait()
+        return self.body
+
+
+class CollectingWriter:
+    def __init__(self) -> None:
+        self.data = bytearray()
+
+    def write(self, data: bytes) -> None:
+        self.data.extend(data)
+
+    async def drain(self) -> None:
+        await asyncio.sleep(0)
+
+    def is_closing(self) -> bool:
+        return False
+
+
 async def main() -> int:
     print("=== WAKE SHIM (loopback only) ===")
 
@@ -186,6 +222,31 @@ async def main() -> int:
     check("an injection alongside a relayed event: the relayed event survives", intact, fresh[:4])
     check("an injection alongside a relayed event: the detection still arrives",
           detections >= 1, f"detections={detections}")
+
+    # 4b. The hard framing case: the upstream header arrives before its declared body. An injection
+    # in that gap must not split the event by landing between the header and body (#17).
+    body = b"{}"
+    header = json.dumps({"type": "info", "data_length": len(body)}).encode() + b"\n"
+    reader = FragmentedEventReader(header, body)
+    writer = CollectingWriter()
+    framing_shim = WakeShim(
+        listen_host="127.0.0.1", listen_port=0,
+        upstream_host="127.0.0.1", upstream_port=0,
+        control_host="127.0.0.1", control_port=0, wake_name="ok_nabu",
+    )
+    framing_shim._sat_writer = writer  # type: ignore[assignment]
+    relay = asyncio.create_task(
+        framing_shim._relay_events(reader, writer)  # type: ignore[arg-type]
+    )
+    await reader.header_seen.wait()
+    await asyncio.sleep(0)
+    inject = asyncio.create_task(framing_shim.inject())
+    await asyncio.sleep(0)
+    reader.release_body.set()
+    await asyncio.gather(relay, inject)
+    detection = (json.dumps({"type": "detection", "data": {"name": "ok_nabu"}}) + "\n").encode()
+    check("a fragmented relayed event remains atomic across an injection",
+          bytes(writer.data) == header + body + detection, repr(bytes(writer.data)))
 
     # 5. A rejected command must not open the microphone.
     reply = await send_control(control_port, "please listen")

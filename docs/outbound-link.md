@@ -39,11 +39,15 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now outbound-satellite
 ```
 
-3. The unit deliberately does not order itself against the older satellite service. That service still
-   serves the dial-in path while the bridge supports both shapes, and the runner carries no audio yet, so
-   they coexist without contending for the microphone. Once the relay is running the two do share the
-   audio device, because the relay hands the bridge's events to that same satellite service: it is the
-   satellite doing the listening and the speaking, exactly as before, just reached over an outbound socket.
+3. The unit prefers the older satellite service without requiring it: ordered `After=` it so the relay
+   usually finds its peer listening, but not `Require=`, because `_serve_local()` retries until the
+   satellite appears and a hard dependency would turn that ordinary boot race into a failed unit.
+
+   The two do share the audio device, by design, and not by contention: the relay hands the bridge's
+   events to that same satellite service, so it is the satellite doing the listening and the speaking,
+   exactly as before, just reached over an outbound socket. Nothing else on the device touches the mic or
+   the speaker, and the dial-in path keeps working alongside this link for as long as the bridge supports
+   both shapes.
 
 ## What it does
 

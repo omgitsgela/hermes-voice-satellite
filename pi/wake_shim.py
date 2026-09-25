@@ -67,6 +67,10 @@ class WakeShim:
         self.control_port = control_port
         self.wake_name = wake_name
         self._sat_writer: Optional[asyncio.StreamWriter] = None
+        # Every writer to the satellite shares this lock. A Wyoming event is a JSON
+        # header followed by declared data/payload bytes; another event may not land
+        # between those pieces (#17).
+        self._sat_write_lock = asyncio.Lock()
         self.injections = 0
 
     # -- relay ---------------------------------------------------------------
@@ -104,12 +108,13 @@ class WakeShim:
                 except ValueError:
                     _LOGGER.warning("upstream sent a line that is not JSON; dropping it")
                     continue
-                writer.write(line)
-                for key in ("data_length", "payload_length"):
-                    length = header.get(key)
-                    if isinstance(length, int) and length > 0:
-                        writer.write(await reader.readexactly(length))
-                await writer.drain()
+                async with self._sat_write_lock:
+                    writer.write(line)
+                    for key in ("data_length", "payload_length"):
+                        length = header.get(key)
+                        if isinstance(length, int) and length > 0:
+                            writer.write(await reader.readexactly(length))
+                    await writer.drain()
         except (ConnectionResetError, BrokenPipeError, OSError, asyncio.IncompleteReadError) as exc:
             _LOGGER.info("wake service -> satellite relay ended: %s", exc or "EOF")
         else:
@@ -172,9 +177,15 @@ class WakeShim:
         if writer is None or writer.is_closing():
             _LOGGER.warning("asked to open the microphone but no satellite is connected")
             return False
-        writer.write((json.dumps({"type": DETECTION_TYPE,
-                                  "data": {"name": self.wake_name}}) + "\n").encode())
-        await writer.drain()
+        async with self._sat_write_lock:
+            # The writer may have disconnected while this injection waited behind a
+            # complete relayed event. Never write into a superseded connection.
+            if writer is not self._sat_writer or writer.is_closing():
+                _LOGGER.warning("asked to open the microphone but the satellite disconnected")
+                return False
+            writer.write((json.dumps({"type": DETECTION_TYPE,
+                                      "data": {"name": self.wake_name}}) + "\n").encode())
+            await writer.drain()
         self.injections += 1
         _LOGGER.info("injected a wake detection (%s): the microphone is open", self.wake_name)
         return True

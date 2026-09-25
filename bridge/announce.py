@@ -46,13 +46,12 @@ import wave
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Awaitable, Callable, Iterable, Optional
 
 from aiohttp import web
 
 from bridge import tts
 from bridge.config import (
-    ANNOUNCE_CHIME,
     ANNOUNCE_DEDUP_SECONDS,
     ANNOUNCE_HOST,
     ANNOUNCE_LOG,
@@ -61,12 +60,13 @@ from bridge.config import (
     ANNOUNCE_PORT,
     ANNOUNCE_TOKEN_ENV,
     ANNOUNCE_TOKEN_FILE,
+    ANNOUNCE_SOUNDS,
     ANNOUNCE_TURN_MAX_AGE,
     AUDIO_OUT,
-    SATELLITE_HOST,
-    SATELLITE_PORT,
 )
 from bridge.satellite import SatelliteClient
+from bridge.timers import DEFAULT_STATE_PATH, TimerLimitError, TimerManager, parse_duration
+from bridge.config_plane import ConfigConflict, ConfigPlane, ConfigValidationError
 
 _LOGGER = logging.getLogger("bridge.announce")
 
@@ -79,7 +79,7 @@ class Announcement:
     text: str
     source: str
     key: Optional[str]
-    chime: bool
+    sound: str
     received_at: float
 
 
@@ -91,6 +91,12 @@ class Announcer:
                  follow_up_set: Optional[Callable[[bool], bool]] = None,
                  endpointing_profile_get: Optional[Callable[[], str]] = None,
                  endpointing_profile_set: Optional[Callable[[str], str]] = None,
+                 timer_state_path: Path = DEFAULT_STATE_PATH,
+                 config_plane: Optional[ConfigPlane] = None,
+                 connected_device_ids: Optional[Callable[[], Iterable[str]]] = None,
+                 config_dispatch: Optional[
+                     Callable[[str, dict[str, Any]], Awaitable[bool] | bool]
+                 ] = None,
                  host: str = ANNOUNCE_HOST, port: int = ANNOUNCE_PORT) -> None:
         self._sat = sat          # the conversation loop's connection; see the module docstring
         self._turn_started_at = turn_started_at
@@ -112,6 +118,10 @@ class Announcer:
         self.spoken = 0
         self.dropped = 0
         self.last_spoken_at: Optional[float] = None
+        self.timers = TimerManager(state_path=timer_state_path, on_expire=self._timer_expired)
+        self.config_plane = config_plane
+        self._connected_device_ids = connected_device_ids or (lambda: ())
+        self._config_dispatch = config_dispatch
 
     # -- token ---------------------------------------------------------------
 
@@ -161,15 +171,25 @@ class Announcer:
         # like announcements: this changes how the device behaves in the room.
         app.router.add_get("/settings", self._handle_settings_get)
         app.router.add_post("/settings", self._handle_settings_post)
+        app.router.add_get("/timers", self._handle_timers_get)
+        app.router.add_post("/timers", self._handle_timers_post)
+        app.router.add_get("/configure", self._handle_config_page)
+        app.router.add_get("/config/schema", self._handle_config_schema)
+        app.router.add_get("/config/devices", self._handle_config_devices)
+        app.router.add_get("/config/devices/{device_id}", self._handle_config_device)
+        app.router.add_put("/config/devices/{device_id}/desired", self._handle_config_desired)
+        app.router.add_post("/config/devices/{device_id}/reported", self._handle_config_reported)
         self._runner = web.AppRunner(app, access_log=None)
         await self._runner.setup()
         site = web.TCPSite(self._runner, self.host, self.port)
         await site.start()
         self._worker = asyncio.create_task(self._run_worker(), name="announcer")
+        await self.timers.start()
         _LOGGER.info("announcement endpoint on http://%s:%d/announce (bearer token required)",
                      self.host, self.port)
 
     async def stop(self) -> None:
+        await self.timers.stop()
         if self._worker is not None:
             self._worker.cancel()
             try:
@@ -282,7 +302,14 @@ class Announcer:
 
         source = self._clean(str(payload.get("source") or "unknown"))[:40] or "unknown"
         key = self._clean(str(payload.get("key") or ""))[:80] or None
-        chime = bool(payload.get("chime", True))
+        requested_sound = payload.get("sound")
+        if requested_sound is None:
+            sound = "chime" if bool(payload.get("chime", True)) else "none"
+        elif not isinstance(requested_sound, str) or requested_sound not in ANNOUNCE_SOUNDS:
+            return web.json_response(
+                {"ok": False, "error": f"sound must be one of {list(ANNOUNCE_SOUNDS)}"}, status=400)
+        else:
+            sound = requested_sound
 
         if key and self._is_duplicate(key, text):
             self.dropped += 1
@@ -290,23 +317,188 @@ class Announcer:
             self._log({"outcome": "duplicate", "source": source, "key": key, "text": text})
             return web.json_response({"ok": True, "queued": False, "duplicate": True})
 
-        item = Announcement(
-            id=f"an-{datetime.now().strftime('%H%M%S')}-{secrets.token_hex(2)}",
-            text=text, source=source, key=key, chime=chime, received_at=time.monotonic(),
-        )
         try:
-            self._queue.put_nowait(item)
+            item = self._enqueue(text=text, source=source, key=key, sound=sound)
         except asyncio.QueueFull:
             self.dropped += 1
             _LOGGER.warning("announcement queue full; dropping %r from %s", text[:60], source)
             self._log({"outcome": "queue_full", "source": source, "key": key, "text": text})
             return web.json_response({"ok": False, "error": "queue full"}, status=503)
 
-        self.queued += 1
         _LOGGER.info("announcement queued (%s from %s, %d waiting): %s",
                      item.id, source, self._queue.qsize(), text[:80])
         return web.json_response({"ok": True, "queued": True, "id": item.id,
                                   "position": self._queue.qsize()}, status=202)
+
+    def _enqueue(self, *, text: str, source: str, key: Optional[str], sound: str) -> Announcement:
+        item = Announcement(
+            id=f"an-{datetime.now().strftime('%H%M%S')}-{secrets.token_hex(2)}",
+            text=text, source=source, key=key, sound=sound, received_at=time.monotonic(),
+        )
+        self._queue.put_nowait(item)
+        self.queued += 1
+        return item
+
+    async def _timer_expired(self, timer: dict) -> None:
+        label = self._clean(str(timer.get("label") or ""))
+        text = f"Your {label} timer is done." if label else "Your timer is done."
+        try:
+            self._enqueue(text=text, source="timer", key=f"timer:{timer['id']}", sound="timer")
+        except asyncio.QueueFull:
+            self.dropped += 1
+            _LOGGER.error("timer %s expired but the announcement queue was full", timer.get("id"))
+            self._log({"outcome": "queue_full", "source": "timer", "key": timer.get("id"),
+                       "text": text})
+
+    async def _handle_timers_get(self, request: web.Request) -> web.Response:
+        if not self._authorised(request):
+            return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+        timers = self.timers.list_timers()
+        return web.json_response({"ok": True, "count": len(timers), "timers": timers})
+
+    async def _handle_timers_post(self, request: web.Request) -> web.Response:
+        if not self._authorised(request):
+            return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return web.json_response({"ok": False, "error": "body must be JSON"}, status=400)
+        if not isinstance(body, dict):
+            return web.json_response({"ok": False, "error": "body must be a JSON object"}, status=400)
+        action = body.get("action")
+        try:
+            if action == "list":
+                timers = self.timers.list_timers()
+                return web.json_response({"ok": True, "count": len(timers), "timers": timers})
+            if action == "set":
+                if "seconds" in body and "duration" in body:
+                    raise ValueError("provide seconds or duration, not both")
+                seconds = (int(body["seconds"]) if "seconds" in body
+                           else parse_duration(str(body.get("duration") or "")))
+                timer = self.timers.set_timer(seconds, str(body.get("label") or ""))
+                return web.json_response({"ok": True, "timer": timer}, status=201)
+            if action == "cancel":
+                cancelled = self.timers.cancel_timer(
+                    timer_id=str(body.get("id") or "") or None,
+                    label=str(body.get("label") or "") or None,
+                    all_timers=body.get("all") is True,
+                )
+                return web.json_response({"ok": True, "cancelled": len(cancelled),
+                                          "timers": cancelled})
+        except (ValueError, TypeError, TimerLimitError) as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=400)
+        return web.json_response(
+            {"ok": False, "error": "unknown action; expected set, list, or cancel"}, status=400)
+
+    def _config_ready(self) -> Optional[web.Response]:
+        if self.config_plane is None:
+            return web.json_response(
+                {"ok": False, "error": "configuration plane is not enabled"}, status=501)
+        return None
+
+    async def _handle_config_page(self, _request: web.Request) -> web.Response:
+        """Serve a credential-free client; the operator supplies the bearer token locally."""
+        page = Path(__file__).resolve().parent / "static" / "settings.html"
+        try:
+            content = page.read_text()
+        except OSError:
+            return web.Response(text="configuration page is not installed", status=503)
+        return web.Response(text=content, content_type="text/html")
+
+    async def _handle_config_schema(self, request: web.Request) -> web.Response:
+        if not self._authorised(request):
+            return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+        unavailable = self._config_ready()
+        if unavailable is not None:
+            return unavailable
+        return web.json_response({"ok": True, **self.config_plane.schema()})
+
+    async def _handle_config_devices(self, request: web.Request) -> web.Response:
+        if not self._authorised(request):
+            return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+        unavailable = self._config_ready()
+        if unavailable is not None:
+            return unavailable
+        devices = self.config_plane.list_devices(connected_ids=self._connected_device_ids())
+        return web.json_response({"ok": True, "count": len(devices), "devices": devices})
+
+    async def _handle_config_device(self, request: web.Request) -> web.Response:
+        if not self._authorised(request):
+            return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+        unavailable = self._config_ready()
+        if unavailable is not None:
+            return unavailable
+        device_id = request.match_info.get("device_id", "")
+        try:
+            device = self.config_plane.get_device(
+                device_id, connected=device_id in set(self._connected_device_ids()))
+        except ConfigValidationError as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=400)
+        except KeyError:
+            return web.json_response({"ok": False, "error": "device not found"}, status=404)
+        return web.json_response({"ok": True, "device": device})
+
+    async def _handle_config_desired(self, request: web.Request) -> web.Response:
+        if not self._authorised(request):
+            return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+        unavailable = self._config_ready()
+        if unavailable is not None:
+            return unavailable
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return web.json_response({"ok": False, "error": "body must be JSON"}, status=400)
+        if not isinstance(body, dict):
+            return web.json_response({"ok": False, "error": "body must be a JSON object"}, status=400)
+        expected = body.get("expected_generation")
+        if isinstance(expected, bool) or not isinstance(expected, int) or expected < 0:
+            return web.json_response(
+                {"ok": False, "error": "expected_generation must be a non-negative integer"},
+                status=400)
+        device_id = request.match_info.get("device_id", "")
+        try:
+            device = self.config_plane.set_desired(
+                device_id, body.get("settings"), expected_generation=expected)
+        except ConfigConflict as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=409)
+        except ConfigValidationError as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=400)
+
+        dispatched = False
+        if self._config_dispatch is not None and device_id in set(self._connected_device_ids()):
+            try:
+                result = self._config_dispatch(device_id, device)
+                dispatched = bool(await result) if asyncio.iscoroutine(result) else bool(result)
+            except Exception as exc:  # noqa: BLE001 - desired state remains durable for reconnect
+                _LOGGER.warning("could not dispatch desired state to %s: %s", device_id, exc)
+        return web.json_response(
+            {"ok": True, "accepted": True, "dispatched": dispatched, "device": device},
+            status=202,
+        )
+
+    async def _handle_config_reported(self, request: web.Request) -> web.Response:
+        if not self._authorised(request):
+            return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+        unavailable = self._config_ready()
+        if unavailable is not None:
+            return unavailable
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return web.json_response({"ok": False, "error": "body must be JSON"}, status=400)
+        if not isinstance(body, dict):
+            return web.json_response({"ok": False, "error": "body must be a JSON object"}, status=400)
+        try:
+            device = self.config_plane.report(
+                request.match_info.get("device_id", ""),
+                generation=body.get("generation"),
+                actual=body.get("actual"),
+                health=body.get("health"),
+                error=body.get("error"),
+            )
+        except ConfigValidationError as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=400)
+        return web.json_response({"ok": True, "device": device})
 
     @staticmethod
     def _clean(text: str) -> str:
@@ -388,13 +580,14 @@ class Announcer:
         """Wake tone and speech as one clip, with a beat between them and one playback session."""
         speech = AUDIO_OUT / f"announce-{item.id}.wav"
         tts.synthesize_to_wav(item.text, speech)
-        if not item.chime:
+        sound_path = ANNOUNCE_SOUNDS.get(item.sound)
+        if sound_path is None:
             return speech
-        if not ANNOUNCE_CHIME.exists():
-            _LOGGER.warning("chime missing at %s; announcing without it", ANNOUNCE_CHIME)
+        if not sound_path.exists():
+            _LOGGER.warning("%s sound missing at %s; announcing without it", item.sound, sound_path)
             return speech
         out = AUDIO_OUT / f"announce-{item.id}-full.wav"
-        _concat_wavs([ANNOUNCE_CHIME, speech], out)
+        _concat_wavs([sound_path, speech], out)
         return out
 
     @staticmethod

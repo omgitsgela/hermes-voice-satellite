@@ -61,6 +61,9 @@ DONE = [(523, 120), (392, 170)]
 # something.
 STARTUP = [(392, 140), (523, 140), (659, 200)]     # G4 -> C5 -> E5
 CONNECTED = [(659, 90), (880, 150)]                # E5 -> A5, snappier and brighter
+# Alarm: three deliberate repeated notes, recognisably different from the timer's
+# vendored descending two-note sound and from the conversational awake/done pair.
+ALARM = [(440, 170), (440, 170), (440, 240)]
 
 
 def chime(freq: float, ms: float, *, amplitude: float = 0.20,
@@ -127,6 +130,9 @@ print(f"  power-on.wav   {info['ms']:.0f} ms  {info['dbfs']:.1f} dBFS  (three ri
 info = write_wav(OUT / "connected.wav", build(CONNECTED, gap_ms=14))
 print(f"  connected.wav  {info['ms']:.0f} ms  {info['dbfs']:.1f} dBFS  (two quick bright notes, "
       f"played by the bridge on connect)")
+info = write_wav(OUT / "alarm.wav", build(ALARM, gap_ms=70))
+print(f"  alarm.wav      {info['ms']:.0f} ms  {info['dbfs']:.1f} dBFS  (three repeated notes, "
+      f"used only by cron-backed alarms)")
 
 print(f"\nwritten to {OUT}")
 print("Preview:  .venv/bin/python scripts/preview_awake_candidates.py")

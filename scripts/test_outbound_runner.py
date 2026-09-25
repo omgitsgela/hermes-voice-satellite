@@ -21,6 +21,9 @@ Checks:
   7  a stalled write fails the link instead of hanging the device
   8  the bootstrap configuration is exactly what the device needs
   9  a stale write failure does not tear down a newer connection (#64)
+ 10  local satellite EOF ends the paired relay so both sides can reconnect
+ 11  a local satellite write failure ends the paired relay
+ 12  desired configuration is applied/reported out of band, not sent to the satellite
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ import asyncio
 import pathlib
 import socket
 import sys
+import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
@@ -145,6 +149,8 @@ def config_for(port: int, **overrides) -> LinkConfig:
         connect_timeout=2.0,
         handshake_timeout=2.0,
         write_timeout=2.0,
+        # Never let a check write into the real per-user state directory.
+        config_state_path=pathlib.Path(tempfile.gettempdir()) / "voice-test-config.json",
     )
     base.update(overrides)
     # These checks exercise the transport of a device with no local satellite to relay to, which is why the
@@ -359,9 +365,11 @@ async def t_config_from_env() -> None:
         "VOICE_BRIDGE_HOST": "bridge.example",
         "VOICE_BRIDGE_PORT": "443",
         "VOICE_DEVICE_AREA": "kitchen",
+        "VOICE_DEVICE_CONFIG_STATE": "/tmp/kitchen-config.json",
     })
     assert config.device_id == "kitchen-1"
     assert config.host == "bridge.example" and config.port == 443
+    assert config.config_state_path == pathlib.Path("/tmp/kitchen-config.json")
     assert config.ssl_context is None, "a plain local connection must not build a TLS context"
     try:
         load_config_from_env({})
@@ -423,6 +431,112 @@ async def t_stale_write_teardown() -> None:
         assert not new_writer.is_closing(), "a stale failure must not close the live connection"
         assert link.connected, "the link must still be up after a superseded write fails"
         new_writer.close()
+    finally:
+        await runner.stop()
+        await bridge.stop()
+
+
+@check("10", "local satellite EOF ends the paired relay")
+async def t_local_eof_ends_relay() -> None:
+    accepted = asyncio.Event()
+
+    async def local_satellite(
+        _reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        accepted.set()
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(local_satellite, "127.0.0.1", 0)
+    local_port = server.sockets[0].getsockname()[1]
+    link = BridgeLink(
+        config_for(
+            free_port(),
+            relay=True,
+            local_host="127.0.0.1",
+            local_port=local_port,
+            local_retry_seconds=0.01,
+        )
+    )
+    link.connected = True
+    # The bridge side stays open and sends nothing. The local side's EOF must still
+    # end _serve_local promptly so run() can tear down and reconnect both legs.
+    link.reader = asyncio.StreamReader()
+    try:
+        await asyncio.wait_for(link._serve_local(), 0.5)
+        assert accepted.is_set(), "the relay must connect to the local satellite"
+    finally:
+        await link.stop()
+        server.close()
+        await server.wait_closed()
+
+
+@check("11", "a local satellite write failure ends the paired relay")
+async def t_local_write_failure_ends_relay() -> None:
+    class BrokenLocalWriter:
+        def write(self, _data: bytes) -> None:
+            pass
+
+        def writelines(self, _lines) -> None:
+            pass
+
+        async def drain(self) -> None:
+            raise ConnectionResetError("local satellite disappeared")
+
+        def close(self) -> None:
+            pass
+
+    link = BridgeLink(config_for(free_port()))
+    link._local_writer = BrokenLocalWriter()  # type: ignore[assignment]
+    try:
+        await link.relay_event_to_local(Event(type="led-idle"))
+    except ConnectionError:
+        pass
+    else:
+        raise AssertionError(
+            "a failed local write must end the relay instead of dropping later events silently"
+        )
+    assert link._local_writer is None
+
+
+@check("12", "desired configuration is applied/reported out of band")
+async def t_configuration_control_plane() -> None:
+    class FakeConfigAgent:
+        def __init__(self) -> None:
+            self.events: list[Event] = []
+
+        async def apply_event(self, event: Event) -> Event:
+            self.events.append(event)
+            return Event(type="hermes.config.reported", data={
+                "generation": event.data["generation"],
+                "actual": event.data["settings"],
+                "health": "healthy",
+                "error": None,
+            })
+
+    bridge = FakeBridge()
+    await bridge.start()
+    agent = FakeConfigAgent()
+    link = BridgeLink(config_for(bridge.port), config_agent=agent)
+    runner = LinkRunner(link)
+    try:
+        await runner.start()
+        await asyncio.wait_for(bridge.registered.wait(), TIMEOUT)
+        await bridge.push(Event(type="hermes.config.desired", data={
+            "schema_version": 1,
+            "device_id": "kitchen-1",
+            "generation": 4,
+            "settings": {"mic_gain": 78},
+        }))
+        deadline = asyncio.get_running_loop().time() + TIMEOUT
+        while (asyncio.get_running_loop().time() < deadline
+               and not any(event.type == "hermes.config.reported" for event in bridge.received)):
+            await asyncio.sleep(0.01)
+        assert len(agent.events) == 1
+        assert any(event.type == "hermes.config.reported" for event in bridge.received)
+        assert not any(event.type == "hermes.config.desired" for event in runner.events), (
+            "configuration control events must not be relayed into the local satellite audio path"
+        )
     finally:
         await runner.stop()
         await bridge.stop()

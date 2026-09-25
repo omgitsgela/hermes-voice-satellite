@@ -25,7 +25,14 @@ _SCHEMA = {
         "'endpointing_pause_tolerant' allows longer mid-sentence pauses while retaining finite "
         "no-speech and utterance limits; 'endpointing_standard' restores ordinary timing, and "
         "'endpointing_status' reports the current profile. Use these for requests to wait longer "
-        "while someone speaks. Every change is read back from the device before it is reported."
+        "while someone speaks. Every change is read back from the device before it is reported. "
+        "'fleet_status' lists every satellite the bridge knows with its convergence state; "
+        "'config_status' reports one device's desired settings, reported settings and drift; "
+        "'config_set' writes durable desired settings (wake_word, wake_threshold, mic_gain, "
+        "playback_volume, led_brightness, locale, update_channel) for one device. Use the config_* "
+        "actions for requests about how a device should be configured from now on, and the "
+        "follow_up_*/endpointing_* actions for changes that only matter to the conversation happening "
+        "right now."
     ),
     "parameters": {
         "type": "object",
@@ -39,8 +46,25 @@ _SCHEMA = {
                     "endpointing_pause_tolerant",
                     "endpointing_standard",
                     "endpointing_status",
+                    "fleet_status",
+                    "config_status",
+                    "config_set",
                 ],
                 "description": "Change or report a device conversation setting.",
+            },
+            "device_id": {
+                "type": "string",
+                "description": (
+                    "The device to act on, as it registered itself (for example 'kitchen-1'). "
+                    "Required for config_status and config_set."
+                ),
+            },
+            "settings": {
+                "type": "object",
+                "description": (
+                    "For config_set: the settings to change, as setting name to value. A partial set is "
+                    "merged over the device's existing desired state."
+                ),
             },
         },
         "required": ["action"],
@@ -57,7 +81,7 @@ def register(ctx) -> None:
         handler=lambda args, **kwargs: handle(args),
         check_fn=_bridge_available,
         requires_env=[],
-        description="Follow-up mode control for the voice satellite",
+        description="Conversation settings and durable fleet configuration for the voice satellite",
         emoji="🔊",
     )
 

@@ -40,6 +40,21 @@ _ACTIONS = (
     "endpointing_pause_tolerant",
     "endpointing_standard",
     "endpointing_status",
+    "fleet_status",
+    "config_status",
+    "config_set",
+)
+
+# Settings the gateway tool will pass through. The bridge validates authoritatively; this list exists so a
+# typo is caught here, with a useful message, instead of being sent and refused as an opaque 400.
+_SETTINGS = (
+    "wake_word",
+    "wake_threshold",
+    "mic_gain",
+    "playback_volume",
+    "led_brightness",
+    "locale",
+    "update_channel",
 )
 
 
@@ -130,13 +145,86 @@ def _set_endpointing_profile(profile: str) -> str:
     return verified
 
 
+def _fleet() -> dict:
+    """Every device the bridge knows about, with its convergence state."""
+    data = _request("GET", "/config/devices")
+    if not data.get("ok"):
+        raise VoiceControlError(str(data.get("error") or "the bridge refused the fleet read"))
+    return data
+
+
+def _device(device_id: str) -> dict:
+    data = _request("GET", f"/config/devices/{device_id}")
+    if not data.get("ok"):
+        raise VoiceControlError(str(data.get("error") or "the bridge refused the device read"))
+    return data["device"]
+
+
+def _set_config(device_id: str, settings: dict) -> dict:
+    """Write desired state against the generation just read, then read the result back.
+
+    The generation guard is the point: a stale `expected_generation` is a 409, which is how two writers
+    are stopped from silently overwriting each other. Reading first and sending that exact number means
+    this tool never clobbers a change it did not see.
+    """
+    current = _device(device_id)
+    data = _request(
+        "PUT",
+        f"/config/devices/{device_id}/desired",
+        {"expected_generation": current["generation"], "settings": settings},
+    )
+    if not data.get("ok"):
+        raise VoiceControlError(str(data.get("error") or "the bridge refused the change"))
+    verified = _device(device_id)
+    if verified["generation"] != current["generation"] + 1:
+        raise VoiceControlError(
+            f"asked to advance from generation {current['generation']} but the device reports "
+            f"{verified['generation']}"
+        )
+    # Desired state is recorded even when the device is away, so report which of the two happened
+    # rather than implying the device already changed.
+    return {"device": verified, "dispatched": bool(data.get("dispatched")), "accepted": True}
+
+
 def handle(args: dict) -> str:
-    action = str((args or {}).get("action") or "").strip()
+    args = args or {}
+    action = str(args.get("action") or "").strip()
     if action not in _ACTIONS:
         return json.dumps({"ok": False,
                            "error": f"unknown action {action!r}; expected one of {list(_ACTIONS)}"},
                           ensure_ascii=False)
     try:
+        if action == "fleet_status":
+            data = _fleet()
+            return json.dumps({"ok": True, "action": action, "count": data["count"],
+                               "devices": data["devices"], "verified": True}, ensure_ascii=False)
+        if action == "config_status":
+            device_id = str(args.get("device_id") or "").strip()
+            if not device_id:
+                raise VoiceControlError("config_status needs a device_id")
+            return json.dumps({"ok": True, "action": action, "device": _device(device_id),
+                               "verified": True}, ensure_ascii=False)
+        if action == "config_set":
+            device_id = str(args.get("device_id") or "").strip()
+            settings = args.get("settings")
+            if not device_id:
+                raise VoiceControlError("config_set needs a device_id")
+            if not isinstance(settings, dict) or not settings:
+                raise VoiceControlError("config_set needs a non-empty settings object")
+            unknown = sorted(name for name in settings if name not in _SETTINGS)
+            if unknown:
+                raise VoiceControlError(
+                    f"{', '.join(unknown)} is not a configurable setting; expected one of "
+                    f"{list(_SETTINGS)}"
+                )
+            result = _set_config(device_id, settings)
+            device = result["device"]
+            return json.dumps({
+                "ok": True, "action": action, "device_id": device_id,
+                "generation": device["generation"], "desired": device["desired"],
+                "dispatched": result["dispatched"], "converged": device["converged"],
+                "drift": device["drift"], "verified": True,
+            }, ensure_ascii=False)
         if action == "follow_up_status":
             state = _settings()
             return json.dumps({"ok": True, "action": action, "follow_up": state,

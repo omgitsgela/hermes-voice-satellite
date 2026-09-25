@@ -1,0 +1,7 @@
+name: hermes_timers
+version: 1.0.0
+description: "Set, list, and cancel persistent relative voice timers through the bridge; list cron-backed alarms whose names begin with alarm:."
+author: angela
+kind: standalone
+provides_tools:
+  - hermes_timers

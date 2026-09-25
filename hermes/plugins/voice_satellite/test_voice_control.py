@@ -31,6 +31,7 @@ def main() -> int:
     expected_actions = {
         "follow_up_on", "follow_up_off", "follow_up_status",
         "endpointing_pause_tolerant", "endpointing_standard", "endpointing_status",
+        "fleet_status", "config_status", "config_set",
     }
     if set(actions) != expected_actions:
         failures.append(f"published action schema: {actions!r}")

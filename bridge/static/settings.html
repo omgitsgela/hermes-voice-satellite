@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Hermes Voice Fleet</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+    header, .row { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
+    input, select, button { font: inherit; padding: .55rem; }
+    input[type=password] { min-width: 22rem; max-width: 100%; }
+    button { cursor: pointer; }
+    .device { border: 1px solid #8886; border-radius: .65rem; padding: 1rem; margin: 1rem 0; }
+    .field { display: grid; grid-template-columns: minmax(10rem, 1fr) minmax(12rem, 2fr); gap: .75rem; margin: .7rem 0; align-items: center; }
+    .status { white-space: pre-wrap; padding: .7rem; border-radius: .5rem; background: #8882; }
+    .good { color: #16803c; } .bad { color: #b42318; }
+    small { opacity: .78; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Hermes Voice Fleet</h1>
+      <p>Declarative desired state, reported state, and drift. The bearer token remains in this browser tab only.</p>
+    </div>
+  </header>
+
+  <section class="row">
+    <label for="token">Bearer token</label>
+    <input id="token" type="password" autocomplete="off" spellcheck="false">
+    <button id="connect" type="button">Load devices</button>
+  </section>
+  <p id="status" class="status">Enter the bridge token, then load devices.</p>
+  <main id="devices"></main>
+
+<script>
+'use strict';
+const token = document.getElementById('token');
+const statusBox = document.getElementById('status');
+const devicesBox = document.getElementById('devices');
+token.value = sessionStorage.getItem('voiceBridgeToken') || '';
+let schema = null;
+
+function setStatus(message, ok = true) {
+  statusBox.textContent = message;
+  statusBox.className = 'status ' + (ok ? 'good' : 'bad');
+}
+
+async function api(path, options = {}) {
+  const value = token.value.trim();
+  if (!value) throw new Error('A bearer token is required.');
+  sessionStorage.setItem('voiceBridgeToken', value);
+  const response = await fetch(path, {
+    ...options,
+    headers: {
+      'Authorization': 'Bearer ' + value,
+      'Content-Type': 'application/json',
+      ...(options.headers || {})
+    }
+  });
+  const body = await response.json().catch(() => ({error: 'Non-JSON response'}));
+  if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+  return body;
+}
+
+function inputFor(name, spec, value) {
+  const input = spec.enum ? document.createElement('select') : document.createElement('input');
+  input.dataset.setting = name;
+  if (spec.enum) {
+    for (const optionValue of spec.enum) {
+      const option = document.createElement('option');
+      option.value = optionValue;
+      option.textContent = optionValue;
+      input.appendChild(option);
+    }
+  } else if (spec.type === 'integer' || spec.type === 'number') {
+    input.type = 'number';
+    input.min = spec.minimum;
+    input.max = spec.maximum;
+    input.step = spec.type === 'integer' ? '1' : '0.01';
+  } else {
+    input.type = 'text';
+    if (spec.pattern) input.pattern = spec.pattern;
+  }
+  input.value = value ?? spec.default ?? '';
+  return input;
+}
+
+function renderDevice(device) {
+  const card = document.createElement('section');
+  card.className = 'device';
+  const heading = document.createElement('h2');
+  heading.textContent = `${device.device_id} · ${device.connected ? 'connected' : 'offline'} · generation ${device.generation}`;
+  card.appendChild(heading);
+  const summary = document.createElement('p');
+  summary.textContent = device.converged ? 'Converged' : `Not converged; drift: ${JSON.stringify(device.drift)}`;
+  summary.className = device.converged ? 'good' : 'bad';
+  card.appendChild(summary);
+
+  for (const [name, spec] of Object.entries(schema.device_settings)) {
+    const row = document.createElement('label');
+    row.className = 'field';
+    const caption = document.createElement('span');
+    caption.textContent = `${name} (${spec.apply})`;
+    row.appendChild(caption);
+    row.appendChild(inputFor(name, spec, device.desired[name]));
+    card.appendChild(row);
+  }
+
+  const save = document.createElement('button');
+  save.type = 'button';
+  save.textContent = 'Save desired state';
+  save.addEventListener('click', async () => {
+    try {
+      const settings = {};
+      for (const input of card.querySelectorAll('[data-setting]')) {
+        const spec = schema.device_settings[input.dataset.setting];
+        settings[input.dataset.setting] = spec.type === 'integer'
+          ? Number.parseInt(input.value, 10)
+          : spec.type === 'number' ? Number.parseFloat(input.value) : input.value;
+      }
+      const result = await api(`/config/devices/${encodeURIComponent(device.device_id)}/desired`, {
+        method: 'PUT',
+        body: JSON.stringify({expected_generation: device.generation, settings})
+      });
+      setStatus(`Saved generation ${result.device.generation}; dispatched: ${result.dispatched}.`);
+      await load();
+    } catch (error) {
+      setStatus(error.message, false);
+    }
+  });
+  card.appendChild(save);
+  return card;
+}
+
+async function load() {
+  try {
+    const [schemaResult, fleet] = await Promise.all([
+      api('/config/schema'), api('/config/devices')
+    ]);
+    schema = schemaResult;
+    devicesBox.replaceChildren(...fleet.devices.map(renderDevice));
+    setStatus(`Loaded ${fleet.count} device${fleet.count === 1 ? '' : 's'}.`);
+  } catch (error) {
+    devicesBox.replaceChildren();
+    setStatus(error.message, false);
+  }
+}
+
+document.getElementById('connect').addEventListener('click', load);
+</script>
+</body>
+</html>
