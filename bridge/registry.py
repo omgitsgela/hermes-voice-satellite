@@ -366,7 +366,7 @@ class SatelliteConnection:
                 await async_write_event(event, self.writer)
                 await self.writer.drain()
             except (ConnectionError, OSError, asyncio.IncompleteReadError):
-                self.closed = True
+                await self.close()
                 return False
             self.stats.events_sent += 1
             return True
