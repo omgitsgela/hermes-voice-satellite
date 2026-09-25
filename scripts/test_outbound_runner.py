@@ -147,6 +147,11 @@ def config_for(port: int, **overrides) -> LinkConfig:
         write_timeout=2.0,
     )
     base.update(overrides)
+    # These checks exercise the transport of a device with no local satellite to relay to, which is why the
+    # relay is off here. With it on, the runner would sit in its retry loop waiting for a satellite that does
+    # not exist in this process, which is the correct behaviour and useless for testing framing. The relay
+    # against a second real Wyoming peer is covered by the live device, not here.
+    base.setdefault("relay", False)
     return LinkConfig(**base)
 
 
