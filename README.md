@@ -164,6 +164,20 @@ Piper saying the wake word scores around 0.001 against any wake model.
 This repository deliberately contains **no secrets**. `SECRETS.md` lists every credential the system
 needs, where it lives, and what it is for. Read it before deploying.
 
+## Licensing
+
+Two separate things, and only one of them has restrictions:
+
+- **Wake word models.** The recommended default is a community-library model from the hosted
+  openWakeWord trainer, and that site's terms license such models for **personal and non-commercial use
+  only**. The pre-trained models that ship with the openWakeWord software are Apache-2.0 and carry no
+  such restriction. Before deploying commercially, read
+  [`docs/wake-word-licensing.md`](docs/wake-word-licensing.md): it sets out which source carries which
+  terms, and the one case that needs care, which is compiling a model into a published firmware image.
+- **This repository's own code.** There is no licence file here yet, so no licence is granted for the
+  code itself. That is a maintainer decision that has not been made rather than an omission from this
+  section.
+
 ## Surviving Hermes updates
 
 `hermes update` does not preserve local source changes, and our remaining patch is an uncommitted
@@ -205,6 +219,7 @@ it.
 - [`docs/interruption.md`](docs/interruption.md) talking to a task that is already running: steer it, stop it, or ignore noise
 - [`docs/endpointing-profiles.md`](docs/endpointing-profiles.md) opt-in pause-tolerant listening for hesitant or slower speech
 - [`docs/agent-and-model-routing.md`](docs/agent-and-model-routing.md) choose either a model route alias or a complete named Hermes Bot/profile for every satellite conversation
+- [`docs/wake-word-licensing.md`](docs/wake-word-licensing.md) which wake word models may be used commercially, and the terms attached to each source
 
 ## Status and known gaps
 

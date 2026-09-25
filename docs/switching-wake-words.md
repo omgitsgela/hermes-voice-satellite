@@ -25,6 +25,12 @@ Star ratings are not a useful signal here. Neither is a model's name: it tells y
 **Avoid a wake word that collides with a stop phrase.** If the model answers to a word the device also acts
 on, it can stop itself. "Stop" is the obvious trap.
 
+**Check where a model came from before you install it, because the licences differ.** The pre-trained
+models that ship with the openWakeWord software are Apache-2.0. Models trained through the hosted trainer
+at openwakeword.com, including everything in its community library, are licensed for personal and
+non-commercial use only by default. `wake-word-licensing.md` sets out which source carries which terms and
+the one case that needs care, a model compiled into a published firmware image.
+
 ## Applying it
 
 1. Put `<wake word>.tflite` in the custom model directory.
