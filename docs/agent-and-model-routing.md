@@ -1,5 +1,7 @@
 # Choosing the Hermes agent or model used by the satellite
 
+**Where this sits:** stage 6 think of the voice pipeline. The end-to-end map, and every other stage, is in `docs/architecture.md`.
+
 The bridge reaches Hermes through the authenticated Runs API. There are two different routing choices:
 
 1. **Select a model route** while keeping the same Hermes profile, memory, skills and identity.

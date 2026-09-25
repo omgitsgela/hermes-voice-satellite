@@ -1,5 +1,7 @@
 # Endpointing profiles: accommodating hesitant or slower speech
 
+**Where this sits:** stage 4 endpoint of the voice pipeline. The end-to-end map, and every other stage, is in `docs/architecture.md`.
+
 Some people pause in the middle of a sentence: to find a word, to organise a thought, or simply to
 breathe. A voice assistant tuned for conversational pace treats a long pause as "they have finished"
 and answers early, cutting the rest of the sentence off.

@@ -1,5 +1,7 @@
 # Changing the wake word
 
+**Where this sits:** stage 2 wake of the voice pipeline. The end-to-end map, and every other stage, is in `docs/architecture.md`.
+
 The wake word is a TFLite model file. Changing it is a file and a service argument, not a code change.
 
 ## The model

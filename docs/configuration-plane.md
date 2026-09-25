@@ -1,5 +1,7 @@
 # The configuration plane
 
+**Where this sits:** stage across the device of the voice pipeline. The end-to-end map, and every other stage, is in `docs/architecture.md`.
+
 Interface contract for the voice bridge's settings and fleet-configuration surface. Written for the
 system on the other side of it: the Hermes gateway, a script, a cron job, or an operator's browser.
 

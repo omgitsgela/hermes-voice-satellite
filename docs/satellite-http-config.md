@@ -1,5 +1,7 @@
 # A configuration server for the satellite
 
+**Where this sits:** stage across the device of the voice pipeline. The end-to-end map, and every other stage, is in `docs/architecture.md`.
+
 Feasibility research, 2026-09-23. **Status: the recommended design has since been built.**
 
 This document is kept as the record of *why* the recommendation was what it was. For the interface
