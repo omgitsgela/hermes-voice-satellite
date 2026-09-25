@@ -12,9 +12,9 @@ Verified live, not assumed:
 |---|---|
 | Everything comes back after a host reboot with nobody logged in | `loginctl show-user <your user> -p Linger` is `yes`, and both `hermes-gateway` and `hermes-voice-bridge` are `enabled` |
 | The bridge survives a gateway restart instead of being dragged down with it | The unit deliberately has no `Requires=hermes-gateway`, only `After=`/`Wants=`, and says so in a comment, because the bridge retries by itself |
-| The bridge itself always comes back | `Restart=always`, `RestartSec=5` |
+| The bridge itself always comes back | `Restart=always`, `RestartSec=60`. Raised from 5 s to 60 s on 2026-09-24, so a satellite that is away overnight costs one restart a minute rather than twelve |
 | A crash or a lost satellite cannot leave the system wedged | The main loop re-raises connection errors, so the process exits and systemd re-dials; `start()` reconnects on the next run |
-| A lost satellite does not stop the bridge | **Not yet true.** With the device away the process exits instead and systemd restarts it every 5 s: measured at 154 restarts on 2026-09-24. Issue #61 makes zero devices a normal state, and this row becomes obsolete when it lands |
+| A lost satellite does not stop the bridge | **Not yet true.** With the device away the process exits instead and systemd restarts it every 60 s: 154 restarts measured by 21:54 on 2026-09-24. Issue #61 makes zero devices a normal state, and this row becomes obsolete when it lands |
 | Voice capabilities are not inside the Hermes checkout | Plugins live in `~/.hermes/plugins/`, config in `config.yaml`, procedures in `~/.hermes/skills/`; an update cannot revert them |
 | The bridge cannot drift into Hermes internals | It talks only to `POST /v1/runs` plus SSE on loopback, reads one key from `.env`, and imports nothing from Hermes |
 | The voice persona is ours, not Hermes' | `VOICE_INSTRUCTIONS` lives in `bridge/config.py` and is passed per run as `instructions` |
