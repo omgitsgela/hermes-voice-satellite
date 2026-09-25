@@ -222,6 +222,11 @@ class VoiceLoop:
         from bridge.config_plane import ConfigPlane
 
         self.config_plane = ConfigPlane(FLEET_CONFIG_STATE_FILE)
+        # The device the configuration plane addresses. One bridge serves one device today;
+        # when a fleet is live this becomes the leased device's id rather than a default.
+        self.device_id = VOICE_SESSION_ID
+        self.volume = 0
+        self._load_volume(self)
 
         # Shares the loop's satellite connection: see bridge/announce.py for why it does not open
         # its own.
@@ -237,6 +242,10 @@ class VoiceLoop:
             config_plane=self.config_plane,
             connected_device_ids=self._connected_device_ids,
             config_dispatch=self._dispatch_device_config,
+            # The alarm volume override needs to read the level it is raising from and
+            # write it back, so it goes through the same recorded path as a spoken change.
+            volume_get=lambda: self.volume,
+            volume_set=self._set_volume,
         )
 
     # -- session handling ---------------------------------------------------
@@ -451,6 +460,87 @@ class VoiceLoop:
             return ("Follow-up mode is on. I will keep listening for about fifteen seconds after "
                     "each answer.")
         return ""
+
+    # -- volume (issue #10) --------------------------------------------------
+
+    def _load_volume(self, target) -> int:
+        """Adopt the recorded playback level, clamped, so a restart resumes it.
+
+        The floor is applied on the way in as well as on the way out: a stored value
+        below it means something wrote one directly, and resuming a value that cannot be
+        heard would reproduce the exact failure this feature exists to prevent.
+        """
+        from bridge.volume import FLOOR_PERCENT, clamp
+
+        level = FLOOR_PERCENT
+        try:
+            record = self.config_plane.get_device(self.device_id)
+        except Exception:  # noqa: BLE001 - a config problem must not stop the boot
+            _LOGGER.warning("could not read the stored volume; using the floor")
+            record = None
+        if record is not None:
+            stored = (record.get("desired") or {}).get("playback_volume")
+            if isinstance(stored, int) and not isinstance(stored, bool):
+                level = clamp(stored)
+            elif stored is not None:
+                _LOGGER.warning("ignoring an unusable stored playback_volume %r", stored)
+        target.volume = level
+        return level
+
+    async def _set_volume(self, level: int) -> bool:
+        """Record a level durably and tell the device. True only if both happened.
+
+        Order matters. The desired state is written first, so a device that is briefly
+        unreachable still converges when it reconnects, and the tracked value only moves
+        once the write is recorded. If the device cannot be told, the caller says so
+        rather than claiming a change nobody applied.
+        """
+        from bridge.volume import clamp
+
+        level = clamp(level)
+        try:
+            self.config_plane.set_desired(
+                self.device_id, {"playback_volume": level}, expected_generation=None
+            )
+        except Exception as exc:  # noqa: BLE001 - a failed record must surface, not be swallowed
+            _LOGGER.error("could not record playback_volume %d: %s", level, exc)
+            return False
+
+        self.volume = level
+        try:
+            delivered = await self._dispatch_device_config(
+                self.device_id, self.config_plane.get_device(self.device_id)
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("could not deliver playback_volume %d to the device: %s", level, exc)
+            delivered = False
+        if not delivered:
+            _LOGGER.warning(
+                "playback_volume %d is recorded but the device has not been told; it will "
+                "converge on reconnect", level,
+            )
+        return delivered
+
+    async def _volume_command(self, transcript: str) -> str:
+        """A spoken volume request, answered without a model call.
+
+        Returns the line to speak, or "" when this is not a volume request. Set and step
+        both change the device; a query never does.
+        """
+        from bridge.volume import parse_volume_command, resolve
+
+        intent = parse_volume_command(transcript)
+        if intent is None:
+            return ""
+        level, speech = resolve(intent, self.volume)
+        if intent.kind == "query":
+            return speech
+        delivered = await self._set_volume(level)
+        if not delivered:
+            # Do not speak a success that did not happen. The level is recorded, so the
+            # sentence says what is true: asked for, not yet applied.
+            return f"{speech} I could not reach the device yet."
+        return speech
 
     def _maybe_rotate_on_idle(self) -> bool:
         if self._last_turn_at is None or self.idle_reset_minutes <= 0:
@@ -1060,6 +1150,19 @@ class VoiceLoop:
             stats.note = "local control"
             _LOGGER.info("local control: %s", local_reply)
             await self.say(local_reply)
+            self.turn_started_at = None
+            self.turns.append(stats)
+            return stats
+
+        # Volume next, and separately, because unlike the controls above it talks to the device
+        # before it can answer. Still before the session reset, so the request never reaches the
+        # model: a volume command the assistant rephrases into a question is a worse experience
+        # than one answered in the room instantly.
+        volume_reply = await self._volume_command(transcript)
+        if volume_reply:
+            stats.note = "volume control"
+            _LOGGER.info("volume control: %s", volume_reply)
+            await self.say(volume_reply)
             self.turn_started_at = None
             self.turns.append(stats)
             return stats

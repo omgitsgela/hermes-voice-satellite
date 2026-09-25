@@ -333,6 +333,12 @@ ANNOUNCE_SOUNDS = {
     "alarm": ALARM_CHIME,
 }
 ANNOUNCE_LOG = PROJECT_DIR / "logs" / "announcements.jsonl"
+# How long to keep an alarm's raised volume after the clip has been sent. play_wav returns
+# when the audio is SENT, not when it finishes playing, so restoring immediately would cut
+# the alarm back down before anyone heard it and the override would be cosmetic. The margin
+# covers the device's own buffering; the cap stops a very long clip pinning the volume.
+ALARM_VOLUME_HOLD_MARGIN = 0.75
+ALARM_VOLUME_HOLD_MAX = 120.0
 ANNOUNCE_MAX_CHARS = 400          # beyond this a spoken announcement is almost certainly a bug
 ANNOUNCE_MAX_QUEUE = 5            # beyond this callers get 503 and the text is dropped
 ANNOUNCE_DEDUP_SECONDS = 60.0     # same source + same text inside this window is ignored

@@ -52,6 +52,8 @@ from aiohttp import web
 
 from bridge import tts
 from bridge.config import (
+    ALARM_VOLUME_HOLD_MARGIN,
+    ALARM_VOLUME_HOLD_MAX,
     ANNOUNCE_DEDUP_SECONDS,
     ANNOUNCE_HOST,
     ANNOUNCE_LOG,
@@ -97,6 +99,8 @@ class Announcer:
                  config_dispatch: Optional[
                      Callable[[str, dict[str, Any]], Awaitable[bool] | bool]
                  ] = None,
+                 volume_get: Optional[Callable[[], int]] = None,
+                 volume_set: Optional[Callable[[int], Any]] = None,
                  host: str = ANNOUNCE_HOST, port: int = ANNOUNCE_PORT) -> None:
         self._sat = sat          # the conversation loop's connection; see the module docstring
         self._turn_started_at = turn_started_at
@@ -122,6 +126,11 @@ class Announcer:
         self.config_plane = config_plane
         self._connected_device_ids = connected_device_ids or (lambda: ())
         self._config_dispatch = config_dispatch
+        # Alarm volume override (issue #10, Angela's decision 2026-09-25): an alarm may
+        # raise a room that is too quiet to hear it. Upward only. Both optional, so an
+        # Announcer built without a volume path still announces.
+        self._volume_get: Optional[Callable[[], int]] = volume_get
+        self._volume_set: Optional[Callable[[int], Any]] = volume_set
 
     # -- token ---------------------------------------------------------------
 
@@ -568,7 +577,23 @@ class Announcer:
         # Fire and forget: play_wav returns once the clip is sent AND its playout has been timed
         # locally, holding the playback lock for the audible duration. Waiting for the satellite's
         # Played event is exactly what a caller on another component's connection must not do.
-        await self._sat.play_wav(wav, wait_for_played=False)
+        #
+        # An alarm may raise the room first (issue #10): an alarm nobody can hear is not an
+        # alarm. The raise is upward-only, and it is held for the clip's own length because
+        # play_wav returns when the audio has been SENT, not when it finishes.
+        restore_to = await self._raise_for_alarm(item)
+        try:
+            await self._sat.play_wav(wav, wait_for_played=False)
+            if restore_to is not None:
+                await asyncio.sleep(self._volume_hold_seconds(wav))
+        finally:
+            if restore_to is not None:
+                try:
+                    result = self._volume_set(restore_to)
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception as exc:  # noqa: BLE001 - never let tidying up break an announcement
+                    _LOGGER.warning("could not restore the volume to %d: %s", restore_to, exc)
         self.spoken += 1
         self.last_spoken_at = time.time()
         self._prune_audio()
@@ -589,6 +614,63 @@ class Announcer:
         out = AUDIO_OUT / f"announce-{item.id}-full.wav"
         _concat_wavs([sound_path, speech], out)
         return out
+
+    async def _raise_for_alarm(self, item: Announcement) -> Optional[int]:
+        """Raise the room for an alarm, returning the level to restore, or None.
+
+        Angela's decision, 2026-09-25: an alarm may override upward to a minimum alarm
+        level so it is always audible. It is deliberately upward-only, because lowering a
+        level she chose would make the override a surprise rather than a safeguard.
+
+        Returns None when nothing needs restoring, which is the common case: a room already
+        loud enough, a non-alarm sound, or no volume path wired at all.
+        """
+        if item.sound != "alarm":
+            return None
+        if self._volume_get is None or self._volume_set is None:
+            _LOGGER.debug("no volume path wired; the alarm plays at the current level")
+            return None
+
+        from bridge.volume import alarm_percent
+
+        try:
+            current = int(self._volume_get())
+        except Exception as exc:  # noqa: BLE001 - a bad read must not stop the alarm
+            _LOGGER.warning("could not read the volume for the alarm override: %s", exc)
+            return None
+
+        target = alarm_percent(current)
+        if target == current:
+            return None
+        try:
+            result = self._volume_set(target)
+            if asyncio.iscoroutine(result):
+                result = await result
+        except Exception as exc:  # noqa: BLE001 - the alarm still has to play
+            _LOGGER.warning("could not raise the volume for the alarm: %s", exc)
+            return None
+        if result is False:
+            _LOGGER.warning("the volume raise for the alarm was refused; playing at %d%%", current)
+            return None
+        _LOGGER.info("alarm raised the volume from %d%% to %d%%", current, target)
+        return current
+
+    @staticmethod
+    def _volume_hold_seconds(wav: Path) -> float:
+        """How long to keep a raised level, from the clip's own length.
+
+        play_wav returns once the audio has been SENT, not once it has finished, so
+        restoring immediately would cut the alarm back down before anyone heard it and the
+        override would be cosmetic. Bounded so a very long clip cannot pin the volume.
+        """
+        try:
+            with wave.open(str(wav), "rb") as handle:
+                rate = handle.getframerate() or 1
+                seconds = handle.getnframes() / rate
+        except (OSError, wave.Error) as exc:
+            _LOGGER.warning("could not measure %s for the alarm hold: %s", wav, exc)
+            seconds = 5.0
+        return min(seconds + ALARM_VOLUME_HOLD_MARGIN, ALARM_VOLUME_HOLD_MAX)
 
     @staticmethod
     def _prune_audio(keep: int = 40) -> None:
