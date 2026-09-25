@@ -164,6 +164,29 @@ here all the same: this index is the list of what we intend to build, whatever t
 Keep both places in step: this document carries the reasoning, the issues carry the work. When an
 issue is opened, link it here; when an idea arrives that is not already an issue, file it.
 
+## Bug work, filed from a code audit (2026-09-25)
+
+A read of `main` against the running system produced ten defects, each reproduced offline and filed as
+a bug rather than an enhancement. They are listed here so the roadmap stays the single index of open
+work; details, affected files and safe reproductions live on each issue.
+
+| Issue | What is broken |
+|---|---|
+| [#79](https://github.com/omgitsgela/hermes-voice-satellite/issues/79) | A failed registry write skips connection cleanup and leaves lease waiters blocked |
+| [#80](https://github.com/omgitsgela/hermes-voice-satellite/issues/80) | The outbound runner misses a bridge disconnect while retrying an unavailable local satellite |
+| [#81](https://github.com/omgitsgela/hermes-voice-satellite/issues/81) | A failed config-plane save publishes an unpersisted desired generation |
+| [#82](https://github.com/omgitsgela/hermes-voice-satellite/issues/82) | The interruption watcher spins forever when it receives `Played` before the waiter |
+| [#83](https://github.com/omgitsgela/hermes-voice-satellite/issues/83) | A full announcement queue marks rejected messages as duplicates |
+| [#84](https://github.com/omgitsgela/hermes-voice-satellite/issues/84) | The timer scheduler dies permanently after an expiry persistence error |
+| [#85](https://github.com/omgitsgela/hermes-voice-satellite/issues/85) | Card deployment does not install the outbound runner's required sibling modules |
+| [#86](https://github.com/omgitsgela/hermes-voice-satellite/issues/86) | The device config agent never retries a failed hardware apply for the same generation |
+| [#87](https://github.com/omgitsgela/hermes-voice-satellite/issues/87) | Wi-Fi card provisioning leaves a source-device MAC restriction in the `[wifi]` section |
+| [#88](https://github.com/omgitsgela/hermes-voice-satellite/issues/88) | The Hermes voice and timer tools are unavailable with environment-token authentication |
+
+Each of these is a defect in behaviour the repository already documents, so none of them needs a design
+decision first. The one exception is the fix shape for #86, which has to choose between retrying a
+failed generation and accepting a new one.
+
 ## Built from this list
 
 - **#26, pause-tolerant endpointing** (built 2026-09-24). Named, validated endpointing profiles with
