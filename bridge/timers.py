@@ -185,9 +185,15 @@ class TimerManager:
             return 0
         due.sort(key=lambda item: (item["due_at"], item["id"]))
         due_ids = {timer["id"] for timer in due}
+        previous = self._timers
         self._timers = [timer for timer in self._timers if timer["id"] not in due_ids]
         # Remove first, atomically, so a restart cannot announce the same expiry twice.
-        self._save()
+        try:
+            self._save()
+        except OSError:
+            # No await has occurred: restore the uncommitted removal for retry.
+            self._timers = previous
+            raise
         for timer in due:
             lateness = max(0.0, now - timer["due_at"])
             if lateness:
@@ -201,7 +207,10 @@ class TimerManager:
         if self._task is not None:
             return
         self._changed = asyncio.Event()
-        await self.fire_due()
+        try:
+            await self.fire_due()
+        except OSError as exc:
+            _LOGGER.error("could not persist timer expiry; scheduler will retry: %s", exc)
         self._task = asyncio.create_task(self._run(), name="timer-scheduler")
 
     async def stop(self) -> None:
@@ -218,7 +227,13 @@ class TimerManager:
     async def _run(self) -> None:
         assert self._changed is not None
         while True:
-            await self.fire_due()
+            try:
+                await self.fire_due()
+            except OSError as exc:
+                _LOGGER.error("could not persist timer expiry; retrying: %s", exc)
+                # An overdue deadline otherwise retries with a zero timeout.
+                await asyncio.sleep(1.0)
+                continue
             timers = self.list_timers()
             if not timers:
                 await self._changed.wait()
