@@ -19,7 +19,16 @@ VOICE_ROUTE_ALIAS = ""
 ```
 
 The bridge sends each utterance to the unprefixed `/v1/runs` endpoint and omits the request's `model`
-field. Hermes therefore uses the default profile and that profile's normal model and fallback chain.
+field.
+
+**Current setting (2026-09-25): pinned.** `VOICE_ROUTE_ALIAS = "voice-fast"`, resolved by the default
+profile's `gateway.api_server.model_routes` to `provider: deepseek` / `model: deepseek-flash`. Chosen
+because the local `qwen38` route was too slow to iterate against. This is a **cross-provider** route -
+the profile default is `llamacpp-qwen38` and this is DeepSeek - which is the condition that once
+required the api_server `extra_body` re-scope patch. That patch is not currently carried; verified
+2026-09-25 that routed runs succeed against DeepSeek anyway (`session_model_usage` shows
+`deepseek-flash` / `deepseek` at `https://api.deepseek.com/v1`). Set the alias back to `""` to return
+the voice surface to the profile default. Hermes therefore uses the default profile and that profile's normal model and fallback chain.
 Rotating the bridge's session id starts a new conversation but does not change either choice.
 
 ## Option 1: pin the voice surface to a model route alias

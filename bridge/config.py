@@ -70,9 +70,17 @@ AUDIO_OUT = PROJECT_DIR / "audio"
 GATEWAY_BASE_URL = "http://127.0.0.1:8642"      # loopback; never exposed to the LAN
 GATEWAY_ENV_FILE = Path.home() / ".hermes" / ".env"
 GATEWAY_API_KEY_VAR = "API_SERVER_KEY"
-VOICE_ROUTE_ALIAS = ""               # empty = do not pin a model: the voice surface runs on the
-                                     # gateway's normal default (and its fallback chain), same as any
-                                     # other conversation. Set to a model_routes alias to override it.
+# Set to a `gateway.api_server.model_routes` alias in ~/.hermes/config.yaml to pin the voice
+# surface to a specific model. Empty = do not pin: the voice surface runs on the gateway's normal
+# default (and its fallback chain), same as any other conversation.
+#
+# Pinned 2026-09-25 to `voice-fast` (deepseek / deepseek-flash) at Angela's request, because the
+# local qwen38 route was too slow to iterate against. This is a CROSS-PROVIDER route: the profile
+# default is llamacpp-qwen38 and this one is DeepSeek, which is the exact condition that once
+# required the api_server `extra_body` re-scope patch (see hermes/patches/README.md). That patch is
+# no longer carried, so if a routed run starts failing with a provider error, suspect the profile's
+# provider-specific `extra_body` leaking onto DeepSeek before suspecting DeepSeek itself.
+VOICE_ROUTE_ALIAS = "voice-fast"
 VOICE_SESSION_ID = "voice-wyoming1"  # stable id, so the assistant has continuity
 
 # How long a wake keeps the mic open while the bridge waits for a real utterance. A blip (the
