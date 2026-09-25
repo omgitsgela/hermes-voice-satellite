@@ -58,6 +58,14 @@ the host already did, because a host is not a trust boundary for a device.
 requires a service bounce. A client that batches settings should group by `apply` so one restart covers
 every restart-class change.
 
+`playback_volume` is the setting with a real device-side implementation today, and it carries one extra
+guarantee the schema cannot express: **it can never be silent.** The bridge clamps it to an audible floor
+and the device clamps it independently, so a `0` written here lands as the floor rather than as a deaf
+device. Writing `0` is not an error; it is recorded and reported, and the applied value comes back higher
+than the requested one, with the reason in `last_error`. See `docs/volume.md`. The other four of
+`wake_word`, `wake_threshold`, `mic_gain` and `led_brightness` are staged only, and the device reports
+`degraded` rather than pretending otherwise.
+
 Rejected inputs, all `400`: unknown setting name, wrong JSON type (a string where an integer is required,
 and note that `true` is rejected for a numeric field rather than coerced to `1`), out of range, value
 outside an enum, and a `wake_word` containing anything but lowercase letters, digits, `_` and `-`.
