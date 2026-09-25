@@ -50,6 +50,13 @@ try:  # package import in tests; sibling import when systemd executes this file 
 except ImportError:  # pragma: no cover - exercised by the installed script entrypoint
     from config_agent import CONFIG_DESIRED_EVENT, DeviceConfigAgent
 
+try:
+    from .device_apply import make_apply_adapter
+    from .volume_control import AlsaVolume
+except ImportError:  # pragma: no cover - exercised by the installed script entrypoint
+    from device_apply import make_apply_adapter
+    from volume_control import AlsaVolume
+
 log = logging.getLogger("pi.outbound")
 
 #: Must match the bridge. The bridge refuses a device that speaks a different version, and says so.
@@ -194,14 +201,25 @@ class BridgeLink:
         on_disconnected: Optional[Callable[[str], Any]] = None,
         stats: Optional[LinkStats] = None,
         config_agent: Optional[DeviceConfigAgent] = None,
+        alsa_volume: Optional[AlsaVolume] = None,
     ) -> None:
         self.config = config
         self.on_event = on_event
         self.on_registered = on_registered
         self.on_disconnected = on_disconnected
         self.stats = stats or LinkStats()
-        self.config_agent = config_agent or DeviceConfigAgent(
-            config.config_state_path, device_id=config.device_id)
+        if config_agent is not None:
+            self.config_agent = config_agent
+        else:
+            # Wire the hardware adapter in. Without this the agent validates, persists and
+            # reports - and never touches the device, so every setting would be staged
+            # forever while looking healthy. The adapter's own tests cannot catch that; only
+            # constructing the runner the way production does can.
+            self.config_agent = DeviceConfigAgent(
+                config.config_state_path,
+                device_id=config.device_id,
+                apply=make_apply_adapter(alsa_volume or AlsaVolume.from_calibration()),
+            )
 
         self.connected = False
         self.registered = False
