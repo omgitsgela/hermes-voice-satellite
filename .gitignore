@@ -24,3 +24,10 @@ __pycache__/
 .worktrees/
 # private operating notes: these live in ~/.hermes/skills, not in a published repo
 skills/
+
+# Private and upstream material: these are kept inside the backup mirror, deliberately outside this
+# tree, and the mirror's pruning protects them there. Nothing here should ever be committed: the
+# enclosure files are a third-party design whose licence forbids redistribution, and the device image
+# and token copy are ours alone.
+/private/
+/upstream/

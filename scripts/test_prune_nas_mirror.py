@@ -63,7 +63,59 @@ with tempfile.TemporaryDirectory() as tmp:
     if "fatal: not a git repository" not in stderr.getvalue():
         failures.append("stderr did not report the git ls-files failure")
 
-print(f"prune failure checks: {4 - len(failures)}/4 passed")
+phase_one_failures = len(failures)
+print(f"prune failure checks: {4 - phase_one_failures}/4 passed")
+
+# Phase two: an --apply prune must delete a file the repository no longer tracks and keep every
+# protected one. PROTECTED_TOP in prune-nas-mirror.py is the only thing standing between the hourly
+# job and the device image and the enclosure files, so the behaviour is pinned here rather than left
+# to inspection of the constant.
+with tempfile.TemporaryDirectory() as tmp:
+    mirror = pathlib.Path(tmp)
+    (mirror / "bridge").mkdir()
+    (mirror / "bridge" / "tracked.py").write_text("still tracked\n")
+    (mirror / "bridge" / "stale.py").write_text("no longer tracked\n")
+    protected = [
+        "private/device-images/wyoming1-sdcard.img.zst",
+        "private/device-images/token-copy.txt",
+        "private/makerworld-enclosure/case.3mf",
+        "private/makerworld-enclosure/DO-NOT-PUBLISH.md",
+        "upstream/wyoming.bundle",
+        "upstream/MANIFEST.md",
+    ]
+    generated = ["SYNC-INFO.txt", "README-what-this-is.md", "hermes-voice-satellite.bundle"]
+    for rel in protected + generated:
+        path = mirror / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("keep me\n")
+
+    protected_failures = 0
+    mod.mirror_root = lambda: mirror
+    mod.tracked_files = lambda: {"bridge/tracked.py"}
+    sys.argv = [str(HERE / "prune-nas-mirror.py"), "--apply"]
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = mod.main()
+    finally:
+        sys.argv = old_argv
+
+    if result != 0:
+        failures.append("apply returned failure while a protected file existed")
+        protected_failures += 1
+    if not (mirror / "bridge" / "tracked.py").is_file():
+        failures.append("apply deleted a file the repository still tracks")
+        protected_failures += 1
+    if (mirror / "bridge" / "stale.py").exists():
+        failures.append("apply kept a file the repository no longer tracks")
+        protected_failures += 1
+    for rel in protected + generated:
+        if not (mirror / rel).is_file():
+            failures.append(f"apply deleted a protected file: {rel}")
+            protected_failures += 1
+
+    total = len(protected) + len(generated) + 3
+    print(f"prune protected checks: {total - protected_failures}/{total} passed")
+
 for failure in failures:
     print("  FAIL:", failure)
 sys.exit(1 if failures else 0)
