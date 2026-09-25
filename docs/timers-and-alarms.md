@@ -145,6 +145,10 @@ New module `bridge/timers.py`:
   immediately, once, with its normal text, and the log records the lateness in seconds.
 - A hard cap on concurrent timers (suggest 10), refused politely with a spoken line rather than
   silently dropped.
+- **Setting, cancelling and expiring are all durable writes, and acceptance means the write reached the
+  file.** Each of the three builds the new timer list, saves it, and adopts it only on success. A failed
+  save therefore leaves memory and disk identical, so a retry is safe, a set timer cannot fire once and
+  then vanish on the next restart, and a cancelled timer cannot come back to life after one.
 
 ### The control surface
 
