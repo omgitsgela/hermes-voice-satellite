@@ -50,16 +50,54 @@ def parse_keyfile(path: pathlib.Path) -> configparser.ConfigParser:
     return parser
 
 
-def find_profile_file(store: pathlib.Path, profile_id: str) -> pathlib.Path:
-    """Locate a keyfile by its [connection] id, because the filename is not authoritative."""
-    for path in sorted(store.glob("*.nmconnection")):
+#: Where a machine may keep its system connections. `/etc` is the classic location, but a machine managed
+#: by netplan renders its profiles into `/run/NetworkManager/system-connections/` instead and leaves `/etc`
+#: empty, which is exactly what this script tripped over on 2026-09-24. `--source-store` overrides these.
+DEFAULT_STORES = (
+    "/etc/NetworkManager/system-connections",
+    "/run/NetworkManager/system-connections",
+    "/var/lib/NetworkManager/system-connections",
+)
+
+
+def iter_profiles(stores: list[str]):
+    for store in stores:
+        path = pathlib.Path(store)
+        if path.is_dir():
+            yield from sorted(path.glob("*.nmconnection"))
+
+
+def find_profile_file(stores: list[str], profile_id: str) -> pathlib.Path:
+    """Find a profile by its `[connection] id`, its filename, or its SSID.
+
+    All three, because a filename is not authoritative, and because the caller knows the profile by the name
+    NetworkManager shows them, not by which of those three fields it lives in.
+    """
+    candidates: list[tuple[pathlib.Path, str, str]] = []
+    unreadable: list[tuple[pathlib.Path, str]] = []
+    for path in iter_profiles(stores):
         try:
             parser = parse_keyfile(path)
-        except configparser.Error:
+        except (configparser.Error, OSError, UnicodeDecodeError, ValueError) as exc:
+            unreadable.append((path, type(exc).__name__))
             continue
-        if parser.has_section("connection") and parser.get("connection", "id", fallback="") == profile_id:
+        connection_id = parser.get("connection", "id", fallback="") if parser.has_section("connection") else ""
+        ssid = parser.get("wifi", "ssid", fallback="").strip('"') if parser.has_section("wifi") else ""
+        candidates.append((path, connection_id, ssid))
+        if connection_id == profile_id or profile_id in path.name or (ssid and ssid == profile_id):
             return path
-    raise SystemExit(f"FAIL: no profile with id {profile_id!r} in {store}")
+
+    # Not found: list what was there, so this is diagnosable without another round trip through a human.
+    print(f"FAIL: no profile matching {profile_id!r} in {', '.join(stores)}", file=sys.stderr)
+    if candidates:
+        print("  profiles that were found:", file=sys.stderr)
+        for path, connection_id, ssid in candidates:
+            print(f"    {path.name}\n      id={connection_id!r} ssid={ssid!r}", file=sys.stderr)
+    else:
+        print("  no *.nmconnection files were found in those directories at all", file=sys.stderr)
+    for path, why in unreadable:
+        print(f"    {path.name}: unreadable ({why}); are you running as root?", file=sys.stderr)
+    raise SystemExit(2)
 
 
 def strip_to_blank(parser: configparser.ConfigParser, section: str, key: str) -> None:
@@ -124,7 +162,10 @@ def main() -> int:
     ap.add_argument("--priority", type=int, default=5, help="autoconnect priority for the copy (default 5)")
     ap.add_argument("--home-profile", default=None, help="existing card profile to give a priority (optional)")
     ap.add_argument("--home-priority", type=int, default=10, help="priority for --home-profile (default 10)")
-    ap.add_argument("--source-store", default="/etc/NetworkManager/system-connections")
+    ap.add_argument("--source-store", action="append", default=None,
+                    help="directory to search for the source profile; repeatable. Defaults to the standard "
+                         "NetworkManager stores, which includes the /run directory a netplan-managed "
+                         "machine renders its profiles into")
     args = ap.parse_args()
 
     mount = pathlib.Path(args.mount)
@@ -132,7 +173,8 @@ def main() -> int:
     if not (mount / "etc/NetworkManager").is_dir():
         raise SystemExit(f"FAIL: {mount} does not look like a satellite rootfs (no /etc/NetworkManager)")
 
-    source = find_profile_file(pathlib.Path(args.source_store), args.source)
+    stores = args.source_store or list(DEFAULT_STORES)
+    source = find_profile_file(stores, args.source)
     parser = parse_keyfile(source)
     rewrite(parser, name=args.name, priority=args.priority)
 
