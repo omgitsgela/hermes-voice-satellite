@@ -182,10 +182,16 @@ work; details, affected files and safe reproductions live on each issue.
 | [#86](https://github.com/omgitsgela/hermes-voice-satellite/issues/86) | The device config agent never retries a failed hardware apply for the same generation |
 | [#87](https://github.com/omgitsgela/hermes-voice-satellite/issues/87) | Wi-Fi card provisioning leaves a source-device MAC restriction in the `[wifi]` section |
 | [#88](https://github.com/omgitsgela/hermes-voice-satellite/issues/88) | The Hermes voice and timer tools are unavailable with environment-token authentication |
+| [#89](https://github.com/omgitsgela/hermes-voice-satellite/issues/89) | A failed config-plane *report* publishes health in memory before the save succeeds |
 
 Each of these is a defect in behaviour the repository already documents, so none of them needs a design
 decision first. The one exception is the fix shape for #86, which has to choose between retrying a
 failed generation and accepting a new one.
+
+**#79–#89 are fixed and closed.** Each fix carries a regression test that was observed failing before the
+change and after deliberately restoring the defect, so every check is known to bite. #89 is the sibling
+of #81 that the first pass left behind: `report()` was the last writer in the configuration plane still
+mutating live state before the save returned, and the same copy-on-write rule now covers all three.
 
 ## Built from this list
 
