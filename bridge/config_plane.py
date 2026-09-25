@@ -6,6 +6,7 @@ actual state back with the generation they observed.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import os
 import re
@@ -156,18 +157,28 @@ class ConfigPlane:
             raise ConfigValidationError("configuration state has no devices object")
         return raw
 
-    def _save(self) -> None:
+    def _save(self, state: Optional[dict[str, Any]] = None) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
         try:
-            os.fchmod(fd, 0o600)
+            # mkstemp already creates the file as mode 0600; fchmod is best-effort.
+            try:
+                os.fchmod(fd, 0o600)
+            except OSError:
+                pass
             with os.fdopen(fd, "w") as handle:
-                json.dump(self._state, handle, indent=2, sort_keys=True)
+                json.dump(self._state if state is None else state, handle, indent=2, sort_keys=True)
                 handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp_name, self.path)
-            os.chmod(self.path, 0o600)
+            # mkstemp already created the file as mode 0600. The post-replace chmod is a
+            # best-effort hardening step for systems where replace preserves the old inode's mode;
+            # a chmod failure must never roll back a committed generation.
+            try:
+                os.chmod(self.path, 0o600)
+            except OSError:
+                pass
         except BaseException:
             try:
                 os.unlink(tmp_name)
@@ -175,9 +186,11 @@ class ConfigPlane:
                 pass
             raise
 
-    def _record(self, device_id: str) -> dict[str, Any]:
+    def _record(
+        self, device_id: str, *, state: Optional[dict[str, Any]] = None
+    ) -> dict[str, Any]:
         device_id = _validate_device_id(device_id)
-        devices = self._state["devices"]
+        devices = (self._state if state is None else state)["devices"]
         return devices.setdefault(device_id, {
             "device_id": device_id,
             "metadata": {},
@@ -195,7 +208,8 @@ class ConfigPlane:
         self, device_id: str, *, metadata: Optional[dict[str, Any]] = None
     ) -> dict[str, Any]:
         """Create a newly enrolled device with the complete safe default profile."""
-        record = self._record(device_id)
+        candidate = deepcopy(self._state)
+        record = self._record(device_id, state=candidate)
         clean_metadata: dict[str, Any] = {}
         if metadata is not None:
             if not isinstance(metadata, dict):
@@ -225,7 +239,8 @@ class ConfigPlane:
             record["desired_updated_at"] = _utc_now()
             changed = True
         if changed:
-            self._save()
+            self._save(candidate)
+            self._state = candidate
         return self._public(record)
 
     def set_desired(
@@ -238,7 +253,8 @@ class ConfigPlane:
         clean = validate_settings(patch)
         if not clean:
             raise ConfigValidationError("at least one setting is required")
-        record = self._record(device_id)
+        candidate = deepcopy(self._state)
+        record = self._record(device_id, state=candidate)
         current = int(record["generation"])
         if expected_generation is not None and expected_generation != current:
             raise ConfigConflict(
@@ -249,7 +265,8 @@ class ConfigPlane:
         record["desired"] = desired
         record["generation"] = current + 1
         record["desired_updated_at"] = _utc_now()
-        self._save()
+        self._save(candidate)
+        self._state = candidate
         return self._public(record)
 
     def report(

@@ -426,6 +426,34 @@ class BridgeLink:
 
         Returns when either end stops, which the caller treats as the link ending and reconnects from.
         """
+        # Read the bridge while the local service is still booting. Buffer a bounded
+        # number of ordinary events; control events and EOF must not wait for it.
+        pending: asyncio.Queue[Event] = asyncio.Queue(maxsize=256)
+
+        def enqueue(event: Event) -> None:
+            try:
+                pending.put_nowait(event)
+            except asyncio.QueueFull as exc:
+                raise ConnectionError("local satellite relay backlog is full") from exc
+
+        self.on_event = enqueue
+        tasks = {
+            asyncio.create_task(self._pump()),
+            asyncio.create_task(self._serve_local_connection(pending)),
+        }
+        try:
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                await task
+        finally:
+            for task in tasks:
+                task.cancel()
+            for task in tasks:
+                with contextlib.suppress(BaseException):
+                    await task
+            self.on_event = None
+
+    async def _serve_local_connection(self, pending: asyncio.Queue[Event]) -> None:
         reader = writer = None
         while reader is None:
             try:
@@ -448,13 +476,14 @@ class BridgeLink:
                     return
 
         self._local_writer = writer
-        self.on_event = self.relay_event_to_local
         log.info("relaying to the local satellite at %s:%s",
                  self.config.local_host, self.config.local_port)
         upstream = asyncio.create_task(self._local_to_bridge(reader))
-        downstream = asyncio.create_task(
-            self._pump()
-        )  # bridge -> this device -> the local satellite
+        async def forward_pending() -> None:
+            while True:
+                await self.relay_event_to_local(await pending.get())
+
+        downstream = asyncio.create_task(forward_pending())
         tasks = {upstream, downstream}
         try:
             done, _pending = await asyncio.wait(
@@ -465,7 +494,6 @@ class BridgeLink:
             for task in done:
                 await task
         finally:
-            self.on_event = None
             self._local_writer = None
             for task in tasks:
                 task.cancel()
