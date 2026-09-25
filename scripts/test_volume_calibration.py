@@ -57,11 +57,45 @@ check("--help documents the phases",
       result.stdout[:200])
 
 # ---------------------------------------------------------- writer -> readers
-
 spec = importlib.util.spec_from_file_location("calibrate_volume", script)
 module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(module)
+
+# The writer and the two readers must resolve the SAME path from the same environment
+# variable. On the device the service runs as root while a person runs the calibration as
+# wyoming1, so Path.home() differs between them: without a shared pin, the measurement
+# lands where the running service never looks and the calibration silently does nothing.
+for pinned in ("/tmp/pinned-by-env/volume.json", "/home/wyoming1/.local/state/vsat/volume.json"):
+    saved = {k: os.environ.get(k) for k in ("VOICE_VOLUME_CALIBRATION", "VOICE_STATE_DIR")}
+    os.environ["VOICE_VOLUME_CALIBRATION"] = pinned
+    os.environ.pop("VOICE_STATE_DIR", None)
+    try:
+        writer_path = module.calibration_file()
+        reader_path = pathlib.Path(pinned)   # what pi/volume_control.py resolves
+        check(f"the writer resolves the pinned path ({pinned})",
+              writer_path == reader_path, (writer_path, reader_path))
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+# And the device-side reader must agree, evaluated in a subprocess so its module-level
+# constant is built with the variable actually set.
+reader_probe = subprocess.run(
+    [sys.executable, "-c",
+     "import sys; sys.path.insert(0, '.');"
+     "import pi.volume_control as v; print(v.CALIBRATION_FILE)"],
+    capture_output=True, text=True, timeout=90, cwd=ROOT,
+    env={**os.environ, "PYTHONPATH": str(ROOT),
+         "VOICE_VOLUME_CALIBRATION": "/tmp/pinned-by-env/volume.json"},
+)
+check("the device reader honours the same pinned variable",
+      reader_probe.returncode == 0
+      and reader_probe.stdout.strip() == "/tmp/pinned-by-env/volume.json",
+      f"stdout={reader_probe.stdout.strip()!r} stderr={reader_probe.stderr[-200:]!r}")
 
 with tempfile.TemporaryDirectory() as tmp:
     target = pathlib.Path(tmp) / "volume.json"

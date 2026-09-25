@@ -39,9 +39,32 @@ from typing import Optional
 
 DEFAULT_CARD = "seeed2micvoicec"
 MAX_PERCENT = 100
-STATE_DIR = Path(os.environ.get("VOICE_STATE_DIR")
-                 or (Path.home() / ".local/state/hermes-voice-satellite"))
-CALIBRATION_FILE = STATE_DIR / "volume.json"
+
+
+def calibration_file() -> Path:
+    """Where the measurement goes, resolved the SAME way the reader resolves it.
+
+    The device-side reader (`pi/volume_control.py`) honours `VOICE_VOLUME_CALIBRATION`
+    first, and this script must agree with it exactly, or the measurement lands somewhere
+    the running service never looks and the calibration appears to do nothing at all.
+
+    Getting that wrong is easy and silent, which is why this is resolved in one place
+    rather than inferred from who happens to run the script. The service runs as root
+    (no `User=` in the unit, like every other satellite service) while a person runs this
+    as wyoming1, so `Path.home()` alone would give `/root` for one side and
+    `/home/wyoming1` for the other. Pinning the variable removes the guesswork.
+    """
+    pinned = os.environ.get("VOICE_VOLUME_CALIBRATION", "").strip()
+    if pinned:
+        return Path(pinned)
+    state_dir = os.environ.get("VOICE_STATE_DIR", "").strip()
+    if state_dir:
+        return Path(state_dir) / "volume.json"
+    return Path.home() / ".local/state/hermes-voice-satellite" / "volume.json"
+
+
+CALIBRATION_FILE = calibration_file()
+STATE_DIR = CALIBRATION_FILE.parent
 
 #: Tones that already exist on a satellite built from this project. Any one will do;
 #: the point is a steady, recognisable sound. A missing file is not fatal, we just
