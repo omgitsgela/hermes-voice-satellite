@@ -24,6 +24,7 @@ Checks:
  10  local satellite EOF ends the paired relay so both sides can reconnect
  11  a local satellite write failure ends the paired relay
  12  desired configuration is applied/reported out of band, not sent to the satellite
+ 13  the outbound socket enables short TCP keepalive before it is considered connected
 """
 
 from __future__ import annotations
@@ -316,6 +317,31 @@ async def t_ping_pong() -> None:
         await asyncio.sleep(0.2)
         assert any(e.type == "pong" for e in bridge.received), "an idle link must answer ping"
         assert not any(e.type == "ping" for e in runner.events), "ping must not reach the event sink"
+    finally:
+        await runner.stop()
+        await bridge.stop()
+
+
+@check("13", "the outbound socket enables short TCP keepalive")
+async def t_tcp_keepalive() -> None:
+    bridge = FakeBridge()
+    await bridge.start()
+    link = BridgeLink(config_for(bridge.port))
+    runner = LinkRunner(link)
+    try:
+        await runner.start()
+        await asyncio.wait_for(bridge.registered.wait(), TIMEOUT)
+        assert link.writer is not None
+        sock = link.writer.get_extra_info("socket")
+        assert sock is not None, "the connected stream must expose its socket"
+        assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE) == 1, (
+            "an idle outbound link must not survive a vanished bridge indefinitely"
+        )
+        for name, expected in (("TCP_KEEPIDLE", 15), ("TCP_KEEPINTVL", 5), ("TCP_KEEPCNT", 3)):
+            option = getattr(socket, name, None)
+            if option is not None:
+                actual = sock.getsockopt(socket.IPPROTO_TCP, option)
+                assert actual == expected, f"{name}={actual}, expected {expected}"
     finally:
         await runner.stop()
         await bridge.stop()

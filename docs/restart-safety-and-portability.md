@@ -24,7 +24,8 @@ Verified live, not assumed:
 | Event | Today | Wanted |
 |---|---|---|
 | Bridge process dies | systemd restarts it in 5 s; a turn in flight is lost | same, and say so in the room if a turn was lost |
-| Gateway restarted (planned) | In-flight turn errors, bridge exits, reconnects; the device is deaf for a few seconds | same. Optionally retry the interrupted turn once |
+| Gateway is still starting during bridge/host boot | The bridge keeps its listeners up and retries Gateway health in-process with capped backoff; it arms the satellite only after the API is ready | same |
+| Gateway restarts while the bridge is already running | An in-flight or next turn can fail; the startup readiness loop is not re-entered | Detect runtime loss, wait for readiness and optionally retry an interrupted turn once |
 | `hermes update` runs | **The one remaining core patch is stashed and its fix is lost** (see below) | Patches detected, re-applied and verified automatically |
 | Host reboots | Everything returns unattended | same (verified) |
 | Pi reboots or loses power | Services are enabled and come back; no RTC, so nothing time-based is trusted | same. The gold SD image stays the recovery path |

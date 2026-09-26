@@ -1359,9 +1359,9 @@ class VoiceLoop:
         # reached by dialling IN. Both used to sit behind the connect below, which is why the whole
         # bridge went down with the satellite and nothing was listening on 8765 or 10701 while it was
         # away: a device could not have registered even if it tried.
-        from bridge.config import (REGISTRY_ALLOW_UNAUTHENTICATED, REGISTRY_CREDENTIALS_FILE,
-                                   REGISTRY_DUPLICATE_POLICY, REGISTRY_ENABLED, REGISTRY_HOST,
-                                   REGISTRY_PORT)
+        from bridge.config import (DIRECT_DIAL_FALLBACK, REGISTRY_ALLOW_UNAUTHENTICATED,
+                                   REGISTRY_CREDENTIALS_FILE, REGISTRY_DUPLICATE_POLICY, REGISTRY_ENABLED,
+                                   REGISTRY_HOST, REGISTRY_PORT)
 
         self.registry = None
         self.registry_server = None
@@ -1396,9 +1396,15 @@ class VoiceLoop:
             except CredentialConfigError as exc:
                 _LOGGER.error("registry listener NOT started: %s", exc)
                 self.registry_server = None
-            except Exception as exc:  # noqa: BLE001 - the voice path must not depend on this
+                if not DIRECT_DIAL_FALLBACK:
+                    raise
+            except Exception as exc:  # noqa: BLE001 - direct fallback may preserve the voice path
                 _LOGGER.error("could not start the registry listener: %s", exc)
                 self.registry_server = None
+                if not DIRECT_DIAL_FALLBACK:
+                    # Without a listener or the explicitly enabled direct fallback, acquisition could only
+                    # sleep forever. Exit so systemd can retry after the interface/listener becomes ready.
+                    raise
 
         # Announcements bind their HTTP endpoint here and hold this loop's connection by reference; they
         # do not need the satellite to be connected, so they no longer wait for it.
@@ -1416,7 +1422,8 @@ class VoiceLoop:
         if info is not None:
             name = getattr(getattr(info, "satellite", None), "name", "?")
             _LOGGER.info("satellite: %s", name)
-        _LOGGER.info("gateway health: %s", await self.gateway.health())
+        health = await self._wait_for_gateway_ready()
+        _LOGGER.info("gateway health: %s", health)
         # Tell the satellite we are ready; it arms its wake word and stops being inert.
         await self.sat.run()
 
@@ -1430,6 +1437,22 @@ class VoiceLoop:
 
         # The satellite cannot tell anyone it is connected, so the host does it.
         await self.say_startup_tone()
+
+    async def _wait_for_gateway_ready(self) -> dict:
+        """Keep the bridge alive while the Gateway API finishes an ordinary boot.
+
+        systemd's ``After=`` orders process starts; it does not mean the API listener is ready. The registry
+        and announcement listeners are already up when this runs, so exiting here would tear down the very
+        endpoint the satellite needs in order to recover. Do not arm the microphone until health succeeds.
+        """
+        delay = 1.0
+        while True:
+            try:
+                return await self.gateway.health()
+            except VoiceGatewayError as exc:
+                _LOGGER.warning("gateway is not ready yet (%s); retrying in %.0fs", exc, delay)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2.0, 10.0)
 
     def _use_satellite(self, satellite, *, leased: bool) -> None:
         """Point the loop, and everything that speaks on its connection, at this satellite.
@@ -1461,20 +1484,15 @@ class VoiceLoop:
     async def _acquire_a_satellite(self) -> None:
         """Take hold of a satellite, preferring a device that dialled in.
 
-        A lease is checked first every time round: it is the newer shape, and two clients competing for one
-        device is exactly what the one-client rule exists to prevent. The direct dial remains the fallback so
-        a device that does not run the outbound runner is served exactly as before.
-
-        The dial happens immediately on the first pass rather than after the lease wait, because that is what
-        this bridge has always done at startup and a device in the room should not wait out a timeout it has
-        no part in. After a failed dial the wait applies, and the dial is retried slowly.
+        A lease is checked first every time round: it is the intended shape, and two clients competing for
+        one device is exactly what the one-client rule exists to prevent. The direct dial is an explicit
+        migration/rollback option; when enabled it still waits out the lease grace period first.
         """
-        from bridge.config import (REGISTRY_LEASE_WAIT_SECONDS, REGISTRY_WAIT_RETRY_SECONDS,
-                                   SATELLITE_HOST, SATELLITE_PORT)
+        from bridge.config import (DIRECT_DIAL_FALLBACK, REGISTRY_LEASE_WAIT_SECONDS,
+                                   REGISTRY_WAIT_RETRY_SECONDS, SATELLITE_HOST, SATELLITE_PORT)
         from bridge.lease import LeasedSatellite
 
         waited = 0.0
-        first_pass = True
         while True:
             connection = self._first_ready_device()
             if connection is not None:
@@ -1487,27 +1505,29 @@ class VoiceLoop:
                 await lease.connect()
                 return
 
-            if first_pass or waited >= REGISTRY_LEASE_WAIT_SECONDS:
+            if DIRECT_DIAL_FALLBACK and waited >= REGISTRY_LEASE_WAIT_SECONDS:
                 waited = 0.0
                 try:
                     await self.sat.connect()
                 except (OSError, ConnectionError) as exc:
                     _LOGGER.debug(
-                        "no device has dialled in, and %s:%s did not answer either: %s",
+                        "no device has dialled in, and fallback %s:%s did not answer either: %s",
                         SATELLITE_HOST, SATELLITE_PORT, exc,
                     )
                 else:
                     _LOGGER.info(
-                        "dialled the satellite at %s:%s: no device has dialled in",
+                        "dialled fallback satellite at %s:%s after the lease grace expired",
                         SATELLITE_HOST, SATELLITE_PORT,
                     )
                     return
-            first_pass = False
 
-            _LOGGER.info(
-                "no satellite yet; staying up and listening for a device to dial in (%s:%s did not answer "
-                "either)", SATELLITE_HOST, SATELLITE_PORT,
-            )
+            if DIRECT_DIAL_FALLBACK:
+                _LOGGER.info(
+                    "no registered satellite yet; waiting for a lease before fallback dial to %s:%s",
+                    SATELLITE_HOST, SATELLITE_PORT,
+                )
+            else:
+                _LOGGER.info("no registered satellite yet; direct-dial fallback is disabled")
             await asyncio.sleep(REGISTRY_WAIT_RETRY_SECONDS)
             waited += REGISTRY_WAIT_RETRY_SECONDS
 

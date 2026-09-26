@@ -322,6 +322,7 @@ class BridgeLink:
             asyncio.open_connection(self.config.host, self.config.port, ssl=self.config.ssl_context),
             timeout=self.config.connect_timeout,
         )
+        self._enable_tcp_keepalive()
         self.connected = True
 
         await self._handshake()
@@ -344,6 +345,31 @@ class BridgeLink:
             await self._serve_local()
         else:
             await self._pump()
+
+    def _enable_tcp_keepalive(self) -> None:
+        """Make an idle link notice that the bridge host vanished.
+
+        Without keepalive, a powered-off bridge can leave the device-side socket in ESTABLISHED for the
+        kernel's multi-hour default. The reader then sees no EOF, the reconnect loop never runs, and the
+        device remains registered only in its own imagination. Match the host-side liveness window: after
+        15 idle seconds, three probes five seconds apart surface a dead peer in roughly 30 seconds.
+        """
+        import socket as _socket
+
+        try:
+            writer = self.writer
+            sock = writer.get_extra_info("socket") if writer is not None else None
+            if sock is None:
+                log.warning("could not reach the bridge socket, so TCP keepalive is off")
+                return
+            sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_KEEPALIVE, 1)
+            for name, value in (("TCP_KEEPIDLE", 15), ("TCP_KEEPINTVL", 5), ("TCP_KEEPCNT", 3)):
+                option = getattr(_socket, name, None)
+                if option is not None:
+                    sock.setsockopt(_socket.IPPROTO_TCP, option, value)
+            log.info("TCP keepalive on for the bridge link (15s idle, 3 probes 5s apart)")
+        except Exception as exc:  # noqa: BLE001 - liveness tuning must not block a usable link
+            log.warning("could not enable TCP keepalive on the bridge link: %s", exc)
 
     async def _handshake(self) -> None:
         """describe -> info -> register -> ok, with every step bounded."""

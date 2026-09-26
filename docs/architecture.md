@@ -67,8 +67,10 @@ So the bridge can talk to a device either way, and everything above the transpor
 announcements, TTS, capture - is written once. `registry.py` decides which connection owns a device
 id; `lease.py` runs a conversation on the one that dialled in.
 
-**The older dial-out shape stays reachable for rollback.** It is not dead code, and a reader who
-finds both should not delete one without reading `docs/outbound-link.md` first.
+**The older dial-out shape stays reachable as an explicit rollback path.** In registry mode it is disabled
+by default so it cannot compete with the device's relay. Set `VOICE_DIRECT_DIAL_FALLBACK=1` to restore it;
+even then the bridge waits through the lease grace period before dialling. The code is not dead, and a reader
+who finds both shapes should not delete one without reading `docs/outbound-link.md` first.
 
 ## Every component, and who owns it
 
