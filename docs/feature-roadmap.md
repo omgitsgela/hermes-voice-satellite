@@ -187,6 +187,7 @@ work; details, affected files and safe reproductions live on each issue.
 | [#91](https://github.com/omgitsgela/hermes-voice-satellite/issues/91) | A host reboot can strand the outbound satellite on a half-open link and trigger a competing direct dial |
 | [#93](https://github.com/omgitsgela/hermes-voice-satellite/issues/93) | The voice prompt refuses requested knowledge-base writes despite the API surface having the required tools |
 | [#97](https://github.com/omgitsgela/hermes-voice-satellite/issues/97) | A spoken volume request can change a different device: the assistant picks a device and a value, then reads a repeat as agreement |
+| [#99](https://github.com/omgitsgela/hermes-voice-satellite/issues/99) | The card deploy script omits four device modules, so a closed fix could never be deployed |
 
 Each of these is a defect in behaviour the repository already documents, so none of them needs a design
 decision first. The one exception is the fix shape for #86, which has to choose between retrying a

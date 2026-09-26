@@ -53,6 +53,15 @@ Captured as patches in `pi/vendor/`. Nothing here is upstream behaviour.
 3. **Three example scripts we added:** `wake_shim.py` (holds 10400 so the microphone can be opened
    on demand for follow-up mode), `inject_wake.py`, `led_cmd.py` (lets the satellite's own TTS hooks
    change the LEDs over loopback).
+
+**Every module above must also be listed in `scripts/deploy-to-card.sh`.** That script carries a
+hardcoded list in two places (the copy loop and the verification loop), and for three days it listed
+only four modules, so `wake_shim.py` was never copied to a device by any deploy. The fix for issue #17
+was merged, tested and closed while the device kept running the previous copy, and nothing failed
+because nothing checked. `scripts/test_deploy_file_list.py` now derives the expected set from `pi/`
+itself and fails if the script's list disagrees, so adding a module without deploying it is a test
+failure rather than a silent partial deploy. Add a file to that test's `DEVICE_EXCLUSIONS` only when
+the file genuinely is not a deployed example module, and say why.
 4. **Two systemd drop-ins**, which is where the real configuration lives:
    - `wyoming-satellite.service.d`: `Requires=` and `After=` on `wake-shim.service`, so the shim is
      up first, and restarting it bounces the satellite. The drop-in carries the warning to check
