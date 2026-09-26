@@ -36,12 +36,25 @@ REMINDER_SHAPED = (
     "reminder and deliver it to telegram",
 )
 
+# The specific shapes that would make the prompt contradict itself: it could contain every required
+# token above and still tell the model to build a reminder. Substring matching alone cannot tell a
+# self-contradicting prompt from a correct one, so these are forbidden outright. None of them appears
+# in the intended wording, which says "delivers a message is not an alarm" without ever naming a
+# delivery target or a false no_agent value.
+SELF_CONTRADICTING = (
+    "deliver: telegram",
+    "deliver telegram",
+    "no_agent false",
+    "no-agent false",
+)
+
 
 def check_alarm_contract(text: str) -> list[str]:
     """Return the alarm-contract violations in *text*."""
     problems = [f"missing: {needed}" for needed in REQUIRED if needed not in text]
     lowered = text.lower()
     problems += [f"contradicted: {forbidden}" for forbidden in REMINDER_SHAPED if forbidden in lowered]
+    problems += [f"self-contradicting: {forbidden}" for forbidden in SELF_CONTRADICTING if forbidden in lowered]
     return problems
 
 
@@ -54,6 +67,20 @@ def main() -> int:
     if "contradicted: reminder and deliver it to telegram" not in check_alarm_contract(broken):
         print("  FAIL: the checker accepts a reminder-shaped alarm prompt")
         failures.append("checker does not reject a reminder-shaped alarm prompt")
+
+    # And prove the second half bites independently: a prompt that carries every required token while
+    # also instructing a message delivery is exactly the self-contradiction plain token matching
+    # cannot see. It must be reported too.
+    self_contradicting = (
+        "An alarm uses scripts/alarm_fire.py with no_agent true and deliver local. "
+        "alarm_list lists alarms. alarm: prefixes the name. Also set deliver: telegram."
+    )
+    if not any(
+        problem.startswith("self-contradicting:")
+        for problem in check_alarm_contract(self_contradicting)
+    ):
+        print("  FAIL: the checker misses a prompt that contradicts itself")
+        failures.append("checker does not reject a self-contradicting alarm prompt")
 
     for failure in failures:
         print("  FAIL:", failure)
