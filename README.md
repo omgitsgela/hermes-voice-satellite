@@ -18,7 +18,9 @@ type into. The satellite is for the moments you are not:
 - **Your hands are occupied.** Cooking, soldering, working on something on a ladder, holding a child:
   the wake word plus a sentence replaces typing, and the answer comes back without touching a device.
   The voice surface runs at full parity with a normal conversation (see Status), so the same requests
-  that work in a terminal — a question, a draft, a lookup, a home-automation action — work here.
+  that work in a terminal — a question, a draft, a lookup, a knowledge-base update, or a home-automation
+  action — work here. Its spoken prompt explicitly routes requested Obsidian writes through the storage and
+  vault skills rather than treating the whole microphone channel as read-only.
 - **The house can talk.** A cron job, a home-automation rule, or any other process can POST an
   announcement to the bridge, and the satellite speaks it through its own speaker, queued politely
   behind any conversation in progress. A freezer that crossed a threshold, a door left open, a backup

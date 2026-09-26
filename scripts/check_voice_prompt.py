@@ -7,10 +7,11 @@ nothing is spoken out loud.
 
 import asyncio
 import os
+from pathlib import Path
 import re
 import sys
 
-sys.path.insert(0, "/home/angela/hermes-voice-bridge")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from bridge.config import (  # noqa: E402
     GATEWAY_BASE_URL,
@@ -101,7 +102,8 @@ def check_prompt_clauses() -> int:
 
     The prompt used to forbid `tool_search`, `tool_describe` and `tool_call` outright, which is the
     only route to a deferred tool, while the voice surface runs at full parity and depends on those
-    tools being reachable (issue #18). Pin both halves: discovery allowed, writes still refused.
+    tools being reachable (issue #18). Pin discovery, preserve the voice-only skill boundary, and
+    require explicit permission for requested knowledge-base writes (issue #93).
     """
     problems = 0
     if "never call tool_search" in VOICE_INSTRUCTIONS:
@@ -111,14 +113,31 @@ def check_prompt_clauses() -> int:
         if needed not in VOICE_INSTRUCTIONS:
             print(f"  FAIL: the prompt no longer mentions {needed}")
             problems += 1
-    if "never write or modify files" not in VOICE_INSTRUCTIONS:
-        print("  FAIL: the read-only rule is gone; this surface must not write")
-        problems += 1
-    if "never call skill_manage" not in VOICE_INSTRUCTIONS:
+    blanket_write_bans = (
+        "channel is READ-ONLY",
+        "never write or modify files",
+        "never run a command that changes anything",
+    )
+    for forbidden in blanket_write_bans:
+        if forbidden in VOICE_INSTRUCTIONS:
+            print(f"  FAIL: the prompt still blocks requested knowledge-base writes: {forbidden}")
+            problems += 1
+    for needed in (
+        "knowledge base",
+        "Obsidian",
+        "smb-share-access",
+        "obsidian",
+        "state-changing request",
+        "one concise clarifying question",
+    ):
+        if needed not in VOICE_INSTRUCTIONS:
+            print(f"  FAIL: the prompt does not explain the knowledge-base write path: {needed}")
+            problems += 1
+    if "never call skill_manage" not in VOICE_INSTRUCTIONS.lower():
         print("  FAIL: the no-skill_manage rule is gone")
         problems += 1
     if problems == 0:
-        print("  OK: discovery permitted, writes still refused")
+        print("  OK: discovery and requested KB writes permitted; skill_manage still refused")
     return problems
 
 
