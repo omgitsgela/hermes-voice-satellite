@@ -133,6 +133,24 @@ def check_prompt_clauses() -> int:
         if needed not in VOICE_INSTRUCTIONS:
             print(f"  FAIL: the prompt does not explain the knowledge-base write path: {needed}")
             problems += 1
+    write_contract = (
+        "preserve the existing note",
+        "make the requested write, and verify it before confirming briefly",
+        "Normal action gates, approvals, privacy rules, and safety boundaries still apply",
+    )
+    for needed in write_contract:
+        if needed not in VOICE_INSTRUCTIONS:
+            print(f"  FAIL: the operative knowledge-base write contract is missing: {needed}")
+            problems += 1
+    explicit_write_denials = (
+        "do not make the requested write",
+        "never make the requested write",
+        "must not make the requested write",
+    )
+    for forbidden in explicit_write_denials:
+        if forbidden in VOICE_INSTRUCTIONS.lower():
+            print(f"  FAIL: the prompt explicitly denies the requested knowledge-base write: {forbidden}")
+            problems += 1
     if "never call skill_manage" not in VOICE_INSTRUCTIONS.lower():
         print("  FAIL: the no-skill_manage rule is gone")
         problems += 1
