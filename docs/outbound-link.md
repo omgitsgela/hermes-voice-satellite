@@ -60,6 +60,19 @@ seconds apart. A powered-off or rebooted bridge therefore becomes a connection e
 instead of leaving a device-side socket falsely `ESTABLISHED` for the kernel's multi-hour default. The normal
 reconnect loop then re-resolves the endpoint, reconnects and registers a new generation.
 
+**Keepalive runs in both directions, and it is the same numbers on both ends.** The device's outbound socket
+covers a bridge that has gone away. The bridge's **accepted** registry socket covers the opposite case, which
+is the more common one for a roaming satellite: the device loses power or its route, closes nothing, and the
+bridge goes on holding a registration and a lease for something that is not there. An idle link has no timeout
+of its own and the protocol offers no heartbeat — the satellite does not answer application-level pings — so
+without keepalive the bridge cannot tell at all.
+
+Measured 2026-09-26: the satellite was power-cycled and the accepted socket stayed `ESTABLISHED` for the whole
+outage, cleaned up only because the returning device displaced it. Had it stayed off, the stale state would
+have persisted indefinitely and anything trying to use the device would have blocked on a dead socket. The
+bridge's dialled client and its accepted registry sockets now share one implementation in `bridge/net.py`, so
+the two ends cannot drift apart; the device repeats the same values from `pi/outbound_satellite.py`.
+
 Relaying is the audio: once registered, the runner connects to the satellite service running on the same
 device and becomes a transparent pipe between it and the bridge, in both directions.
 

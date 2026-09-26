@@ -68,6 +68,8 @@ from wyoming.satellite import (
 from wyoming.snd import Played
 from wyoming.wake import Detection
 
+from bridge.net import enable_tcp_keepalive
+
 from bridge.config import SND_FORMAT
 
 _LOGGER = logging.getLogger("bridge.satellite")
@@ -139,26 +141,14 @@ class SatelliteClient:
 
         With this, a peer that has gone away produces a socket error in about 30 seconds, the
         reader reports EOF, `wait_for_wake` raises ConnectionError, and systemd restarts us into a
-        fresh connection. Non-fatal on purpose: a chime must never block a connection.
-        """
-        import socket as _socket
+        fresh connection.
 
-        try:
-            writer = getattr(self._client, "_writer", None)
-            sock = writer.get_extra_info("socket") if writer is not None else None
-            if sock is None:
-                _LOGGER.warning("could not reach the socket, so keepalive is off")
-                return
-            sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_KEEPALIVE, 1)
-            # 15 s idle, then 3 probes 5 s apart: roughly 30 s to notice a dead peer.
-            for name, value in (("TCP_KEEPIDLE", 15), ("TCP_KEEPINTVL", 5), ("TCP_KEEPCNT", 3)):
-                opt = getattr(_socket, name, None)
-                if opt is not None:
-                    sock.setsockopt(_socket.IPPROTO_TCP, opt, value)
-            _LOGGER.info("tcp keepalive on (15s idle, 3 probes 5s apart): a dead satellite now "
-                         "surfaces as a closed socket instead of silence")
-        except Exception as exc:  # noqa: BLE001 - never block a connection over a sockopt
-            _LOGGER.warning("could not enable tcp keepalive: %s", exc)
+        The mechanism and the values live in `bridge/net.py` now, because the accepted registry
+        sockets need exactly the same thing and two copies of "15, 5, 3" would drift apart.
+        """
+        writer = getattr(self._client, "_writer", None)
+        sock = writer.get_extra_info("socket") if writer is not None else None
+        enable_tcp_keepalive(sock, label="dialled satellite", logger=_LOGGER)
 
     async def close(self) -> None:
         if self._reader_task is not None:

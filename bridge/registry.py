@@ -48,6 +48,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from wyoming.event import Event, async_write_event
 from wyoming.server import AsyncEventHandler, AsyncTcpServer
 
+from bridge.net import enable_tcp_keepalive
+
 log = logging.getLogger("bridge.registry")
 
 #: Bumped when the registration contract changes, so an old device is refused clearly instead of
@@ -739,6 +741,16 @@ class RegistryServer:
         self._server: Optional[AsyncTcpServer] = None
 
     def _handler_factory(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> RegistrationHandler:
+        # Keepalive on the accepted socket, for the same reason the dialled client has it: an idle link
+        # has no timeout of its own, and a device that dies without closing leaves this end believing it
+        # is connected. Measured 2026-09-26: the satellite was power-cycled and the bridge did not notice
+        # at all — the registration and the lease were held for the whole outage, and only the returning
+        # device displaced the stale socket. Applied per accepted connection, before anything reads.
+        enable_tcp_keepalive(
+            writer.get_extra_info("socket"),
+            label=f"accepted device link from {describe_peer(writer)}",
+            logger=log,
+        )
         authenticated_id: Optional[str] = None
         known = True
         if self.credential_lookup is not None:
