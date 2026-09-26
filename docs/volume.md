@@ -55,6 +55,28 @@ bridge-local command that changes the room is worse than the assistant taking an
 second. `turn the volume up` and `volume up` both work, because neither leaves the object
 ambiguous.
 
+### What must happen after a fall-through, and what must not
+
+Handing a request to the assistant is only safe if the assistant answers the request that was
+actually made. A volume request the matcher declines is still a volume request: it is about this
+device's own playback level, and it is never satisfied by changing another device in the house.
+
+That is not hypothetical. On 2026-09-25 a spoken **"volume five"** was transcribed with the word
+*volume* lost, so the matcher correctly declined it and let it through — and the assistant then set
+the **thermostat** to 65, a device the person never named, while the volume never changed at all.
+The transcript had arrived in the middle of a thermostat conversation, so the model reached for the
+device that was in context instead of the device that was asked about. It had also invented the
+value 65 on the previous turn, offered it back as "did you mean 65?", and then read the person's
+repeat of their own request as agreement to that guess.
+
+The clauses that close that chain are in `VOICE_INSTRUCTIONS`: a device is never changed unless the
+person named it, a clarifying question may never introduce a number the person did not say, a repeat
+is the same request rather than a yes, and a garbled or fragmentary utterance never becomes a state
+change. `scripts/test_voice_device_scope.py` pins them offline. Note what the matcher's conservatism
+now implies: when a volume request is mis-heard badly enough to lose the word *volume*, the honest
+outcome is that the assistant asks rather than acts, and the person says it again more clearly. That
+is the intended trade — an extra exchange instead of a changed thermostat.
+
 ## Alarms override upward
 
 Angela's decision, 2026-09-25: **an alarm may override upward to a minimum alarm level, so
