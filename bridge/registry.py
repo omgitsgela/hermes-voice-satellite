@@ -600,6 +600,15 @@ class RegistrationHandler(AsyncEventHandler):
         self._registration_watchdog = asyncio.create_task(self._enforce_deadline())
         try:
             await super().run()
+        except (ConnectionError, OSError) as exc:
+            # A device that roams loses its route mid-read, so the read fails with EHOSTUNREACH rather
+            # than returning a clean EOF. That is an ordinary disconnect, not a fault: the slot and the
+            # lease are cleared by the registry and the lease layer, and this handler's only remaining
+            # job is to end. Letting it escape made asyncio report "Task exception was never retrieved"
+            # with a full traceback, because the library starts this task fire-and-forget and its
+            # done-callback never reads the exception. Logged at info so it stays visible if the shape
+            # ever changes. CancelledError is a BaseException, so a shutdown still propagates.
+            log.info("registration connection ended: %s", exc or "peer unreachable")
         finally:
             self._registration_watchdog.cancel()
 

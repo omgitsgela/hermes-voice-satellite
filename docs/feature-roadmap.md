@@ -189,6 +189,7 @@ work; details, affected files and safe reproductions live on each issue.
 | [#96](https://github.com/omgitsgela/hermes-voice-satellite/issues/96) | A spoken alarm is created as a plain cron reminder, so it never speaks and listing alarms reads the whole cron inventory |
 | [#97](https://github.com/omgitsgela/hermes-voice-satellite/issues/97) | A spoken volume request can change a different device: the assistant picks a device and a value, then reads a repeat as agreement |
 | [#99](https://github.com/omgitsgela/hermes-voice-satellite/issues/99) | The card deploy script omits four device modules, so a closed fix could never be deployed |
+| [#102](https://github.com/omgitsgela/hermes-voice-satellite/issues/102) | A roaming device disconnecting with No route to host logs an unretrieved task exception and a traceback |
 
 Each of these is a defect in behaviour the repository already documents, so none of them needs a design
 decision first. The one exception is the fix shape for #86, which has to choose between retrying a
