@@ -185,6 +185,7 @@ work; details, affected files and safe reproductions live on each issue.
 | [#89](https://github.com/omgitsgela/hermes-voice-satellite/issues/89) | A failed config-plane *report* publishes health in memory before the save succeeds |
 | [#90](https://github.com/omgitsgela/hermes-voice-satellite/issues/90) | A failed timer set or cancel publishes the change in memory before the save succeeds |
 | [#91](https://github.com/omgitsgela/hermes-voice-satellite/issues/91) | A host reboot can strand the outbound satellite on a half-open link and trigger a competing direct dial |
+| [#93](https://github.com/omgitsgela/hermes-voice-satellite/issues/93) | The voice prompt refuses requested knowledge-base writes despite the API surface having the required tools |
 
 Each of these is a defect in behaviour the repository already documents, so none of them needs a design
 decision first. The one exception is the fix shape for #86, which has to choose between retrying a
