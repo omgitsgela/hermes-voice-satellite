@@ -1557,7 +1557,9 @@ class VoiceLoop:
         # Re-arm: the device only reports wake words once the host has said it is ready.
         await self.sat.run()
         _LOGGER.info(
-            "re-acquired %s", "a device that dialled in" if self.leased else "the dialled satellite"
+            "re-acquired %s; listening again (session %s)",
+            "a device that dialled in" if self.leased else "the dialled satellite",
+            self.gateway.session_id,
         )
 
     def _connected_device_ids(self):

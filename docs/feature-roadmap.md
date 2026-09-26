@@ -190,6 +190,8 @@ work; details, affected files and safe reproductions live on each issue.
 | [#97](https://github.com/omgitsgela/hermes-voice-satellite/issues/97) | A spoken volume request can change a different device: the assistant picks a device and a value, then reads a repeat as agreement |
 | [#99](https://github.com/omgitsgela/hermes-voice-satellite/issues/99) | The card deploy script omits four device modules, so a closed fix could never be deployed |
 | [#102](https://github.com/omgitsgela/hermes-voice-satellite/issues/102) | A roaming device disconnecting with No route to host logs an unretrieved task exception and a traceback |
+| [#104](https://github.com/omgitsgela/hermes-voice-satellite/issues/104) | The bridge cannot detect a vanished satellite: nothing sets keepalive on accepted registry sockets |
+| [#105](https://github.com/omgitsgela/hermes-voice-satellite/issues/105) | A recovered link does not say it is listening again, so the journal cannot distinguish recovery from a stall |
 
 Each of these is a defect in behaviour the repository already documents, so none of them needs a design
 decision first. The one exception is the fix shape for #86, which has to choose between retrying a
