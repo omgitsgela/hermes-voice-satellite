@@ -50,6 +50,11 @@ REGISTRY_WAIT_RETRY_SECONDS = float(os.environ.get("VOICE_REGISTRY_WAIT_RETRY_SE
 # and two clients competing for one device is what the one-client rule exists to prevent). Waiting a moment
 # first stops the bridge from grabbing a device that is about to dial us itself.
 REGISTRY_LEASE_WAIT_SECONDS = float(os.environ.get("VOICE_REGISTRY_LEASE_WAIT_SECONDS", "30"))
+# The direct dial is a migration/rollback path, not something that should race the device-initiated link.
+# Registry deployments therefore wait only for a device by default. An installation that still has an
+# old-shape device can opt in explicitly; even then the lease grace above is honoured before the dial.
+DIRECT_DIAL_FALLBACK = os.environ.get("VOICE_DIRECT_DIAL_FALLBACK", "").strip().lower() in (
+    "1", "true", "yes", "on")
 
 # Taken from the satellite's own ExecStart flags, so these are its real formats:
 #   --mic-command 'arecord -D plughw:CARD=seeed2micvoicec,DEV=0 -r 16000 -c 1 -f S16_LE -t raw'

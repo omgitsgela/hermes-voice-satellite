@@ -45,15 +45,20 @@ sudo systemctl enable --now outbound-satellite
    usually finds its peer listening, but not `Require=`, because `_serve_local()` retries until the
    satellite appears and a hard dependency would turn that ordinary boot race into a failed unit.
 
-   The two do share the audio device, by design, and not by contention: the relay hands the bridge's
+   The two do share the audio device, by design and not by contention: the relay hands the bridge's
    events to that same satellite service, so it is the satellite doing the listening and the speaking,
-   exactly as before, just reached over an outbound socket. Nothing else on the device touches the mic or
-   the speaker, and the dial-in path keeps working alongside this link for as long as the bridge supports
-   both shapes.
+   exactly as before, just reached over an outbound socket. The older inbound listener may remain available
+   during migration, but the bridge does not race both connection shapes. In registry mode it waits for the
+   outbound lease; `VOICE_DIRECT_DIAL_FALLBACK=1` explicitly restores the old dial as a rollback path, after
+   the configured lease grace period.
 
 ## What it does
 
 The link registers, holds the connection, answers pings, reconnects with capped jitter, and then **relays**.
+The device also enables TCP keepalive on the bridge socket: 15 seconds idle followed by three probes five
+seconds apart. A powered-off or rebooted bridge therefore becomes a connection error in roughly 30 seconds
+instead of leaving a device-side socket falsely `ESTABLISHED` for the kernel's multi-hour default. The normal
+reconnect loop then re-resolves the endpoint, reconnects and registers a new generation.
 
 Relaying is the audio: once registered, the runner connects to the satellite service running on the same
 device and becomes a transparent pipe between it and the bridge, in both directions.
