@@ -3,8 +3,8 @@
 
 The outbound runner is installed as a plain script:
 
-    /home/wyoming1/wyoming-satellite/.venv/bin/python \
-        /home/wyoming1/wyoming-satellite/examples/outbound_satellite.py
+    ~/wyoming-satellite/.venv/bin/python \
+        ~/wyoming-satellite/examples/outbound_satellite.py
 
 So its helper modules sit BESIDE it in `examples/` with no package around them. A bare
 `from pi.volume_control import ...` works in the repo, where `pi/` is a package on
@@ -48,7 +48,10 @@ for name, source in SHIPPED.items():
 
 with tempfile.TemporaryDirectory() as tmp:
     rootfs = pathlib.Path(tmp)
-    flat = rootfs / "home/wyoming1/wyoming-satellite/examples"
+    # The device user is an example value, not the real device; it is passed to the installer
+    # rather than assumed, so the test builds exactly what the installer would (issue #45).
+    DEVICE_USER = "satellite"
+    flat = rootfs / "home" / DEVICE_USER / "wyoming-satellite" / "examples"
     flat.mkdir(parents=True)
     # Exercise the real installer, never a hand-maintained copy of its inventory.
     for deployment in ("fresh", "update"):
@@ -56,7 +59,7 @@ with tempfile.TemporaryDirectory() as tmp:
             for name in SHIPPED:
                 (flat / name).write_text("# stale installed artifact\n")
         installed = subprocess.run(
-            ["sh", str(ROOT / "scripts/deploy-to-card.sh"), str(rootfs)],
+            ["sh", str(ROOT / "scripts/deploy-to-card.sh"), str(rootfs), DEVICE_USER],
             capture_output=True, text=True, timeout=30,
         )
         check(f"{deployment} installer succeeds", installed.returncode == 0, installed.stderr)
@@ -102,14 +105,14 @@ with tempfile.TemporaryDirectory() as tmp:
         "async def main():\n"
         "    with tempfile.TemporaryDirectory() as t:\n"
         "        fake = FakeAmixer()\n"
-        "        cfg = runner.LinkConfig(device_id='wyoming1', host='127.0.0.1', port=1,\n"
+        "        cfg = runner.LinkConfig(device_id='satellite', host='127.0.0.1', port=1,\n"
         "                                relay=False,\n"
         "                                config_state_path=pathlib.Path(t)/'c.json')\n"
         "        link = runner.BridgeLink(cfg, alsa_volume=AlsaVolume(\n"
         "            card='seeed2micvoicec', control='PCM', floor=25, runner=fake))\n"
         "        report = await link.config_agent.apply_event(Event(\n"
         "            type='hermes.config.desired',\n"
-        "            data={'schema_version':1,'device_id':'wyoming1','generation':1,\n"
+        "            data={'schema_version':1,'device_id':'satellite','generation':1,\n"
         "                  'settings':{'playback_volume':70}}))\n"
         "        print(json.dumps({'actual': report.data['actual'],\n"
         "                          'health': report.data['health'],\n"

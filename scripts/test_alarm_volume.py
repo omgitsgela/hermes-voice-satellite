@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Alarm volume override checks (issue #10, Angela's decision 2026-09-25).
+"""Alarm volume override checks (issue #10, 2026-09-25).
 
-Her decision: **an alarm may override upward to a minimum alarm level, so an alarm is
+The decision: **an alarm may override upward to a minimum alarm level, so an alarm is
 always audible.** It must never override downward, because lowering a level she chose
 would be the override behaving as a surprise rather than a safeguard.
 

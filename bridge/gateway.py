@@ -230,7 +230,7 @@ class VoiceGateway:
     async def steer(self, text: str, run_id: Optional[str] = None) -> bool:
         """Hand new information to a run that is already going.
 
-        Angela, 2026-09-23. When she wakes the device mid-task and says something new, that belongs
+        2026-09-23. When the person wakes the device mid-task and says something new, that belongs
         in the conversation the agent is already having, not in a fresh question. The API server
         exposes this as POST /v1/runs/{id}/steer, which passes the text to the live agent. It is
         cooperative: the agent decides what to do with it, which is why a stop is a separate call.

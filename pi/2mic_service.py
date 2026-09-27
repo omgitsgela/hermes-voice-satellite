@@ -185,7 +185,7 @@ def _boot_pulse_wanted(args: argparse.Namespace) -> bool:
 
 
 # The green connect flash is for "the device just came up and found its host", not for every
-# reconnection. Angela, 2026-09-23: the bridge refreshed its link once an hour overnight and the
+# reconnection. 2026-09-23: the bridge refreshed its link once an hour overnight and the
 # flash ran every time. Same /run marker trick as the boot pulse, so a service restart does not
 # replay it and a real reboot does.
 _FIRST_CONNECT_MARKER = Path("/run/wyoming-led-first-connect")
@@ -307,7 +307,7 @@ class LEDsEventHandler(AsyncEventHandler):
         self.client_id = str(time.monotonic_ns())
         self.controller = controller
         # Pending "the host has been gone a while, admit it with red" timer, cancelled by a
-        # reconnect. Angela, 2026-09-23: red used to appear instantly on every disconnect, which
+        # reconnect. 2026-09-23: red used to appear instantly on every disconnect, which
         # meant it also flashed red through the routine hourly link refresh.
         self._red_task: Optional[asyncio.Task] = None
 
@@ -324,7 +324,7 @@ class LEDsEventHandler(AsyncEventHandler):
     async def _red_after_grace(self) -> None:
         """Show red, but only once the host has been gone long enough to mean it.
 
-        Angela, 2026-09-23: red used to appear the instant the link dropped, so the routine hourly
+        2026-09-23: red used to appear the instant the link dropped, so the routine hourly
         refresh produced a red flash too, and the colour stopped meaning anything. The grace period
         is deliberately longer than a refresh takes, so red now only appears for a real outage.
         """
@@ -380,11 +380,11 @@ class LEDsEventHandler(AsyncEventHandler):
                     await self.controller.set_color(_BLACK)
                     await asyncio.sleep(0.3)
             else:
-                # A reconnect is silent (Angela, 2026-09-23). Still go dark here, so a service
+                # A reconnect is silent (2026-09-23). Still go dark here, so a service
                 # restart inside the startup window cannot leave the lights breathing.
                 await self.controller.set_color(_BLACK)
         elif SatelliteDisconnected.is_type(event.type):
-            # Red now means a real outage, not a blink (Angela, 2026-09-23).
+            # Red now means a real outage, not a blink (2026-09-23).
             await self._red_after_grace()
         elif event.type == WAKE_NOW_EVENT:
             # Open the microphone by asking the wake shim to inject a wake detection. Best effort:

@@ -13,7 +13,7 @@ This document is about the first. The second is in the comment above `VOICE_ENER
 
 ## The change, and why it was forced
 
-Until 2026-09-25 the detector was `webrtcvad` at aggressiveness 2. Angela reported the satellite
+Until 2026-09-25 the detector was `webrtcvad` at aggressiveness 2. The report that forced the change: the satellite
 recognising its wake word and then answering nothing, in a busy computer centre office with a fan and
 other people. The bridge log said `nothing said after the wake word` nine times running, each turn
 carrying `0.52s audio, 0.02s speech` - about 2% of a five-second window.

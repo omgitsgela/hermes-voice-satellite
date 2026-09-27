@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Put "open the microphone" under the bridge's control.
 
-Angela's choice, 2026-09-22, option 3. Follow-up mode needs the microphone opened with no wake word,
+The choice, 2026-09-22, option 3. Follow-up mode needs the microphone opened with no wake word,
 and a wyoming satellite in wake-word mode only streams audio after a wake detection:
 `WakeStreamingSatellite` turns streaming off at the end of every utterance, re-arms wake detection and
 logs "Waiting for wake word". Measured on the device: a follow-up window received 0 chunks of audio,
@@ -26,7 +26,7 @@ Nothing new is exposed to the LAN.
 
 Run it with the satellite's virtualenv: it needs the `wyoming` package.
 
-    /home/wyoming1/wyoming-satellite/.venv/bin/python3 wake_shim.py
+    ~/wyoming-satellite/.venv/bin/python3 wake_shim.py
 """
 
 from __future__ import annotations

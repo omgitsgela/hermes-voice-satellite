@@ -2,18 +2,18 @@
 
 This is the piece that stops the assistant recording dead air. Phase 2 captured a fixed 5
 seconds, which meant 2.4 s of leading silence in one test and a 5 s window regardless of
-how briefly Angela spoke.
+how briefly the person spoke.
 
 Design notes that come straight from Phase 2's failures:
 
 * **Pre-roll buffer.** A VAD needs a few frames of speech before it fires, so a naive
   "start recording when the VAD says speech" loses the first 100-200 ms of the word. We
   already fixed exactly that class of bug on the satellite side (the mic mute was clipping
-  the onset of Angela's first word), so repeating it here would be careless. The last
+  the onset of the first word), so repeating it here would be careless. The last
   `pre_roll_ms` of non-speech frames are prepended when speech starts.
 * **Frame quantisation.** webrtcvad only accepts 10, 20 or 30 ms frames of 16-bit mono at
   8/16/32/48 kHz, so the buffer is sliced to that size and any partial frame is held over.
-* **Measured VAD choice.** On Angela's real capture webrtcvad at aggressiveness 2 put its
+* **Measured VAD choice.** On the real capture webrtcvad at aggressiveness 2 put its
   first speech frame at 0.54 s against a measured truth of 0.537 s, within one frame. It is
   tiny and cheap on CPU. `pysilero_vad` is a viable higher-quality swap (it exports
   `SileroVoiceActivityDetector` and ships a ggml model) if the room gets noisier.
@@ -108,7 +108,7 @@ class EnergyGate:
         drive it above the person being listened for. The ceiling is the part that was missing, and
         its absence is not theoretical: `floor` and `ratio` are both properties of the ROOM, so a
         busy office whose floor learns ~540 produced a threshold of ~3240 and the device stopped
-        hearing Angela altogether, while the same person in a quiet room was heard fine. Being deaf
+        hearing the person altogether, while the same person in a quiet room was heard fine. Being deaf
         to the person is the worse failure, so the person wins any disagreement with the room.
 
         `threshold_max` is an absolute level rather than a learned one on purpose. A learned

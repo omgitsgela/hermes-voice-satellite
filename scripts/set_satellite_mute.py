@@ -6,16 +6,16 @@ tone.
 
 * Too large, and it eats the onset of the user's speech before it is ever recorded.
   Observed 2026-09-22: a 0.6 s margin (+ a 308 ms tone = 908 ms total) swallowed the front
-  of Angela's first word. The tell was a recording that opens at full level with no
+  of the first word. The tell was a recording that opens at full level with no
   lead-in (first 20 ms peak 9416 against a 28982 overall peak).
 * Too small, and the tone's acoustic tail leaks into the recording.
 
 The chosen awake tone is 308 ms with an exponential decay, so 0.1 s covers the acoustic
 tail without clipping speech: about 408 ms total.
 
-    scp scripts/set_satellite_mute.py wyoming1:/tmp/
-    ssh wyoming1 'sudo python3 /tmp/set_satellite_mute.py 0.1'
-    ssh wyoming1 'sudo systemctl restart wyoming-satellite.service'
+    scp scripts/set_satellite_mute.py <satellite>:/tmp/
+    ssh <satellite> 'sudo python3 /tmp/set_satellite_mute.py 0.1'
+    ssh <satellite> 'sudo systemctl restart wyoming-satellite.service'
 
 The value lives in the unit, so unlike the tone WAVs (re-read per detection) this needs a
 service restart to take effect.

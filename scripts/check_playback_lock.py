@@ -4,7 +4,7 @@
 This exists because of a real failure on 2026-09-22. `SatelliteClient` was imported inside
 `TtsStream.__aenter__` but referenced in `__aexit__`, where that name does not exist, so the release
 raised `NameError` inside its own `finally`. The lock was never freed, the next answer blocked
-forever acquiring it, and from Angela's side the device simply looked stuck: it woke, listened,
+forever acquiring it, and from the person's side the device simply looked stuck: it woke, listened,
 transcribed and never replied, with nothing in the log saying why. The same trap caught a later edit
 that used `asyncio.wait_for` in a module that imported `asyncio` only inside a method.
 

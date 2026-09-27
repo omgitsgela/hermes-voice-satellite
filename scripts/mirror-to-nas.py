@@ -2,7 +2,7 @@
 """Mirror this repository to the NAS. One-way: GitHub is authoritative, this is the backup.
 
 Why this exists: one copy in one place is a single point of failure. GitHub holds the authoritative
-history, this holds a second copy on hardware Angela owns, and the live tree at ~/hermes-voice-bridge
+history, this holds a second copy on local hardware, and the live tree at ~/hermes-voice-bridge
 is a checkout of the same repository.
 
 Design notes, each of them learned the hard way:
@@ -21,14 +21,22 @@ Exit codes: 0 all good, 1 something failed (the cron job reports failures only).
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+# The mount point is a deployment value: it names a server, a share and a user, so it belongs to the
+# machine running this, not to the code. Set VOICE_NAS_MIRROR_ROOT (or pass it as the first argument)
+# to the mounted share. The conventional fallback below is not a real default: if the share is not
+# mounted the script fails with the exact value it looked for, rather than mirroring into a local
+# directory that pretends to be the NAS. (issue #45)
 NAS_ROOT = Path(
-    "/run/user/1000/gvfs/smb-share:server=192.168.0.20,share=media,user=angela/AI Projects"
+    os.environ.get("VOICE_NAS_MIRROR_ROOT", "").strip()
+    or sys.argv[1]
+    or Path.home() / "nas" / "hermes-voice-satellite"
 )
 NAS_DIR = NAS_ROOT / "hermes-voice-satellite"
 BUNDLE = NAS_DIR / "hermes-voice-satellite.bundle"
@@ -36,7 +44,7 @@ README = NAS_DIR / "README-what-this-is.md"
 
 README_TEXT = """# hermes-voice-satellite (NAS backup)
 
-This is a **one-way backup copy** of Angela's private repository
+This is a **one-way backup copy** of a private repository
 `github.com/omgitsgela/hermes-voice-satellite`. GitHub is the authoritative source; nothing here
 should ever be edited by hand, and changes made here are overwritten on the next sync.
 
@@ -123,7 +131,7 @@ def main() -> int:
     )
 
     # Quiet on success, on purpose. This runs hourly as a no_agent watchdog job whose stdout is
-    # delivered verbatim, so anything printed here becomes a message to Angela. Say nothing unless
+    # delivered verbatim, so anything printed here becomes a message to the maintainer. Say nothing unless
     # something is actually wrong; every tick is still recorded in the cron run history and in the
     # NAS SYNC-INFO.txt file.
     if failed or problems or not bundle_ok:

@@ -15,7 +15,7 @@ A turn is two journeys in opposite directions, and the second one is why the fir
 SPEAKING                                            →  the device hears a wake, tunnels audio to the bridge,
                                                        the bridge decides what was said
 
-        ┌──────────────────────────── the device (Pi Zero 2 W, "wyoming1") ───────────────────────────┐
+        ┌──────────────────────────── the device (Pi Zero 2 W) ──────────────────────────────────────┐
         │                                                                                             │
   1  mic  Seeed 2-mic HAT ──► ALSA card seeed2micvoicec ──► arecord 16 kHz mono S16_LE                 │
         │                          (tlv320aic3x codec, seeed-voicecard driver, DKMS)                  │
@@ -29,7 +29,7 @@ SPEAKING                                            →  the device hears a wake
                                                     │
                                         Wyoming protocol over TCP
                                                     ▼
-        ┌────────────────────────────── the bridge (autumn, bridge/loop.py) ─────────────────────────┐
+        ┌────────────────────────────── the bridge (bridge host, bridge/loop.py) ────────────────────┐
         │                                                                                            │
   4  endpoint  endpointing.py ── VAD (silero_vad.py) ── energy gate ──► one trimmed utterance           │
         │                                                                                            │
@@ -92,12 +92,12 @@ who finds both shapes should not delete one without reading `docs/outbound-link.
 | 4 endpoint | energy gate (level backstop) | bridge | **written by us** | ours |
 | 5 transcribe | `faster-whisper` `small.en`, int8, CPU | bridge | `SYSTRAN/faster-whisper` | dependency |
 | 6 think | `gateway.py` over the Runs API | bridge | **written by us** | ours |
-| 6 think | Hermes agent + API server at `http://127.0.0.1:8642` | autumn | Hermes Agent | platform |
-| 6 think | route `voice-fast` → `deepseek-flash` | autumn | configured | ours (config) |
+| 6 think | Hermes agent + API server at `http://127.0.0.1:8642` | bridge host | Hermes Agent | platform |
+| 6 think | route `voice-fast` → `deepseek-flash` | bridge host | configured | ours (config) |
 | 7 speak | `tts.py` + Piper `en_US-hfc_male-medium` | bridge | Piper | ours + model file |
 | 8 play | `aplay` on the device's HAT | device | ALSA | config |
 | — | `announce.py`, `registry.py`, `lease.py`, `timers.py`, `volume.py`, `config_plane.py` | bridge | **written by us** | ours |
-| — | `hermes/plugins/voice_satellite`, `hermes_timers` | autumn | **written by us** | ours |
+| — | `hermes/plugins/voice_satellite`, `hermes_timers` | bridge host | **written by us** | ours |
 
 **Everything in the "ours" column is the point of the project.** The upstream satellite is archived,
 so nothing above it will be fixed for us. `docs/owning-the-satellite-stack.md` covers the device half
@@ -170,7 +170,7 @@ That is exactly how the 2026-09-25 office failure was caught.
 ## The rule that holds all of it together
 
 **Every component that decides whether the device hears its owner is vendored, pinned, or written by
-us.** Angela's rule, 2026-09-25: *"if we're going to use silero, we're going to use it locally, and
+us.** The rule, 2026-09-25: *"if we're going to use silero, we're going to use it locally, and
 make it a repo we track."*
 
 That is why the detector model is committed to this repository rather than read out of a package's

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Does the satellite stream microphone audio with no wake word?
 
-Angela, 2026-09-22, after follow-up mode "never got answered": the bridge's follow-up windows opened
+2026-09-22, after follow-up mode "never got answered": the bridge's follow-up windows opened
 and then timed out with nothing heard. This settles why.
 
 The suspicion, from reading the satellite's own code: with no VAD flag, a wyoming satellite only
@@ -41,7 +41,7 @@ from wyoming.audio import AudioChunk  # noqa: E402
 from bridge.config import SATELLITE_HOST, SATELLITE_PORT  # noqa: E402
 from bridge.satellite import SatelliteClient  # noqa: E402
 
-SPOKEN_WAV = Path("/home/angela/hermes-voice-bridge/audio/announce-an-074311-3467-full.wav")
+SPOKEN_WAV = Path.home() / "hermes-voice-bridge" / "audio" / "announce-an-074311-3467-full.wav"
 LISTEN_SECONDS = 14.0
 QUIET = "--quiet" in sys.argv   # no playback: one reader only, so chunk timing is meaningful
 

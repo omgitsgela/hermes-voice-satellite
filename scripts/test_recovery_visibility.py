@@ -69,7 +69,7 @@ async def main() -> int:
 
     async def fake_acquire() -> None:
         # Stand in for the acquisition: it is the part that needs a real device to dial in.
-        loop.leased = "wyoming1"
+        loop.leased = "satellite"
         loop.sat = QuietSatellite()
 
     loop._acquire_a_satellite = fake_acquire

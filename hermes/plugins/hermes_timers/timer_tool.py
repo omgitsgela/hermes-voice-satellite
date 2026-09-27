@@ -8,7 +8,9 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
-_PROJECT = Path("/home/angela/hermes-voice-bridge")
+# The checkout this installation lives in. A deployment value, not a literal: an environment
+# variable wins, and the default is the conventional location (issue #45).
+_PROJECT = Path(os.environ.get("VOICE_BRIDGE_PROJECT", "").strip() or (Path.home() / "hermes-voice-bridge"))
 TOKEN_FILE = _PROJECT / "state" / "announce-token.txt"
 TOKEN_ENV = "VOICE_ANNOUNCE_TOKEN"
 BASE_URL = os.environ.get("VOICE_BRIDGE_URL", "http://127.0.0.1:8765").rstrip("/")

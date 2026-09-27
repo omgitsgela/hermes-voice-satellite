@@ -104,9 +104,12 @@ def main() -> int:
     # Presence, not just agreement. Removing the flag from a unit leaves the shim on its hardcoded
     # default, which is the very bug this guards against ("ok_nabu" in the log), and a values-only
     # comparison cannot see that because the default is not written down anywhere.
+    # The marker identifies which unit runs the program, so the check can require the flag on it.
+    # The satellite's path is a variable now (satellite.env, issue #45), so the marker is the unit's
+    # power-on gate, which appears only in the satellite unit and not in any other tracked file.
     required = {
         "wake_shim.py": "--wake-name",
-        "wyoming-satellite/script/run": "--wake-word-name",
+        "wyoming-power-on-said": "--wake-word-name",
     }
     for marker, flag in required.items():
         carriers = [p for p in units if marker in p.read_text()]

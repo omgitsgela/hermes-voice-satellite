@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prove a rejected blip no longer ends the activation.
 
-Michael's report, 2026-09-22: "the ok nabu activation is cutting off too early before he
+The report, 2026-09-22: "the ok nabu activation is cutting off too early before the person
 actually speaks". The bridge journal showed exactly why:
 
     16:42:42  wake word: okay_nabu
@@ -83,7 +83,7 @@ def make_loop(script: list[EndpointResult | None]):
 
 
 async def main() -> int:
-    print("=== ACTIVATION SURVIVES A BLIP (Michael's case, 2026-09-22) ===")
+    print("=== ACTIVATION SURVIVES A BLIP (the 2026-09-22 case) ===")
     problems = 0
 
     # 1. The reported failure: chime blip, then he speaks. Must return the real utterance.

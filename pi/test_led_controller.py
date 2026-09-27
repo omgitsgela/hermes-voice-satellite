@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline tests for the 2mic LED controller and boot-pulse gate.
 
-Runs on autumn against the Pi's LED service source with gpiozero and spidev stubbed out,
+Runs on the bridge host against the Pi's LED service source with gpiozero and spidev stubbed out,
 so the animation and the gating can be checked without touching the device.
 
     ~/hermes-voice-bridge/.venv/bin/python test_led_controller.py

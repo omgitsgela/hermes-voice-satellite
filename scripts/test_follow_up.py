@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Follow-up mode: the device keeps listening after it answers.
 
-Angela's request, 2026-09-22: "enable a new control mode 'turn on/off follow up mode', which would
+The request, 2026-09-22: "enable a new control mode 'turn on/off follow up mode', which would
 cause the device to immediately listen for responses for about 15 seconds on its own after talking
 to it when enabled".
 
@@ -116,7 +116,7 @@ async def main() -> int:
     fresh = bare_loop()
     check("a fresh process reads the flag back on", fresh._load_follow_up() is True)
 
-    # 2b. Spoken "stop" ends the conversation without switching the mode off (Angela's request:
+    # 2b. Spoken "stop" ends the conversation without switching the mode off (the 2026-09-22 request:
     # "ok nabu stop should be a way to stop the current follow up conversation, but leave it open to
     # retrigger again").
     loop.follow_up = True
@@ -128,7 +128,7 @@ async def main() -> int:
           loop.follow_up is True)
     loop.stop_requested = False
     variants = ("stop", "Stop.", "that's all", "never mind", "we're done", "goodbye",
-                # These are the forms Angela actually used on 2026-09-22, and the first one is the
+                # These are the forms actually used on 2026-09-22, and the first one is the
                 # regression: "Okay, stop." normalises with a double space where the comma was.
                 "Okay, stop.", "Stop listening to me!", "Okay, now will you stop?",
                 "will you stop", "be quiet")
@@ -206,7 +206,7 @@ async def main() -> int:
     check("silence closes the window", endpoint is None and "nothing said" in note, repr(note))
     check("the announcement gate is released", loop.turn_started_at is None)
 
-    # 5b. A blip is noise, not a reply: it must not close the window (Angela, 2026-09-22, after
+    # 5b. A blip is noise, not a reply: it must not close the window (2026-09-22, after
     # the device's own done tone came through as "beep" and consumed the window).
     loop = bare_loop()
     script = [blip(), blip(0.12), utterance()]
@@ -293,7 +293,7 @@ async def main() -> int:
     config_module.FOLLOW_UP_QUIET_SECONDS = original_quiet
 
     # 5c-ter. The window must not listen while its own wake chime is still ringing, or the device
-    # answers its own boop (Angela, 2026-09-22). The endpointer must not be fed before the quiet
+    # answers its own boop (2026-09-22). The endpointer must not be fed before the quiet
     # period has passed.
     loop = bare_loop()
     started = {"at": 0.0}

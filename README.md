@@ -87,7 +87,7 @@ device and receive its audio. Everything else in the stack is loopback only.
 |---|---|
 | `bridge/` | The bridge itself: endpointing, STT, TTS, gateway client, satellite client, announcements |
 | `scripts/` | Operational scripts: live checks, tests, chime generation, capture tools |
-| `pi/` | The device side: wake shim, LED service, systemd units, and `.orig` copies of the upstream files we patch |
+| `pi/` | The device side: wake shim, LED service, the systemd units, and the device's configuration template (`pi/systemd/satellite.env`) |
 | `sounds/` | Chimes and tones the device plays |
 | `reference/` | Upstream reference copies of the files the device patches, for diffing |
 | `hubitat/` | `HermesAnnouncer.groovy`: an optional Hubitat driver that announces through this system |
@@ -122,18 +122,32 @@ here) comes from the Piper voices release; the custom wake model is a community 
 3. Apply the configuration keys from `hermes/config/voice-surface.example.yaml` to
    `~/.hermes/config.yaml`. The surface deliberately has **no** `platform_toolsets.api_server` entry:
    it inherits the default toolset list, which is how it runs at full parity.
-4. Apply the core patch: see `hermes/patches/README.md`.
-5. Restart the gateway and verify the surface resolves as expected (see Verify, below).
+4. Write `bridge.env` at the project root from `bridge.env.example` and set at least
+   `VOICE_SATELLITE_HOST` to the address of this installation's satellite. This is the host side's one
+   configuration file: `bridge/config.py` reads it (a real environment variable always wins over the
+   file, and the file wins over the default in the code), and the user unit points at it too, so one
+   file is the whole host-side configuration.
+5. Apply the core patch: see `hermes/patches/README.md`.
+6. Restart the gateway and verify the surface resolves as expected (see Verify, below).
 
 ## Install: the device side
 
 1. Install the satellite per upstream `wyoming-satellite`, with the Seeed 2-mic HAT.
-2. Copy `pi/*.py` and the unit files into place, then enable `wake-shim`, `wyoming-openwakeword`,
-   `2mic_leds` and `wyoming-satellite`. Mind the `Requires=` relationships: restarting the shim or the
-   LED service bounces the satellite, and the satellite does not come back on its own.
-3. Put the wake model in the directory named by `--custom-model-dir` in the wake service drop-in, named
-   after the wake word you want (`<name>.tflite`).
-4. Copy `sounds/` onto the device under the path your wake service expects, e.g. `~/sounds/`.
+2. Copy `pi/*.py` into the satellite's `examples/` directory, and install the units from `pi/systemd/`
+   to `/etc/systemd/system/`.
+3. Copy `pi/systemd/satellite.env` to `/etc/voice-satellite/satellite.env` and fill in the `<...>`
+   values: the install location, the device's name, the sounds and wake-model directories, and the
+   wake word. Every unit reads this one file through `EnvironmentFile=`; none of the unit files carry a
+   path or an identity of their own, so changing where the device lives is a change to this file plus a
+   `daemon-reload` and a restart, not an edit to any unit.
+4. Put the wake model in the directory named by `VS_WAKE_MODELS` in that file, named after the wake
+   word you want (`<name>.tflite`). The model's stem must equal `VS_WAKE_WORD`: the satellite and the
+   wake shim both take the word from there, and `scripts/test_pi_units_consistent.py` fails if the two
+   units ever disagree.
+5. Copy `sounds/` onto the device under the path named by `VS_SOUNDS` in the file, e.g. `~/sounds/`.
+6. Enable `wake-shim`, `wyoming-openwakeword`, `2mic_leds` and `wyoming-satellite`. Mind the
+   `Requires=` relationships: restarting the shim or the LED service bounces the satellite, and the
+   satellite does not come back on its own.
 
 ## Verify
 
@@ -252,7 +266,9 @@ it.
   model, so it inherits the normal fallback chain. Measured 2026-09-24 with this repository's own Verify
   block: **21 toolsets, 19 tools, about 8.4k tokens of tool schema**.
   It is no longer narrowed, and it no longer pins a voice-specific model route.
-- **One satellite only.** `SATELLITE_HOST` is a single address and the session is a single session.
-- Machine-specific values are still hardcoded in `bridge/config.py`.
+- **One satellite only.** The bridge dials one configured address and the session is a single session.
+- The host side's configuration is `bridge.env` (template `bridge.env.example`); the device side's is
+  `/etc/voice-satellite/satellite.env` (template `pi/systemd/satellite.env`). The repository itself
+  carries no installation-specific value: `scripts/check-no-personal-data.sh` fails if one gets back in.
 - `voices/`, `logs/`, `audio/` and `state/` are intentionally not committed.
 

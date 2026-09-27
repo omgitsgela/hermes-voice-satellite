@@ -51,8 +51,8 @@ def calibration_file() -> Path:
     Getting that wrong is easy and silent, which is why this is resolved in one place
     rather than inferred from who happens to run the script. The service runs as root
     (no `User=` in the unit, like every other satellite service) while a person runs this
-    as wyoming1, so `Path.home()` alone would give `/root` for one side and
-    `/home/wyoming1` for the other. Pinning the variable removes the guesswork.
+    as the device user, so `Path.home()` alone would give `/root` for one side and
+    the user's home for the other. Pinning the variable removes the guesswork.
     """
     pinned = os.environ.get("VOICE_VOLUME_CALIBRATION", "").strip()
     if pinned:
@@ -70,8 +70,8 @@ STATE_DIR = CALIBRATION_FILE.parent
 #: the point is a steady, recognisable sound. A missing file is not fatal, we just
 #: fall back to a generated sine.
 CANDIDATE_TONES = [
-    Path("/home/wyoming1/sounds/awake.wav"),
-    Path("/home/wyoming1/wyoming-satellite/sounds/awake.wav"),
+    Path.home() / "sounds" / "awake.wav",
+    Path.home() / "wyoming-satellite" / "sounds" / "awake.wav",
 ]
 
 #: The controls the issue names. Probed in this order, because the earlier ones are the

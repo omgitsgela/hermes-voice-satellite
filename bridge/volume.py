@@ -6,10 +6,10 @@ cannot talk it back up when you cannot hear it confirm anything. So there is a
 floor, it is above zero, and every command, announcement, timer and alarm goes
 through :func:`clamp` on the way out.
 
-Angela's decision, 2026-09-25, on the one question the issue reserved for her:
+The decision, 2026-09-25, on the one question the issue reserved for the room's owner:
 **an alarm may override upward to a minimum alarm level**, so an alarm is always
 audible even when the room is set quiet. That override is upward-only. It never
-lowers a level she chose.
+lowers a level the owner chose.
 
 Where the level actually lives: speech is rendered on the bridge but *playback*
 happens on the satellite, so the number that matters is the Pi's ALSA level for
@@ -171,7 +171,7 @@ def clamp(percent: object) -> int:
 # on it - "50 percent" and "level 5" are positions on the same range, one finer than the
 # other - so they cannot drift apart.
 #
-# Angela's correction, 2026-09-25: both scales must span the USABLE range. Before this,
+# The correction, 2026-09-25: both scales must span the USABLE range. Before this,
 # a raw floor of 50 meant "set volume to 30%" was clamped and reported as an error, so
 # half the percentage scale was dead and every value in it did the same thing.
 #
@@ -246,7 +246,7 @@ def step(current_user: object, delta: int) -> int:
 
 
 def alarm_percent(current_user: object) -> int:
-    """The USER level an alarm should play at. Upward-only (Angela, 2026-09-25).
+    """The USER level an alarm should play at. Upward-only (2026-09-25).
 
     An alarm at a level too quiet to notice is useless, so a quiet room is raised to
     the alarm minimum. A room already louder than that is left alone, because lowering

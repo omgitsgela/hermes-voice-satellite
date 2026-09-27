@@ -1,26 +1,27 @@
 #!/usr/bin/env python3
 """Live checks for the voice_satellite control path.
 
-Angela, 2026-09-22: "'turn on follow up mode' should work too. if you give the agent a tool call
+2026-09-22: "'turn on follow up mode' should work too. if you give the agent a tool call
 script, it should be able to execute that on its own smartly." So the assistant gets a tool, and
 this proves the tool can actually change the device.
 
 Checks the whole chain: the plugin's handler -> the bridge's authenticated /settings endpoint -> the
 loop's persisted state, and back out again. It leaves follow-up mode OFF, which is the default.
 
-    python3 /home/angela/.hermes/plugins/voice_satellite/test_voice_control_live.py
+    python3 ~/.hermes/plugins/voice_satellite/test_voice_control_live.py
 """
 
 from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-PLUGIN = Path("/home/angela/.hermes/plugins/voice_satellite/voice_tool.py")
-STATE = Path("/home/angela/hermes-voice-bridge/state/follow-up-on")
+PLUGIN = Path(os.path.expanduser("~/.hermes/plugins/voice_satellite/voice_tool.py"))
+STATE = Path(os.path.expanduser("~/hermes-voice-bridge/state/follow-up-on"))
 PROBLEMS = 0
 
 
@@ -83,7 +84,7 @@ def main() -> int:
           STATE.read_text().strip() if STATE.is_file() else "missing")
     check("a fresh read sees it on", raw(module, "GET", "/settings")["body"].get("follow_up") is True)
 
-    # 4. Turn it back off, the state Angela would normally leave it in.
+    # 4. Turn it back off, the state the device is normally left in.
     result = call(module, "follow_up_off")
     check("follow_up_off reports success and verification",
           result.get("ok") and result.get("verified") and result.get("follow_up") is False, result)

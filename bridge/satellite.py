@@ -163,7 +163,7 @@ class SatelliteClient:
     async def reconnect(self) -> None:
         """Reopen the socket without restarting the process or reloading the models.
 
-        Angela, 2026-09-23. The bridge used to exit on the hourly wake-word timeout, so systemd
+        2026-09-23. The bridge used to exit on the hourly wake-word timeout, so systemd
         restarted it: the connect tone played every hour, whisper and Piper reloaded (about 640 MB
         churn), and the device was deaf for roughly nine seconds. Refreshing in place does the same
         job with none of that.

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run ON the satellite, as root: add the prompt-tone flags to its systemd unit.
 
-    scp scripts/enable_chimes_on_satellite.py wyoming1:/tmp/
-    ssh wyoming1 'sudo python3 /tmp/enable_chimes_on_satellite.py'
+    scp scripts/enable_chimes_on_satellite.py <satellite>:/tmp/
+    ssh <satellite> 'sudo python3 /tmp/enable_chimes_on_satellite.py'
 
 Why the satellite owns the tone rather than the bridge: the satellite plays --awake-wav
 locally the instant its wake word fires (no network round trip), and it mutes the
@@ -13,23 +13,25 @@ bridge-sent chime could not do the mute, and would land in the recorded audio.
 Idempotent. Backs the unit up before editing. Never restarts anything itself.
 """
 
+import os
 import shutil
 import sys
 import time
 from pathlib import Path
 
 UNIT = Path("/etc/systemd/system/wyoming-satellite.service")
-SOUNDS = ["/home/wyoming1/sounds/awake.wav", "/home/wyoming1/sounds/done.wav"]
+# Where the device's tone files live. This is a per-device path (the satellite user's sounds
+# directory), so it is a deployment value, not a literal: set SAT_SOUNDS_DIR. Absent, the script
+# fails closed below rather than patching a path it is guessing at (issue #45).
+_SOUNDS_DIR = os.environ.get("SAT_SOUNDS_DIR", "").strip()
 FLAGS = (
-    " --awake-wav /home/wyoming1/sounds/awake.wav"
-    " --done-wav /home/wyoming1/sounds/done.wav"
+    f" --awake-wav {_SOUNDS_DIR}/awake.wav"
+    f" --done-wav {_SOUNDS_DIR}/done.wav"
     " --mic-seconds-to-mute-after-awake-wav 0.6"
 )
 
-missing = [p for p in SOUNDS if not Path(p).is_file()]
-if missing:
-    # Fail closed: a bad --awake-wav path can stop the satellite from starting at all.
-    sys.exit(f"REFUSING TO PATCH: missing sound files: {missing}")
+if not _SOUNDS_DIR:
+    sys.exit("REFUSING TO PATCH: set SAT_SOUNDS_DIR to the device's sounds directory (e.g. /home/<satellite-user>/sounds)")
 
 text = UNIT.read_text()
 

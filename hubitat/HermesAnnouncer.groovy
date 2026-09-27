@@ -7,7 +7,7 @@
  *  page, and Hermes announces it on the satellite speaker: a wake tone, a one second beat, then
  *  the message read verbatim.
  *
- *  Round trip: this driver -> POST http://<autumn>:8765/announce -> the Hermes voice bridge ->
+ *  Round trip: this driver -> POST http://<bridge-host>:8765/announce -> the Hermes voice bridge ->
  *  the satellite speaker. Nothing leaves the house and no language model is involved, so what
  *  you type is exactly what is spoken. Reserved for important notifications by design: the
  *  bridge drops repeats of the same message within 60 seconds and refuses anything over 400
@@ -15,16 +15,16 @@
  *
  *  The deliverable is "accepted", not "spoken". The bridge queues the message and speaks it once
  *  any conversation in progress has finished; a drop (satellite unreachable) is recorded in
- *  /home/angela/hermes-voice-bridge/logs/announcements.jsonl on autumn and is not retried.
+ *  in the bridge checkout's logs/announcements.jsonl on the bridge host and is not retried.
  *
- *  2026-09-22  1.0.0  Angela  Initial release.
+ *  2026-09-22  1.0.0  initial release.
  */
 
 metadata {
     definition(
         name: "Hermes Announcer",
         namespace: "custom",
-        author: "Angela",
+        author: "hermes-voice-satellite",
         description: "Speaks a message out loud on the Hermes voice satellite.",
         category: "Convenience"
     ) {
@@ -45,10 +45,10 @@ metadata {
         input name: "announceUrl", type: "text", title: "Announce endpoint URL",
             defaultValue: "http://localhost:8765/announce", required: true
         input name: "apiToken", type: "password", title: "API token",
-            description: "Copy it from /home/angela/hermes-voice-bridge/state/announce-token.txt on autumn",
+            description: "Copy it from the bridge checkout's state/announce-token.txt on the bridge host",
             required: true
         input name: "sourceName", type: "text", title: "Source label",
-            description: "Recorded in the announcement log on autumn", defaultValue: "hubitat",
+            description: "Recorded in the announcement log on the bridge host", defaultValue: "hubitat",
             required: false
         input name: "useTone", type: "bool", title: "Start with the wake tone",
             defaultValue: true

@@ -24,7 +24,7 @@ from bridge.gateway import VoiceGateway, read_api_key  # noqa: E402
 BANNED = ("verif", "confirm", "double check", "double-check", "checked", "validated",
           "i can see", "attribute")
 
-# Angela's rule, 2026-09-22: the voice surface must not volunteer anything about its own setup, and
+# The rule, 2026-09-22: the voice surface must not volunteer anything about its own setup, and
 # WHEN ASKED it must look the answer up (skill_view on hermes-voice-bridge) instead of guessing.
 # These checks pin both halves. The expected values come from that skill's own summary section, so a
 # pass means it read the skill and reported what is actually configured.
@@ -61,7 +61,7 @@ async def ask(gateway, question: str) -> None:
 async def ask_for_facts(gateway, question: str, expected: re.Pattern, what: str) -> int:
     """Asked about its own setup, it must find and report the real value.
 
-    Michael asked why it heard him poorly and got confident inventions instead of an answer. The fix
+    The report: the device heard a person poorly and answered with confident inventions. The fix
     is not to refuse the question: it is to look it up. So this fails when the reply does not carry
     the real value, which it can only get by reading the skill.
     """

@@ -1,20 +1,73 @@
-"""Bridge configuration for the wyoming1 voice satellite.
+"""Bridge configuration for this voice satellite.
 
 The satellite is a Wyoming *server*: we dial out to it. All audio processing
-(VAD, STT, TTS) happens here on `autumn`; the Pi only does mic capture,
+(VAD, STT, TTS) happens here on the bridge host; the Pi only does mic capture,
 wake word, and playback.
 
 That direction is being inverted (issue #61): a device may instead dial *us*, and we keep a registry of
 who is connected. The listener lives under "the registry listener" below and is off by default, because
 the voice loop still dials the satellite.
+
+Installation-specific values (the satellite's address, the gateway's port, the session id, ...) are
+never literals here. They come from the environment first and from `bridge.env` (at the project
+root, git-ignored, see `bridge.env.example`) second, so a clone on another machine is configured by
+copying the example file rather than by editing source. The host's systemd unit points at the same
+file, so one file is the whole host-side configuration. Same pattern on the device side:
+`pi/systemd/satellite.env`. See issue #45.
 """
 
 import os
 from pathlib import Path
 
+# --- local configuration file -------------------------------------------------
+# The one place this installation's values live. `KEY=VALUE` lines, `#` comments, optional quotes.
+# Absent is fine: every value falls back to its default below. A real environment variable always
+# wins over the file, so the file holds the durable values and the environment holds experiments.
+LOCAL_ENV_FILE = Path(__file__).resolve().parent.parent / "bridge.env"
+
+_LOCAL_ENV_CACHE: dict | None = None
+
+
+def _local_env() -> dict:
+    """Parse config.local.env once. A missing or unreadable file is an empty file, not an error."""
+    global _LOCAL_ENV_CACHE
+    if _LOCAL_ENV_CACHE is None:
+        values: dict = {}
+        try:
+            for line in LOCAL_ENV_FILE.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+                    value = value[1:-1]
+                values[key] = value
+        except OSError:
+            pass
+        _LOCAL_ENV_CACHE = values
+    return _LOCAL_ENV_CACHE
+
+
+def _cfg(name: str, default: str = "") -> str:
+    """Resolve a configuration value: environment variable, then config.local.env, then default."""
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
+    value = _local_env().get(name, "").strip()
+    if value:
+        return value
+    return default
+
+
 # --- the satellite ---------------------------------------------------------
-SATELLITE_HOST = "192.168.0.149"
-SATELLITE_PORT = 10700
+# Where the bridge dials. This was a hardcoded LAN address, which is why the bridge once spent
+# hours dialling a satellite that had gone away and why moving the device broke it silently
+# (issue #45). Default is loopback on purpose: a clone with no configuration fails visibly and
+# locally instead of quietly hunting a foreign address.
+SATELLITE_HOST = _cfg("VOICE_SATELLITE_HOST", "127.0.0.1")
+SATELLITE_PORT = int(_cfg("VOICE_SATELLITE_PORT", "10700"))
 
 # --- the registry listener (issue #61) -------------------------------------
 # Lets a device dial in and register. OFF by default, because the loop falls back to dialling the
@@ -66,32 +119,36 @@ SND_FORMAT = (22050, 2, 1)   # what aplay expects from us
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 FLEET_CONFIG_STATE_FILE = PROJECT_DIR / "state" / "fleet-config.json"
 VOICES_DIR = PROJECT_DIR / "voices"
-PIPER_VOICE_NAME = "en_US-hfc_male-medium"          # Angela's pick; also Hermes' platform voice
+# The Piper voice. A pick made for this installation (2026-09-22, also the platform voice), so it
+# is a value a different deployment would want to change.
+PIPER_VOICE_NAME = _cfg("VOICE_PIPER_VOICE", "en_US-hfc_male-medium")
 VOICE_MODEL = VOICES_DIR / f"{PIPER_VOICE_NAME}.onnx"
 VOICE_CONFIG = VOICES_DIR / f"{PIPER_VOICE_NAME}.onnx.json"
 AUDIO_OUT = PROJECT_DIR / "audio"
 
 # --- the Hermes gateway's API server (loopback only) -----------------------
-GATEWAY_BASE_URL = "http://127.0.0.1:8642"      # loopback; never exposed to the LAN
+GATEWAY_BASE_URL = _cfg("VOICE_GATEWAY_URL", "http://127.0.0.1:8642")      # loopback; never exposed to the LAN
 GATEWAY_ENV_FILE = Path.home() / ".hermes" / ".env"
 GATEWAY_API_KEY_VAR = "API_SERVER_KEY"
 # Set to a `gateway.api_server.model_routes` alias in ~/.hermes/config.yaml to pin the voice
 # surface to a specific model. Empty = do not pin: the voice surface runs on the gateway's normal
 # default (and its fallback chain), same as any other conversation.
 #
-# Pinned 2026-09-25 to `voice-fast` (deepseek / deepseek-flash) at Angela's request, because the
+# Pinned 2026-09-25 to `voice-fast` (deepseek / deepseek-flash), because the
 # local qwen38 route was too slow to iterate against. This is a CROSS-PROVIDER route: the profile
 # default is llamacpp-qwen38 and this one is DeepSeek, which is the exact condition that once
 # required the api_server `extra_body` re-scope patch (see hermes/patches/README.md). That patch is
 # no longer carried, so if a routed run starts failing with a provider error, suspect the profile's
 # provider-specific `extra_body` leaking onto DeepSeek before suspecting DeepSeek itself.
-VOICE_ROUTE_ALIAS = "voice-fast"
-VOICE_SESSION_ID = "voice-wyoming1"  # stable id, so the assistant has continuity
+VOICE_ROUTE_ALIAS = _cfg("VOICE_ROUTE_ALIAS", "voice-fast")
+# Stable id so the assistant has continuity across bridge restarts. Carries the device's name, so it
+# is a deployment value rather than a literal.
+VOICE_SESSION_ID = _cfg("VOICE_SESSION_ID", "voice-satellite")
 
 # How long a wake keeps the mic open while the bridge waits for a real utterance. A blip (the
 # satellite's wake chime leaking into the mic, a cough, a lip smack) no longer ends the
 # activation, so this is the only bound on an activation where nobody actually speaks. Chosen
-# 2026-09-22 after Michael reported the activation closing before he could speak.
+# 2026-09-22 after it was reported that the activation was closing before a person could speak.
 CAPTURE_ACTIVATION_SECONDS = 30.0
 
 # How long the person gets to produce real speech after a wake before the activation closes with
@@ -112,11 +169,11 @@ WAKE_QUIET_SECONDS = 0.5
 
 
 # --- follow-up mode: keep listening after an answer --------------------------
-# Angela's request, 2026-09-22: a control mode which, when on, makes the device listen again
+# A control mode which, when on, makes the device listen again
 # straight after it finishes speaking, so continuing a conversation does not need the wake word
 # every turn. Off by default, because it changes how the device behaves in the room, and persisted
 # so it survives a restart and can be flipped by voice, by a script, or by a cron job.
-FOLLOW_UP_SECONDS = 15.0          # Angela's number: about fifteen seconds of listening
+FOLLOW_UP_SECONDS = 15.0          # about fifteen seconds of listening
 FOLLOW_UP_SETTLE_SECONDS = 0.6    # let the speaker and the room go quiet before opening the mic
 FOLLOW_UP_MAX_TURNS = 10          # a chain longer than this is a runaway, not a conversation
 
@@ -130,7 +187,7 @@ FOLLOW_UP_WAKE_RETRY_SECONDS = 1.5
 # How long a follow-up window stays deaf before it starts listening.
 #
 # Opening the microphone means injecting a wake detection, which makes the satellite play its awake
-# chime, and the window's own microphone hears that chime and its room echo. Angela hit the result on
+# chime, and the window's own microphone hears that chime and its room echo. The result was hit on
 # 2026-09-22: "it was responding to its own boop sound effect as if it was a conversation". The
 # satellite already mutes its mic across the chime itself (0.4 s plus a 0.1 s margin), but that leaves
 # the echo, and a 0.2-0.3 s burst of echo is long enough to pass the endpointer as an utterance.
@@ -237,7 +294,7 @@ FOLLOW_UP_OFF_PHRASES = (
     "switch off follow up mode", "end follow up mode",
 )
 # "Stop" ends the current follow-up conversation and hands the device back to waiting for its wake
-# word, WITHOUT switching follow-up mode off: the next conversation follows up again. Angela asked for
+# word, WITHOUT switching follow-up mode off: the next conversation follows up again. Asked for
 # exactly this on 2026-09-22 ("ok nabu stop should be a way to stop the current follow up conversation,
 # but leave it open to retrigger again").
 #
@@ -301,7 +358,7 @@ VOICE_INSTRUCTIONS = (
     "ask one concise clarifying question instead of guessing. For a bare question about the temperature, "
     "read the Porch Thermometer for outside and the Hall Thermometer for inside and report both, rather "
     "than asking which one was meant. This "
-    "differs deliberately from Angela's text conversations, where follow-ups are welcome. "
+    "differs deliberately from her text conversations, where follow-ups are welcome. "
     "For a smart home action, reply with one short line naming what you did and stop there, for "
     "example 'I turned off the porch light.' Never say that you double checked, confirmed, "
     "verified, or validated it, and never read out attributes or status values: the check is "
@@ -371,7 +428,7 @@ VOICE_INSTRUCTIONS = (
 )
 
 # --- announcements: house events spoken out loud on the satellite ------------
-# Angela's decisions (2026-09-22):
+# Decisions (2026-09-22):
 #   * a dedicated LAN port, never behind Caddy and never reachable from outside;
 #   * any LAN device may call it, authenticated with a bearer token;
 #   * an announcement waits until any conversation in progress has finished speaking;
@@ -381,7 +438,7 @@ ANNOUNCE_HOST = "0.0.0.0"
 ANNOUNCE_PORT = 8765
 ANNOUNCE_TOKEN_FILE = PROJECT_DIR / "state" / "announce-token.txt"
 ANNOUNCE_TOKEN_ENV = "VOICE_ANNOUNCE_TOKEN"   # set this to override the file
-# Angela's pick (2026-09-22, revised): option A of the three prompt tones she auditioned at the
+# The announcement chime (2026-09-22, revised): option A of the three prompt tones auditioned at the
 # start of the project, "a-warm-fifth" (440 -> 660 Hz). The bare tone is generated by
 # scripts/make_chimes.py into sounds/candidates/; the label-*.wav files in audio/ are the spoken
 # previews, not the tones themselves, so never point this at one of those. Referenced in place
@@ -409,13 +466,13 @@ ANNOUNCE_MAX_QUEUE = 5            # beyond this callers get 503 and the text is 
 ANNOUNCE_DEDUP_SECONDS = 60.0     # same source + same text inside this window is ignored
 ANNOUNCE_TURN_MAX_AGE = 180.0     # a turn "active" longer than this means the flag went stale
 
-# Startup feedback for the device itself. It has no power light and no connection light, so Angela
-# asked to be able to hear both (2026-09-22). power-on.wav is played by the satellite service on the
+# Startup feedback for the device itself. It has no power light and no connection light, so the
+# person in the room asked to be able to hear both (2026-09-22). power-on.wav is played by the
 # Pi; connected.wav is played by this bridge the moment the link is up, because only the host knows
 # that. See scripts/make_chimes.py for the two designs.
 CONNECTED_TONE = PROJECT_DIR / "sounds" / "connected.wav"
 # The connected tone and the green LED flash must fire once per boot, not once per connection.
-# Angela, 2026-09-23: the hourly link refresh was announcing itself with both, all night. This
+# The hourly link refresh was announcing itself with both, all night (2026-09-23). This
 # marker records which host boot last heard the tone.
 CONNECTED_TONE_BOOT_MARKER = PROJECT_DIR / "state" / "connected-tone-boot-id"
 
@@ -425,10 +482,10 @@ CONNECTED_TONE_BOOT_MARKER = PROJECT_DIR / "state" / "connected-tone-boot-id"
 # problem: the process exited, systemd restarted it, and every restart replayed the connect tone,
 # reloaded whisper and Piper, and left the device deaf for about nine seconds. An hour with nobody
 # speaking is the normal overnight state, not a fault, so it is now a socket refresh instead
-# (Angela, 2026-09-23). Overridable so the refresh can be tested in seconds rather than an hour.
+# (2026-09-23). Overridable so the refresh can be tested in seconds rather than an hour.
 WAKE_WAIT_SECONDS = float(os.environ.get("VOICE_WAKE_WAIT_SECONDS", "3600"))
 
-# Voice interruption (Angela, 2026-09-23).
+# Voice interruption (2026-09-23).
 #
 # While the agent is working on a task, a wake word plus a new utterance should be treated as a
 # conversation interruption rather than as a queued question:
@@ -449,5 +506,5 @@ INTERRUPT_MIN_CHARS = 5
 # load-bearing: a satellite that is still playing cannot stream the microphone, so a wake word that
 # lands while the device is speaking would otherwise wait forever, keep ownership of the satellite
 # event queue, and swallow every later wake detection. The device then looks completely deaf
-# (Angela hit exactly that on 2026-09-23, minutes after the feature shipped).
+# (hit exactly that on 2026-09-23, minutes after the feature shipped).
 INTERRUPT_CAPTURE_SECONDS = 12.0

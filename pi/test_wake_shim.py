@@ -13,7 +13,7 @@ What matters, in order of how badly it would hurt if it broke:
     event-at-a-time rather than a byte copy);
   * with no satellite connected, the control port says so instead of pretending;
 
-    /home/angela/hermes-voice-bridge/.venv/bin/python test_wake_shim.py
+    ~/hermes-voice-bridge/.venv/bin/python test_wake_shim.py
 """
 
 from __future__ import annotations

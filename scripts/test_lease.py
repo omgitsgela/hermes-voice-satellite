@@ -132,7 +132,7 @@ async def check_describe_handshake() -> None:
         assert Describe.is_type(request.type), request.type
         await async_write_event(
             Info(satellite=Satellite(
-                name="wyoming1", attribution=Attribution(name="test", url="https://example.invalid"),
+                name="satellite", attribution=Attribution(name="test", url="https://example.invalid"),
                 installed=True, description="test", version="1.0",
             )).event(),
             peer_writer,
@@ -143,7 +143,7 @@ async def check_describe_handshake() -> None:
     await task
     check("the inherited describe() works over a lease", info is not None)
     check("describe() returns the device's own name",
-          info is not None and info.satellite is not None and info.satellite.name == "wyoming1")
+          info is not None and info.satellite is not None and info.satellite.name == "satellite")
     await satellite.close()
 
 

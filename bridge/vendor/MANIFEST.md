@@ -8,7 +8,7 @@ Everything here exists so the bridge does not depend on something that can move 
 
 ## Why this one is vendored rather than imported
 
-Angela's rule, 2026-09-25: **"if we're going to use silero, we're going to use it locally, and make
+The rule, 2026-09-25: **"if we're going to use silero, we're going to use it locally, and make
 it a repo we track."**
 
 The detector decides whether the device hears the person who owns it. That is not a component to

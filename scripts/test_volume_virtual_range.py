@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The virtual volume range (issue #10).
 
-Angela's correction, 2026-09-25: the spoken scales must span the *usable* range, not
+The correction, 2026-09-25: the spoken scales must span the *usable* range, not
 the raw one. On this hardware the measured floor is 50% of the ALSA range, so before
 this change "set volume to 30%" was clamped to 50 and reported back as an error - half
 the percentage scale was dead, and every value below it did the same thing.

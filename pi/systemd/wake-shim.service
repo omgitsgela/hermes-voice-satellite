@@ -11,15 +11,17 @@ Wants=wyoming-openwakeword.service
 
 [Service]
 Type=simple
-WorkingDirectory=/home/wyoming1/wyoming-satellite/examples
-# The satellite's virtualenv: this speaks the wyoming protocol and needs that package.
+EnvironmentFile=/etc/voice-satellite/satellite.env
+# The satellite's virtualenv: this speaks the wyoming protocol and needs that package. The cd
+# inside ExecStart is how the working directory is set, because systemd will not expand variables
+# in WorkingDirectory=.
 #
 # --wake-name names the wake word in the synthetic Detection the shim injects. It is only ever
 # logged (the satellite treats any Detection as a wake), but leaving it at the shim's default made
-# the bridge log "wake word: ok_nabu" after an injected wake, naming a wake word this device no
-# longer uses and sending a future diagnosis after the wrong thing. It must match the satellite's
-# own --wake-word-name below, and scripts/test_pi_units_consistent.py fails if the two disagree.
-ExecStart=/home/wyoming1/wyoming-satellite/.venv/bin/python3 /home/wyoming1/wyoming-satellite/examples/wake_shim.py --wake-name 'hey_hermes'
+# the bridge log a wake word this device no longer uses after an injected wake, sending a future
+# diagnosis after the wrong thing. It must match the satellite's own --wake-word-name, and
+# scripts/test_pi_units_consistent.py fails if the two disagree.
+ExecStart=/bin/sh -c 'cd "$VS_BASE/examples" && exec "$VS_BASE/.venv/bin/python3" "$VS_BASE/examples/wake_shim.py" --wake-name "$VS_WAKE_WORD"'
 Restart=always
 RestartSec=3
 

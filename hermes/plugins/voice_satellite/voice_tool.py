@@ -1,6 +1,6 @@
 """Control for the voice satellite itself (follow-up mode), for the assistant to call.
 
-Why this exists, in Angela's words (2026-09-22): the bridge can act on the literal phrase "turn on
+Why this exists, in the request that made it (2026-09-22): the bridge can act on the literal phrase "turn on
 follow up mode" by itself, but a phrase match is not understanding. Giving the assistant a tool
 means any natural way of asking works: "keep listening after you answer", "stop following up", "are
 you still listening for replies?". The bridge keeps its own matcher as an instant, offline fallback
@@ -27,7 +27,9 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Optional
 
-_PROJECT = Path("/home/angela/hermes-voice-bridge")
+# The checkout this installation lives in. A deployment value, not a literal: an environment
+# variable wins, and the default is the conventional location (issue #45).
+_PROJECT = Path(os.environ.get("VOICE_BRIDGE_PROJECT", "").strip() or (Path.home() / "hermes-voice-bridge"))
 TOKEN_FILE = _PROJECT / "state" / "announce-token.txt"
 TOKEN_ENV = "VOICE_ANNOUNCE_TOKEN"
 BASE_URL = os.environ.get("VOICE_BRIDGE_URL", "http://127.0.0.1:8765").rstrip("/")

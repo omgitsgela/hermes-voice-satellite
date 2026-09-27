@@ -79,7 +79,7 @@ is the intended trade — an extra exchange instead of a changed thermostat.
 
 ## Alarms override upward
 
-Angela's decision, 2026-09-25: **an alarm may override upward to a minimum alarm level, so
+The decision, 2026-09-25: **an alarm may override upward to a minimum alarm level, so
 an alarm is always audible.** An alarm at a level too quiet to notice is useless.
 
 The override is **upward only**. A room already louder than the minimum is left exactly
@@ -121,7 +121,7 @@ python3 calibrate-volume.py --show
 The script is stdlib-only and imports nothing from this repository, on purpose: it has to
 run on an embedded device with no dependency chain. Copy it across on its own.
 
-### The measurement, taken 2026-09-25 on `wyoming1`
+### The measurement, taken 2026-09-25 on this device
 
 | Value | Result |
 |---|---|
@@ -169,7 +169,7 @@ kept in step with the first.
 
 **This was a correction.** The first version mapped the percentage scale onto raw directly, so
 with a floor of 50 every value from 1% to 50% meant the same thing and was reported back as a
-clamp - half the percentage scale was dead. Angela's point: both scales should exist *within*
+clamp - half the percentage scale was dead. The point: both scales should exist *within*
 the measured range, so "volume 30%" is 30% of what this hardware can do.
 
 The configuration plane carries the user scale too, deliberately. A fleet API that reported raw
@@ -181,7 +181,7 @@ percentage, so it shifts by one for 49 of the 100 values. `playback_volume` ther
 permanent drift and never converge - which teaches whoever reads the fleet view to ignore drift
 altogether. The setting is converged, at the resolution the hardware can express.
 
-**Alarm minimum 50%, on the user scale.** Angela decided alarms may override upward so an alarm
+**Alarm minimum 50%, on the user scale.** The decision: alarms may override upward so an alarm
 is always audible. User 50% maps to raw 75 here, comfortably above the raw 70 that the sweep
 showed as clearly audible, and well above the raw 50 floor where the device can only just be
 heard. Stored on the user scale so the same number means the same thing on hardware with a
@@ -195,7 +195,7 @@ measurement.
 | Where | Path |
 |---|---|
 | Bridge | `state/volume-calibration.json` |
-| Device | `/home/wyoming1/.local/state/hermes-voice-satellite/volume.json` |
+| Device | `~/.local/state/hermes-voice-satellite/volume.json` (the device user's home) |
 
 Pin `VOICE_VOLUME_CALIBRATION` on the device so both resolve the same file (see above).
 
@@ -216,8 +216,8 @@ anyone has listened.
 
 **The satellite runs its services as `root`.** None of the units sets `User=` — not this one,
 not `wyoming-satellite`, not `wake-shim`, not `2mic_leds`. So `Path.home()` is `/root` for the
-service, while a person running the calibration is logged in as `wyoming1` and gets
-`/home/wyoming1`.
+service, while a person running the calibration is logged in as the device user and gets
+their own home.
 
 Unpinned, those two paths differ, and the failure is silent and total: the measurement is
 written where the running service never looks, so the floor stays at its placeholder and the
@@ -226,8 +226,8 @@ calibration appears to have done nothing at all.
 Pin it explicitly in the device's bootstrap file, on **both** sides:
 
 ```
-VOICE_VOLUME_CALIBRATION=/home/wyoming1/.local/state/hermes-voice-satellite/volume.json
-VOICE_DEVICE_CONFIG_STATE=/home/wyoming1/.local/state/hermes-voice-satellite/config.json
+VOICE_VOLUME_CALIBRATION=$HOME/.local/state/hermes-voice-satellite/volume.json
+VOICE_DEVICE_CONFIG_STATE=$HOME/.local/state/hermes-voice-satellite/config.json
 ```
 
 `VOICE_VOLUME_CALIBRATION` is the variable both the calibration script and
@@ -236,7 +236,7 @@ of who runs them. `scripts/test_volume_calibration.py` pins that agreement, incl
 evaluating the reader in a subprocess so its module-level constant is built with the variable
 actually set. Without that check a measurement could sit on disk being correctly ignored.
 
-Create the directory as `wyoming1` (1000:1000, mode `0700`) so the person can write the
+Create the directory as the device user (mode `0700`) so the person can write the
 measurement and `root` can read it.
 
 ### After calibrating

@@ -2,7 +2,7 @@
 
 Why this replaced `webrtcvad` is in `scripts/test_silero_vad.py` and `docs/voice-detection.md`.
 The one-line version: webrtcvad calls ~99% of a noisy room "speech", which is why the project
-needed an aggressive energy gate, and the gate then went deaf to Angela in an office.
+needed an aggressive energy gate, and the gate then went deaf to the person in an office.
 
 The model lives in `bridge/vendor/silero_vad_v6.onnx` and is loaded with `onnxruntime`, which the
 bridge already installs. Nothing here reaches the network, and nothing here reads an asset out of

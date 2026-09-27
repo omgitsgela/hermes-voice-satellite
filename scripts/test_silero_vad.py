@@ -12,7 +12,7 @@ settled it (2026-09-25, the same 5 s of real speech and synthetic room noise):
 
 webrtcvad's verdict depends on the noise's LEVEL, and the boundary falls between a quiet room and a
 busy one. That is why the project grew an energy gate: the gate existed to clean up after a detector
-that calls a loud office "speech". And the gate then went deaf to Angela in exactly that office,
+that calls a loud office "speech". And the gate then went deaf to the person in exactly that office,
 because it judges loudness - a property of the room - when the real question is whether the sound is
 a voice. Silero answers that question directly, at every level measured.
 
@@ -20,7 +20,7 @@ So this is not "a better threshold". It removes the reason the threshold had to 
 
 ## Why the model is vendored rather than imported
 
-Angela's rule, 2026-09-25: "if we're going to use silero, we're going to use it locally, and make
+The rule, 2026-09-25: "if we're going to use silero, we're going to use it locally, and make
 it a repo we track." A detector that decides whether the device hears its owner must not depend on
 a package that can be yanked, or on an asset living inside someone else's wheel where an unrelated
 upgrade can move or drop it. The ONNX file is in `bridge/vendor/` with its checksum recorded, and
@@ -126,9 +126,9 @@ def main() -> int:
     #     noise at rms ~1170  -> 92.7%
     #     noise at rms ~3500  -> 100.0%
     #
-    # Angela's office measured a floor of ~540 with frames to ~930, so it sits in the range where
+    # An office measured a floor of ~540 with frames to ~930, so it sits in the range where
     # webrtcvad is fooled - which is exactly why the energy gate was doing all the work there and
-    # then went deaf to her. A quiet room would not have shown the problem at all.
+    # then went deaf to the person. A quiet room would not have shown the problem at all.
     #
     # NOTE, because it cost a wrong measurement: `webrtcvad.Vad` carries state between calls, so
     # reusing one instance across different signals leaks the previous signal into the next

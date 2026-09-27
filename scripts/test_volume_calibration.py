@@ -63,10 +63,10 @@ assert spec.loader is not None
 spec.loader.exec_module(module)
 
 # The writer and the two readers must resolve the SAME path from the same environment
-# variable. On the device the service runs as root while a person runs the calibration as
-# wyoming1, so Path.home() differs between them: without a shared pin, the measurement
+# variable. On the device the service runs as root while a person runs the calibration as the
+# device user, so Path.home() differs between them: without a shared pin, the measurement
 # lands where the running service never looks and the calibration silently does nothing.
-for pinned in ("/tmp/pinned-by-env/volume.json", "/home/wyoming1/.local/state/vsat/volume.json"):
+for pinned in ("/tmp/pinned-by-env/volume.json", "/opt/vsat/volume.json"):
     saved = {k: os.environ.get(k) for k in ("VOICE_VOLUME_CALIBRATION", "VOICE_STATE_DIR")}
     os.environ["VOICE_VOLUME_CALIBRATION"] = pinned
     os.environ.pop("VOICE_STATE_DIR", None)

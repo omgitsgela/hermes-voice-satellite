@@ -3,14 +3,14 @@
 #
 # Run it on the device, whichever network it is on:
 #
-#     ssh wyoming1 'sh ~/check-network.sh'          # from home
-#     sh /home/wyoming1/check-network.sh            # on the device itself
+#     ssh <satellite> 'sh ~/check-network.sh'     # from home
+#     sh ~/check-network.sh                        # on the device itself
 #
 # It answers three questions a person actually has: which network did it join, what address does it have,
 # and can it reach the bridge from here. It does not change anything.
 set -u
 
-BRIDGE_HOST="${BRIDGE_HOST:-192.168.0.142}"
+BRIDGE_HOST="${BRIDGE_HOST:?set BRIDGE_HOST to the bridge address, e.g. BRIDGE_HOST=10.0.0.5 sh check-network.sh}"
 # Ports worth testing from the device's side. 22 is the host's SSH, 8765 is the bridge's announcement
 # endpoint, and 10701 is the registry listener the inversion adds. The device's own 10700 is deliberately
 # absent: testing a port the device itself owns proves nothing about the network, which is what the first

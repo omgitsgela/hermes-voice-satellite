@@ -37,6 +37,7 @@ the mirror's pruning, unlike the caches this used to read from.
 
 from __future__ import annotations
 
+import os
 import sys
 import wave
 from pathlib import Path
@@ -51,13 +52,14 @@ PROJECT = Path(__file__).resolve().parent.parent
 
 #: Where a fixture might be, most convenient first. The private copy is the durable one; the
 #: others are working copies that a cache clean can remove, which is exactly what happened.
+#: The private directory is a deployment value: it is a path on a network share, so it is named
+#: by environment, never in code (issue #45).
+_PRIVATE_FIXTURES = os.environ.get("VOICE_ENDPOINTER_FIXTURES", "").strip()
 SEARCH_DIRS = (
     PROJECT / "audio",
     Path.home() / ".hermes/cache/audio",
     Path.home() / ".local/share/hermes-voice-satellite/endpointer-fixtures",
-    Path("/run/user/1000/gvfs/smb-share:server=192.168.0.20,share=media,user=angela"
-         "/AI Projects/hermes-voice-satellite/private/endpointer-fixtures"),
-)
+) + ((Path(_PRIVATE_FIXTURES),) if _PRIVATE_FIXTURES else ())
 
 #: label, filename, what it demonstrates.
 CAPTURES = (

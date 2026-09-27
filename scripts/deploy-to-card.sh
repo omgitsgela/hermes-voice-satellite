@@ -8,10 +8,13 @@
 # re-running copies the same files again and changes nothing else. It never overwrites an existing
 # bridge-link.env, because that file holds the real values a person had to supply.
 #
-# It installs four things: the outbound runner, the unit that runs it, the enablement symlink so the device
-# dials the bridge on every boot, and a bootstrap env file for the values only a human can fill in. The unit
-# is only enabled when those values are real: a card whose env file still says CHANGE-ME is left with the
-# unit installed but disabled, rather than booting into a link that is guaranteed to fail.
+# It installs five things: the outbound runner, the unit that runs it, the device's configuration
+# file (satellite.env), the enablement symlink so the device dials the bridge on every boot, and a
+# bootstrap env file for the values only a human can fill in. The unit is only enabled when those
+# values are real: a card whose env file still says CHANGE-ME is left with the unit installed but
+# disabled, rather than booting into a link that is guaranteed to fail.
+#
+# The second argument is the device user the satellite is installed under (default satellite).
 #
 # Mounting as your own user needs no sudo when the host has a polkit rule allowing udisks2 mount/unmount
 # for removable media: an SSH session has no active desktop seat, which is why a plain `udisksctl mount`
@@ -20,31 +23,33 @@
 set -eu
 
 MOUNT="${1:-}"
+DEVICE_USER="${2:-satellite}"
 if [ -z "$MOUNT" ]; then
-    echo "usage: $0 <mountpoint of the card's rootfs partition>" >&2
+    echo "usage: $0 <mountpoint of the card's rootfs partition> [device-user]" >&2
     exit 2
 fi
-if [ ! -d "$MOUNT/home/wyoming1/wyoming-satellite/examples" ]; then
+DEVICE_USER_HOME="$MOUNT/home/$DEVICE_USER"
+if [ ! -d "$DEVICE_USER_HOME/wyoming-satellite/examples" ]; then
     echo "FAIL: $MOUNT does not look like the satellite's rootfs" >&2
-    echo "      expected $MOUNT/home/wyoming1/wyoming-satellite/examples to exist" >&2
+    echo "      expected $DEVICE_USER_HOME/wyoming-satellite/examples to exist" >&2
     exit 1
 fi
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO=$(CDPATH= cd -- "$HERE/.." && pwd)
-DEST="$MOUNT/home/wyoming1/wyoming-satellite/examples"
-ENV_FILE="$MOUNT/home/wyoming1/bridge-link.env"
+DEST="$DEVICE_USER_HOME/wyoming-satellite/examples"
+ENV_FILE="$DEVICE_USER_HOME/bridge-link.env"
 UNIT_SRC="$REPO/pi/systemd/outbound-satellite.service.in"
 UNIT_DEST="$MOUNT/etc/systemd/system/outbound-satellite.service"
 WANTS_DIR="$MOUNT/etc/systemd/system/multi-user.target.wants"
 
 # The paths the unit is installed with. These are the card's paths, not the build host's.
-DEVICE_USER_HOME="/home/wyoming1"
 DEVICE_PYTHON="$DEVICE_USER_HOME/wyoming-satellite/.venv/bin/python"
 DEVICE_RUNNER="$DEVICE_USER_HOME/wyoming-satellite/examples/outbound_satellite.py"
 
 echo "=== source: $HERE"
 echo "=== destination: $DEST"
+echo "=== device user: $DEVICE_USER"
 
 # The runner lives in the repo at pi/outbound_satellite.py. A staging directory that holds a copy next to
 # this script also works, which is how the first hand deployment was done.
@@ -64,18 +69,33 @@ for f in outbound_satellite.py config_agent.py device_apply.py volume_control.py
     echo "  copied $f"
 done
 
-# The device's bootstrap configuration: identity and where to dial, nothing else. Mode 0600 because a
+# The device's one configuration file. The repo copy is a template with <...> placeholders; if the card
+# already has a filled-in file, keep it (it holds this device's real values). If it does not, install the
+# template and say so plainly: the units will not work until a person fills it in.
+SATENV_DIR="$MOUNT/etc/voice-satellite"
+SATENV_DEST="$SATENV_DIR/satellite.env"
+if [ -f "$SATENV_DEST" ]; then
+    echo "  kept the existing /etc/voice-satellite/satellite.env (it holds the device's real values)"
+else
+    mkdir -p "$SATENV_DIR"
+    cp "$REPO/pi/systemd/satellite.env" "$SATENV_DEST"
+    chmod 0644 "$SATENV_DEST"
+    echo "  wrote /etc/voice-satellite/satellite.env from the template"
+    echo "  FILL IT IN: it still carries <...> placeholders, and the units will not start until it is real"
+fi
+
+# The link's bootstrap configuration: identity and where to dial, nothing else. Mode 0600 because a
 # deployment may point at certificate material from here.
 if [ -f "$ENV_FILE" ]; then
     echo "  kept the existing bridge-link.env (it holds the real values)"
 else
-    cat > "$ENV_FILE" <<'EOF'
+    cat > "$ENV_FILE" <<EOF
 # Bootstrap configuration for the outbound shape: the device dials the bridge.
-# This file is the only place real values live, and it is never committed.
+# This file is never committed.
 VOICE_DEVICE_ID=CHANGE-ME
 VOICE_BRIDGE_HOST=CHANGE-ME
 VOICE_BRIDGE_PORT=10701
-VOICE_DEVICE_NAME=
+VOICE_DEVICE_NAME=$DEVICE_USER
 VOICE_DEVICE_AREA=
 VOICE_CAPABILITIES=led,speaker,microphone
 # TLS, when the bridge terminates it: VOICE_BRIDGE_TLS_CA, and VOICE_BRIDGE_TLS_CERT/KEY for mutual TLS.
@@ -117,6 +137,7 @@ for f in outbound_satellite.py config_agent.py device_apply.py volume_control.py
     printf '  %-34s %s bytes  mode %s\n' "$f" "$bytes" "$(stat -c %a "$DEST/$f")"
 done
 printf '  %-34s %s bytes  mode %s\n' "bridge-link.env" "$(wc -c < "$ENV_FILE" | tr -d ' ')" "$(stat -c %a "$ENV_FILE")"
+printf '  %-34s %s bytes  mode %s\n' "satellite.env" "$(wc -c < "$SATENV_DEST" | tr -d ' ')" "$(stat -c %a "$SATENV_DEST")"
 printf '  %-34s %s bytes\n' "outbound-satellite.service" "$(wc -c < "$UNIT_DEST" | tr -d ' ')"
 if [ -e "$WANTS_DIR/outbound-satellite.service" ]; then
     echo "  enablement: linked (the device will dial the bridge on boot)"

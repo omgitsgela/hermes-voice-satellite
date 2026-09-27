@@ -29,7 +29,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=__ENV_FILE__
+# The satellite's own configuration: paths, identity, names.
+EnvironmentFile=/etc/voice-satellite/satellite.env
+# The link's bootstrap: where the bridge is, the device's registry id, TLS. Managed by the card
+# deployer (scripts/deploy-to-card.sh), never by a unit edit. The '-' means a missing file is not
+# fatal to this unit, because the file is the deployer's to create and the runner fails closed on
+# its own with a clear error.
+EnvironmentFile=-__ENV_FILE__
 ExecStart=__PYTHON__ __RUNNER__
 # The link reconnects by itself, with capped jitter and a backoff that only resets after the connection
 # has been healthy for a while, so this outer restart covers real death only.

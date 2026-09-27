@@ -1,6 +1,6 @@
 """Offline tests for voice interruption. No device, no gateway, no model, no side effects.
 
-Angela, 2026-09-23: while the device is working on a task, a wake word plus a new utterance
+2026-09-23: while the device is working on a task, a wake word plus a new utterance
 should act as a conversation interruption. Two outcomes matter:
 
 * new information ("it was a joke, that light change was a prank") must reach the agent that is

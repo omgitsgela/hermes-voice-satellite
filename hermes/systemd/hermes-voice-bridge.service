@@ -2,15 +2,22 @@
 Description=Hermes Voice Bridge - Wyoming satellite voice frontend
 After=network-online.target hermes-gateway.service
 Wants=network-online.target
-# The bridge dials the satellite on tcp/10700 and the Hermes API server on loopback 8642.
+# The bridge dials the satellite on its configured port and the Hermes API server on loopback.
 # Deliberately no Requires=hermes-gateway: it retries by itself, so a gateway restart or an
 # update should not cascade into taking the bridge down with it.
 
 [Service]
 Type=simple
-WorkingDirectory=/home/angela/hermes-voice-bridge
+# %h is the service user's home, so a clone installs as whoever is running it: no path in this
+# file depends on the install location.
+WorkingDirectory=%h/hermes-voice-bridge
+# The host side's one configuration file (bridge.env at the project root, git-ignored; see
+# bridge.env.example). A missing file is not fatal: every value then falls back to its default
+# in bridge/config.py, and an unconfigured bridge dials loopback and says so. A real environment
+# variable always wins over the file.
+EnvironmentFile=-%h/hermes-voice-bridge/bridge.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/home/angela/hermes-voice-bridge/.venv/bin/python -m bridge.loop
+ExecStart=%h/hermes-voice-bridge/.venv/bin/python -m bridge.loop
 Restart=always
 # A satellite that is switched off cannot be dialled, and every attempt costs about 1.3s of CPU
 # reloading the whisper and Piper models before it fails. At 5s that was ~25% of a core for hours

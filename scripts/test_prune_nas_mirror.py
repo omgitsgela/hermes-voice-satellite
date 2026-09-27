@@ -76,7 +76,7 @@ with tempfile.TemporaryDirectory() as tmp:
     (mirror / "bridge" / "tracked.py").write_text("still tracked\n")
     (mirror / "bridge" / "stale.py").write_text("no longer tracked\n")
     protected = [
-        "private/device-images/wyoming1-sdcard.img.zst",
+        "private/device-images/satellite-sdcard.img.zst",
         "private/device-images/token-copy.txt",
         "private/makerworld-enclosure/case.3mf",
         "private/makerworld-enclosure/DO-NOT-PUBLISH.md",

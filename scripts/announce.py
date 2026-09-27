@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Announce something out loud on the voice satellite, from Hermes or from a cron job.
 
-    /home/angela/hermes-voice-bridge/.venv/bin/python \
-        /home/angela/hermes-voice-bridge/scripts/announce.py --text "Freezer temperature is 40 degrees"
+    ~/hermes-voice-bridge/.venv/bin/python \
+        ~/hermes-voice-bridge/scripts/announce.py --text "Freezer temperature is 40 degrees"
 
 The token is read from state/announce-token.txt (or $VOICE_ANNOUNCE_TOKEN) and never printed.
 
 Exit codes matter when a cron job uses this: 0 means the bridge accepted the announcement, 1
 means it was refused (bad token, too long, queue full), 2 means the token itself was unreadable.
 An accepted announcement is still best-effort delivery by design, so a drop is logged by the
-bridge at /home/angela/hermes-voice-bridge/logs/announcements.jsonl rather than raised here.
+bridge in the checkout's logs/announcements.jsonl rather than raised here.
 """
 
 from __future__ import annotations

@@ -144,9 +144,9 @@ def main() -> int:
     check("a dead-silent room leaves a sane threshold", ep.gate.threshold >= 400, True)
 
     # ---------------------------------------------------------------- a busy office
-    # Measured from Angela's three samples on 2026-09-25, a computer centre with a fan and other
+    # Measured from three samples on 2026-09-25, a computer centre with a fan and other
     # people: the room's non-speech floor is ~540 (against 142-190 at home) and its loud frames
-    # reach ~930, while her speech sits at ~1040. The room and the voice are only ~11% apart.
+    # reach ~930, while the person's speech sits at ~1040. The room and the voice are only ~11% apart.
     #
     # The old shape - the room's 20th percentile times 6 - put the threshold at ~3240, ABOVE the
     # person, and the device answered nothing. That is the failure this section pins: the gate must
@@ -157,7 +157,7 @@ def main() -> int:
     # stops it becoming a turn. Being deaf to the person is the worse failure.
     OFFICE_ROOM = 540        # 20th percentile of the office's non-speech frames
     OFFICE_ROOM_LOUD = 930   # its loudest non-speech frames
-    OFFICE_SPEECH = 1040     # Angela's speech median in that room
+    OFFICE_SPEECH = 1040     # the person's speech median in that room
     ep = build([False] * 400)
     feed(ep, OFFICE_ROOM, 300)
     check("a busy office does not push the threshold above the speaker",

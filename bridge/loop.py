@@ -44,7 +44,7 @@ class IdleWakeRefresh(Exception):
     """No wake word for the configured window. Not a failure, just time to refresh the link.
 
     Deliberately NOT a subclass of TimeoutError or ConnectionError: the loop treats those as real
-    connection problems and exits, which is the behaviour this replaces (Angela, 2026-09-23).
+    connection problems and exits, which is the behaviour this replaces (2026-09-23).
     """
 
 
@@ -227,7 +227,7 @@ class VoiceLoop:
         #
         # This used to be VOICE_SESSION_ID, which is a SESSION id and not a device id. The
         # consequence was silent and total: a spoken volume command wrote a configuration
-        # record for a device called "voice-wyoming1" that does not exist, the dispatch then
+        # record for a device called "voice-satellite" that does not exist, the dispatch then
         # found no connection under that name, and the reply told the user it could not
         # reach the device - while every piece involved looked correctly wired.
         self.device_id = ""
@@ -645,7 +645,7 @@ class VoiceLoop:
         A timeout here is NOT a connection failure. An hour with nobody speaking is the normal
         overnight state, and treating it as fatal is exactly what made the bridge exit, restart,
         replay its connect tone, reload whisper and Piper, and go deaf for nine seconds, once an
-        hour all night (Angela, 2026-09-23). `run()` catches IdleWakeRefresh and refreshes the
+        hour all night (2026-09-23). `run()` catches IdleWakeRefresh and refreshes the
         socket in place instead.
         """
         from bridge.config import WAKE_WAIT_SECONDS
@@ -693,7 +693,7 @@ class VoiceLoop:
                 self.self_trigger_count += 1
                 _LOGGER.warning("wake word during playback: treating as a self-trigger")
 
-    # -- interruption while a task is running (Angela, 2026-09-23) ----------
+    # -- interruption while a task is running (2026-09-23) --------------
 
     async def _handle_interruption(self, transcript: str) -> str:
         """Decide what a mid-task utterance means, and act on it.
@@ -779,7 +779,7 @@ class VoiceLoop:
             # microphone, so a wake word that lands during the answer leaves it waiting forever.
             # Worse, the waiting watcher stays the active consumer of the satellite queue and
             # silently eats every later wake detection, which makes the device look completely deaf
-            # (Angela hit exactly this on 2026-09-23, minutes after this feature shipped).
+            # (hit exactly this on 2026-09-23, minutes after this feature shipped).
             # CancelledError is deliberately NOT caught here: swallowing it is how a task that should
             # have died keeps running.
             try:
@@ -804,7 +804,7 @@ class VoiceLoop:
             outcome = await self._handle_interruption(transcript)
             # The capture is over whichever way it went, so hand the microphone back. Leaving the
             # satellite streaming is issue #12: a streaming satellite ignores its own wake word, so
-            # the device looks deaf until the next hourly link refresh. Angela hit exactly that on
+            # the device looks deaf until the next hourly link refresh. Hit exactly that on
             # 2026-09-23 by interrupting during an answer.
             await self._end_capture()
             if outcome == "stopped":
@@ -890,10 +890,10 @@ class VoiceLoop:
         """Capture the utterance, ignoring anything that is not one.
 
         A rejected blip must NOT end the activation. The satellite's wake chime leaks into the
-        mic as a few dozen milliseconds of "speech" at the very start of the stream, and Michael
-        waits for the tone to finish before he speaks, so the 700 ms silence timer used to close
-        the window in his face about a second after the wake: he said the wake word, the device
-        chimed, went quiet, and he had to start over. The noise is discarded and the mic stays
+        mic as a few dozen milliseconds of "speech" at the very start of the stream, and a person
+        waits for the tone to finish before speaking, so the 700 ms silence timer used to close
+        the window about a second after the wake: they said the wake word, the device
+        chimed, went quiet, and they had to start over. The noise is discarded and the mic stays
         open, bounded by CAPTURE_ACTIVATION_SECONDS so a wake with nobody there cannot hold it.
 
         Returns (endpoint, note). A None endpoint means the activation ended with no utterance,
@@ -996,7 +996,7 @@ class VoiceLoop:
     async def capture_follow_up(self) -> tuple[Optional[EndpointResult], str]:
         """Listen for a reply with no wake word, bounded by FOLLOW_UP_SECONDS.
 
-        Angela's follow-up mode. The device has just answered, so the person is already talking to
+        Follow-up mode. The device has just answered, so the person is already talking to
         it and should not have to wake it again to continue. One utterance and this hands over to
         the normal turn; silence and it closes.
 
@@ -1014,12 +1014,12 @@ class VoiceLoop:
         # worked: an already-streaming satellite ignores the request before any chime or light.
         retry = asyncio.create_task(self._reinforce_wake_now(), name="wake-now-retry")
         # Show that it is listening: without this the answer ends, the lights go dark and the
-        # device looks switched off, which is exactly how Angela read it on 2026-09-22 ("after you
+        # device looks switched off, which is exactly how it read on 2026-09-22 ("after you
         # give an answer you're just shutting off") while the window was open behind the darkness.
         await self.publish_led(FOLLOW_UP_LED)
         # Stay deaf while the device's own wake chime and its room echo are in the room, or the window
-        # answers its own boop (Angela, 2026-09-22). See FOLLOW_UP_QUIET_SECONDS. The window's own
-        # timing starts after this, so she still gets the full listening time.
+        # answers its own boop (2026-09-22). See FOLLOW_UP_QUIET_SECONDS. The window's own
+        # timing starts after this, so the person still gets the full listening time.
         from bridge.config import FOLLOW_UP_QUIET_SECONDS
 
         await asyncio.sleep(FOLLOW_UP_QUIET_SECONDS)
@@ -1073,7 +1073,7 @@ class VoiceLoop:
                 self.turn_started_at = None
                 # Put the satellite back to wake-word detection. A streaming satellite is not
                 # listening for its wake word and its lights stay yellow, so without this a single
-                # silent follow-up window leaves the device apparently stuck: Angela saw exactly that
+                # silent follow-up window leaves the device apparently stuck: it looked exactly that
                 # on 2026-09-22.
                 await self._rearm_wake_word()
 
@@ -1246,7 +1246,7 @@ class VoiceLoop:
 
         # Watch for an interruption for as long as the task is running. The satellite keeps
         # listening for its wake word throughout, so a detection arriving here means someone
-        # deliberately woke the device mid-task (Angela, 2026-09-23).
+        # deliberately woke the device mid-task (2026-09-23).
         class _Interrupt:
             """Mutable state shared with the interruption watcher."""
 
@@ -1627,11 +1627,11 @@ class VoiceLoop:
     async def say_startup_tone(self) -> None:
         """Play the "connected" tone, so the device can report the host link out loud.
 
-        The satellite has no power light and no connection light, and Angela asked to be able to
-        tell "powered on" from "actually connected". Best effort on purpose: a missing or
+        The satellite has no power light and no connection light, and the person in the room asked
+        to be able to tell "powered on" from "actually connected". Best effort on purpose: a missing or
         unplayable tone must never stop the loop from starting.
 
-        Once per boot, not once per connection. Angela, 2026-09-23: the hourly link refresh used to
+        Once per boot, not once per connection. 2026-09-23: the hourly link refresh used to
         restart this process, so the tone played all night long. A restart of this service, or a
         reconnection, is now silent; a real reboot of this host still says hello.
         """
@@ -1688,7 +1688,7 @@ class VoiceLoop:
             except IdleWakeRefresh as exc:
                 # Not a fault: nobody spoke for the configured window. Refresh in place instead of
                 # exiting. Exiting is what replayed the connect tone, reloaded the models and went
-                # deaf for seconds, once an hour overnight (Angela, 2026-09-23).
+                # deaf for seconds, once an hour overnight (2026-09-23).
                 _LOGGER.info("idle: %s", exc)
                 try:
                     await self._refresh_link()

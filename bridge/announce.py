@@ -1,6 +1,6 @@
 """Announcement endpoint: house events spoken out loud on the satellite.
 
-Angela's decisions (2026-09-22):
+Decisions (2026-09-22):
 
   * a dedicated LAN port, never behind Caddy and never reachable from outside;
   * any LAN device may call it, authenticated with a bearer token;
@@ -126,7 +126,7 @@ class Announcer:
         self.config_plane = config_plane
         self._connected_device_ids = connected_device_ids or (lambda: ())
         self._config_dispatch = config_dispatch
-        # Alarm volume override (issue #10, Angela's decision 2026-09-25): an alarm may
+        # Alarm volume override (issue #10, 2026-09-25): an alarm may
         # raise a room that is too quiet to hear it. Upward only. Both optional, so an
         # Announcer built without a volume path still announces.
         self._volume_get: Optional[Callable[[], int]] = volume_get
@@ -620,9 +620,9 @@ class Announcer:
     async def _raise_for_alarm(self, item: Announcement) -> Optional[int]:
         """Raise the room for an alarm, returning the level to restore, or None.
 
-        Angela's decision, 2026-09-25: an alarm may override upward to a minimum alarm
+        The decision, 2026-09-25: an alarm may override upward to a minimum alarm
         level so it is always audible. It is deliberately upward-only, because lowering a
-        level she chose would make the override a surprise rather than a safeguard.
+        level the owner chose would make the override a surprise rather than a safeguard.
 
         Returns None when nothing needs restoring, which is the common case: a room already
         loud enough, a non-alarm sound, or no volume path wired at all.
@@ -706,7 +706,7 @@ class Announcer:
 def _concat_wavs(paths: list[Path], out: Path, *, gap_ms: int = 1000) -> None:
     """Concatenate WAVs that already share the satellite's playback format.
 
-    The gap goes BETWEEN clips only, never trailing. Angela asked for a full second of quiet
+    The gap goes BETWEEN clips only, never trailing. A full second of quiet was asked for
     between the wake tone and the announcement (2026-09-22); a trailing second would only extend
     how long the playback lock is held.
 

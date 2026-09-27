@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the satellite's prompt tones, plus candidate awake tones to choose from.
 
-Angela's feedback on v1: the rising 880 -> 1245 Hz awake tone was "a bit jarring". 1245 Hz
+The feedback on v1: the rising 880 -> 1245 Hz awake tone was "a bit jarring". 1245 Hz
 is high for a 1 W 8 ohm speaker in a small enclosure, and a flat-topped beep sounds harsher
 than a struck chime. So v2:
 
@@ -16,9 +16,11 @@ Pi. The satellite opens the WAV per detection (satellite.py:646-669), so changin
 needs no service restart.
 
 Wiring (the satellite's own flags, not the bridge's):
-    --awake-wav /home/wyoming1/sounds/awake.wav
-    --done-wav  /home/wyoming1/sounds/done.wav
-    --mic-seconds-to-mute-after-awake-wav 0.6
+    --awake-wav ${VS_SOUNDS}/awake.wav
+    --done-wav  ${VS_SOUNDS}/done.wav
+    --mic-seconds-to-mute-after-awake-wav 0.4
+
+(On the device the values come from /etc/voice-satellite/satellite.env; the unit expands them.)
 
 The satellite mutes the microphone for the awake wav's duration PLUS that setting
 (satellite.py:656-662), so the tone is never captured into the utterance that follows.
@@ -53,7 +55,7 @@ ACTIVE_AWAKE = "c-low-fourth"
 # reading as "finished" because it descends.
 DONE = [(523, 120), (392, 170)]
 
-# Startup feedback, added 2026-09-22 at Angela's request. Same envelope, register and level as
+# Startup feedback, added 2026-09-22. Same envelope, register and level as
 # everything else, distinguished by note count and rhythm rather than by volume:
 #   power-on  : three slow rising notes, "the Pi has booted and audio is up"
 #   connected : two quick bright notes, "the host has dialled in, I am actually functional"
@@ -136,4 +138,4 @@ print(f"  alarm.wav      {info['ms']:.0f} ms  {info['dbfs']:.1f} dBFS  (three re
 
 print(f"\nwritten to {OUT}")
 print("Preview:  .venv/bin/python scripts/preview_awake_candidates.py")
-print("Install:  scp sounds/awake.wav wyoming1:/home/wyoming1/sounds/   (no restart needed)")
+print("Install:  scp sounds/awake.wav <satellite>:$HOME/sounds/   (no restart needed)")
