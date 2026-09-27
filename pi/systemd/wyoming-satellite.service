@@ -23,7 +23,7 @@ EnvironmentFile=/etc/voice-satellite/satellite.env
 # so the working directory is set with a cd inside ExecStart; the rest is ordinary ${} expansion.
 # The power-on tone plays once per boot, gated by /run, not once per restart (a crash loop
 # would otherwise become an alarm loop). The tone lives in satellite.env.
-ExecStartPre=-/bin/sh -c 'test -e /run/wyoming-power-on-said || { touch /run/wyoming-power-on-said; exec /usr/bin/aplay -D plughw:CARD=seeed2micvoicec,DEV=0 ${VS_SOUNDS}/power-on.wav; }'
+ExecStartPre=-/bin/sh -c 'test -e /run/wyoming-power-on-said || { touch /run/wyoming-power-on-said; exec /usr/bin/aplay -D plughw:CARD=seeed2micvoicec,DEV=0 "$VS_SOUNDS/power-on.wav"; }'
 # led_cmd.py is a safety net, not the main path. The bridge publishes led-busy and led-idle
 # itself, because a hook here cannot tell the bridge's "One moment." filler from the real
 # answer (both arrive as AudioStart), which ended the pulse a second after it started. This

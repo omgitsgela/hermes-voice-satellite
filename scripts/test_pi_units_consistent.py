@@ -120,6 +120,23 @@ def main() -> int:
                 f"{flag} is missing from a unit that runs {marker}, so it falls back to a "
                 f"hardcoded default: {', '.join(missing)}")
 
+    # Every variable referenced by a device unit must have a template definition.
+    env_text = (ROOT / 'pi/systemd/satellite.env').read_text()
+    defined = set(re.findall(r'^(VS_\w+)=', env_text, re.M))
+    for path in units:
+        used = set(re.findall(r'\$\{?(VS_\w+)', path.read_text()))
+        if used - defined:
+            problems.append(f'{path.name}: undefined variables {sorted(used - defined)}')
+    base = (ROOT / 'pi/systemd/wyoming-openwakeword.service').read_text()
+    drop = (ROOT / 'pi/systemd/wyoming-openwakeword.service.d-overrides.conf').read_text()
+    effective = lambda text: [line for line in text.splitlines() if line.startswith('ExecStart=')][-1]
+    if effective(base) != effective(drop) or 'cd "$VS_OPENWAKEWORD"' not in effective(drop):
+        problems.append('wake service override differs from bundled override or loses its cwd')
+    sat_text = (ROOT / 'pi/systemd/wyoming-satellite.service').read_text()
+    pre = next(line for line in sat_text.splitlines() if line.startswith('ExecStartPre='))
+    if '"$VS_SOUNDS/power-on.wav"' not in pre:
+        problems.append('power-on sound path must be expanded and quoted by the shell')
+
     for problem in problems:
         print(f"FAIL: {problem}")
     if problems:
