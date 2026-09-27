@@ -18,19 +18,16 @@ import pathlib
 import subprocess
 import sys
 
+from nas_paths import mirror_root as configured_mirror_root
+
 PROTECTED_TOP = {"private", "upstream", ".git"}
 PROTECTED_NAMES = {"hermes-voice-satellite.bundle", "SYNC-INFO.txt", "README-what-this-is.md"}
-REPO = pathlib.Path.home() / "hermes-voice-bridge"
+REPO = pathlib.Path(__file__).resolve().parent.parent
 
 
 def mirror_root():
-    """Find the NAS mirror by looking, never by assuming a path."""
-    base = pathlib.Path("/run/user/1000/gvfs")
-    for mount in sorted(base.glob("smb-share:server=*")):
-        candidate = mount / "AI Projects" / "hermes-voice-satellite"
-        if candidate.is_dir() and (candidate / "bridge").is_dir():
-            return candidate
-    return None
+    """Use the same explicit parent directory as the mirror; never pick another share."""
+    return configured_mirror_root(allow_apply=True)
 
 
 def tracked_files():
@@ -47,7 +44,10 @@ def main():
     apply = "--apply" in sys.argv
     mirror = mirror_root()
     if mirror is None:
-        print("prune: NAS mirror not found, nothing done", file=sys.stderr)
+        print("prune: pass the NAS parent directory or set VOICE_NAS_MOUNT", file=sys.stderr)
+        return 1
+    if not (mirror / 'bridge').is_dir():
+        print(f"prune: NAS mirror not found at {mirror}, nothing done", file=sys.stderr)
         return 1
     tracked = tracked_files()
     if tracked is None:

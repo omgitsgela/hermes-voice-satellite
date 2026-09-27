@@ -35,6 +35,9 @@ with tempfile.TemporaryDirectory() as tmp:
     walked = []
 
     class NoWalkMirror:
+        def __truediv__(self, name):
+            return mirror / name
+
         def rglob(self, _pattern):
             walked.append(True)
             return ()

@@ -27,20 +27,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+from nas_paths import mirror_root
+
 REPO = Path(__file__).resolve().parent.parent
-# The mount point is a deployment value: it names a server, a share and a user, so it belongs to the
-# machine running this, not to the code. Set VOICE_NAS_MIRROR_ROOT (or pass it as the first argument)
-# to the mounted share. The conventional fallback below is not a real default: if the share is not
-# mounted the script fails with the exact value it looked for, rather than mirroring into a local
-# directory that pretends to be the NAS. (issue #45)
-NAS_ROOT = Path(
-    os.environ.get("VOICE_NAS_MIRROR_ROOT", "").strip()
-    or sys.argv[1]
-    or Path.home() / "nas" / "hermes-voice-satellite"
-)
-NAS_DIR = NAS_ROOT / "hermes-voice-satellite"
-BUNDLE = NAS_DIR / "hermes-voice-satellite.bundle"
-README = NAS_DIR / "README-what-this-is.md"
+# Both scripts take the mounted parent directory as argv[1] or VOICE_NAS_MOUNT.
+# The former VOICE_NAS_MIRROR_ROOT spelling remains an alias; an explicit argument wins.
 
 README_TEXT = """# hermes-voice-satellite (NAS backup)
 
@@ -74,6 +65,13 @@ def git(*args: str) -> str:
 
 
 def main() -> int:
+    NAS_DIR = mirror_root()
+    if NAS_DIR is None:
+        print('FAIL: pass the NAS parent directory or set VOICE_NAS_MOUNT', file=sys.stderr)
+        return 1
+    NAS_ROOT = NAS_DIR.parent
+    BUNDLE = NAS_DIR / 'hermes-voice-satellite.bundle'
+    README = NAS_DIR / 'README-what-this-is.md'
     if not NAS_ROOT.is_dir():
         print(f"FAIL: the NAS is not mounted at {NAS_ROOT}")
         print("      run: mount-nas")
