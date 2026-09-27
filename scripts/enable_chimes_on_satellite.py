@@ -33,6 +33,11 @@ FLAGS = (
 if not _SOUNDS_DIR:
     sys.exit("REFUSING TO PATCH: set SAT_SOUNDS_DIR to the device's sounds directory (e.g. /home/<satellite-user>/sounds)")
 
+missing = [str(Path(_SOUNDS_DIR) / name) for name in ('awake.wav', 'done.wav')
+           if not (Path(_SOUNDS_DIR) / name).is_file()]
+if missing:
+    sys.exit(f"REFUSING TO PATCH: missing sound files: {missing}")
+
 text = UNIT.read_text()
 
 if "--awake-wav" in text:
