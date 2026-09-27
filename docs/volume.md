@@ -226,9 +226,12 @@ calibration appears to have done nothing at all.
 Pin it explicitly in the device's bootstrap file, on **both** sides:
 
 ```
-VOICE_VOLUME_CALIBRATION=$HOME/.local/state/hermes-voice-satellite/volume.json
-VOICE_DEVICE_CONFIG_STATE=$HOME/.local/state/hermes-voice-satellite/config.json
+VOICE_VOLUME_CALIBRATION=/home/<satellite-user>/.local/state/hermes-voice-satellite/volume.json
+VOICE_DEVICE_CONFIG_STATE=/home/<satellite-user>/.local/state/hermes-voice-satellite/config.json
 ```
+
+Replace `<satellite-user>` with the device account before saving. These are literal absolute paths:
+`EnvironmentFile=` does not expand `$HOME` (and the service's home would be root's anyway).
 
 `VOICE_VOLUME_CALIBRATION` is the variable both the calibration script and
 `pi/volume_control.py` honour, so the writer and the reader resolve the same path regardless

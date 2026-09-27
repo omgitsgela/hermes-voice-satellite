@@ -201,7 +201,7 @@ WAKE_QUIET_SECONDS = 0.5
 
 
 # --- follow-up mode: keep listening after an answer --------------------------
-# A control mode which, when on, makes the device listen again
+# Requested 2026-09-22: a control mode which, when on, makes the device listen again
 # straight after it finishes speaking, so continuing a conversation does not need the wake word
 # every turn. Off by default, because it changes how the device behaves in the room, and persisted
 # so it survives a restart and can be flipped by voice, by a script, or by a cron job.
