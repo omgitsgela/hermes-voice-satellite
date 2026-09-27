@@ -53,6 +53,10 @@ with tempfile.TemporaryDirectory() as tmp:
     DEVICE_USER = "satellite"
     flat = rootfs / "home" / DEVICE_USER / "wyoming-satellite" / "examples"
     flat.mkdir(parents=True)
+    interpreter = flat.parent / '.venv/bin/python'
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text('#!/bin/sh\nexit 0\n')
+    interpreter.chmod(0o755)
     # Exercise the real installer, never a hand-maintained copy of its inventory.
     for deployment in ("fresh", "update"):
         if deployment == "update":
@@ -63,6 +67,22 @@ with tempfile.TemporaryDirectory() as tmp:
             capture_output=True, text=True, timeout=30,
         )
         check(f"{deployment} installer succeeds", installed.returncode == 0, installed.stderr)
+        unit = (rootfs / 'etc/systemd/system/outbound-satellite.service').read_text()
+        home = '/home/' + DEVICE_USER
+        check('unit uses only device paths', str(rootfs) not in unit, unit)
+        check('unit env path', f'EnvironmentFile=-{home}/bridge-link.env' in unit)
+        check('unit executable path', f'ExecStart={home}/wyoming-satellite/.venv/bin/python ' in unit)
+        check('interpreter checked against card once', 'interpreter: present' in installed.stdout)
+        satenv = rootfs / 'etc/voice-satellite/satellite.env'
+        wanted = rootfs / 'etc/systemd/system/multi-user.target.wants/outbound-satellite.service'
+        if deployment == 'fresh':
+            check('fresh satellite env is template', satenv.read_bytes() == (ROOT / 'pi/systemd/satellite.env').read_bytes())
+            check('placeholder link not enabled', not wanted.is_symlink())
+            satenv.write_text('VS_DEVICE_NAME=custom-device\n')
+            (rootfs / 'home' / DEVICE_USER / 'bridge-link.env').write_text('VOICE_DEVICE_ID=example\nVOICE_BRIDGE_HOST=10.1.2.3\n')
+        else:
+            check('existing satellite env preserved', satenv.read_text() == 'VS_DEVICE_NAME=custom-device\n')
+            check('configured link enabled under set -eu', wanted.is_symlink())
         for name, source in SHIPPED.items():
             target = flat / name
             check(f"{deployment} installs current {name}",

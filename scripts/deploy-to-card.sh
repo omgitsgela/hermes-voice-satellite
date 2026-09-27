@@ -24,21 +24,26 @@ set -eu
 
 MOUNT="${1:-}"
 DEVICE_USER="${2:-satellite}"
+# Keep generated device paths and sed substitutions literal; reject path traversal/metacharacters.
+case "$DEVICE_USER" in
+    *[!a-zA-Z0-9_-]*|''|-*) echo 'FAIL: invalid device user' >&2; exit 2 ;;
+esac
 if [ -z "$MOUNT" ]; then
     echo "usage: $0 <mountpoint of the card's rootfs partition> [device-user]" >&2
     exit 2
 fi
-DEVICE_USER_HOME="$MOUNT/home/$DEVICE_USER"
-if [ ! -d "$DEVICE_USER_HOME/wyoming-satellite/examples" ]; then
+DEVICE_USER_HOME="/home/$DEVICE_USER"
+CARD_USER_HOME="$MOUNT$DEVICE_USER_HOME"
+if [ ! -d "$CARD_USER_HOME/wyoming-satellite/examples" ]; then
     echo "FAIL: $MOUNT does not look like the satellite's rootfs" >&2
-    echo "      expected $DEVICE_USER_HOME/wyoming-satellite/examples to exist" >&2
+    echo "      expected $CARD_USER_HOME/wyoming-satellite/examples to exist" >&2
     exit 1
 fi
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO=$(CDPATH= cd -- "$HERE/.." && pwd)
-DEST="$DEVICE_USER_HOME/wyoming-satellite/examples"
-ENV_FILE="$DEVICE_USER_HOME/bridge-link.env"
+DEST="$CARD_USER_HOME/wyoming-satellite/examples"
+ENV_FILE="$CARD_USER_HOME/bridge-link.env"
 UNIT_SRC="$REPO/pi/systemd/outbound-satellite.service.in"
 UNIT_DEST="$MOUNT/etc/systemd/system/outbound-satellite.service"
 WANTS_DIR="$MOUNT/etc/systemd/system/multi-user.target.wants"
