@@ -61,6 +61,7 @@ from bridge.config import (
     ANNOUNCE_MAX_QUEUE,
     ANNOUNCE_PORT,
     ANNOUNCE_TOKEN_ENV,
+    _cfg,
     ANNOUNCE_TOKEN_FILE,
     ANNOUNCE_SOUNDS,
     ANNOUNCE_TURN_MAX_AGE,
@@ -140,7 +141,7 @@ class Announcer:
         The file is the handoff point for the Hubitat driver preference: it is created mode 600
         and never printed, so the value stays out of logs and out of this conversation.
         """
-        from_env = os.environ.get(ANNOUNCE_TOKEN_ENV, "").strip()
+        from_env = _cfg(ANNOUNCE_TOKEN_ENV, "").strip()
         if from_env:
             return from_env
         try:

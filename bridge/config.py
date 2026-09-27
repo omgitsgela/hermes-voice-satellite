@@ -28,37 +28,69 @@ LOCAL_ENV_FILE = Path(__file__).resolve().parent.parent / "bridge.env"
 _LOCAL_ENV_CACHE: dict | None = None
 
 
+def _parse_env(text: str) -> dict[str, str]:
+    """Read systemd EnvironmentFile assignments, without shell expansion.
+
+    Quotes only have special meaning at the start of a value. Hashes inside values
+    are literal; backslash continuation and quoted multiline values are supported.
+    """
+    values = {}
+    lines = iter(text.splitlines(keepends=True))
+    for line in lines:
+        line = line.lstrip()
+        if not line or line.startswith(("#", ";")) or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key.isidentifier() or not key.isascii():
+            continue
+        value = value.lstrip(" \t\r")
+        quote = value[0] if value and value[0] in "'\"" else None
+        if quote:
+            value = value[1:]
+        out = []
+        i = 0
+        while i < len(value):
+            char = value[i]
+            if quote and char == quote:
+                break
+            if char == "\n":
+                if not quote:
+                    break
+                out.append(char)
+                value += next(lines, "")
+            elif char == "\\" and quote != "'" and i + 1 < len(value):
+                following = value[i + 1]
+                if following == "\n":
+                    value += next(lines, "")
+                elif quote == '"' and following not in '\\"$`':
+                    out.extend((char, following))
+                else:
+                    out.append(following)
+                i += 1
+            else:
+                out.append(char)
+            i += 1
+        values[key] = "".join(out) if quote else "".join(out).rstrip(" \t\r")
+    return values
+
+
 def _local_env() -> dict:
-    """Parse config.local.env once. A missing or unreadable file is an empty file, not an error."""
+    """Read bridge.env once per process; missing/unreadable files use defaults."""
     global _LOCAL_ENV_CACHE
     if _LOCAL_ENV_CACHE is None:
-        values: dict = {}
         try:
-            for line in LOCAL_ENV_FILE.read_text().splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, _, value = line.partition("=")
-                key = key.strip()
-                value = value.strip()
-                if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-                    value = value[1:-1]
-                values[key] = value
+            _LOCAL_ENV_CACHE = _parse_env(LOCAL_ENV_FILE.read_text())
         except OSError:
-            pass
-        _LOCAL_ENV_CACHE = values
+            _LOCAL_ENV_CACHE = {}
     return _LOCAL_ENV_CACHE
 
 
 def _cfg(name: str, default: str = "") -> str:
-    """Resolve a configuration value: environment variable, then config.local.env, then default."""
-    value = os.environ.get(name, "").strip()
-    if value:
-        return value
-    value = _local_env().get(name, "").strip()
-    if value:
-        return value
-    return default
+    """Environment > bridge.env > default, including explicitly empty values."""
+    if name in os.environ:
+        return os.environ[name]
+    return _local_env().get(name, default)
 
 
 # --- the satellite ---------------------------------------------------------
@@ -79,34 +111,34 @@ SATELLITE_PORT = int(_cfg("VOICE_SATELLITE_PORT", "10700"))
 #
 # What is still missing before this can replace the dial-in shape: listener-side authentication that
 # is not the trusted-network override, and device-side cutover. See issue #61.
-REGISTRY_ENABLED = os.environ.get("VOICE_REGISTRY_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
-REGISTRY_HOST = os.environ.get("VOICE_REGISTRY_HOST", "127.0.0.1")
-REGISTRY_PORT = int(os.environ.get("VOICE_REGISTRY_PORT", "10701"))
+REGISTRY_ENABLED = _cfg("VOICE_REGISTRY_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+REGISTRY_HOST = _cfg("VOICE_REGISTRY_HOST", "127.0.0.1")
+REGISTRY_PORT = int(_cfg("VOICE_REGISTRY_PORT", "10701"))
 # reject = refuse a second connection from a device that is already connected; replace = close the old one
 # and keep the new. Either way exactly one connection per device is ever writable.
-REGISTRY_DUPLICATE_POLICY = os.environ.get("VOICE_REGISTRY_DUPLICATE_POLICY", "replace")
+REGISTRY_DUPLICATE_POLICY = _cfg("VOICE_REGISTRY_DUPLICATE_POLICY", "replace")
 # fingerprint -> device_id. Absent means the listener believes what a device claims, which is only
 # acceptable on a trusted network: never expose this listener to the internet without this file.
 REGISTRY_CREDENTIALS_FILE = Path(__file__).resolve().parent.parent / "state" / "device-credentials.json"
 # Running the listener with no authentication has to be asked for explicitly. Without this flag, a missing
 # or unreadable credential file stops the listener instead of quietly accepting self-claimed identities
 # (review finding, issue #62). Trusted networks only.
-REGISTRY_ALLOW_UNAUTHENTICATED = os.environ.get("VOICE_REGISTRY_ALLOW_UNAUTHENTICATED", "").strip().lower() in (
+REGISTRY_ALLOW_UNAUTHENTICATED = _cfg("VOICE_REGISTRY_ALLOW_UNAUTHENTICATED", "").strip().lower() in (
     "1", "true", "yes", "on")
 # How often the bridge retries the direct dial to the satellite while it is staying up without one. With
 # the registry enabled, a failed connect no longer exits: the listeners have to outlive the absence of
 # every device, because a device that is away can only get in by dialling us (issue #61). The dial retry
 # exists so a device that comes home is picked up exactly as before.
-REGISTRY_WAIT_RETRY_SECONDS = float(os.environ.get("VOICE_REGISTRY_WAIT_RETRY_SECONDS", "30"))
+REGISTRY_WAIT_RETRY_SECONDS = float(_cfg("VOICE_REGISTRY_WAIT_RETRY_SECONDS", "30"))
 # How long to wait for a device to dial in before falling back to dialling the configured satellite. Both
 # shapes are supported during the migration, and a device that dials in is preferred (it is the newer shape,
 # and two clients competing for one device is what the one-client rule exists to prevent). Waiting a moment
 # first stops the bridge from grabbing a device that is about to dial us itself.
-REGISTRY_LEASE_WAIT_SECONDS = float(os.environ.get("VOICE_REGISTRY_LEASE_WAIT_SECONDS", "30"))
+REGISTRY_LEASE_WAIT_SECONDS = float(_cfg("VOICE_REGISTRY_LEASE_WAIT_SECONDS", "30"))
 # The direct dial is a migration/rollback path, not something that should race the device-initiated link.
 # Registry deployments therefore wait only for a device by default. An installation that still has an
 # old-shape device can opt in explicitly; even then the lease grace above is honoured before the dial.
-DIRECT_DIAL_FALLBACK = os.environ.get("VOICE_DIRECT_DIAL_FALLBACK", "").strip().lower() in (
+DIRECT_DIAL_FALLBACK = _cfg("VOICE_DIRECT_DIAL_FALLBACK", "").strip().lower() in (
     "1", "true", "yes", "on")
 
 # Taken from the satellite's own ExecStart flags, so these are its real formats:
@@ -483,7 +515,7 @@ CONNECTED_TONE_BOOT_MARKER = PROJECT_DIR / "state" / "connected-tone-boot-id"
 # reloaded whisper and Piper, and left the device deaf for about nine seconds. An hour with nobody
 # speaking is the normal overnight state, not a fault, so it is now a socket refresh instead
 # (2026-09-23). Overridable so the refresh can be tested in seconds rather than an hour.
-WAKE_WAIT_SECONDS = float(os.environ.get("VOICE_WAKE_WAIT_SECONDS", "3600"))
+WAKE_WAIT_SECONDS = float(_cfg("VOICE_WAKE_WAIT_SECONDS", "3600"))
 
 # Voice interruption (2026-09-23).
 #

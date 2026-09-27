@@ -13,8 +13,9 @@ Type=simple
 WorkingDirectory=%h/hermes-voice-bridge
 # The host side's one configuration file (bridge.env at the project root, git-ignored; see
 # bridge.env.example). A missing file is not fatal: every value then falls back to its default
-# in bridge/config.py, and an unconfigured bridge dials loopback and says so. A real environment
-# variable always wins over the file.
+# in bridge/config.py, and an unconfigured bridge dials loopback and says so. systemd
+# EnvironmentFile values override manager/Environment= values; for a service override,
+# use a later EnvironmentFile in a drop-in. Direct Python runs prefer their environment.
 EnvironmentFile=-%h/hermes-voice-bridge/bridge.env
 Environment=PYTHONUNBUFFERED=1
 ExecStart=%h/hermes-voice-bridge/.venv/bin/python -m bridge.loop
