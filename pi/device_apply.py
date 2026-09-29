@@ -321,8 +321,17 @@ def make_apply_adapter(
                 # load. So a missing model is refused up front: the working config is left
                 # untouched, the value is reported degraded and named, and - because it never
                 # enters `applied` - it stays retryable once the model is deployed.
-                model_dir = _wake_model_dir()
-                if not (model_dir / f"{value}.tflite").is_file():
+                # The lookup itself is a fallible step (an env read and a stat). A failure is
+                # an application failure, reported like any other: it must not escape and skip
+                # the bookkeeping below, or an earlier restart-class setting written in this
+                # same delivery would never be restarted and its report would be a lie.
+                try:
+                    model_dir = _wake_model_dir()
+                    model_present = (model_dir / f"{value}.tflite").is_file()
+                except OSError as exc:
+                    hard.append(f"wake_word: could not check for {value}.tflite: {exc}")
+                    continue
+                if not model_present:
                     not_applicable.append(
                         f"wake_word: {value} recorded but {value}.tflite is not present in "
                         f"{model_dir}; deploy the model file for it to take effect "

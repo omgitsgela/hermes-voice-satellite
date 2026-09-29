@@ -489,6 +489,95 @@ async def readback_failure_regression() -> None:
 
 asyncio.run(readback_failure_regression())
 
+# ---------------------------------------------------------------- a failed wake-model lookup is a failed apply (fifth-pass F1)
+
+# The wake-word model lookup (reading the VS_WAKE_MODELS env key and stat-ing the model
+# file) runs INSIDE the restart-class loop, after earlier restart-class settings in the same
+# delivery have already been written and marked stale. A transient OSError there used to
+# escape apply(): the agent's error path then saved no state (no pending_restart) and the
+# coupled restart was never reached - so an earlier written value (e.g. LED) was later
+# reported healthy with zero restarts, a converged flag that is a lie. The lookup must be
+# guarded: a failed model check is an application failure, reported like any other, and the
+# settings this delivery already wrote still get their restart.
+def _model_lookup_failure(real_read):
+    state = {"on": True}
+    def flaky(path, key):
+        if key == "VS_WAKE_MODELS" and state["on"]:
+            raise OSError("simulated transient I/O error reading the model-dir key")
+        return real_read(path, key)
+    return flaky, state
+
+async def model_lookup_failure_regression() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        env = make_env(tmp)
+        models = pathlib.Path(tmp) / "models"
+        models.mkdir()
+        (models / "hey_hermes.tflite").write_bytes(b"\x00")  # existing word's model present
+        (models / "new_word.tflite").write_bytes(b"\x00")     # new word's model present too
+        sc = FakeSystemctl()
+        state_path = pathlib.Path(tmp) / "config.json"
+        real_read = _device_apply._read_env_key
+        flaky, state = _model_lookup_failure(real_read)
+        _device_apply._read_env_key = flaky
+        try:
+            # Generation 1: LED 20 plus a new wake word, with the model lookup failing.
+            agent = DeviceConfigAgent(
+                state_path,
+                apply=make_apply_adapter(env_path=env, systemctl=sc, wake_models_dir=models),
+                device_id="kitchen-1",
+            )
+            report = await agent.apply_event(Event(type="hermes.config.desired", data={
+                "schema_version": 1, "device_id": "kitchen-1", "generation": 1,
+                "settings": {"led_brightness": 20, "wake_word": "new_word"},
+            }))
+            check("a failed wake-model lookup is reported as an error, not raised",
+                  report.data["health"] == "error", report.data)
+            check("the failed model lookup is named in the report",
+                  report.data["error"] is not None and "wake_word" in report.data["error"],
+                  report.data)
+            # THE KEY ASSERTION: the earlier-written LED must still be restarted into force.
+            # Before the fix the escaping OSError skipped the coupled restart entirely
+            # (zero systemctl calls) and the agent saved no state.
+            check("an earlier-written restart-class setting is still restarted into force",
+                  any(c[0] == "systemctl" and c[1] == "restart"
+                      and set(c[2:]) == set(COUPLED_AUDIO_UNITS) for c in sc.calls), sc.calls)
+            check("the restarted LED is reported as applied",
+                  report.data["actual"].get("led_brightness") == 20, report.data)
+            check("the wake word is NOT reported as applied (its model could not be checked)",
+                  report.data["actual"].get("wake_word") is None, report.data)
+            check("the unapplied wake word is persisted as a pending restart",
+                  _state_pending_restart(state_path) == ["wake_word"],
+                  str(_state_pending_restart(state_path)))
+
+            # Adapter recreation (an outbound-runner restart), then the operator reverts the
+            # wake word to one whose model is present. The LED is genuinely in force (the
+            # restart ran), so reporting it is honest; the wake word must be re-checked and,
+            # once its model is found, applied with a real restart.
+            state["on"] = False
+            sc2 = FakeSystemctl()
+            agent2 = DeviceConfigAgent(
+                state_path,
+                apply=make_apply_adapter(env_path=env, systemctl=sc2, wake_models_dir=models,
+                                         stale_seed=["wake_word"]),
+                device_id="kitchen-1",
+            )
+            report2 = await agent2.apply_event(Event(type="hermes.config.desired", data={
+                "schema_version": 1, "device_id": "kitchen-1", "generation": 2,
+                "settings": {"led_brightness": 20, "wake_word": "hey_hermes"},
+            }))
+            check("after recreation, the in-force LED is honestly reported (not a lie)",
+                  report2.data["actual"].get("led_brightness") == 20, report2.data)
+            check("the reverted wake word (model present) is applied with a real restart",
+                  report2.data["actual"].get("wake_word") == "hey_hermes"
+                  and report2.data["health"] == "healthy", report2.data)
+            check("the wake-word re-check actually restarted the coupled audio group",
+                  any(c[0] == "systemctl" and c[1] == "restart"
+                      and set(c[2:]) == set(COUPLED_AUDIO_UNITS) for c in sc2.calls), sc2.calls)
+        finally:
+            _device_apply._read_env_key = real_read
+
+asyncio.run(model_lookup_failure_regression())
+
 # ---------------------------------------------------------------- env file: update existing key, preserve others
 
 with tempfile.TemporaryDirectory() as tmp:

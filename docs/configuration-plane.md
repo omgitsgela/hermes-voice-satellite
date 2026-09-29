@@ -292,7 +292,10 @@ tiers:
   the whole group: the LED service is part of it (`wyoming-satellite` `Requires=` and `After=` it), so
   an "LED-only" restart is not an independent operation. The group is restarted as one, and it
   deliberately excludes `outbound-satellite` — the process running the adapter — so the device can
-  bounce its own audio stack and still hold the connection that carries the report back.
+  bounce its own audio stack and still hold the connection that carries the report back. For
+  `wake_word` the model file must be present first: a word whose `.tflite` is missing is refused up
+  front (reported `degraded` and named, never written into the active config), and a *failed* model
+  lookup (a transient I/O error) is reported the same way as any other application failure.
 
 A restart-class value is reported in `actual` only **after its service restart succeeds**. The env
 write itself is read back to prove it landed, and that readback is a fallible step: a write error or a
