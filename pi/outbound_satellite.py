@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import pathlib
@@ -53,9 +54,11 @@ except ImportError:  # pragma: no cover - exercised by the installed script entr
 try:
     from .device_apply import make_apply_adapter
     from .volume_control import AlsaVolume
+    from .mic_gain_control import AlsaMicGain
 except ImportError:  # pragma: no cover - exercised by the installed script entrypoint
     from device_apply import make_apply_adapter
     from volume_control import AlsaVolume
+    from mic_gain_control import AlsaMicGain
 
 log = logging.getLogger("pi.outbound")
 
@@ -189,6 +192,26 @@ def _ssl_context_from_env(env: Dict[str, str]) -> Optional[ssl.SSLContext]:
     return context
 
 
+def _read_pending_restart(state_path: "pathlib.Path | str") -> list[str]:
+    """The restart-class settings the previous run wrote but could not restart into force.
+
+    Reads the device's persisted config state (the agent's own `0600` file) WITHOUT
+    constructing an agent, so the runner can seed a fresh adapter with the stale set before
+    the agent is built. A missing, unreadable, or malformed file means there is nothing to
+    remember: an empty list, never an error at startup.
+    """
+    try:
+        data = json.loads(pathlib.Path(state_path).read_text())
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    pending = data.get("pending_restart")
+    if not isinstance(pending, list):
+        return []
+    return [name for name in pending if isinstance(name, str)]
+
+
 class BridgeLink:
     """One connection to the bridge, kept alive across reconnects."""
 
@@ -202,6 +225,7 @@ class BridgeLink:
         stats: Optional[LinkStats] = None,
         config_agent: Optional[DeviceConfigAgent] = None,
         alsa_volume: Optional[AlsaVolume] = None,
+        mic_gain: Optional[AlsaMicGain] = None,
     ) -> None:
         self.config = config
         self.on_event = on_event
@@ -215,10 +239,21 @@ class BridgeLink:
             # reports - and never touches the device, so every setting would be staged
             # forever while looking healthy. The adapter's own tests cannot catch that; only
             # constructing the runner the way production does can.
+            #
+            # Seed the adapter's stale set from the agent's persisted state: if the previous
+            # run wrote a restart-class value whose service restart FAILED, this fresh
+            # adapter must not read the env file and report that staged value as in force -
+            # the service it would apply it to has the old value, so the restart must be
+            # re-attempted.
+            stale = _read_pending_restart(config.config_state_path)
             self.config_agent = DeviceConfigAgent(
                 config.config_state_path,
                 device_id=config.device_id,
-                apply=make_apply_adapter(alsa_volume or AlsaVolume.from_calibration()),
+                apply=make_apply_adapter(
+                    volume=alsa_volume or AlsaVolume.from_calibration(),
+                    mic_gain=mic_gain or AlsaMicGain.from_env(),
+                    stale_seed=stale,
+                ),
             )
 
         self.connected = False

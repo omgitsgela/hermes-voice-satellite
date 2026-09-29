@@ -11,11 +11,23 @@
     input, select, button { font: inherit; padding: .55rem; }
     input[type=password] { min-width: 22rem; max-width: 100%; }
     button { cursor: pointer; }
+    .fleet { border: 1px solid #4a80d080; border-radius: .65rem; padding: 1rem; margin: 1rem 0; background: #4a80d012; }
+    .fleet h2 { margin-top: 0; }
     .device { border: 1px solid #8886; border-radius: .65rem; padding: 1rem; margin: 1rem 0; }
     .field { display: grid; grid-template-columns: minmax(10rem, 1fr) minmax(12rem, 2fr); gap: .75rem; margin: .7rem 0; align-items: center; }
     .status { white-space: pre-wrap; padding: .7rem; border-radius: .5rem; background: #8882; }
     .good { color: #16803c; } .bad { color: #b42318; }
+    .muted { color: #b58900; }
     small { opacity: .78; }
+    .fleet-pick { display: grid; grid-template-columns: minmax(10rem, 1fr) minmax(12rem, 2fr); gap: .5rem; margin: .5rem 0; align-items: center; }
+    .fleet-pick input[type=checkbox] { width: auto; }
+    .fleet-pick .fleet-control { display: none; }
+    .fleet-pick.picked .fleet-control { display: block; }
+    @media (max-width: 640px) {
+      .fleet-pick { grid-template-columns: 1fr; }
+      .fleet-pick .fleet-control { display: none; }
+      .fleet-pick.picked .fleet-control { display: block; }
+    }
   </style>
 </head>
 <body>
@@ -32,6 +44,22 @@
     <button id="connect" type="button">Load devices</button>
   </section>
   <p id="status" class="status">Enter the bridge token, then load devices.</p>
+
+  <section class="fleet">
+    <h2>Apply to all devices</h2>
+    <small>Select the settings you are changing, then apply. Only the selected settings are
+    written to every satellite, so a setting you do not select is left exactly as it is on
+    each device (devices may differ). Devices that are offline still take the change when
+    they reconnect. A change that restarts a device service is applied one room at a time.</small>
+    <div id="fleet-fields" style="margin-top:.75rem"></div>
+    <div class="row" style="margin-top:.75rem">
+      <button id="fleet-save" type="button">Apply selected to all devices</button>
+      <label style="display:flex;align-items:center;gap:.4rem">
+        <input id="fleet-poll" type="checkbox" checked> auto-refresh
+      </label>
+    </div>
+  </section>
+
   <main id="devices"></main>
 
 <script>
@@ -39,12 +67,17 @@
 const token = document.getElementById('token');
 const statusBox = document.getElementById('status');
 const devicesBox = document.getElementById('devices');
+const fleetFields = document.getElementById('fleet-fields');
+const fleetSave = document.getElementById('fleet-save');
+const fleetPoll = document.getElementById('fleet-poll');
 token.value = sessionStorage.getItem('voiceBridgeToken') || '';
 let schema = null;
+let pollTimer = null;
+let loading = false;
 
-function setStatus(message, ok = true) {
+function setStatus(message, ok = true, warn = false) {
   statusBox.textContent = message;
-  statusBox.className = 'status ' + (ok ? 'good' : 'bad');
+  statusBox.className = 'status ' + (ok ? (warn ? 'muted' : 'good') : 'bad');
 }
 
 async function api(path, options = {}) {
@@ -64,7 +97,11 @@ async function api(path, options = {}) {
   return body;
 }
 
-function inputFor(name, spec, value) {
+function inputFor(name, spec, value, container) {
+  const field = document.createElement('label');
+  field.className = 'field';
+  const caption = document.createElement('span');
+  caption.textContent = name + (spec.apply ? ` (${spec.apply})` : '');
   const input = spec.enum ? document.createElement('select') : document.createElement('input');
   input.dataset.setting = name;
   if (spec.enum) {
@@ -84,69 +121,313 @@ function inputFor(name, spec, value) {
     if (spec.pattern) input.pattern = spec.pattern;
   }
   input.value = value ?? spec.default ?? '';
+  field.appendChild(caption);
+  field.appendChild(input);
+  container.appendChild(field);
   return input;
+}
+
+function readField(input) {
+  const spec = schema.device_settings[input.dataset.setting];
+  return spec.type === 'integer'
+    ? Number.parseInt(input.value, 10)
+    : spec.type === 'number' ? Number.parseFloat(input.value) : input.value;
+}
+
+function buildFleetFields() {
+  fleetFields.replaceChildren();
+  for (const [name, spec] of Object.entries(schema.device_settings)) {
+    const row = document.createElement('label');
+    row.className = 'fleet-pick';
+    row.dataset.setting = name;
+    const pick = document.createElement('input');
+    pick.type = 'checkbox';
+    const caption = document.createElement('span');
+    caption.textContent = name + (spec.apply ? ` (${spec.apply})` : '');
+    const input = spec.enum ? document.createElement('select') : document.createElement('input');
+    input.dataset.setting = name;
+    input.className = 'fleet-control';
+    if (spec.enum) {
+      for (const optionValue of spec.enum) {
+        const option = document.createElement('option');
+        option.value = optionValue;
+        option.textContent = optionValue;
+        input.appendChild(option);
+      }
+    } else if (spec.type === 'integer' || spec.type === 'number') {
+      input.type = 'number';
+      input.min = spec.minimum;
+      input.max = spec.maximum;
+      input.step = spec.type === 'integer' ? '1' : '0.01';
+    } else {
+      input.type = 'text';
+      if (spec.pattern) input.pattern = spec.pattern;
+    }
+    input.value = spec.default ?? '';
+    pick.addEventListener('change', () => {
+      row.classList.toggle('picked', pick.checked);
+      input.disabled = !pick.checked;
+    });
+    input.disabled = true;
+    row.appendChild(pick);
+    row.appendChild(caption);
+    row.appendChild(input);
+    fleetFields.appendChild(row);
+  }
 }
 
 function renderDevice(device) {
   const card = document.createElement('section');
   card.className = 'device';
+  card.dataset.deviceId = device.device_id;
+  // The values as they were when this card was drawn. The save sends only what the
+  // operator changed relative to these, never the whole form: the form is pre-filled
+  // with the current values, and re-sending them would clobber a per-device custom value
+  // the operator did not intend to touch.
+  let original = Object.assign({}, device.desired);
+  // The fields the operator has actually edited. Tracked explicitly (not by comparing
+  // input values to the baseline) because a value comparison cannot distinguish an
+  // untouched field from one the operator changed and then changed back to the same
+  // number while a save is in flight.
+  const edited = new Set();
   const heading = document.createElement('h2');
-  heading.textContent = `${device.device_id} · ${device.connected ? 'connected' : 'offline'} · generation ${device.generation}`;
-  card.appendChild(heading);
   const summary = document.createElement('p');
-  summary.textContent = device.converged ? 'Converged' : `Not converged; drift: ${JSON.stringify(device.drift)}`;
-  summary.className = device.converged ? 'good' : 'bad';
+  const reportedNotes = new Map();
+  const inputs = new Map();
+
+  function paintHeading(view) {
+    heading.textContent = `${view.device_id} · ${view.connected ? 'connected' : 'offline'} · generation ${view.generation}`;
+    card.dataset.generation = view.generation;
+  }
+  function paintSummary(view) {
+    if (view.converged) {
+      summary.textContent = 'Converged';
+      summary.className = 'good';
+    } else {
+      const parts = ['Not converged'];
+      if (Object.keys(view.drift).length) parts.push(`drift: ${JSON.stringify(view.drift)}`);
+      if (view.last_error) parts.push(`last error: ${view.last_error}`);
+      summary.textContent = parts.join(' · ');
+      summary.className = 'bad';
+    }
+  }
+  paintHeading(device);
+  paintSummary(device);
+  card.appendChild(heading);
   card.appendChild(summary);
 
   for (const [name, spec] of Object.entries(schema.device_settings)) {
-    const row = document.createElement('label');
-    row.className = 'field';
-    const caption = document.createElement('span');
-    caption.textContent = `${name} (${spec.apply})`;
-    row.appendChild(caption);
-    row.appendChild(inputFor(name, spec, device.desired[name]));
-    card.appendChild(row);
+    const input = inputFor(name, spec, device.desired[name], card);
+    inputs.set(name, input);
+    const markEdited = () => {
+      edited.add(name);
+      card.dataset.dirty = '1';
+    };
+    // Number and text inputs fire `change` only when the edit is committed (blur or Enter);
+    // while the operator is still typing, only `input` fires per keystroke. Edit tracking
+    // must therefore listen for `input` too, or refresh()/reconcile() would see an
+    // uncommitted field as untouched and overwrite the number mid-typing.
+    input.addEventListener('input', markEdited);
+    input.addEventListener('change', markEdited);
+    if (device.reported[name] !== undefined && device.reported[name] !== device.desired[name]) {
+      const note = document.createElement('small');
+      note.textContent = `device reports ${device.reported[name]}`;
+      note.className = 'bad';
+      reportedNotes.set(name, note);
+      card.appendChild(note);
+    }
   }
 
   const save = document.createElement('button');
   save.type = 'button';
-  save.textContent = 'Save desired state';
+  save.textContent = 'Save this device only';
   save.addEventListener('click', async () => {
+    // Send only the settings that differ from when the card was drawn, at the generation
+    // the card currently shows (polling may have advanced it under this card).
+    const settings = {};
+    for (const [name, input] of inputs) {
+      const value = readField(input);
+      if (value !== original[name]) settings[name] = value;
+    }
+    if (!Object.keys(settings).length) {
+      setStatus(`${device.device_id}: nothing changed; nothing written.`);
+      return;
+    }
+    save.disabled = true;
     try {
-      const settings = {};
-      for (const input of card.querySelectorAll('[data-setting]')) {
-        const spec = schema.device_settings[input.dataset.setting];
-        settings[input.dataset.setting] = spec.type === 'integer'
-          ? Number.parseInt(input.value, 10)
-          : spec.type === 'number' ? Number.parseFloat(input.value) : input.value;
-      }
       const result = await api(`/config/devices/${encodeURIComponent(device.device_id)}/desired`, {
         method: 'PUT',
-        body: JSON.stringify({expected_generation: device.generation, settings})
+        body: JSON.stringify({expected_generation: Number(card.dataset.generation), settings})
       });
-      setStatus(`Saved generation ${result.device.generation}; dispatched: ${result.dispatched}.`);
+      // Reconcile the card with what the server now holds: the baseline and the
+      // generation advance, so the NEXT save cannot issue a stale expected_generation,
+      // and an edit made while this request was in flight is preserved if - and only if
+      // the server does not already hold it.
+      card.reconcile(result.device);
+      setStatus(`Saved generation ${result.device.generation} for ${device.device_id} ` +
+                `(only the changed settings were sent); dispatched: ${result.dispatched}.`);
       await load();
     } catch (error) {
       setStatus(error.message, false);
+    } finally {
+      save.disabled = false;
     }
   });
   card.appendChild(save);
+
+  function paintNotes(view) {
+    for (const [name] of inputs) {
+      const oldNote = reportedNotes.get(name);
+      if (oldNote) { oldNote.remove(); reportedNotes.delete(name); }
+      if (view.reported[name] !== undefined && view.reported[name] !== view.desired[name]) {
+        const note = document.createElement('small');
+        note.textContent = `device reports ${view.reported[name]}`;
+        note.className = 'bad';
+        reportedNotes.set(name, note);
+        card.appendChild(note);
+      }
+    }
+  }
+
+  function refresh(view) {
+    // Polling updates the card in place: status, generation, reported notes, and the
+    // editable fields for anything the operator has NOT edited. An edited field is left
+    // exactly as the operator left it (and stays flagged dirty), so an unsaved edit
+    // survives an auto-refresh; a save is issued against the generation the card shows,
+    // so a refresh cannot turn it into a stale write. A field the operator has not touched
+    // is repainted from the server and the baseline advances with it, so an external
+    // change (another operator, a fleet write) shows up instead of the card silently
+    // holding a stale value that a save would then report as "nothing changed".
+    paintHeading(view);
+    paintSummary(view);
+    for (const [name, input] of inputs) {
+      if (edited.has(name)) continue;
+      input.value = view.desired[name];
+      original[name] = view.desired[name];
+    }
+    paintNotes(view);
+  }
+
+  function reconcile(view) {
+    // A save just succeeded. Move the baseline and generation to the server's record so
+    // the NEXT save diffs against the truth and carries the new generation. A field the
+    // operator edited while this request was in flight is preserved only if the server
+    // does not already hold the edited value; the edit set is recomputed from what is
+    // still genuinely pending, never blindly cleared.
+    paintHeading(view);
+    paintSummary(view);
+    for (const [name, input] of inputs) {
+      const current = readField(input);
+      if (edited.has(name) && current !== view.desired[name]) {
+        // Edited and not yet in force on the server: keep the operator's value and the
+        // field's edited flag.
+        continue;
+      }
+      input.value = view.desired[name];
+      edited.delete(name);
+    }
+    original = Object.assign({}, view.desired);
+    paintNotes(view);
+    if (edited.size) { card.dataset.dirty = '1'; } else { delete card.dataset.dirty; }
+  }
+
+  card.refresh = refresh;
+  card.reconcile = reconcile;
   return card;
 }
 
+fleetSave.addEventListener('click', async () => {
+  // Only the settings the operator selected: this is what makes a fleet save a change
+  // rather than a clobber, and it is what keeps the request out of the restart class
+  // unless the operator actually picked a restart-class setting.
+  const settings = {};
+  for (const row of fleetFields.querySelectorAll('.fleet-pick')) {
+    const name = row.dataset.setting;
+    const pick = row.querySelector('input[type=checkbox]');
+    const input = row.querySelector('.fleet-control');
+    if (!pick.checked) continue;
+    settings[name] = readField(input);
+  }
+  if (!Object.keys(settings).length) {
+    setStatus('Select at least one setting to apply to the fleet.');
+    return;
+  }
+  try {
+    const result = await api('/config/fleet/desired', {
+      method: 'PUT',
+      body: JSON.stringify({settings})
+    });
+    const pacing = result.restart_pacing
+      ? ' Restart-class settings are being applied one room at a time.'
+      : '';
+    setStatus(`Applied ${Object.keys(settings).length} setting(s) to ${result.count} device(s).${pacing}`,
+              true, result.restart_pacing);
+    for (const row of fleetFields.querySelectorAll('.fleet-pick')) {
+      const pick = row.querySelector('input[type=checkbox]');
+      pick.checked = false;
+      row.classList.remove('picked');
+      row.querySelector('.fleet-control').disabled = true;
+    }
+    await load();
+  } catch (error) {
+    setStatus(error.message, false);
+  }
+});
+
 async function load() {
+  if (loading) return; // a refresh already in flight; do not stack them
+  loading = true;
   try {
     const [schemaResult, fleet] = await Promise.all([
       api('/config/schema'), api('/config/devices')
     ]);
+    const firstLoad = schema === null;
     schema = schemaResult;
-    devicesBox.replaceChildren(...fleet.devices.map(renderDevice));
-    setStatus(`Loaded ${fleet.count} device${fleet.count === 1 ? '' : 's'}.`);
+    if (firstLoad) buildFleetFields();
+    const byId = new Map(fleet.devices.map(d => [d.device_id, d]));
+    // Reconcile by device id: a card that already exists is refreshed in place, so the
+    // polling timer never discards an unsaved edit and a save is issued against the
+    // generation the card shows. Only a brand-new device gets a fresh card; a device that
+    // disappeared is removed. refresh() itself leaves operator-edited fields untouched and
+    // repaints the rest, so it is safe to call on a card in the middle of an edit.
+    const existing = new Map(
+      [...devicesBox.querySelectorAll('.device')].map(c => [c.dataset.deviceId, c]));
+    for (const card of existing.values()) {
+      const id = card.dataset.deviceId;
+      if (!byId.has(id)) { card.remove(); continue; }
+      card.refresh(byId.get(id));
+    }
+    for (const d of fleet.devices) {
+      if (existing.has(d.device_id)) continue; // refreshed in place above
+      devicesBox.appendChild(renderDevice(d));
+    }
+    devicesBox.replaceChildren(
+      ...[...devicesBox.querySelectorAll('.device')]
+        .sort((a, b) => a.dataset.deviceId.localeCompare(b.dataset.deviceId)));
+    const converged = fleet.devices.filter(d => d.converged).length;
+    setStatus(`Loaded ${fleet.count} device(s); ${converged} converged.`);
+    restartPoll();
   } catch (error) {
-    devicesBox.replaceChildren();
+    // A failed poll must not destroy what is on screen: the operator's unsaved edits and
+    // the last good device view stay exactly as they were; the status line says what
+    // happened and the next poll will try again.
     setStatus(error.message, false);
+    stopPoll();
+  } finally {
+    loading = false;
   }
 }
+
+function restartPoll() {
+  stopPoll();
+  if (fleetPoll.checked) {
+    pollTimer = setInterval(load, 5000);
+  }
+}
+function stopPoll() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+fleetPoll.addEventListener('change', restartPoll);
 
 document.getElementById('connect').addEventListener('click', load);
 </script>

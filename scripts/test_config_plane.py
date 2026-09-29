@@ -44,7 +44,7 @@ def main() -> int:
             "wake_threshold": 0.35,
             "mic_gain": 78,
             "playback_volume": 55,
-            "led_brightness": 40,
+            "led_brightness": 31,
             "locale": "en-US",
             "update_channel": "stable",
         }, expected_generation=0)
@@ -178,6 +178,76 @@ def main() -> int:
         check("the recovered report is what a fresh reader sees",
               ConfigPlane(pathlib.Path(tmp) / "durable.json").get_device("kitchen-1")["health"]
               == "healthy")
+
+        # -------------------------------------------------------------------
+        # Legacy led_brightness migration (review F3)
+        # -------------------------------------------------------------------
+        # A device enrolled under the old schema carries led_brightness=40, a value the
+        # 1-31 LED driver never had. Without migration, that poisoned value makes every
+        # delivery for that device fail validation — even an unrelated volume change.
+        # The migration repairs it on load, persisting the fix, and advances the
+        # generation so the corrected profile re-delivers.
+        import json as _json
+        legacy_path = pathlib.Path(tmp) / "legacy.json"
+        legacy_record = {
+            "device_id": "kitchen-1",
+            "metadata": {},
+            "generation": 3,
+            "desired": {
+                "wake_word": "hey_hermes",
+                "wake_threshold": 0.35,
+                "mic_gain": 78,
+                "playback_volume": 55,
+                "led_brightness": 40,  # legacy out-of-range value
+                "locale": "en-US",
+                "update_channel": "stable",
+            },
+            "reported_generation": 3,
+            "reported": {
+                "wake_word": "hey_hermes",
+                "wake_threshold": 0.35,
+                "mic_gain": 78,
+                "playback_volume": 55,
+                "led_brightness": 40,
+                "locale": "en-US",
+                "update_channel": "stable",
+            },
+            "health": "healthy",
+            "last_error": None,
+            "desired_updated_at": "2026-09-20T10:00:00+00:00",
+            "reported_at": "2026-09-20T10:00:01+00:00",
+        }
+        legacy_path.write_text(_json.dumps(
+            {"schema_version": 1, "devices": {"kitchen-1": legacy_record}}
+        ))
+        migrated = ConfigPlane(legacy_path)
+        rec = migrated.get_device("kitchen-1")
+        check("legacy led_brightness=40 is migrated to 31 on load",
+              rec["desired"]["led_brightness"] == 31, rec["desired"])
+        check("the migration advances the generation",
+              rec["generation"] == 4, rec["generation"])
+        check("the migration is persisted (a fresh reader sees the fixed value)",
+              ConfigPlane(legacy_path).get_device("kitchen-1")["desired"]["led_brightness"] == 31)
+        # An unrelated volume write must succeed after migration (no longer poisoned).
+        vol_write = migrated.set_desired("kitchen-1", {"playback_volume": 60},
+                                         expected_generation=4)
+        check("a volume write succeeds after the legacy migration",
+              vol_write["generation"] == 5 and vol_write["desired"]["led_brightness"] == 31,
+              vol_write)
+        # A device already at 31 is untouched by the migration.
+        in_range_path = pathlib.Path(tmp) / "in_range.json"
+        in_range_record = dict(legacy_record)
+        in_range_record["desired"] = dict(legacy_record["desired"])
+        in_range_record["desired"]["led_brightness"] = 31
+        in_range_record["reported"] = dict(legacy_record["reported"])
+        in_range_record["reported"]["led_brightness"] = 31
+        in_range_path.write_text(_json.dumps(
+            {"schema_version": 1, "devices": {"kitchen-1": in_range_record}}
+        ))
+        untouched = ConfigPlane(in_range_path).get_device("kitchen-1")
+        check("an in-range led_brightness is not touched by the migration",
+              untouched["generation"] == 3 and untouched["desired"]["led_brightness"] == 31,
+              untouched)
 
     if problems:
         print("\nFAILURES")

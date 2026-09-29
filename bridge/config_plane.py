@@ -44,8 +44,12 @@ DEVICE_SETTING_SCHEMA: dict[str, dict[str, Any]] = {
         "round_trip_tolerance": 1,
     },
     "led_brightness": {
-        "type": "integer", "minimum": 0, "maximum": 100,
-        "default": 40, "apply": "led_service_restart",
+        # The LED driver takes 1-31 (APA102 global brightness is 5 bits and the service's
+        # --led-brightness refuses anything else). The old 0-100 range with a default of 40
+        # described a scale the hardware does not have: 40 would never converge and 0 would
+        # not mean "off", because the strip's power rail is a GPIO, not a level.
+        "type": "integer", "minimum": 1, "maximum": 31,
+        "default": 31, "apply": "led_service",
     },
     "locale": {
         "type": "string", "enum": ["en-US"], "default": "en-US",
@@ -64,6 +68,18 @@ class ConfigValidationError(ValueError):
 
 class ConfigConflict(RuntimeError):
     """The writer supplied a stale desired-state generation."""
+
+
+#: The settings a device can apply without bouncing one of its own services. Everything else
+#: is restart-class: applying it restarts the wake engine or the LED service, which on this
+#: hardware means the audio stack goes quiet for a moment. A fleet write that touches any of
+#: these must be paced so the rooms do not all go silent at once.
+IMMEDIATE_APPLY = frozenset({"immediate", "next_turn", "next_update_check"})
+
+
+def setting_requires_restart(name: str) -> bool:
+    """Whether applying a setting bounces a device service, from the schema's `apply` field."""
+    return DEVICE_SETTING_SCHEMA.get(name, {}).get("apply") not in IMMEDIATE_APPLY
 
 
 def values_agree(name: str, wanted: Any, reported: Any) -> bool:
@@ -132,7 +148,13 @@ class ConfigPlane:
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
+        self._pending_save = False
         self._state = self._load()
+        # _load() may have migrated a legacy profile but cannot save it yet: `self._state`
+        # does not exist until this line. Persist the migration now, before the plane is used.
+        if self._pending_save:
+            self._save(self._state)
+            self._pending_save = False
 
     def schema(self) -> dict[str, Any]:
         return {
@@ -155,7 +177,40 @@ class ConfigPlane:
             raise ConfigValidationError("unsupported configuration-state schema")
         if not isinstance(raw.get("devices"), dict):
             raise ConfigValidationError("configuration state has no devices object")
+        if self._migrate_legacy(raw):
+            # Persist before this becomes the active state: the migrated profile must be on
+            # disk so the first reader after a restart sees values already in range.
+            self._pending_save = True
         return raw
+
+    @staticmethod
+    def _migrate_legacy(state: dict[str, Any]) -> bool:
+        """Migrate out-of-range legacy `led_brightness` values into the current schema.
+
+        Before the schema was corrected to 1-31, the default was 40 on a 0-100 scale that
+        the APA102 LED driver does not have: such a value could never converge, and the
+        device's LED service was actually running at its own default (31). A device enrolled
+        under the old schema therefore still carries an out-of-range desired `led_brightness`.
+        Because that value was never in force, the honest migration is to the level the
+        hardware actually ran (31), and the generation is advanced so the corrected profile
+        is re-delivered to the device. Without this, the new device-side bounds would reject
+        every delivery for that device - even an unrelated volume change - on the strength of
+        the poisoned legacy value.
+        """
+        changed = False
+        for record in (state.get("devices") or {}).values():
+            desired = record.get("desired")
+            if not isinstance(desired, dict):
+                continue
+            led = desired.get("led_brightness")
+            if isinstance(led, bool) or not isinstance(led, int):
+                continue
+            if led < 1 or led > 31:
+                desired["led_brightness"] = 31
+                record["generation"] = int(record.get("generation", 0)) + 1
+                record["desired_updated_at"] = _utc_now()
+                changed = True
+        return changed
 
     def _save(self, state: Optional[dict[str, Any]] = None) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -269,6 +324,59 @@ class ConfigPlane:
         self._state = candidate
         return self._public(record)
 
+    def set_desired_fleet(
+        self,
+        patch: dict[str, Any],
+        *,
+        device_ids: Optional[Iterable[str]] = None,
+    ) -> list[dict[str, Any]]:
+        """Apply one desired-state patch to every device, durably, in a single save.
+
+        `device_ids` narrows the target set (a subset write). `None` means every device in
+        the fleet. Each targeted device's generation is bumped exactly once and its desired
+        state merged with the patch, mirroring `set_desired`. The write is one atomic save,
+        so a crash cannot leave the fleet half-updated. Devices not targeted are untouched.
+
+        The optimistic-concurrency guard is deliberately not per-device here: a fleet write is a
+        single operator intent ("make it so everywhere"), and re-reading every device to carry
+        N generations through the client defeats the point of the endpoint. The guard is
+        still enforced on the single-device path, which is where concurrent writers actually
+        race. A fleet write observed mid-flight by a single-device writer will 409, which is
+        the correct, conservative answer.
+        """
+        clean = validate_settings(patch)
+        if not clean:
+            raise ConfigValidationError("at least one setting is required")
+        candidate = deepcopy(self._state)
+        devices = candidate["devices"]
+        if device_ids is None:
+            targets = set(devices)
+        else:
+            targets = set()
+            for item in device_ids:
+                targets.add(_validate_device_id(item))
+            unknown = targets - set(devices)
+            if unknown:
+                raise ConfigValidationError(
+                    "unknown device(s) in fleet target: "
+                    + ", ".join(sorted(unknown))
+                )
+        if not targets:
+            raise ConfigValidationError("fleet target has no devices")
+        now = _utc_now()
+        for device_id in sorted(targets):
+            record = devices[device_id]
+            desired = dict(record.get("desired") or {})
+            desired.update(clean)
+            record["desired"] = desired
+            record["generation"] = int(record["generation"]) + 1
+            record["desired_updated_at"] = now
+        self._save(candidate)
+        self._state = candidate
+        return [
+            self._public(candidate["devices"][device_id]) for device_id in sorted(targets)
+        ]
+
     def report(
         self,
         device_id: str,
@@ -343,4 +451,5 @@ class ConfigPlane:
 __all__ = [
     "SCHEMA_VERSION", "DEVICE_SETTING_SCHEMA", "ConfigPlane",
     "ConfigValidationError", "ConfigConflict", "validate_settings",
+    "IMMEDIATE_APPLY", "setting_requires_restart",
 ]

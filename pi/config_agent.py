@@ -30,7 +30,7 @@ SUPPORTED: dict[str, dict[str, Any]] = {
     "wake_threshold": {"type": "number", "minimum": 0.05, "maximum": 0.99},
     "mic_gain": {"type": "integer", "minimum": 0, "maximum": 100},
     "playback_volume": {"type": "integer", "minimum": 0, "maximum": 100},
-    "led_brightness": {"type": "integer", "minimum": 0, "maximum": 100},
+    "led_brightness": {"type": "integer", "minimum": 1, "maximum": 31},
     "locale": {"type": "string", "enum": ["en-US"]},
     "update_channel": {"type": "string", "enum": ["stable", "beta"]},
 }
@@ -84,13 +84,14 @@ class DeviceConfigAgent:
             "generation": 0,
             "desired": {},
             "actual": {},
+            "pending_restart": [],
             "health": "unknown",
             "error": None,
         }
         self._load()
 
     @staticmethod
-    def _stage_only(_settings: dict[str, Any]) -> tuple[dict, str, Optional[str]]:
+    def _stage_only(_settings: dict[str, Any], *, applied: dict[str, Any] | None = None) -> tuple[dict, str, Optional[str]]:
         return {}, "degraded", "desired state is staged; no hardware adapter is installed"
 
     def _load(self) -> None:
@@ -167,7 +168,21 @@ class DeviceConfigAgent:
             return self.current_report(health="error", error=str(exc))
 
         try:
-            result = self.apply(settings)
+            # Settings the previous attempt wrote but could not apply (e.g. a restart that
+            # failed). Persisted so that if THIS process is recreated before a retry - an
+            # outbound-runner restart, not an audio-stack restart - the new adapter is told
+            # which values the env file must NOT be trusted for, and re-attempts the restart
+            # instead of reporting the staged value as in force.
+            stale = [
+                name for name in (self.state.get("pending_restart") or [])
+                if name in (data.get("settings") or {})
+            ]
+            # Not every adapter accepts the stale seed (the staging fallback does not),
+            # so pass it only when the callback's signature takes it.
+            if stale and "stale_seed" in inspect.signature(self.apply).parameters:
+                result = self.apply(settings, stale_seed=stale)
+            else:
+                result = self.apply(settings)
             if inspect.isawaitable(result):
                 result = await result
             actual, health, error = result
@@ -179,11 +194,28 @@ class DeviceConfigAgent:
         except Exception as exc:  # noqa: BLE001 - application failure becomes reported state
             return self.current_report(health="error", error=f"apply failed: {exc}")
 
+        # What this attempt did NOT bring into `actual`, restricted to the settings a
+        # service restart is what would apply them. For a failed restart these are the
+        # restart-class values whose env write succeeded but whose service still holds the
+        # old value: they stay retryable, and a recreated adapter is seeded with them so
+        # the env file is not treated as authority for them. Only `error` and `degraded`
+        # attempts remember anything - a healthy attempt has nothing pending by
+        # definition, and an all-settings `degraded` from the staging fallback (no adapter
+        # at all) must not poison future runs either, so even degraded remembers only
+        # restart-class names.
+        restart_class_names = {
+            "led_brightness", "wake_threshold", "wake_word"
+        }
+        unapplied = sorted(
+            name for name in settings
+            if name in restart_class_names and name not in actual
+        )
         self.state.update({
             "device_id": device_id,
             "generation": generation,
             "desired": settings,
             "actual": actual,
+            "pending_restart": unapplied if health in ("error", "degraded") else [],
             "health": health,
             "error": error,
         })

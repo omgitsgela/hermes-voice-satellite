@@ -29,7 +29,11 @@ _SCHEMA = {
         "'fleet_status' lists every satellite the bridge knows with its convergence state; "
         "'config_status' reports one device's desired settings, reported settings and drift; "
         "'config_set' writes durable desired settings (wake_word, wake_threshold, mic_gain, "
-        "playback_volume, led_brightness, locale, update_channel) for one device. Use the config_* "
+        "playback_volume, led_brightness, locale, update_channel) for one device. "
+        "'fleet_config_set' writes the same settings to every registered satellite at once, or to a "
+        "named subset via device_ids; it is the 'change all the satellites' action, and it reports "
+        "when the change is being paced so the rooms do not all go silent at once. "
+        "Use the config_* "
         "actions for requests about how a device should be configured from now on, and the "
         "follow_up_*/endpointing_* actions for changes that only matter to the conversation happening "
         "right now."
@@ -49,6 +53,7 @@ _SCHEMA = {
                     "fleet_status",
                     "config_status",
                     "config_set",
+                    "fleet_config_set",
                 ],
                 "description": "Change or report a device conversation setting.",
             },
@@ -57,6 +62,14 @@ _SCHEMA = {
                 "description": (
                     "The device to act on, as it registered itself (for example 'kitchen-1'). "
                     "Required for config_status and config_set."
+                ),
+            },
+            "device_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "For fleet_config_set: restrict the write to these devices. Omit it to apply to "
+                    "every registered satellite."
                 ),
             },
             "settings": {

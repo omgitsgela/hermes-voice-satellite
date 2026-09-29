@@ -110,6 +110,49 @@ async def main() -> int:
               page.status == 200 and "/config/devices" in page.text
               and "test-token" not in page.text, page.text[:200])
 
+        # -------------------------------------------------------------------
+        # Fleet page invariants (review F5/F6)
+        # -------------------------------------------------------------------
+        # F5: a fleet save must send only the settings the operator selected, never the
+        # whole schema with defaults for untouched fields - that would clobber a
+        # per-device custom value the operator did not intend to touch. The page pins
+        # this structurally: each fleet field is checkbox-gated and the submit handler
+        # skips unselected fields.
+        html = page.text
+        check("the fleet panel checkbox-gates each setting (F5: no default-filled clobber)",
+              "fleet-pick" in html and "pick.checked" in html
+              and "if (!pick.checked) continue;" in html, "fleet picker not found")
+        # F6: the convergence poll must update cards in place and must not discard unsaved
+        # edits. The page pins this structurally: each card keeps a stable device id and a
+        # per-card refresh() that paints only status/generation/notes; load() reconciles by
+        # device id (refreshing in place, sparring dirty cards, rendering only new devices)
+        # and a failed poll must not clear the DOM.
+        check("the poll reconciles device cards by id without duplicating them (F6)",
+              "card.refresh = refresh;" in html
+              and "existing.has(d.device_id)" in html
+              and "d.device_id in existing" not in html
+              and "card.refresh(byId.get(id))" in html,
+              "id reconciliation / Map membership not found")
+        # Fourth-pass: number/text inputs fire `change` only on commit (blur/Enter); the
+        # per-keystroke `input` event is what marks a field as edited while it is being
+        # typed. Without it, refresh()/reconcile() see the in-progress value as an
+        # untouched field and overwrite it.
+        check("in-progress typing is tracked before the edit is committed (fourth-pass F2)",
+              "input.addEventListener('input', markEdited);" in html
+              and "input.addEventListener('change', markEdited);" in html,
+              "input-event edit tracking not found")
+        # A failed poll must not clear the DOM: the operator's unsaved edits and the last
+        # good device view stay exactly as they were.
+        check("a failed poll does not clear the device cards (F6)",
+              "devicesBox.replaceChildren();" not in html,
+              "poll-failure DOM wipe still present")
+        # The device-card save must reconcile the card with the server's returned record:
+        # advance the baseline and generation so a second save is not a stale write.
+        check("a successful device save reconciles the card with the server record (F6 follow-up)",
+              "card.reconcile(result.device)" in html
+              and "card.reconcile = reconcile;" in html,
+              "save reconciliation not found")
+
     if problems:
         print("\nFAILURES")
         for problem in problems:
