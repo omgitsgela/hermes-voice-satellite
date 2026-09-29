@@ -18,9 +18,14 @@ needs no service restart.
 Wiring (the satellite's own flags, not the bridge's):
     --awake-wav ${VS_SOUNDS}/awake.wav
     --done-wav  ${VS_SOUNDS}/done.wav
-    --mic-seconds-to-mute-after-awake-wav 0.4
+    --mic-seconds-to-mute-after-awake-wav 0.1
 
 (On the device the values come from /etc/voice-satellite/satellite.env; the unit expands them.)
+
+Keep that last one small: it is the margin in front of the person's first word. A 308 ms tone plus
+a 0.4 s margin is 708 ms of deaf microphone, which clipped the onset of the operator's speech twice
+(2026-09-22 at 908 ms, and again on 2026-09-29 at 708 ms, where "New conversation" arrived as
+"conversation"). scripts/test_wake_mute_timing.py asserts the bound on the host side.
 
 The satellite mutes the microphone for the awake wav's duration PLUS that setting
 (satellite.py:656-662), so the tone is never captured into the utterance that follows.
