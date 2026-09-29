@@ -53,9 +53,11 @@ except ImportError:  # pragma: no cover - exercised by the installed script entr
 try:
     from .device_apply import make_apply_adapter
     from .volume_control import AlsaVolume
+    from .mic_gain_control import AlsaMicGain
 except ImportError:  # pragma: no cover - exercised by the installed script entrypoint
     from device_apply import make_apply_adapter
     from volume_control import AlsaVolume
+    from mic_gain_control import AlsaMicGain
 
 log = logging.getLogger("pi.outbound")
 
@@ -202,6 +204,7 @@ class BridgeLink:
         stats: Optional[LinkStats] = None,
         config_agent: Optional[DeviceConfigAgent] = None,
         alsa_volume: Optional[AlsaVolume] = None,
+        mic_gain: Optional[AlsaMicGain] = None,
     ) -> None:
         self.config = config
         self.on_event = on_event
@@ -218,7 +221,10 @@ class BridgeLink:
             self.config_agent = DeviceConfigAgent(
                 config.config_state_path,
                 device_id=config.device_id,
-                apply=make_apply_adapter(alsa_volume or AlsaVolume.from_calibration()),
+                apply=make_apply_adapter(
+                    volume=alsa_volume or AlsaVolume.from_calibration(),
+                    mic_gain=mic_gain or AlsaMicGain.from_env(),
+                ),
             )
 
         self.connected = False

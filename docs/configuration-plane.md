@@ -5,9 +5,10 @@
 Interface contract for the voice bridge's settings and fleet-configuration surface. Written for the
 system on the other side of it: the Hermes gateway, a script, a cron job, or an operator's browser.
 
-Verified against the implementation on branch `work/voice-fleet-config`. Every field, bound and status
-code below is read from the code, not from an intention: `bridge/config_plane.py` (state and validation),
-`bridge/announce.py` (HTTP), `bridge/registry.py` (wire events), `pi/config_agent.py` (device side).
+Verified against the implementation on `main`. Every field, bound and status code below is read from
+the code, not from an intention: `bridge/config_plane.py` (state and validation), `bridge/announce.py`
+(HTTP), `bridge/registry.py` (wire events), `pi/config_agent.py` (device side), `pi/device_apply.py`
+(hardware adapter), `pi/mic_gain_control.py` (input level).
 
 ## 1. What this is
 
@@ -52,7 +53,7 @@ the host already did, because a host is not a trust boundary for a device.
 | `wake_threshold` | number | 0.05 – 0.99 | `0.35` | wake service restart |
 | `mic_gain` | integer | 0 – 100 | `78` | immediate |
 | `playback_volume` | integer | 0 – 100 | `55` | immediate |
-| `led_brightness` | integer | 0 – 100 | `40` | LED service restart |
+| `led_brightness` | integer | 1 – 31 | `31` | LED service restart |
 | `locale` | string | enum: `en-US` | `en-US` | next turn |
 | `update_channel` | string | enum: `stable`, `beta` | `stable` | next update check |
 
@@ -60,13 +61,24 @@ the host already did, because a host is not a trust boundary for a device.
 requires a service bounce. A client that batches settings should group by `apply` so one restart covers
 every restart-class change.
 
-`playback_volume` is the setting with a real device-side implementation today, and it carries one extra
+`playback_volume` is the setting with the strongest device-side guarantee, and it carries one extra
 guarantee the schema cannot express: **it can never be silent.** The bridge clamps it to an audible floor
 and the device clamps it independently, so a `0` written here lands as the floor rather than as a deaf
 device. Writing `0` is not an error; it is recorded and reported, and the applied value comes back higher
-than the requested one, with the reason in `last_error`. See `docs/volume.md`. The other four of
-`wake_word`, `wake_threshold`, `mic_gain` and `led_brightness` are staged only, and the device reports
-`degraded` rather than pretending otherwise.
+than the requested one, with the reason in `last_error`. See `docs/volume.md`.
+
+The other hardware settings are applied by the device's adapter (`pi/device_apply.py`) rather than staged:
+`mic_gain` (ALSA input level) and `led_brightness` / `wake_threshold` / `wake_word` (durable env-file
+writes plus a coupled service restart). Two honest caveats are built into the adapter and reported rather
+than hidden:
+
+- **`mic_gain` may be a no-op on some cards.** If the card's capture is an `arecord` command line with no
+  amixer input control, there is nothing to set. The value is still recorded (so it takes effect if a
+  control is later configured via `VOICE_MIC_GAIN_CONTROL`), but the report is `degraded` and names the
+  reason — never a `healthy` for a gain the device did not take.
+- **`led_brightness` is on the LED driver's 1-31 scale, not a percentage.** The APA102 global-brightness
+  register is 5 bits and the service refuses anything outside 1-31. The strip's power rail is a GPIO, so
+  there is no `0`/"off" level in this setting; 1 is its dimmest.
 
 **`playback_volume` is on a USER scale of 1-100, not a raw ALSA percentage.** 1 is the quietest this
 hardware can be and 100 is full volume, so the same number means the same thing on a device with a
@@ -165,6 +177,32 @@ intent recorded must not.
   silently overwriting each other.
 - `400` → missing/non-integer/negative `expected_generation`, unknown setting, bad type, out of range.
 
+### `PUT /config/fleet/desired`
+
+The "change it on every satellite" write. It merges `settings` into the desired state of **every**
+registered device — or into a named subset when `device_ids` is given — in a single atomic save, bumping
+each targeted device's generation by exactly one.
+
+```json
+{"settings": {"led_brightness": 20}}
+{"settings": {"playback_volume": 40}, "device_ids": ["kitchen-1", "hall-1"]}
+```
+
+`202` → `{"ok": true, "accepted": true, "count": N, "restart_pacing": <bool>,
+"devices": [<device record>, ...]}` — one record per targeted device, each carrying its new
+`generation`, `desired` state and a `dispatched` flag. `restart_pacing` is `true` when the patch
+touched a restart-class setting, so the per-device bounces are being queued rather than fired.
+
+An empty `settings`, an empty `device_ids`, or any unknown target is a `400`; the write is atomic, so a
+rejected fleet write changes nothing.
+
+A fleet write is then dispatched like a per-device write: if every targeted device is connected the new
+generation reaches it immediately. If the patch touches any **restart-class** setting
+(`wake_word`, `wake_threshold`, `led_brightness`) the dispatch is **paced**: the bridge spaces out the
+per-device restart-class restarts by `VOICE_FLEET_RESTART_DISPATCH_INTERVAL` seconds (default 8) rather
+than bouncing every room's audio stack in the same instant. Immediate-class settings are dispatched
+without delay.
+
 ### `POST /config/devices/{device_id}/reported`
 
 The device's own report. Also carries health, so an apply failure is observable rather than inferred.
@@ -217,16 +255,29 @@ same socket is carrying the microphone.
 Hardware application is an **injected adapter**, not something this module guesses at. The adapter
 receives the validated settings and returns `(actual, health, error)`.
 
-With no adapter installed the default is to stage and tell the truth:
+The adapter shipped with the fleet configuration work (`pi/device_apply.py`) applies the settings in two
+tiers:
+
+- **Immediate** — `playback_volume` (ALSA output via `volume_control`) and `mic_gain` (ALSA input via
+  `mic_gain_control`). Written straight to the hardware and read back; no service is touched.
+- **Restart-class** — `led_brightness`, `wake_threshold`, `wake_word`. Written durably to the device's
+  env file and applied by restarting the coupled audio group. The group is restarted as one, and it
+  deliberately excludes `outbound-satellite` — the process running the adapter — so the device can
+  bounce its own audio stack and still hold the connection that carries the report back.
+
+The **honesty rule** is the whole point. A device that cannot apply a setting must not claim it did. A
+setting with no path on this hardware (e.g. `mic_gain` when the card has no input control) is reported
+`degraded` and named; a path that exists but fails is reported `error`; only a value the hardware
+actually took is reported in `actual` with `healthy`. The default with **no adapter installed** remains
+to stage and tell the truth:
 
 ```json
 {"generation": 1, "actual": {}, "health": "degraded",
  "error": "desired state is staged; no hardware adapter is installed"}
 ```
 
-That is deliberate. A device that cannot apply a setting must not claim it did. It also means the
-contract can be exercised end to end before any hardware-specific code exists, and that a Pi-side adapter
-is a contained, individually testable unit.
+That is deliberate. It means the contract can be exercised end to end before any hardware-specific code
+exists, and that a Pi-side adapter is a contained, individually testable unit.
 
 ## 8. Existing surfaces on the same port
 
@@ -239,6 +290,12 @@ is a contained, individually testable unit.
 | `GET /timers` | bearer | List active timers |
 | `POST /timers` | bearer | `{"action": "set"\|"list"\|"cancel", ...}` |
 | `GET /configure` | none | Static configuration page (no credential embedded) |
+| `GET /config/schema` | bearer | Setting names, bounds, defaults, `apply` class |
+| `GET /config/devices` | bearer | Every device and its convergence state |
+| `GET /config/devices/{id}` | bearer | One device's desired, reported, drift |
+| `PUT /config/devices/{id}/desired` | bearer | Durable per-device desired state |
+| `PUT /config/fleet/desired` | bearer | Durable fleet-wide desired state |
+| `POST /config/devices/{id}/reported` | bearer | A device's own report |
 
 `/settings` and `/config/*` are intentionally separate. `/settings` is the **single-device, live-room**
 surface: it changes how the device behaves in the room right now, and it is read back immediately.
@@ -278,7 +335,8 @@ list per kind rather than one API pretending to do both.
 | `endpointing_pause_tolerant` / `endpointing_standard` / `endpointing_status` | `/settings` | waiting longer while someone speaks |
 | `fleet_status` | `/config/devices` | every device and its convergence state |
 | `config_status` | `/config/devices/{id}` | one device: desired, reported, drift |
-| `config_set` | `/config/devices/{id}/desired` | durable settings from now on |
+| `config_set` | `/config/devices/{id}/desired` | durable settings for one device |
+| `fleet_config_set` | `/config/fleet/desired` | durable settings for every device (or a subset) |
 
 The split matters. `/settings` is read back immediately and changes the live room; `/config/*` records
 intent durably and converges. An assistant asked to "keep listening for a reply" wants the first

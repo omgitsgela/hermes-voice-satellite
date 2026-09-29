@@ -44,7 +44,7 @@ def main() -> int:
             "wake_threshold": 0.35,
             "mic_gain": 78,
             "playback_volume": 55,
-            "led_brightness": 40,
+            "led_brightness": 31,
             "locale": "en-US",
             "update_channel": "stable",
         }, expected_generation=0)

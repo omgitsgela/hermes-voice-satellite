@@ -150,6 +150,20 @@ SND_FORMAT = (22050, 2, 1)   # what aplay expects from us
 # --- local paths -----------------------------------------------------------
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 FLEET_CONFIG_STATE_FILE = PROJECT_DIR / "state" / "fleet-config.json"
+# A fleet write that touches a restart-class setting (wake word, wake threshold) bounces each
+# device's audio stack. Pushing all of them at once means the whole house is quiet at the same
+# moment, so dispatch is paced: one device per interval, until the next device is free to take
+# its turn. One or two devices this is imperceptible; ten devices it is the difference between
+# "the rooms go quiet one at a time" and "the house goes quiet all at once".
+FLEET_RESTART_DISPATCH_INTERVAL_SECONDS = _cfg(
+    "VOICE_FLEET_RESTART_DISPATCH_INTERVAL", "8.0"
+)
+try:
+    FLEET_RESTART_DISPATCH_INTERVAL_SECONDS = max(
+        0.0, float(FLEET_RESTART_DISPATCH_INTERVAL_SECONDS)
+    )
+except (TypeError, ValueError):
+    FLEET_RESTART_DISPATCH_INTERVAL_SECONDS = 8.0
 VOICES_DIR = PROJECT_DIR / "voices"
 # The Piper voice. A pick made for this installation (2026-09-22, also the platform voice), so it
 # is a value a different deployment would want to change.

@@ -44,8 +44,12 @@ DEVICE_SETTING_SCHEMA: dict[str, dict[str, Any]] = {
         "round_trip_tolerance": 1,
     },
     "led_brightness": {
-        "type": "integer", "minimum": 0, "maximum": 100,
-        "default": 40, "apply": "led_service_restart",
+        # The LED driver takes 1-31 (APA102 global brightness is 5 bits and the service's
+        # --led-brightness refuses anything else). The old 0-100 range with a default of 40
+        # described a scale the hardware does not have: 40 would never converge and 0 would
+        # not mean "off", because the strip's power rail is a GPIO, not a level.
+        "type": "integer", "minimum": 1, "maximum": 31,
+        "default": 31, "apply": "led_service",
     },
     "locale": {
         "type": "string", "enum": ["en-US"], "default": "en-US",
@@ -64,6 +68,18 @@ class ConfigValidationError(ValueError):
 
 class ConfigConflict(RuntimeError):
     """The writer supplied a stale desired-state generation."""
+
+
+#: The settings a device can apply without bouncing one of its own services. Everything else
+#: is restart-class: applying it restarts the wake engine or the LED service, which on this
+#: hardware means the audio stack goes quiet for a moment. A fleet write that touches any of
+#: these must be paced so the rooms do not all go silent at once.
+IMMEDIATE_APPLY = frozenset({"immediate", "next_turn", "next_update_check"})
+
+
+def setting_requires_restart(name: str) -> bool:
+    """Whether applying a setting bounces a device service, from the schema's `apply` field."""
+    return DEVICE_SETTING_SCHEMA.get(name, {}).get("apply") not in IMMEDIATE_APPLY
 
 
 def values_agree(name: str, wanted: Any, reported: Any) -> bool:
@@ -269,6 +285,59 @@ class ConfigPlane:
         self._state = candidate
         return self._public(record)
 
+    def set_desired_fleet(
+        self,
+        patch: dict[str, Any],
+        *,
+        device_ids: Optional[Iterable[str]] = None,
+    ) -> list[dict[str, Any]]:
+        """Apply one desired-state patch to every device, durably, in a single save.
+
+        `device_ids` narrows the target set (a subset write). `None` means every device in
+        the fleet. Each targeted device's generation is bumped exactly once and its desired
+        state merged with the patch, mirroring `set_desired`. The write is one atomic save,
+        so a crash cannot leave the fleet half-updated. Devices not targeted are untouched.
+
+        The optimistic-concurrency guard is deliberately not per-device here: a fleet write is a
+        single operator intent ("make it so everywhere"), and re-reading every device to carry
+        N generations through the client defeats the point of the endpoint. The guard is
+        still enforced on the single-device path, which is where concurrent writers actually
+        race. A fleet write observed mid-flight by a single-device writer will 409, which is
+        the correct, conservative answer.
+        """
+        clean = validate_settings(patch)
+        if not clean:
+            raise ConfigValidationError("at least one setting is required")
+        candidate = deepcopy(self._state)
+        devices = candidate["devices"]
+        if device_ids is None:
+            targets = set(devices)
+        else:
+            targets = set()
+            for item in device_ids:
+                targets.add(_validate_device_id(item))
+            unknown = targets - set(devices)
+            if unknown:
+                raise ConfigValidationError(
+                    "unknown device(s) in fleet target: "
+                    + ", ".join(sorted(unknown))
+                )
+        if not targets:
+            raise ConfigValidationError("fleet target has no devices")
+        now = _utc_now()
+        for device_id in sorted(targets):
+            record = devices[device_id]
+            desired = dict(record.get("desired") or {})
+            desired.update(clean)
+            record["desired"] = desired
+            record["generation"] = int(record["generation"]) + 1
+            record["desired_updated_at"] = now
+        self._save(candidate)
+        self._state = candidate
+        return [
+            self._public(candidate["devices"][device_id]) for device_id in sorted(targets)
+        ]
+
     def report(
         self,
         device_id: str,
@@ -343,4 +412,5 @@ class ConfigPlane:
 __all__ = [
     "SCHEMA_VERSION", "DEVICE_SETTING_SCHEMA", "ConfigPlane",
     "ConfigValidationError", "ConfigConflict", "validate_settings",
+    "IMMEDIATE_APPLY", "setting_requires_restart",
 ]

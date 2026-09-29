@@ -45,6 +45,7 @@ _ACTIONS = (
     "fleet_status",
     "config_status",
     "config_set",
+    "fleet_config_set",
 )
 
 # Settings the gateway tool will pass through. The bridge validates authoritatively; this list exists so a
@@ -188,6 +189,35 @@ def _set_config(device_id: str, settings: dict) -> dict:
     return {"device": verified, "dispatched": bool(data.get("dispatched")), "accepted": True}
 
 
+def _set_fleet(settings: dict, device_ids: Optional[list] = None) -> dict:
+    """Write the same desired patch to every registered device (or a named subset).
+
+    The fleet endpoint is one atomic write, so there is no per-device generation to guard; the
+    bridge bumps every targeted device by one and returns each record. Reading the fleet back and
+    confirming every targeted generation advanced is how this tool proves the write landed rather
+    than asserting it.
+    """
+    before = {d["device_id"]: d["generation"] for d in _fleet()["devices"]}
+    payload: dict = {"settings": settings}
+    if device_ids is not None:
+        payload["device_ids"] = list(device_ids)
+    data = _request("PUT", "/config/fleet/desired", payload)
+    if not data.get("ok"):
+        raise VoiceControlError(str(data.get("error") or "the bridge refused the fleet change"))
+    targets = list(device_ids) if device_ids is not None else list(before)
+    after = {d["device_id"]: d["generation"] for d in _fleet()["devices"]}
+    for device_id in targets:
+        if device_id not in before:
+            raise VoiceControlError(f"{device_id} is not a registered satellite")
+        if after.get(device_id) != before[device_id] + 1:
+            raise VoiceControlError(
+                f"asked to advance {device_id} from generation {before[device_id]} but the "
+                f"bridge reports {after.get(device_id)}")
+    return {"count": data.get("count", len(targets)),
+            "devices": data.get("devices", []),
+            "restart_pacing": bool(data.get("restart_pacing"))}
+
+
 def handle(args: dict) -> str:
     args = args or {}
     action = str(args.get("action") or "").strip()
@@ -226,6 +256,27 @@ def handle(args: dict) -> str:
                 "generation": device["generation"], "desired": device["desired"],
                 "dispatched": result["dispatched"], "converged": device["converged"],
                 "drift": device["drift"], "verified": True,
+            }, ensure_ascii=False)
+        if action == "fleet_config_set":
+            settings = args.get("settings")
+            if not isinstance(settings, dict) or not settings:
+                raise VoiceControlError("fleet_config_set needs a non-empty settings object")
+            unknown = sorted(name for name in settings if name not in _SETTINGS)
+            if unknown:
+                raise VoiceControlError(
+                    f"{', '.join(unknown)} is not a configurable setting; expected one of "
+                    f"{list(_SETTINGS)}"
+                )
+            device_ids = args.get("device_ids")
+            if device_ids is not None and (
+                not isinstance(device_ids, list) or not all(isinstance(i, str) for i in device_ids)
+            ):
+                raise VoiceControlError("device_ids must be a list of strings")
+            result = _set_fleet(settings, device_ids)
+            return json.dumps({
+                "ok": True, "action": action, "count": result["count"],
+                "restart_pacing": result["restart_pacing"],
+                "devices": result["devices"], "verified": True,
             }, ensure_ascii=False)
         if action == "follow_up_status":
             state = _settings()

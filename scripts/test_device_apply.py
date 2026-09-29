@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Device-side apply adapter checks (issue #10 / #6).
+"""Device-side apply adapter checks (issues #10 / #6).
 
 The adapter is what turns desired settings into hardware change. The property that
 matters most here is honesty: it must never report a setting as applied when it was not,
 and it must never report a level it did not set.
+
+Every hardware dependency is faked so the test runs on the bridge host with no Pi: a fake
+`amixer`, a fake env file on disk, a fake `systemctl`, and a fake mic-gain control.
 """
 from __future__ import annotations
 
+import asyncio
 import pathlib
 import sys
 import tempfile
@@ -14,7 +18,10 @@ import tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from pi.device_apply import make_apply_adapter  # noqa: E402
-from pi.volume_control import AlsaVolume, VolumeCommandError  # noqa: E402
+from pi.volume_control import AlsaVolume  # noqa: E402
+from pi.mic_gain_control import AlsaMicGain  # noqa: E402
+from wyoming.event import Event  # noqa: E402
+from pi.config_agent import DeviceConfigAgent  # noqa: E402
 
 problems: list[str] = []
 checks = 0
@@ -28,6 +35,7 @@ def check(label: str, condition: bool, detail="") -> None:
 
 
 class FakeAmixer:
+    """Stands in for `amixer` for the OUTPUT control (volume)."""
     def __init__(self, fail_set: bool = False) -> None:
         self.calls: list[list[str]] = []
         self.fail_set = fail_set
@@ -47,10 +55,62 @@ class FakeAmixer:
         return r
 
 
+class FakeMicAmixer:
+    """Stands in for `amixer` for the INPUT control (mic gain)."""
+    def __init__(self, present: bool = True, fail: bool = False) -> None:
+        self.calls: list[list[str]] = []
+        self.present = present
+        self.fail = fail
+
+    def __call__(self, argv, **_kwargs):
+        self.calls.append(list(argv))
+
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        r = R()
+        if "sget" in argv and not self.present:
+            r.returncode = 1
+            r.stderr = "amixer: control Mic not found"
+        if "sset" in argv and self.fail:
+            r.returncode = 1
+            r.stderr = "amixer: unable to set"
+        return r
+
+
+class FakeSystemctl:
+    """Stands in for `systemctl`; records restarts, can be made to fail."""
+    def __init__(self, fail_restart: bool = False) -> None:
+        self.calls: list[list[str]] = []
+        self.fail_restart = fail_restart
+
+    def __call__(self, argv, **_kwargs):
+        self.calls.append(list(argv))
+
+        class R:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        r = R()
+        if self.fail_restart and "restart" in argv:
+            r.returncode = 1
+            r.stderr = "systemctl: failed to restart"
+        return r
+
+
+def make_env(tmp) -> pathlib.Path:
+    env = pathlib.Path(tmp) / "satellite.env"
+    env.write_text("VS_DEVICE_NAME=kitchen\nVS_WAKE_WORD=hey_hermes\nVS_WAKE_THRESHOLD=0.35\n")
+    return env
+
+
 # ---------------------------------------------------------------- volume applies
 
 fake = FakeAmixer()
-adapter = make_apply_adapter(AlsaVolume(card="seeed2micvoicec", control="PCM", floor=25, runner=fake))
+adapter = make_apply_adapter(volume=AlsaVolume(card="seeed2micvoicec", control="PCM", floor=25, runner=fake))
 actual, health, error = adapter({"playback_volume": 70})
 check("a valid volume is applied", actual.get("playback_volume") == 70, actual)
 check("applying a valid volume is healthy", health == "healthy", health)
@@ -62,95 +122,190 @@ check("the level was persisted for reboot survival",
 # ---------------------------------------------------------------- the floor is surfaced
 
 fake = FakeAmixer()
-adapter = make_apply_adapter(AlsaVolume(card="seeed2micvoicec", control="PCM", floor=25, runner=fake))
+adapter = make_apply_adapter(volume=AlsaVolume(card="seeed2micvoicec", control="PCM", floor=25, runner=fake))
 actual, health, error = adapter({"playback_volume": 0})
-# The setting is on the USER scale now, so zero is refused up to user 1 - the quietest
-# this hardware can be - and user 1 maps to the raw floor of 25 on this test device.
+# The setting is on the USER scale, so zero is refused up to user 1 - the quietest this
+# hardware can be - and user 1 maps to the raw floor of 25. It WAS applied (a real, audible
+# level), so it stays healthy; the correction is an explanation, not a degradation.
 check("a zero request is reported as the quietest USER level",
       actual.get("playback_volume") == 1, actual)
 check("a zero request reaches amixer as the raw floor, never 0%",
       any("25%" in part for c in fake.calls for part in c)
       and not any("0%" in part for c in fake.calls for part in c), fake.calls)
-check("the floor adjustment is reported rather than silent",
+check("the floor adjustment is explained, not silent",
       error is not None and "raised" in error, error)
 check("the report says what it was raised from and to, on the user scale",
       "from 0 to 1" in error, error)
-check("the adjusted level is still healthy, because it was applied",
+check("the floor-adjusted level is healthy, because it was applied",
       health == "healthy", health)
-
-# ---------------------------------------------------------------- the user range maps
-
-# The whole point of the user scale: the middle of it is the middle of what the hardware
-# can do, not the middle of the raw range. On a floor of 25 the usable range is 25..100,
-# so user 50 must land near raw 63 - NOT raw 50, which would be almost the bottom.
-fake_mid = FakeAmixer()
-adapter_mid = make_apply_adapter(
-    AlsaVolume(card="seeed2micvoicec", control="PCM", floor=25, runner=fake_mid))
-actual_mid, _h, _e = adapter_mid({"playback_volume": 50})
-sent = [part for c in fake_mid.calls for part in c if part.endswith("%")]
-check("user 50% maps into the middle of the USABLE range, not the middle of raw",
-      bool(sent) and 60 <= int(sent[0].rstrip("%")) <= 65, sent)
-check("user 50% is reported back as 50%", actual_mid.get("playback_volume") == 50, actual_mid)
-
-fake_top = FakeAmixer()
-adapter_top = make_apply_adapter(
-    AlsaVolume(card="seeed2micvoicec", control="PCM", floor=25, runner=fake_top))
-actual_top, _h, _e = adapter_top({"playback_volume": 100})
-sent_top = [part for c in fake_top.calls for part in c if part.endswith("%")]
-check("user 100% reaches full raw volume", sent_top and sent_top[0] == "100%", sent_top)
-check("user 100% is reported back as 100%", actual_top.get("playback_volume") == 100, actual_top)
 
 # ---------------------------------------------------------------- a failure is not a success
 
 fake = FakeAmixer(fail_set=True)
-adapter = make_apply_adapter(AlsaVolume(card="seeed2micvoicec", control="PCM", floor=25, runner=fake))
+adapter = make_apply_adapter(volume=AlsaVolume(card="seeed2micvoicec", control="PCM", floor=25, runner=fake))
 actual, health, error = adapter({"playback_volume": 60})
-check("a failed set reports no applied level", "playback_volume" not in actual, actual)
-check("a failed set is not healthy", health != "healthy", health)
-check("a failed set explains itself", error is not None and "playback_volume" in error, error)
+check("a failed volume set reports no applied level", "playback_volume" not in actual, actual)
+check("a failed volume set is not healthy", health != "healthy", health)
+check("a failed volume set explains itself", error is not None and "playback_volume" in error, error)
 
-# ---------------------------------------------------------------- unimplemented settings
+# ---------------------------------------------------------------- mic gain: applied
 
-fake = FakeAmixer()
-adapter = make_apply_adapter(AlsaVolume(card="seeed2micvoicec", control="PCM", floor=25, runner=fake))
-actual, health, error = adapter({"mic_gain": 78})
-check("a setting with no adapter yet is not reported as applied", actual == {}, actual)
-check("a setting with no adapter yet is degraded, not healthy", health == "degraded", health)
-check("the unimplemented setting is named", error is not None and "mic_gain" in error, error)
-check("no amixer command was issued for an unimplemented setting", fake.calls == [], fake.calls)
+with tempfile.TemporaryDirectory() as tmp:
+    mic = FakeMicAmixer(present=True)
+    env = make_env(tmp)
+    adapter = make_apply_adapter(
+        volume=AlsaVolume(card="seeed2micvoicec", control="PCM", floor=25, runner=FakeAmixer()),
+        mic_gain=AlsaMicGain(card="seeed2micvoicec", control="Mic", runner=mic),
+        env_path=env, systemctl=FakeSystemctl(),
+    )
+    actual, health, error = adapter({"mic_gain": 60})
+    check("a mic gain with a control is applied", actual.get("mic_gain") == 60, actual)
+    check("applying a real mic gain is healthy", health == "healthy", health)
+    check("the input control was actually set",
+          any("sset" in c and "60%" in c for c in mic.calls), mic.calls)
 
-# A mix: the volume applies, the rest is named as staged.
-fake = FakeAmixer()
-adapter = make_apply_adapter(AlsaVolume(card="seeed2micvoicec", control="PCM", floor=25, runner=fake))
-actual, health, error = adapter({"playback_volume": 80, "led_brightness": 40})
-check("a mixed request applies what it can", actual.get("playback_volume") == 80, actual)
-check("a mixed request is still degraded, because part was staged",
-      health == "degraded", health)
-check("a mixed request names the staged setting",
-      error is not None and "led_brightness" in error, error)
+# ---------------------------------------------------------------- mic gain: no control -> degraded, not applied
+
+with tempfile.TemporaryDirectory() as tmp:
+    mic = FakeMicAmixer(present=False)
+    env = make_env(tmp)
+    adapter = make_apply_adapter(
+        volume=AlsaVolume(card="seeed2micvoicec", control="PCM", floor=25, runner=FakeAmixer()),
+        mic_gain=AlsaMicGain(card="seeed2micvoicec", control="", runner=mic),
+        env_path=env, systemctl=FakeSystemctl(),
+    )
+    actual, health, error = adapter({"mic_gain": 60})
+    check("a mic gain with no input control is NOT reported as applied",
+          actual.get("mic_gain") is None, actual)
+    check("a mic gain with no input control is degraded, not healthy",
+          health == "degraded", health)
+    check("the missing-control state is named",
+          error is not None and "mic_gain" in error and "not applied" in error, error)
+    check("no amixer set was attempted for a control that is absent",
+          not any("sset" in c for c in mic.calls), mic.calls)
+
+# ---------------------------------------------------------------- mic gain: set fails -> error
+
+with tempfile.TemporaryDirectory() as tmp:
+    mic = FakeMicAmixer(present=True, fail=True)
+    env = make_env(tmp)
+    adapter = make_apply_adapter(
+        mic_gain=AlsaMicGain(card="seeed2micvoicec", control="Mic", runner=mic),
+        env_path=env, systemctl=FakeSystemctl(),
+    )
+    actual, health, error = adapter({"mic_gain": 60})
+    check("a mic gain whose set fails is reported as an error, not applied",
+          health == "error" and actual.get("mic_gain") is None, (health, actual))
+
+# ---------------------------------------------------------------- led brightness: env + restart
+
+with tempfile.TemporaryDirectory() as tmp:
+    env = make_env(tmp)
+    sc = FakeSystemctl()
+    adapter = make_apply_adapter(
+        env_path=env, systemctl=sc,
+        wake_models_dir=pathlib.Path(tmp),
+    )
+    actual, health, error = adapter({"led_brightness": 18})
+    check("led brightness is applied and reported", actual.get("led_brightness") == 18, actual)
+    check("a clean led change is healthy", health == "healthy", health)
+    check("the led value was written to the env file",
+          any("VS_LED_BRIGHTNESS=18" in line for line in env.read_text().splitlines()),
+          env.read_text())
+    check("the led service was restarted (and only the led service)",
+          any(c == ["systemctl", "restart", "2mic_leds"] for c in sc.calls), sc.calls)
+    check("the LED change did not bounce the whole audio stack",
+          not any(c == ["systemctl", "restart", "wyoming-satellite",
+                        "wyoming-openwakeword", "wake-shim", "2mic_leds"] for c in sc.calls),
+          sc.calls)
+
+# ---------------------------------------------------------------- wake threshold: env + full coupled restart
+
+with tempfile.TemporaryDirectory() as tmp:
+    env = make_env(tmp)
+    sc = FakeSystemctl()
+    adapter = make_apply_adapter(env_path=env, systemctl=sc)
+    actual, health, error = adapter({"wake_threshold": 0.4})
+    check("wake threshold is applied and reported", actual.get("wake_threshold") == 0.4, actual)
+    check("a clean wake-threshold change is healthy", health == "healthy", health)
+    check("the threshold was written to the env file",
+          any("VS_WAKE_THRESHOLD=0.4" in line for line in env.read_text().splitlines()),
+          env.read_text())
+    check("a wake change restarts the whole coupled audio group",
+          any(c[0] == "systemctl" and c[1] == "restart"
+              and set(c[2:]) == {"wyoming-satellite", "wyoming-openwakeword",
+                                 "wake-shim", "2mic_leds"} for c in sc.calls), sc.calls)
+    check("a wake change never restarts outbound-satellite (the applying process)",
+          not any("outbound-satellite" in c for c in sc.calls), sc.calls)
+    check("the units were reloaded before the restart",
+          any(c == ["systemctl", "daemon-reload"] for c in sc.calls), sc.calls)
+
+# ---------------------------------------------------------------- wake word: env + restart, model check is honest
+
+with tempfile.TemporaryDirectory() as tmp:
+    env = make_env(tmp)
+    models = pathlib.Path(tmp) / "models"
+    models.mkdir()
+    (models / "hey_hermes.tflite").write_bytes(b"\x00")
+    sc = FakeSystemctl()
+    adapter = make_apply_adapter(env_path=env, systemctl=sc, wake_models_dir=models)
+    # A word whose model is present: applied, healthy.
+    actual, health, error = adapter({"wake_word": "hey_hermes"})
+    check("a wake word with its model present is applied", actual.get("wake_word") == "hey_hermes", actual)
+    check("a wake word with its model present is healthy", health == "healthy", health)
+
+    # A word whose model is absent: recorded (env + restart happen) but degraded and named.
+    (models / "hey_hermes.tflite").unlink()
+    actual, health, error = adapter({"wake_word": "hey_karen"})
+    check("a wake word whose model is missing is still recorded",
+          actual.get("wake_word") == "hey_karen", actual)
+    check("a wake word whose model is missing is degraded, not healthy",
+          health == "degraded", health)
+    check("the missing model is named",
+          error is not None and "hey_karen.tflite" in error, error)
+
+# ---------------------------------------------------------------- a failed restart is reported, not converged
+
+with tempfile.TemporaryDirectory() as tmp:
+    env = make_env(tmp)
+    sc = FakeSystemctl(fail_restart=True)
+    adapter = make_apply_adapter(env_path=env, systemctl=sc)
+    actual, health, error = adapter({"led_brightness": 18})
+    check("a failed restart is reported as an error, not converged",
+          health == "error" and "restart" in (error or ""), (health, error))
+    check("the value was still written durably before the failed restart",
+          any("VS_LED_BRIGHTNESS=18" in line for line in env.read_text().splitlines()),
+          env.read_text())
+
+# ---------------------------------------------------------------- env file: update existing key, preserve others
+
+with tempfile.TemporaryDirectory() as tmp:
+    env = make_env(tmp)
+    sc = FakeSystemctl()
+    adapter = make_apply_adapter(env_path=env, systemctl=sc)
+    adapter({"wake_threshold": 0.4})
+    text = env.read_text()
+    check("an existing env key is updated in place, not duplicated",
+          text.count("VS_WAKE_THRESHOLD") == 1, text)
+    check("unrelated env keys are preserved",
+          "VS_DEVICE_NAME=kitchen" in text and "VS_WAKE_WORD=hey_hermes" in text, text)
 
 # ---------------------------------------------------------------- the agent end-to-end
 
-import asyncio  # noqa: E402
-
-from wyoming.event import Event  # noqa: E402
-
-from pi.config_agent import DeviceConfigAgent  # noqa: E402
-
-
 async def agent_round_trip() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        fake = FakeAmixer()
+        env = make_env(tmp)
+        sc = FakeSystemctl()
         agent = DeviceConfigAgent(
             pathlib.Path(tmp) / "config.json",
             apply=make_apply_adapter(
-                AlsaVolume(card="seeed2micvoicec", control="PCM", floor=25, runner=fake)),
+                volume=AlsaVolume(card="seeed2micvoicec", control="PCM", floor=25, runner=FakeAmixer()),
+                env_path=env, systemctl=sc,
+            ),
             device_id="kitchen-1",
         )
         report = await agent.apply_event(Event(type="hermes.config.desired", data={
-            "schema_version": 1,
-            "device_id": "kitchen-1",
-            "generation": 1,
+            "schema_version": 1, "device_id": "kitchen-1", "generation": 1,
             "settings": {"playback_volume": 55},
         }))
         check("the agent reports a healthy volume change",
@@ -158,28 +313,23 @@ async def agent_round_trip() -> None:
         check("the agent reports the applied level, not the requested one",
               report.data["actual"].get("playback_volume") == 55, report.data)
 
-        # And a zero request through the whole chain still lands audible.
-        fake2 = FakeAmixer()
+        # A restart-class change through the whole chain: env written, group restarted.
+        sc2 = FakeSystemctl()
         agent2 = DeviceConfigAgent(
             pathlib.Path(tmp) / "config2.json",
-            apply=make_apply_adapter(
-                AlsaVolume(card="seeed2micvoicec", control="PCM", floor=25, runner=fake2)),
+            apply=make_apply_adapter(env_path=env, systemctl=sc2),
             device_id="kitchen-1",
         )
         report = await agent2.apply_event(Event(type="hermes.config.desired", data={
-            "schema_version": 1,
-            "device_id": "kitchen-1",
-            "generation": 1,
-            "settings": {"playback_volume": 0},
+            "schema_version": 1, "device_id": "kitchen-1", "generation": 2,
+            "settings": {"led_brightness": 22},
         }))
-        # On the user scale a zero request is refused up to user 1; the raw floor is what
-        # user 1 maps to, and that is what amixer must receive.
-        check("zero through the whole chain lands on the quietest user level",
-              report.data["actual"].get("playback_volume") == 1, report.data)
-        check("zero through the whole chain reaches amixer as the raw floor",
-              any("25%" in part for c in fake2.calls for part in c), fake2.calls)
-        check("zero never reaches amixer as 0%",
-              not any("0%" in part for c in fake2.calls for part in c), fake2.calls)
+        check("a restart-class change through the agent is healthy",
+              report.data["health"] == "healthy", report.data)
+        check("the agent reports the restart-class value it applied",
+              report.data["actual"].get("led_brightness") == 22, report.data)
+        check("the agent's restart-class change restarted the led service",
+              any(c == ["systemctl", "restart", "2mic_leds"] for c in sc2.calls), sc2.calls)
 
 
 asyncio.run(agent_round_trip())

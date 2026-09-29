@@ -66,10 +66,13 @@ from bridge.config import (
     ANNOUNCE_SOUNDS,
     ANNOUNCE_TURN_MAX_AGE,
     AUDIO_OUT,
+    FLEET_RESTART_DISPATCH_INTERVAL_SECONDS,
 )
 from bridge.satellite import SatelliteClient
 from bridge.timers import DEFAULT_STATE_PATH, TimerLimitError, TimerManager, parse_duration
-from bridge.config_plane import ConfigConflict, ConfigPlane, ConfigValidationError
+from bridge.config_plane import (
+    ConfigConflict, ConfigPlane, ConfigValidationError, setting_requires_restart,
+)
 
 _LOGGER = logging.getLogger("bridge.announce")
 
@@ -132,6 +135,11 @@ class Announcer:
         # Announcer built without a volume path still announces.
         self._volume_get: Optional[Callable[[], int]] = volume_get
         self._volume_set: Optional[Callable[[int], Any]] = volume_set
+        # Pacing for fleet writes that touch a restart-class setting (wake word, threshold):
+        # one device per interval, so the rooms go quiet one at a time instead of all at once.
+        # The write itself is durable; pacing only shapes *when* each connected device is told.
+        self._restart_dispatch_at = 0.0
+        self._fleet_tasks: set = set()
 
     # -- token ---------------------------------------------------------------
 
@@ -188,6 +196,7 @@ class Announcer:
         app.router.add_get("/config/devices", self._handle_config_devices)
         app.router.add_get("/config/devices/{device_id}", self._handle_config_device)
         app.router.add_put("/config/devices/{device_id}/desired", self._handle_config_desired)
+        app.router.add_put("/config/fleet/desired", self._handle_config_fleet)
         app.router.add_post("/config/devices/{device_id}/reported", self._handle_config_reported)
         self._runner = web.AppRunner(app, access_log=None)
         await self._runner.setup()
@@ -488,6 +497,127 @@ class Announcer:
             {"ok": True, "accepted": True, "dispatched": dispatched, "device": device},
             status=202,
         )
+
+    async def _handle_config_fleet(self, request: web.Request) -> web.Response:
+        """Write one desired-state patch to the whole fleet (or a named subset), durably.
+
+        This is the "change it on all satellites" endpoint. The patch is applied to every
+        targeted device in a single atomic save, so the fleet never ends up half-written.
+        Dispatch to connected devices happens afterwards and is best-effort: a device that is
+        away still carries the new generation and converges when it reconnects, which is the
+        declarative guarantee the plane is built around.
+        """
+        if not self._authorised(request):
+            return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+        unavailable = self._config_ready()
+        if unavailable is not None:
+            return unavailable
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return web.json_response({"ok": False, "error": "body must be JSON"}, status=400)
+        if not isinstance(body, dict):
+            return web.json_response({"ok": False, "error": "body must be a JSON object"}, status=400)
+
+        raw_ids = body.get("device_ids")
+        device_ids: Optional[list] = None
+        if raw_ids is not None:
+            if not isinstance(raw_ids, list) or not all(
+                isinstance(i, str) for i in raw_ids
+            ):
+                return web.json_response(
+                    {"ok": False, "error": "device_ids must be a list of strings"},
+                    status=400,
+                )
+            device_ids = list(raw_ids)
+
+        settings = body.get("settings")
+        if not isinstance(settings, dict):
+            return web.json_response(
+                {"ok": False, "error": "settings must be a JSON object"}, status=400,
+            )
+        if self.config_plane is None:
+            return web.json_response(
+                {"ok": False, "error": "configuration plane is not enabled"}, status=501,
+            )
+
+        try:
+            records = self.config_plane.set_desired_fleet(settings, device_ids=device_ids)
+        except ConfigValidationError as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=400)
+
+        connected = set(self._connected_device_ids())
+        # One uniform patch goes to every targeted device. If it touches a setting that bounces a
+        # device service (wake word, threshold), then every device in this write is a restart-class
+        # application, so the whole write is paced: rooms go quiet one at a time, not all at once.
+        restart_class = any(setting_requires_restart(name) for name in settings)
+        results = []
+        pending_restart: list = []
+        for record in records:
+            device_id = record["device_id"]
+            dispatched = False
+            live = device_id in connected and self._config_dispatch is not None
+            if live and not restart_class:
+                # Immediate-class change to a connected device: tell it now and report it.
+                try:
+                    result = self._config_dispatch(device_id, record)
+                    dispatched = bool(await result) if asyncio.iscoroutine(result) else bool(result)
+                except Exception as exc:  # noqa: BLE001 - desired state remains durable for reconnect
+                    _LOGGER.warning("could not dispatch fleet desired state to %s: %s", device_id, exc)
+            if restart_class and live:
+                # A restart-class change bounces this device's audio stack. Do not fire the whole
+                # fleet at once: queue it for the paced dispatcher, one device per interval.
+                pending_restart.append(record)
+            results.append({**record, "dispatched": dispatched})
+
+        if pending_restart and self._config_dispatch is not None:
+            task = asyncio.create_task(
+                self._dispatch_restart_class(pending_restart), name="fleet-restart-dispatch"
+            )
+            self._fleet_tasks.add(task)
+            task.add_done_callback(self._fleet_tasks.discard)
+
+        return web.json_response({
+            "ok": True,
+            "accepted": True,
+            "count": len(results),
+            "restart_pacing": bool(pending_restart),
+            "devices": results,
+        }, status=202)
+
+    async def _dispatch_restart_class(self, records: list) -> None:
+        """Pace the delivery of a restart-class fleet write: one device per interval.
+
+        The write is already durable, so this only controls *when* each connected device is
+        told to bounce. A device that is away is skipped here (it converges on reconnect); a
+        dispatch that fails is logged, because the device still holds the generation and will
+        take it on its next registration, which is the plane's normal recovery path.
+        """
+        interval = max(0.0, FLEET_RESTART_DISPATCH_INTERVAL_SECONDS)
+        for record in records:
+            device_id = record["device_id"]
+            try:
+                if self._config_dispatch is None:
+                    return
+                if device_id not in set(self._connected_device_ids()):
+                    _LOGGER.info(
+                        "fleet restart: %s is not connected; it will take the change on reconnect",
+                        device_id)
+                    continue
+                if interval:
+                    wait = self._restart_dispatch_at - time.monotonic()
+                    if wait > 0:
+                        await asyncio.sleep(wait)
+                result = self._config_dispatch(device_id, record)
+                ok = bool(await result) if asyncio.iscoroutine(result) else bool(result)
+                self._restart_dispatch_at = time.monotonic() + interval
+                if not ok:
+                    _LOGGER.warning("fleet restart: could not dispatch %s; durable for reconnect",
+                                    device_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - one device failing must not stop the rest
+                _LOGGER.warning("fleet restart: dispatch to %s failed: %s", device_id, exc)
 
     async def _handle_config_reported(self, request: web.Request) -> web.Response:
         if not self._authorised(request):

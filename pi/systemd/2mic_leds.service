@@ -8,7 +8,7 @@ EnvironmentFile=/etc/voice-satellite/satellite.env
 # systemd does not expand environment variables in WorkingDirectory= (only specifiers like %h and
 # literal paths), so the working directory is set with a cd inside ExecStart instead. The paths and
 # the event port come from satellite.env, not from here.
-ExecStart=/bin/sh -c 'cd "$VS_BASE/examples" && exec "$VS_BASE/examples/.venv/bin/python3" 2mic_service.py --uri "tcp://127.0.0.1:${VS_EVENT_PORT}"'
+ExecStart=/bin/sh -c 'cd "$VS_BASE/examples" && exec "$VS_BASE/examples/.venv/bin/python3" 2mic_service.py --uri "tcp://127.0.0.1:${VS_EVENT_PORT}" --led-brightness "${VS_LED_BRIGHTNESS:-31}"'
 Restart=always
 RestartSec=1
 

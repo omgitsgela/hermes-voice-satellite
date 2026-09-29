@@ -30,7 +30,7 @@ SUPPORTED: dict[str, dict[str, Any]] = {
     "wake_threshold": {"type": "number", "minimum": 0.05, "maximum": 0.99},
     "mic_gain": {"type": "integer", "minimum": 0, "maximum": 100},
     "playback_volume": {"type": "integer", "minimum": 0, "maximum": 100},
-    "led_brightness": {"type": "integer", "minimum": 0, "maximum": 100},
+    "led_brightness": {"type": "integer", "minimum": 1, "maximum": 31},
     "locale": {"type": "string", "enum": ["en-US"]},
     "update_channel": {"type": "string", "enum": ["stable", "beta"]},
 }

@@ -64,7 +64,7 @@ else
     RUNNER_DIR="$REPO/pi"
 fi
 
-for f in outbound_satellite.py config_agent.py device_apply.py volume_control.py wake_shim.py 2mic_service.py inject_wake.py led_cmd.py; do
+for f in outbound_satellite.py config_agent.py device_apply.py volume_control.py mic_gain_control.py wake_shim.py 2mic_service.py inject_wake.py led_cmd.py; do
     if [ ! -f "$RUNNER_DIR/$f" ]; then
         echo "FAIL: missing device module $RUNNER_DIR/$f" >&2
         exit 1
@@ -137,7 +137,7 @@ fi
 
 echo
 echo "=== verification (read back from the card) ==="
-for f in outbound_satellite.py config_agent.py device_apply.py volume_control.py wake_shim.py 2mic_service.py inject_wake.py led_cmd.py; do
+for f in outbound_satellite.py config_agent.py device_apply.py volume_control.py mic_gain_control.py wake_shim.py 2mic_service.py inject_wake.py led_cmd.py; do
     bytes=$(wc -c < "$DEST/$f" | tr -d ' ')
     printf '  %-34s %s bytes  mode %s\n' "$f" "$bytes" "$(stat -c %a "$DEST/$f")"
 done

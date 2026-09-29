@@ -11,11 +11,16 @@
     input, select, button { font: inherit; padding: .55rem; }
     input[type=password] { min-width: 22rem; max-width: 100%; }
     button { cursor: pointer; }
+    .fleet { border: 1px solid #4a80d080; border-radius: .65rem; padding: 1rem; margin: 1rem 0; background: #4a80d012; }
+    .fleet h2 { margin-top: 0; }
     .device { border: 1px solid #8886; border-radius: .65rem; padding: 1rem; margin: 1rem 0; }
     .field { display: grid; grid-template-columns: minmax(10rem, 1fr) minmax(12rem, 2fr); gap: .75rem; margin: .7rem 0; align-items: center; }
     .status { white-space: pre-wrap; padding: .7rem; border-radius: .5rem; background: #8882; }
     .good { color: #16803c; } .bad { color: #b42318; }
+    .muted { color: #b58900; }
     small { opacity: .78; }
+    .fleet-fields { columns: 2; column-gap: 2rem; }
+    @media (max-width: 640px) { .fleet-fields { columns: 1; } }
   </style>
 </head>
 <body>
@@ -32,6 +37,20 @@
     <button id="connect" type="button">Load devices</button>
   </section>
   <p id="status" class="status">Enter the bridge token, then load devices.</p>
+
+  <section class="fleet">
+    <h2>Apply to all devices</h2>
+    <small>One change, every satellite in the fleet. Devices that are offline still take it when
+    they reconnect. A change that restarts a device service is applied one room at a time.</small>
+    <div id="fleet-fields" class="fleet-fields" style="margin-top:.75rem"></div>
+    <div class="row" style="margin-top:.75rem">
+      <button id="fleet-save" type="button">Apply to all devices</button>
+      <label style="display:flex;align-items:center;gap:.4rem">
+        <input id="fleet-poll" type="checkbox" checked> auto-refresh
+      </label>
+    </div>
+  </section>
+
   <main id="devices"></main>
 
 <script>
@@ -39,12 +58,16 @@
 const token = document.getElementById('token');
 const statusBox = document.getElementById('status');
 const devicesBox = document.getElementById('devices');
+const fleetFields = document.getElementById('fleet-fields');
+const fleetSave = document.getElementById('fleet-save');
+const fleetPoll = document.getElementById('fleet-poll');
 token.value = sessionStorage.getItem('voiceBridgeToken') || '';
 let schema = null;
+let pollTimer = null;
 
-function setStatus(message, ok = true) {
+function setStatus(message, ok = true, warn = false) {
   statusBox.textContent = message;
-  statusBox.className = 'status ' + (ok ? 'good' : 'bad');
+  statusBox.className = 'status ' + (ok ? (warn ? 'muted' : 'good') : 'bad');
 }
 
 async function api(path, options = {}) {
@@ -64,7 +87,11 @@ async function api(path, options = {}) {
   return body;
 }
 
-function inputFor(name, spec, value) {
+function inputFor(name, spec, value, container) {
+  const field = document.createElement('label');
+  field.className = 'field';
+  const caption = document.createElement('span');
+  caption.textContent = name + (spec.apply ? ` (${spec.apply})` : '');
   const input = spec.enum ? document.createElement('select') : document.createElement('input');
   input.dataset.setting = name;
   if (spec.enum) {
@@ -84,7 +111,24 @@ function inputFor(name, spec, value) {
     if (spec.pattern) input.pattern = spec.pattern;
   }
   input.value = value ?? spec.default ?? '';
+  field.appendChild(caption);
+  field.appendChild(input);
+  container.appendChild(field);
   return input;
+}
+
+function readField(input) {
+  const spec = schema.device_settings[input.dataset.setting];
+  return spec.type === 'integer'
+    ? Number.parseInt(input.value, 10)
+    : spec.type === 'number' ? Number.parseFloat(input.value) : input.value;
+}
+
+function buildFleetFields() {
+  fleetFields.replaceChildren();
+  for (const [name, spec] of Object.entries(schema.device_settings)) {
+    inputFor(name, spec, spec.default, fleetFields);
+  }
 }
 
 function renderDevice(device) {
@@ -94,37 +138,43 @@ function renderDevice(device) {
   heading.textContent = `${device.device_id} · ${device.connected ? 'connected' : 'offline'} · generation ${device.generation}`;
   card.appendChild(heading);
   const summary = document.createElement('p');
-  summary.textContent = device.converged ? 'Converged' : `Not converged; drift: ${JSON.stringify(device.drift)}`;
-  summary.className = device.converged ? 'good' : 'bad';
+  if (device.converged) {
+    summary.textContent = 'Converged';
+    summary.className = 'good';
+  } else {
+    const parts = ['Not converged'];
+    if (Object.keys(device.drift).length) parts.push(`drift: ${JSON.stringify(device.drift)}`);
+    if (device.last_error) parts.push(`last error: ${device.last_error}`);
+    summary.textContent = parts.join(' · ');
+    summary.className = 'bad';
+  }
   card.appendChild(summary);
 
   for (const [name, spec] of Object.entries(schema.device_settings)) {
-    const row = document.createElement('label');
-    row.className = 'field';
-    const caption = document.createElement('span');
-    caption.textContent = `${name} (${spec.apply})`;
-    row.appendChild(caption);
-    row.appendChild(inputFor(name, spec, device.desired[name]));
-    card.appendChild(row);
+    inputFor(name, spec, device.desired[name], card);
+    const reported = device.reported[name];
+    if (reported !== undefined && reported !== device.desired[name]) {
+      const note = document.createElement('small');
+      note.textContent = `device reports ${reported}`;
+      note.className = 'bad';
+      card.appendChild(note);
+    }
   }
 
   const save = document.createElement('button');
   save.type = 'button';
-  save.textContent = 'Save desired state';
+  save.textContent = 'Save this device only';
   save.addEventListener('click', async () => {
     try {
       const settings = {};
       for (const input of card.querySelectorAll('[data-setting]')) {
-        const spec = schema.device_settings[input.dataset.setting];
-        settings[input.dataset.setting] = spec.type === 'integer'
-          ? Number.parseInt(input.value, 10)
-          : spec.type === 'number' ? Number.parseFloat(input.value) : input.value;
+        settings[input.dataset.setting] = readField(input);
       }
       const result = await api(`/config/devices/${encodeURIComponent(device.device_id)}/desired`, {
         method: 'PUT',
         body: JSON.stringify({expected_generation: device.generation, settings})
       });
-      setStatus(`Saved generation ${result.device.generation}; dispatched: ${result.dispatched}.`);
+      setStatus(`Saved generation ${result.device.generation} for ${device.device_id}; dispatched: ${result.dispatched}.`);
       await load();
     } catch (error) {
       setStatus(error.message, false);
@@ -134,19 +184,55 @@ function renderDevice(device) {
   return card;
 }
 
+fleetSave.addEventListener('click', async () => {
+  try {
+    const settings = {};
+    for (const input of fleetFields.querySelectorAll('[data-setting]')) {
+      settings[input.dataset.setting] = readField(input);
+    }
+    const result = await api('/config/fleet/desired', {
+      method: 'PUT',
+      body: JSON.stringify({settings})
+    });
+    const pacing = result.restart_pacing
+      ? ' Restart-class settings are being applied one room at a time.'
+      : '';
+    setStatus(`Applied to ${result.count} device(s).${pacing}`, true, result.restart_pacing);
+    await load();
+  } catch (error) {
+    setStatus(error.message, false);
+  }
+});
+
 async function load() {
   try {
     const [schemaResult, fleet] = await Promise.all([
       api('/config/schema'), api('/config/devices')
     ]);
+    const firstLoad = schema === null;
     schema = schemaResult;
+    if (firstLoad) buildFleetFields();
     devicesBox.replaceChildren(...fleet.devices.map(renderDevice));
-    setStatus(`Loaded ${fleet.count} device${fleet.count === 1 ? '' : 's'}.`);
+    const converged = fleet.devices.filter(d => d.converged).length;
+    setStatus(`Loaded ${fleet.count} device(s); ${converged} converged.`);
+    restartPoll();
   } catch (error) {
     devicesBox.replaceChildren();
     setStatus(error.message, false);
+    stopPoll();
   }
 }
+
+function restartPoll() {
+  stopPoll();
+  if (fleetPoll.checked) {
+    pollTimer = setInterval(load, 5000);
+  }
+}
+function stopPoll() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+fleetPoll.addEventListener('change', restartPoll);
 
 document.getElementById('connect').addEventListener('click', load);
 </script>
