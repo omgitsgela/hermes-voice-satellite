@@ -194,7 +194,7 @@ def make_apply_adapter(
             # be applied as healthy, which is the lie this whole module exists to prevent.
             try:
                 on_disk = _read_env_key(env_file, _ENV_KEY_FOR[name])
-            except OSError:
+            except (OSError, UnicodeError):
                 return False
             if on_disk == str(desired):
                 in_force[name] = desired
@@ -324,11 +324,13 @@ def make_apply_adapter(
                 # The lookup itself is a fallible step (an env read and a stat). A failure is
                 # an application failure, reported like any other: it must not escape and skip
                 # the bookkeeping below, or an earlier restart-class setting written in this
-                # same delivery would never be restarted and its report would be a lie.
+                # same delivery would never be restarted and its report would be a lie. The
+                # env read can also fail to DECODE (UnicodeDecodeError, a ValueError rather
+                # than an OSError) on a malformed or concurrently replaced file.
                 try:
                     model_dir = _wake_model_dir()
                     model_present = (model_dir / f"{value}.tflite").is_file()
-                except OSError as exc:
+                except (OSError, UnicodeError) as exc:
                     hard.append(f"wake_word: could not check for {value}.tflite: {exc}")
                     continue
                 if not model_present:
@@ -341,7 +343,7 @@ def make_apply_adapter(
             key = _ENV_KEY_FOR[name]
             try:
                 _write_env_key(env_file, key, str(value))
-            except OSError as exc:
+            except (OSError, UnicodeError) as exc:
                 hard.append(f"{name}: could not write {key} to {env_file}: {exc}")
                 continue
             # From here on the env file claims a value the running services do not yet hold.
@@ -352,12 +354,13 @@ def make_apply_adapter(
             stale.add(name)
             # Read back to prove the write landed, for the same reason as the plane's own
             # persistence: a value the disk never saw must not be reported as applied.
-            # The read itself can fail (a transient I/O error) - that is a failure of the same
-            # kind as a bad write and must be reported, not allowed to escape and skip the
-            # stale bookkeeping above.
+            # The read itself can fail (a transient I/O error, or an undecodable file -
+            # UnicodeDecodeError is a ValueError, not an OSError) - that is a failure of the
+            # same kind as a bad write and must be reported, not allowed to escape and skip
+            # the stale bookkeeping above.
             try:
                 landed = _read_env_key(env_file, key)
-            except OSError as exc:
+            except (OSError, UnicodeError) as exc:
                 hard.append(f"{name}: could not read back {key} from {env_file}: {exc}")
                 continue
             if landed != str(value):

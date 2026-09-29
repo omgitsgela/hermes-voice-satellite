@@ -300,7 +300,10 @@ tiers:
 A restart-class value is reported in `actual` only **after its service restart succeeds**. The env
 write itself is read back to prove it landed, and that readback is a fallible step: a write error or a
 readback error is reported `error` for that setting, the value is left out of `actual`, and it is marked
-stale so a redelivery re-attempts the write+restart instead of trusting the env file. If the env
+stale so a redelivery re-attempts the write+restart instead of trusting the env file. The same rule
+covers a decode failure (an undecodable env file, which `read_text` raises as a `ValueError` rather than
+an `OSError`): a failed env read never proves a value is in force, and a failed env write or readback is
+a reported application failure. If the env
 write lands but the restart fails, the value is reported `error`, left out of `actual`, and remembered:
 the agent persists which settings were not applied, and a *recreated* adapter (an outbound-runner
 restart, not an audio-stack restart) is seeded with that set so it re-attempts the restart instead of

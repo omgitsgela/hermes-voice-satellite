@@ -578,6 +578,112 @@ async def model_lookup_failure_regression() -> None:
 
 asyncio.run(model_lookup_failure_regression())
 
+# ---------------------------------------------------------------- a decode failure is an I/O failure (sixth-pass F1)
+
+# _read_env_key() decodes the env file as text, so a malformed or concurrently replaced file
+# raises UnicodeDecodeError - a ValueError, NOT an OSError. The env-operation guards caught
+# only OSError, so a decode failure after an earlier setting had been staged escaped
+# apply(): the agent saved no state and the coupled restart never ran. Both failure points
+# are covered here: a decode fault on the in-force precheck (an earlier setting is already
+# staged and its restart must still happen) and a decode fault on the post-write readback
+# (the value must stay unapplied, persisted as pending_restart, and retried after recreation).
+def _decode_fault_reader(real_read, fault_key):
+    """A real env reader that raises UnicodeDecodeError the FIRST time it reads a non-None
+    value for fault_key - a decode failure on exactly the named boundary, no other."""
+    state = {"n": 0}
+    def flaky(path, key):
+        val = real_read(path, key)
+        if key == fault_key and val is not None and state["n"] == 0:
+            state["n"] += 1
+            raise UnicodeDecodeError("utf-8", b"\xff\xfe", 0, 1, "simulated env-file decode failure")
+        return val
+    return flaky
+
+async def env_decode_fault_regression() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        env = make_env(tmp)
+        sc = FakeSystemctl()
+        state_path = pathlib.Path(tmp) / "config.json"
+        real_read = _device_apply._read_env_key
+        _device_apply._read_env_key = _decode_fault_reader(real_read, "VS_WAKE_THRESHOLD")
+        try:
+            # LED is written and staged first; the decode fault hits the wake_threshold
+            # in-force precheck AFTER the LED is staged.
+            agent = DeviceConfigAgent(
+                state_path,
+                apply=make_apply_adapter(env_path=env, systemctl=sc),
+                device_id="kitchen-1",
+            )
+            report = await agent.apply_event(Event(type="hermes.config.desired", data={
+                "schema_version": 1, "device_id": "kitchen-1", "generation": 1,
+                "settings": {"led_brightness": 20, "wake_threshold": 0.4},
+            }))
+            check("a decode fault on the in-force precheck does not escape apply()",
+                  report.data["health"] in {"healthy", "error"}, report.data)
+            # THE KEY ASSERTION: the earlier-staged LED must still be restarted into force.
+            # Before the fix the escaping UnicodeDecodeError skipped the restart entirely
+            # (zero systemctl calls) and the agent saved no state.
+            check("an earlier-staged restart-class setting is still restarted into force",
+                  any(c[0] == "systemctl" and c[1] == "restart"
+                      and set(c[2:]) == set(COUPLED_AUDIO_UNITS) for c in sc.calls), sc.calls)
+            check("both settings are applied (a failed precheck fails toward a restart, not a skip)",
+                  report.data["actual"].get("led_brightness") == 20
+                  and report.data["actual"].get("wake_threshold") == 0.4, report.data)
+            check("the delivery converged honestly (state was persisted)",
+                  _state_pending_restart(state_path) == [],
+                  str(_state_pending_restart(state_path)))
+        finally:
+            _device_apply._read_env_key = real_read
+
+    with tempfile.TemporaryDirectory() as tmp:
+        env = make_env(tmp)
+        sc = FakeSystemctl()
+        state_path = pathlib.Path(tmp) / "config.json"
+        real_read = _device_apply._read_env_key
+        _device_apply._read_env_key = _decode_fault_reader(real_read, "VS_LED_BRIGHTNESS")
+        try:
+            # The fault now hits the POST-WRITE readback of the LED (first read that sees a
+            # non-None VS_LED_BRIGHTNESS): the write landed, but it cannot be proven.
+            agent = DeviceConfigAgent(
+                state_path,
+                apply=make_apply_adapter(env_path=env, systemctl=sc),
+                device_id="kitchen-1",
+            )
+            report = await agent.apply_event(Event(type="hermes.config.desired", data={
+                "schema_version": 1, "device_id": "kitchen-1", "generation": 1,
+                "settings": {"led_brightness": 20},
+            }))
+            check("a decode fault on the readback is reported as an error, not raised",
+                  report.data["health"] == "error"
+                  and report.data["actual"].get("led_brightness") is None, report.data)
+            check("the value was written durably and persisted as a pending restart",
+                  _state_pending_restart(state_path) == ["led_brightness"],
+                  str(_state_pending_restart(state_path)))
+            check("no restart ran before the readback could be proven",
+                  not any("restart" in c for c in sc.calls), sc.calls)
+            # Adapter recreation (the outbound runner restarted) with the persisted seed:
+            # the recreated adapter must not trust the env file - it re-attempts the restart.
+            sc2 = FakeSystemctl()
+            agent2 = DeviceConfigAgent(
+                state_path,
+                apply=make_apply_adapter(env_path=env, systemctl=sc2, stale_seed=["led_brightness"]),
+                device_id="kitchen-1",
+            )
+            report2 = await agent2.apply_event(Event(type="hermes.config.desired", data={
+                "schema_version": 1, "device_id": "kitchen-1", "generation": 1,
+                "settings": {"led_brightness": 20},
+            }))
+            check("a recreated seeded adapter re-attempts and converges",
+                  report2.data["health"] == "healthy"
+                  and report2.data["actual"].get("led_brightness") == 20, report2.data)
+            check("the re-attempt restarted the coupled audio group",
+                  any(c[0] == "systemctl" and c[1] == "restart"
+                      and set(c[2:]) == set(COUPLED_AUDIO_UNITS) for c in sc2.calls), sc2.calls)
+        finally:
+            _device_apply._read_env_key = real_read
+
+asyncio.run(env_decode_fault_regression())
+
 # ---------------------------------------------------------------- env file: update existing key, preserve others
 
 with tempfile.TemporaryDirectory() as tmp:
