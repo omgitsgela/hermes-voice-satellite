@@ -218,12 +218,17 @@ CAPTURE_ACTIVATION_SECONDS = 30.0
 # restart cannot reach it. `capture_follow_up` already works this way, with a wall-clock deadline a
 # blip cannot move; this is the wake path getting the same treatment.
 WAKE_NO_SPEECH_SECONDS = 8.0
-# How much of the opening of a wake activation to ignore, so the device's own awake chime
-# and its echo are not taken as speech. Measured 2026-09-24: a 0.3s chime transcribed as
-# "beep" and started a turn (issue #47). Kept short on purpose, because a person usually waits
-# for the tone to finish before speaking, so this costs no real time. The device-side fix is to
-# mute the microphone across the tone at all, which is what actually removes the problem.
-WAKE_QUIET_SECONDS = 0.5
+# How much of the opening of a wake activation to ignore, so the device's own awake chime and its
+# echo are not taken as speech. Measured 2026-09-24: a 0.3s chime transcribed as "beep" and started
+# a turn (issue #47).
+#
+# This is deaf time in front of the person's first word, so it must stay SHORTER than the device's
+# own mute (awake tone 308 ms + VS_MIC_MUTE_AFTER_AWAKE in pi/systemd/satellite.env). A drain that
+# outlasts the mute throws away audio the device is already sending: measured 2026-09-29, at 0.5
+# against a 708 ms device mute, "New conversation" was transcribed as "conversation" and the phrase
+# matcher never fired, while the same words after a pause came through whole. Both invariants are
+# asserted by scripts/test_wake_mute_timing.py.
+WAKE_QUIET_SECONDS = 0.35
 
 
 # --- follow-up mode: keep listening after an answer --------------------------
