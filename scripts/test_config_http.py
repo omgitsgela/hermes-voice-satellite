@@ -133,6 +133,14 @@ async def main() -> int:
               and "d.device_id in existing" not in html
               and "card.refresh(byId.get(id))" in html,
               "id reconciliation / Map membership not found")
+        # Fourth-pass: number/text inputs fire `change` only on commit (blur/Enter); the
+        # per-keystroke `input` event is what marks a field as edited while it is being
+        # typed. Without it, refresh()/reconcile() see the in-progress value as an
+        # untouched field and overwrite it.
+        check("in-progress typing is tracked before the edit is committed (fourth-pass F2)",
+              "input.addEventListener('input', markEdited);" in html
+              and "input.addEventListener('change', markEdited);" in html,
+              "input-event edit tracking not found")
         # A failed poll must not clear the DOM: the operator's unsaved edits and the last
         # good device view stay exactly as they were.
         check("a failed poll does not clear the device cards (F6)",

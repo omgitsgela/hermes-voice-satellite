@@ -11,6 +11,7 @@ Every hardware dependency is faked so the test runs on the bridge host with no P
 from __future__ import annotations
 
 import asyncio
+import json as _json
 import pathlib
 import subprocess
 import sys
@@ -19,6 +20,7 @@ from typing import Optional
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+import pi.device_apply as _device_apply  # noqa: E402
 from pi.device_apply import make_apply_adapter, COUPLED_AUDIO_UNITS  # noqa: E402
 from pi.volume_control import AlsaVolume  # noqa: E402
 from pi.mic_gain_control import AlsaMicGain  # noqa: E402
@@ -403,6 +405,89 @@ for mode, label in (("timeout", "a systemctl timeout"), ("oserror", "an OSError 
         actual2, health2, error2 = adapter({"led_brightness": 18})
         check(f"{label}: a redelivery after the failure clears re-attempts and converges",
               health2 == "healthy" and actual2.get("led_brightness") == 18, (health2, actual2))
+
+# ---------------------------------------------------------------- a failed readback is a failed apply (fourth-pass F1)
+
+# A transient I/O error on the POST-WRITE env readback is a failure, not a proof: the value
+# was written to the file but never restarted into force. Before the fix the raw OSError
+# escaped apply(), the agent's error path saved no state, and a redelivery read the env
+# file and reported the value healthy with zero systemctl calls - a converged flag that is a
+# lie. The value must be marked stale the moment it is written, the readback failure must be
+# reported (not raised), and a redelivery must re-attempt the restart.
+def _state_pending_restart(state_path):
+    """The persisted pending_restart list, or a sentinel if the state file was never
+    written (the defect: the agent's error path saves no state at all)."""
+    try:
+        return _json.loads(state_path.read_text()).get("pending_restart")
+    except (FileNotFoundError, ValueError):
+        return "<state not persisted>"
+
+
+def _flaky_env_reader(real_read):
+    """A real env reader that fails the FIRST read of a key whose value is present -
+    exactly the post-write readback, not the pre-write "is it in force" read (key absent)."""
+    state = {"n": 0}
+    def flaky(path, key):
+        val = real_read(path, key)
+        if val is not None and state["n"] == 0:
+            state["n"] += 1
+            raise OSError("simulated transient I/O error reading the env file")
+        return val
+    return flaky
+
+async def readback_failure_regression() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        env = make_env(tmp)
+        sc = FakeSystemctl()
+        state_path = pathlib.Path(tmp) / "config.json"
+        real_read = _device_apply._read_env_key
+        _device_apply._read_env_key = _flaky_env_reader(real_read)
+        try:
+            agent = DeviceConfigAgent(
+                state_path,
+                apply=make_apply_adapter(env_path=env, systemctl=sc),
+                device_id="kitchen-1",
+            )
+            report = await agent.apply_event(Event(type="hermes.config.desired", data={
+                "schema_version": 1, "device_id": "kitchen-1", "generation": 1,
+                "settings": {"led_brightness": 18},
+            }))
+            check("a failed post-write readback is reported as an error, not applied",
+                  report.data["health"] == "error"
+                  and report.data["actual"].get("led_brightness") is None, report.data)
+            check("the readback failure is named in the report",
+                  report.data["error"] is not None and "read back" in report.data["error"],
+                  report.data)
+            check("the failed readback raised no exception through the agent",
+                  report.data["health"] != "unknown", report.data)
+            check("the value was still written durably to the env file",
+                  any("VS_LED_BRIGHTNESS=18" in line for line in env.read_text().splitlines()),
+                  env.read_text())
+            check("the unapplied value is persisted as a pending restart (a recreated runner must not trust the env file)",
+                  _state_pending_restart(state_path) == ["led_brightness"],
+                  str(_state_pending_restart(state_path)))
+            check("no restart was attempted before the readback could be proven",
+                  not any("restart" in c for c in sc.calls), sc.calls)
+            # Redelivery within the same process: the adapter must NOT trust the env file
+            # for this value - it must re-attempt the restart instead of reporting a value
+            # that was never restarted into force as healthy.
+            report2 = await agent.apply_event(Event(type="hermes.config.desired", data={
+                "schema_version": 1, "device_id": "kitchen-1", "generation": 1,
+                "settings": {"led_brightness": 18},
+            }))
+            check("a redelivery after the readback failure re-attempts and converges",
+                  report2.data["health"] == "healthy"
+                  and report2.data["actual"].get("led_brightness") == 18, report2.data)
+            check("the redelivery restarted the coupled audio group (not a silent env trust)",
+                  any(c[0] == "systemctl" and c[1] == "restart"
+                      and set(c[2:]) == set(COUPLED_AUDIO_UNITS) for c in sc.calls), sc.calls)
+            check("the pending restart is cleared once the restart succeeds",
+                  _state_pending_restart(state_path) == [],
+                  str(_state_pending_restart(state_path)))
+        finally:
+            _device_apply._read_env_key = real_read
+
+asyncio.run(readback_failure_regression())
 
 # ---------------------------------------------------------------- env file: update existing key, preserve others
 

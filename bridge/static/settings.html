@@ -219,10 +219,16 @@ function renderDevice(device) {
   for (const [name, spec] of Object.entries(schema.device_settings)) {
     const input = inputFor(name, spec, device.desired[name], card);
     inputs.set(name, input);
-    input.addEventListener('change', () => {
+    const markEdited = () => {
       edited.add(name);
       card.dataset.dirty = '1';
-    });
+    };
+    // Number and text inputs fire `change` only when the edit is committed (blur or Enter);
+    // while the operator is still typing, only `input` fires per keystroke. Edit tracking
+    // must therefore listen for `input` too, or refresh()/reconcile() would see an
+    // uncommitted field as untouched and overwrite the number mid-typing.
+    input.addEventListener('input', markEdited);
+    input.addEventListener('change', markEdited);
     if (device.reported[name] !== undefined && device.reported[name] !== device.desired[name]) {
       const note = document.createElement('small');
       note.textContent = `device reports ${device.reported[name]}`;

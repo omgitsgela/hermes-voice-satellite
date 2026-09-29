@@ -185,9 +185,20 @@ def make_apply_adapter(
             return False
         if in_force.get(name) == desired:
             return True
-        if name not in in_force and _read_env_key(env_file, _ENV_KEY_FOR[name]) == str(desired):
-            in_force[name] = desired
-            return True
+        if name not in in_force:
+            # The env file is the authority for a value this process has not handled - but
+            # only a read that SUCCEEDS may say "in force". A read that raises (a transient
+            # I/O error) means we do not know, so it is treated as "not proven" and the normal
+            # write+restart path decides. That fails toward an idempotent restart (safe); the
+            # alternative - a failed read counted as proof - would report a value that may not
+            # be applied as healthy, which is the lie this whole module exists to prevent.
+            try:
+                on_disk = _read_env_key(env_file, _ENV_KEY_FOR[name])
+            except OSError:
+                return False
+            if on_disk == str(desired):
+                in_force[name] = desired
+                return True
         return False
 
     def _restart(units: tuple[str, ...]) -> None:
@@ -324,9 +335,23 @@ def make_apply_adapter(
             except OSError as exc:
                 hard.append(f"{name}: could not write {key} to {env_file}: {exc}")
                 continue
+            # From here on the env file claims a value the running services do not yet hold.
+            # Mark it stale BEFORE any further fallible step: if the readback (or anything
+            # after it) fails, a redelivery must not trust the env file and report this value
+            # as in force without a restart. It stays out of `applied` and `in_force` until
+            # the restart below succeeds; `stale` is cleared only on a successful restart.
+            stale.add(name)
             # Read back to prove the write landed, for the same reason as the plane's own
             # persistence: a value the disk never saw must not be reported as applied.
-            if _read_env_key(env_file, key) != str(value):
+            # The read itself can fail (a transient I/O error) - that is a failure of the same
+            # kind as a bad write and must be reported, not allowed to escape and skip the
+            # stale bookkeeping above.
+            try:
+                landed = _read_env_key(env_file, key)
+            except OSError as exc:
+                hard.append(f"{name}: could not read back {key} from {env_file}: {exc}")
+                continue
+            if landed != str(value):
                 hard.append(f"{name}: write to {key} did not land; not reporting it as applied")
                 continue
             units_to_restart.update(_UNITS_FOR[name])
