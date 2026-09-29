@@ -239,28 +239,30 @@ function renderDevice(device) {
       setStatus(`${device.device_id}: nothing changed; nothing written.`);
       return;
     }
+    save.disabled = true;
     try {
       const result = await api(`/config/devices/${encodeURIComponent(device.device_id)}/desired`, {
         method: 'PUT',
         body: JSON.stringify({expected_generation: Number(card.dataset.generation), settings})
       });
+      // Reconcile the card with what the server now holds: the baseline and the
+      // generation advance, so the NEXT save cannot issue a stale expected_generation,
+      // and an edit made while this request was in flight is preserved if - and only if
+      // the server does not already hold it.
+      card.reconcile(result.device);
       setStatus(`Saved generation ${result.device.generation} for ${device.device_id} ` +
                 `(only the changed settings were sent); dispatched: ${result.dispatched}.`);
       await load();
     } catch (error) {
       setStatus(error.message, false);
+    } finally {
+      save.disabled = false;
     }
   });
   card.appendChild(save);
 
-  function refresh(view) {
-    // Polling updates the status, generation, and reported notes in place. It never
-    // touches the editable fields: an unsaved edit survives an auto-refresh, and a save
-    // is issued against the generation the card shows, so a refresh cannot turn it into
-    // a stale write. A card the operator is editing is left completely alone.
-    paintHeading(view);
-    paintSummary(view);
-    for (const [name, input] of inputs) {
+  function paintNotes(view) {
+    for (const [name] of inputs) {
       const oldNote = reportedNotes.get(name);
       if (oldNote) { oldNote.remove(); reportedNotes.delete(name); }
       if (view.reported[name] !== undefined && view.reported[name] !== view.desired[name]) {
@@ -273,7 +275,41 @@ function renderDevice(device) {
     }
   }
 
+  function refresh(view) {
+    // Polling updates the status, generation, and reported notes in place. It never
+    // touches the editable fields: an unsaved edit survives an auto-refresh, and a save
+    // is issued against the generation the card shows, so a refresh cannot turn it into
+    // a stale write. A card the operator is editing is left completely alone.
+    paintHeading(view);
+    paintSummary(view);
+    paintNotes(view);
+  }
+
+  function reconcile(view) {
+    // A save just succeeded. Move the baseline to the server's record so the next save
+    // diffs against the truth and carries the new generation. A field the operator edited
+    // while this request was pending is kept only if the server does not already hold the
+    // edited value; otherwise the server's value wins and the input is repainted. The
+    // dirty flag is recomputed from whatever is still pending, never blindly cleared.
+    paintHeading(view);
+    paintSummary(view);
+    for (const [name, input] of inputs) {
+      const current = readField(input);
+      const pendingEdit = current !== original[name];
+      const serverHasIt = current === view.desired[name];
+      if (!(pendingEdit && !serverHasIt)) {
+        input.value = view.desired[name];
+      }
+      original[name] = view.desired[name];
+    }
+    paintNotes(view);
+    const stillDirty = [...inputs].some(
+      ([name, input]) => readField(input) !== original[name]);
+    if (stillDirty) { card.dataset.dirty = '1'; } else { delete card.dataset.dirty; }
+  }
+
   card.refresh = refresh;
+  card.reconcile = reconcile;
   return card;
 }
 
@@ -326,28 +362,32 @@ async function load() {
     schema = schemaResult;
     if (firstLoad) buildFleetFields();
     const byId = new Map(fleet.devices.map(d => [d.device_id, d]));
-    const existingCards = [...devicesBox.querySelectorAll('.device')];
-    const existingIds = new Set(existingCards.map(c => c.dataset.deviceId));
-    // Rebuild only when the set of device ids changed; otherwise refresh each card in
-    // place so the polling timer never discards an unsaved edit. A card the operator is
-    // editing (data-dirty) is left completely alone until it is saved or the population
-    // changes, which is the one moment a rebuild is unavoidable.
-    const populationChanged = existingIds.size !== fleet.devices.length ||
-      fleet.devices.some(d => !existingIds.has(d.device_id));
-    if (populationChanged) {
-      devicesBox.replaceChildren(...fleet.devices.map(renderDevice));
-    } else {
-      for (const card of existingCards) {
-        if (card.dataset.dirty) continue;
-        const d = byId.get(card.dataset.deviceId);
-        if (d) card.refresh(d);
-      }
+    // Reconcile by device id: a card that already exists is refreshed in place (or left
+    // completely alone while the operator is editing it), so the polling timer never
+    // discards an unsaved edit and a save is issued against the generation the card shows.
+    // Only a brand-new device gets a fresh card; a device that disappeared is removed.
+    const existing = new Map(
+      [...devicesBox.querySelectorAll('.device')].map(c => [c.dataset.deviceId, c]));
+    for (const card of existing.values()) {
+      const id = card.dataset.deviceId;
+      if (!byId.has(id)) { card.remove(); continue; }
+      if (card.dataset.dirty) continue; // the operator is editing this card
+      card.refresh(byId.get(id));
     }
+    for (const d of fleet.devices) {
+      if (d.device_id in existing) continue; // refreshed in place above
+      devicesBox.appendChild(renderDevice(d));
+    }
+    devicesBox.replaceChildren(
+      ...[...devicesBox.querySelectorAll('.device')]
+        .sort((a, b) => a.dataset.deviceId.localeCompare(b.dataset.deviceId)));
     const converged = fleet.devices.filter(d => d.converged).length;
     setStatus(`Loaded ${fleet.count} device(s); ${converged} converged.`);
     restartPoll();
   } catch (error) {
-    devicesBox.replaceChildren();
+    // A failed poll must not destroy what is on screen: the operator's unsaved edits and
+    // the last good device view stay exactly as they were; the status line says what
+    // happened and the next poll will try again.
     setStatus(error.message, false);
     stopPoll();
   } finally {

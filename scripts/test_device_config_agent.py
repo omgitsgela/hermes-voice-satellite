@@ -92,6 +92,82 @@ async def main() -> int:
               and staged_report.data["actual"] == {}
               and "adapter" in staged_report.data["error"], staged_report)
 
+        # ------------------------------------------------------------------
+        # A failed restart-class application is remembered across process
+        # recreation (review F2): the unapplied set is persisted, and a fresh
+        # agent hands it to a compatible adapter as the stale seed, so the new
+        # adapter re-attempts the restart instead of trusting the env file.
+        import json as _json
+        restart_path = pathlib.Path(tmp) / "restart.json"
+        adapter_calls: list[dict] = []
+
+        def adapter_with_seed(settings, stale_seed=None):
+            adapter_calls.append({"settings": settings, "stale_seed": stale_seed})
+            return {}, "error", "restart failed"
+
+        agent_a = DeviceConfigAgent(restart_path, apply=adapter_with_seed,
+                                    device_id="kitchen-1")
+        report_a = await agent_a.apply_event(Event(type="hermes.config.desired", data={
+            "schema_version": 1, "device_id": "kitchen-1", "generation": 1,
+            "settings": {"led_brightness": 20},
+        }))
+        check("a failed application is not reported as applied",
+              report_a.data["health"] == "error"
+              and report_a.data["actual"].get("led_brightness") is None, report_a)
+        persisted = _json.loads(restart_path.read_text())
+        check("the unapplied set is persisted with the device state",
+              persisted.get("pending_restart") == ["led_brightness"], persisted)
+
+        # A fresh agent (process restarted) re-delivering the same generation must
+        # hand the persisted stale set to the adapter.
+        agent_b = DeviceConfigAgent(restart_path, apply=adapter_with_seed,
+                                    device_id="kitchen-1")
+        report_b = await agent_b.apply_event(Event(type="hermes.config.desired", data={
+            "schema_version": 1, "device_id": "kitchen-1", "generation": 1,
+            "settings": {"led_brightness": 20},
+        }))
+        check("a fresh agent re-attempts a failed restart-class setting",
+              report_b.data["health"] == "error" and len(adapter_calls) == 2,
+              (report_b, adapter_calls))
+        check("the fresh agent's adapter received the persisted stale seed",
+              adapter_calls[1].get("stale_seed") == ["led_brightness"], adapter_calls)
+
+        # A successful application clears the remembered set.
+        def adapter_ok(settings, stale_seed=None):
+            return dict(settings), "healthy", None
+
+        agent_c = DeviceConfigAgent(restart_path, apply=adapter_ok,
+                                    device_id="kitchen-1")
+        report_c = await agent_c.apply_event(Event(type="hermes.config.desired", data={
+            "schema_version": 1, "device_id": "kitchen-1", "generation": 2,
+            "settings": {"led_brightness": 20},
+        }))
+        persisted_c = _json.loads(restart_path.read_text())
+        check("a successful application clears the unapplied set",
+              report_c.data["health"] == "healthy"
+              and persisted_c.get("pending_restart") == [], persisted_c)
+
+        # An adapter without the seed parameter is called the old way (staging
+        # fallback compatibility).
+        no_seed_path = pathlib.Path(tmp) / "no-seed.json"
+        legacy_calls: list[dict] = []
+
+        def adapter_legacy(settings):
+            legacy_calls.append(dict(settings))
+            return {}, "degraded", "no adapter"
+
+        legacy_agent = DeviceConfigAgent(no_seed_path, apply=adapter_legacy,
+                                         device_id="kitchen-3")
+        legacy_agent.state["pending_restart"] = ["wake_word"]
+        legacy_agent._save()
+        await legacy_agent.apply_event(Event(type="hermes.config.desired", data={
+            "schema_version": 1, "device_id": "kitchen-3", "generation": 1,
+            "settings": {"wake_word": "hey_karen"},
+        }))
+        check("an adapter without a stale-seed parameter is called normally",
+              len(legacy_calls) == 1 and legacy_calls[0] == {"wake_word": "hey_karen"},
+              legacy_calls)
+
     if problems:
         print("\nFAILURES")
         for problem in problems:

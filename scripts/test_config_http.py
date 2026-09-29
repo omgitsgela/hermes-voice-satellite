@@ -122,16 +122,28 @@ async def main() -> int:
         check("the fleet panel checkbox-gates each setting (F5: no default-filled clobber)",
               "fleet-pick" in html and "pick.checked" in html
               and "if (!pick.checked) continue;" in html, "fleet picker not found")
-        # F6: the 5-second convergence poll must update status in place and must not
-        # discard unsaved edits by rebuilding the card DOM. The page pins this with a
-        # per-card refresh() that paints heading/summary/notes only, and a load() that
-        # rebuilds only when the device population changed and skips dirty cards.
+        # F6: the convergence poll must update cards in place and must not discard unsaved
+        # edits. The page pins this structurally: each card keeps a stable device id and a
+        # per-card refresh() that paints only status/generation/notes; load() reconciles by
+        # device id (refreshing in place, sparring dirty cards, rendering only new devices)
+        # and a failed poll must not clear the DOM.
         check("the poll refreshes cards in place and spares unsaved edits (F6)",
               "card.refresh = refresh;" in html
-              and "populationChanged" in html
               and "card.dataset.dirty" in html
-              and "if (card.dataset.dirty) continue;" in html,
-              "in-place refresh / dirty-card guard not found")
+              and "d.device_id in existing" in html
+              and "card.refresh(byId.get(id))" in html,
+              "in-place refresh / id reconciliation not found")
+        # A failed poll must not clear the DOM: the operator's unsaved edits and the last
+        # good device view stay exactly as they were.
+        check("a failed poll does not clear the device cards (F6)",
+              "devicesBox.replaceChildren();" not in html,
+              "poll-failure DOM wipe still present")
+        # The device-card save must reconcile the card with the server's returned record:
+        # advance the baseline and generation so a second save is not a stale write.
+        check("a successful device save reconciles the card with the server record (F6 follow-up)",
+              "card.reconcile(result.device)" in html
+              and "card.reconcile = reconcile;" in html,
+              "save reconciliation not found")
 
     if problems:
         print("\nFAILURES")

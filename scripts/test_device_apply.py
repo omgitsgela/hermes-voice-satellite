@@ -18,7 +18,7 @@ from typing import Optional
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from pi.device_apply import make_apply_adapter  # noqa: E402
+from pi.device_apply import make_apply_adapter, COUPLED_AUDIO_UNITS  # noqa: E402
 from pi.volume_control import AlsaVolume  # noqa: E402
 from pi.mic_gain_control import AlsaMicGain  # noqa: E402
 from wyoming.event import Event  # noqa: E402
@@ -236,12 +236,17 @@ with tempfile.TemporaryDirectory() as tmp:
     check("the led value was written to the env file",
           any("VS_LED_BRIGHTNESS=18" in line for line in env.read_text().splitlines()),
           env.read_text())
-    check("the led service was restarted (and only the led service)",
-          any(c == ["systemctl", "restart", "2mic_leds"] for c in sc.calls), sc.calls)
-    check("the LED change did not bounce the whole audio stack",
-          not any(c == ["systemctl", "restart", "wyoming-satellite",
-                        "wyoming-openwakeword", "wake-shim", "2mic_leds"] for c in sc.calls),
-          sc.calls)
+    # The LED service is part of the coupled audio group (wyoming-satellite Requires= and
+    # After= it), so an "LED-only" restart is not an independent operation: the whole group
+    # goes, one group, or a unit is left dead. outbound-satellite is the one unit that must
+    # stay up (it is the process reporting the result).
+    check("a led change restarts the whole coupled audio group",
+          any(c[0] == "systemctl" and c[1] == "restart"
+              and set(c[2:]) == set(COUPLED_AUDIO_UNITS) for c in sc.calls), sc.calls)
+    check("a led change never restarts outbound-satellite (the applying process)",
+          not any("outbound-satellite" in c for c in sc.calls), sc.calls)
+    check("the units were reloaded before the restart",
+          any(c == ["systemctl", "daemon-reload"] for c in sc.calls), sc.calls)
 
 # ---------------------------------------------------------------- wake threshold: env + full coupled restart
 
@@ -314,8 +319,51 @@ with tempfile.TemporaryDirectory() as tmp:
     actual2, health2, error2 = adapter({"led_brightness": 18})
     check("a redelivery after a failed restart re-attempts it and converges",
           health2 == "healthy" and actual2.get("led_brightness") == 18, (health2, actual2))
-    check("the retry actually restarted the led service",
-          any(c == ["systemctl", "restart", "2mic_leds"] for c in sc.calls), sc.calls)
+    check("the retry actually restarted the coupled audio group",
+          any(c[0] == "systemctl" and c[1] == "restart"
+              and set(c[2:]) == set(COUPLED_AUDIO_UNITS) for c in sc.calls), sc.calls)
+
+# ---------------------------------------------------------------- failed restart survives adapter recreation (review F2)
+
+# The env file is durable; the in-memory "this restart failed" knowledge was not. If the
+# outbound runner (not the audio stack) is restarted after a failed restart, a FRESH adapter
+# reads the env file, sees the staged value, and - without being told the restart failed -
+# would report it healthy without ever touching systemctl. That is a converged flag that is
+# a lie. The fix: the previous adapter's unapplied set is seeded into the new adapter, so
+# the env file is not authority for those values.
+with tempfile.TemporaryDirectory() as tmp:
+    env = make_env(tmp)
+    sc_failed = FakeSystemctl(fail_restart=True)
+    adapter1 = make_apply_adapter(env_path=env, systemctl=sc_failed)
+    actual, health, error = adapter1({"led_brightness": 18})
+    check("the failed first attempt is not reported as applied",
+          health == "error" and actual.get("led_brightness") is None, (health, actual))
+    check("the failed value was written durably to the env file",
+          any("VS_LED_BRIGHTNESS=18" in line for line in env.read_text().splitlines()),
+          env.read_text())
+    # The audio services still run the OLD value (the restart failed); only the env file
+    # moved. A fresh adapter (the outbound runner restarted) must NOT trust the env file
+    # for this value: no stale seed -> it would read the env and skip the restart, which is
+    # exactly the false success we are guarding against.
+    sc_fresh_bad = FakeSystemctl()
+    adapter_fresh = make_apply_adapter(env_path=env, systemctl=sc_fresh_bad)
+    bad_actual, bad_health, _ = adapter_fresh({"led_brightness": 18})
+    check("an unseeded fresh adapter WOULD trust the env file (the defect the seed prevents)",
+          bad_health == "healthy" and bad_actual.get("led_brightness") == 18
+          and not any("restart" in c for c in sc_fresh_bad.calls),
+          (bad_health, bad_actual, sc_fresh_bad.calls))
+    # With the stale seed (what the agent persists and the runner hands over), the same
+    # fresh adapter re-attempts the restart instead of reporting a lie.
+    sc_fresh = FakeSystemctl()
+    adapter_seeded = make_apply_adapter(
+        env_path=env, systemctl=sc_fresh, stale_seed=["led_brightness"])
+    seeded_actual, seeded_health, seeded_error = adapter_seeded({"led_brightness": 18})
+    check("a seeded fresh adapter re-attempts the restart, does not trust the env file",
+          seeded_health == "healthy" and seeded_actual.get("led_brightness") == 18,
+          (seeded_health, seeded_actual, seeded_error))
+    check("the seeded re-attempt actually restarted the coupled group",
+          any(c[0] == "systemctl" and c[1] == "restart"
+              and set(c[2:]) == set(COUPLED_AUDIO_UNITS) for c in sc_fresh.calls), sc_fresh.calls)
 
 # ---------------------------------------------------------------- env file: update existing key, preserve others
 
@@ -412,8 +460,9 @@ async def agent_round_trip() -> None:
               report.data["health"] == "healthy", report.data)
         check("the agent reports the restart-class value it applied",
               report.data["actual"].get("led_brightness") == 22, report.data)
-        check("the agent's restart-class change restarted the led service",
-              any(c == ["systemctl", "restart", "2mic_leds"] for c in sc2.calls), sc2.calls)
+        check("the agent's restart-class change restarted the coupled audio group",
+              any(c[0] == "systemctl" and c[1] == "restart"
+                  and set(c[2:]) == set(COUPLED_AUDIO_UNITS) for c in sc2.calls), sc2.calls)
 
 
 asyncio.run(agent_round_trip())

@@ -53,7 +53,7 @@ the host already did, because a host is not a trust boundary for a device.
 | `wake_threshold` | number | 0.05 – 0.99 | `0.35` | wake service restart |
 | `mic_gain` | integer | 0 – 100 | `78` | immediate |
 | `playback_volume` | integer | 0 – 100 | `55` | immediate |
-| `led_brightness` | integer | 1 – 31 | `31` | LED service restart |
+| `led_brightness` | integer | 1 – 31 | `31` | coupled audio group restart |
 | `locale` | string | enum: `en-US` | `en-US` | next turn |
 | `update_channel` | string | enum: `stable`, `beta` | `stable` | next update check |
 
@@ -209,10 +209,16 @@ generation reaches it immediately. If the patch touches any **restart-class** se
 (`wake_word`, `wake_threshold`, `led_brightness`) the dispatch is **paced**: the bridge spaces out the
 per-device restart-class restarts by `VOICE_FLEET_RESTART_DISPATCH_INTERVAL` seconds (default 8) rather
 than bouncing every room's audio stack in the same instant. Immediate-class settings are dispatched
-without delay. The pacing wait, the dispatch, and the next-deadline update are one critical section, so
-two concurrent fleet writes cannot wake on the same deadline and bounce two rooms at once; and pending
-paced dispatches are cancelled and awaited by `Announcer.stop()`, so a shutdown cannot leave a restart
-firing after the bridge is down.
+without delay.
+
+Each device **reserves its slot under a lock** (a fast section that never awaits external work), then
+sleeps and dispatches **outside** the lock. This means two concurrent fleet writes still get distinct,
+ordered deadlines and cannot bounce two rooms at the same instant, while a single device whose
+connection stopped consuming output cannot hold the fleet's pacing slot: every dispatch is bounded by
+`VOICE_FLEET_DISPATCH_TIMEOUT` (default 30 s), and a timeout is logged rather than fatal, because the
+write is durable and the device takes the generation on its next registration. Pending paced dispatches
+are cancelled and awaited by `Announcer.stop()`, in a `finally` that runs even when an earlier shutdown
+step raises, so a shutdown cannot leave a restart firing after the bridge is down.
 
 The configuration page (`GET /configure`, served from `bridge/static/settings.html`) sends **only the
 settings the operator selected** on a fleet apply: each fleet field is checkbox-gated, and an
@@ -282,9 +288,18 @@ tiers:
 - **Immediate** — `playback_volume` (ALSA output via `volume_control`) and `mic_gain` (ALSA input via
   `mic_gain_control`). Written straight to the hardware and read back; no service is touched.
 - **Restart-class** — `led_brightness`, `wake_threshold`, `wake_word`. Written durably to the device's
-  env file and applied by restarting the coupled audio group. The group is restarted as one, and it
+  env file and applied by restarting the coupled audio group. **Every** restart-class setting restarts
+  the whole group: the LED service is part of it (`wyoming-satellite` `Requires=` and `After=` it), so
+  an "LED-only" restart is not an independent operation. The group is restarted as one, and it
   deliberately excludes `outbound-satellite` — the process running the adapter — so the device can
   bounce its own audio stack and still hold the connection that carries the report back.
+
+A restart-class value is reported in `actual` only **after its service restart succeeds**. If the env
+write lands but the restart fails, the value is reported `error`, left out of `actual`, and remembered:
+the agent persists which settings were not applied, and a *recreated* adapter (an outbound-runner
+restart, not an audio-stack restart) is seeded with that set so it re-attempts the restart instead of
+reading the env file and reporting the staged value as in force. A `converged` flag must never be a
+lie.
 
 The **honesty rule** is the whole point. A device that cannot apply a setting must not claim it did. A
 setting with no path on this hardware (e.g. `mic_gain` when the card has no input control) is reported

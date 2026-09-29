@@ -164,6 +164,18 @@ try:
     )
 except (TypeError, ValueError):
     FLEET_RESTART_DISPATCH_INTERVAL_SECONDS = 8.0
+# One device's paced dispatch is bounded: the dispatch writes through the device's
+# connection, and a connection that stopped consuming output must not hold the fleet's
+# pacing slot forever and stall every other room's restart-class change.
+FLEET_DISPATCH_TIMEOUT_SECONDS = _cfg(
+    "VOICE_FLEET_DISPATCH_TIMEOUT", "30.0"
+)
+try:
+    FLEET_DISPATCH_TIMEOUT_SECONDS = max(
+        1.0, float(FLEET_DISPATCH_TIMEOUT_SECONDS)
+    )
+except (TypeError, ValueError):
+    FLEET_DISPATCH_TIMEOUT_SECONDS = 30.0
 VOICES_DIR = PROJECT_DIR / "voices"
 # The Piper voice. A pick made for this installation (2026-09-22, also the platform voice), so it
 # is a value a different deployment would want to change.

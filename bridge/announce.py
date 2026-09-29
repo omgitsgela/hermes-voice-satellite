@@ -67,6 +67,7 @@ from bridge.config import (
     ANNOUNCE_TURN_MAX_AGE,
     AUDIO_OUT,
     FLEET_RESTART_DISPATCH_INTERVAL_SECONDS,
+    FLEET_DISPATCH_TIMEOUT_SECONDS,
 )
 from bridge.satellite import SatelliteClient
 from bridge.timers import DEFAULT_STATE_PATH, TimerLimitError, TimerManager, parse_duration
@@ -212,25 +213,28 @@ class Announcer:
                      self.host, self.port)
 
     async def stop(self) -> None:
-        await self.timers.stop()
-        if self._worker is not None:
-            self._worker.cancel()
-            try:
-                await self._worker
-            except asyncio.CancelledError:
-                pass
-            self._worker = None
-        if self._runner is not None:
-            await self._runner.cleanup()
-            self._runner = None
         # Pending fleet restart-class dispatches are sleeping tasks that would otherwise
         # survive shutdown and keep bouncing device services after the bridge has stopped.
-        # Cancel them all and wait for the set to drain.
-        if self._fleet_tasks:
-            for task in list(self._fleet_tasks):
-                task.cancel()
-            await asyncio.gather(*self._fleet_tasks, return_exceptions=True)
-            self._fleet_tasks.clear()
+        # This cleanup is unconditional: it must run even if an earlier shutdown step raises,
+        # because a task that outlives stop() is a service being restarted after the fact.
+        try:
+            await self.timers.stop()
+            if self._worker is not None:
+                self._worker.cancel()
+                try:
+                    await self._worker
+                except asyncio.CancelledError:
+                    pass
+                self._worker = None
+            if self._runner is not None:
+                await self._runner.cleanup()
+                self._runner = None
+        finally:
+            if self._fleet_tasks:
+                for task in list(self._fleet_tasks):
+                    task.cancel()
+                await asyncio.gather(*self._fleet_tasks, return_exceptions=True)
+                self._fleet_tasks.clear()
         # The satellite connection belongs to the loop, which closes it during its own shutdown.
 
     # -- http ----------------------------------------------------------------
@@ -597,45 +601,80 @@ class Announcer:
             "devices": results,
         }, status=202)
 
+    async def _do_dispatch(self, device_id: str, record: dict) -> bool:
+        """Run one fleet dispatch and return its success.
+
+        Supports both sync and async dispatch callbacks. Kept separate so the caller can
+        bound it with a timeout: the dispatch writes through the device's connection, and a
+        connection that stopped consuming output would otherwise block on its own write lock
+        for an unbounded time.
+        """
+        result = self._config_dispatch(device_id, record) if self._config_dispatch else None
+        if result is None:
+            return False
+        if asyncio.iscoroutine(result):
+            return bool(await result)
+        return bool(result)
+
     async def _dispatch_restart_class(self, records: list) -> None:
         """Pace the delivery of a restart-class fleet write: one device per interval.
 
         The write is already durable, so this only controls *when* each connected device is
         told to bounce. A device that is away is skipped here (it converges on reconnect); a
-        dispatch that fails is logged, because the device still holds the generation and will
-        take it on its next registration, which is the plane's normal recovery path.
+        dispatch that fails or times out is logged, because the device still holds the
+        generation and will take it on its next registration, which is the plane's normal
+        recovery path.
 
-        The wait, the dispatch, and the deadline update are one critical section under
-        `_fleet_pace_lock`: each device is handed a fresh deadline before the next one
-        sleeps, so concurrent fleet writes cannot all wake at the same instant and bounce
-        two rooms at once.
+        Each device **reserves its slot under the lock**, then sleeps and dispatches
+        **outside** it. The reservation is fast and never awaits external work, so one device
+        that hangs cannot hold the pacing slot and stall every other room: concurrent fleet
+        writes still get distinct, ordered deadlines (no two rooms bounce at the same
+        instant), but a slow device's dispatch is bounded by `FLEET_DISPATCH_TIMEOUT_SECONDS`
+        and runs in parallel with the next device's scheduled slot rather than ahead of it.
         """
         interval = max(0.0, FLEET_RESTART_DISPATCH_INTERVAL_SECONDS)
         for record in records:
             device_id = record["device_id"]
+            if self._config_dispatch is None:
+                return
+            if device_id not in set(self._connected_device_ids()):
+                _LOGGER.info(
+                    "fleet restart: %s is not connected; it will take the change on reconnect",
+                    device_id)
+                continue
+            # Reserve this device's slot under the lock: distinct deadlines for concurrent
+            # writes, no external await while holding it.
+            async with self._fleet_pace_lock:
+                now = time.monotonic()
+                slot = self._restart_dispatch_at
+                if slot <= now:
+                    my_slot = now
+                    self._restart_dispatch_at = now + interval
+                else:
+                    my_slot = slot
+                    self._restart_dispatch_at = slot + interval
+            # Sleep and dispatch OUTSIDE the lock, bounded so a hung device cannot block the
+            # fleet's pacing indefinitely.
+            wait = my_slot - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
             try:
-                if self._config_dispatch is None:
-                    return
-                if device_id not in set(self._connected_device_ids()):
-                    _LOGGER.info(
-                        "fleet restart: %s is not connected; it will take the change on reconnect",
-                        device_id)
-                    continue
-                async with self._fleet_pace_lock:
-                    if interval:
-                        wait = self._restart_dispatch_at - time.monotonic()
-                        if wait > 0:
-                            await asyncio.sleep(wait)
-                    result = self._config_dispatch(device_id, record)
-                    ok = bool(await result) if asyncio.iscoroutine(result) else bool(result)
-                    self._restart_dispatch_at = time.monotonic() + interval
-                if not ok:
-                    _LOGGER.warning("fleet restart: could not dispatch %s; durable for reconnect",
-                                    device_id)
+                ok = await asyncio.wait_for(
+                    self._do_dispatch(device_id, record),
+                    timeout=FLEET_DISPATCH_TIMEOUT_SECONDS,
+                )
             except asyncio.CancelledError:
                 raise
+            except asyncio.TimeoutError:
+                _LOGGER.warning(
+                    "fleet restart: dispatch to %s timed out; durable for reconnect", device_id)
+                continue
             except Exception as exc:  # noqa: BLE001 - one device failing must not stop the rest
                 _LOGGER.warning("fleet restart: dispatch to %s failed: %s", device_id, exc)
+                continue
+            if not ok:
+                _LOGGER.warning("fleet restart: could not dispatch %s; durable for reconnect",
+                                device_id)
 
     async def _handle_config_reported(self, request: web.Request) -> web.Response:
         if not self._authorised(request):

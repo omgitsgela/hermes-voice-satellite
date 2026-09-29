@@ -48,7 +48,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 try:  # package import in the repo's tests; sibling import when installed beside the runner
     from .volume_control import AlsaVolume, VolumeCommandError
@@ -64,10 +64,14 @@ log = logging.getLogger("pi.device_apply")
 #: to report the result. Restarting it too would drop the very connection carrying the report.
 COUPLED_AUDIO_UNITS = ("wyoming-satellite", "wyoming-openwakeword", "wake-shim", "2mic_leds")
 
-#: Which units a given setting's restart must cover. The LED service is a subset of the coupled
-#: group; a wake change needs the whole group in dependency order.
+#: Which units a given setting's restart must cover. Every restart-class setting restarts the
+#: whole coupled audio group: the LED service is part of that group (wyoming-satellite
+#: Requires= and After= it), so an "LED-only" restart is not an independent operation and the
+#: documented restart contract - one group, or a unit is left dead - applies to it as well.
+#: The group deliberately excludes `outbound-satellite`: that is the process applying the
+#: change, and it must stay up to report the result.
 _UNITS_FOR = {
-    "led_brightness": ("2mic_leds",),
+    "led_brightness": COUPLED_AUDIO_UNITS,
     "wake_threshold": COUPLED_AUDIO_UNITS,
     "wake_word": COUPLED_AUDIO_UNITS,
 }
@@ -138,12 +142,18 @@ def make_apply_adapter(
     env_path: Optional[Path] = None,
     wake_models_dir: Optional[Path] = None,
     systemctl: Optional[Callable[..., subprocess.CompletedProcess]] = None,
+    stale_seed: Optional[Iterable[str]] = None,
 ) -> Callable[[dict[str, Any]], tuple[dict, str, Optional[str]]]:
     """Build the apply callback the configuration agent calls.
 
     Every dependency is injected so the tests can substitute a fake amixer, a fake env file and
     a fake `systemctl` - the production wiring (the `else` branches) is exercised by the
     runner-construction test instead, which is the only place that can catch a wiring gap.
+
+    `stale_seed` names the restart-class settings the *previous* adapter instance wrote to the
+    env file but whose service restart FAILED. For those, the env file is not authority: the
+    running service still holds the old value, so a freshly constructed adapter must not read
+    the env file and report the staged value as in force without restarting.
     """
     alsa = volume or AlsaVolume.from_calibration()
     gain = mic_gain or AlsaMicGain.from_env()
@@ -157,10 +167,11 @@ def make_apply_adapter(
     # touch of a setting this process has not handled, the env file is the fair authority for
     # what is in force: after a clean boot the service started with whatever the env file held.
     in_force: dict[str, Any] = {}
-    # Settings whose env value this process wrote but whose restart FAILED. For those, the env
+    # Settings whose env value was written but whose restart FAILED (this process, or a
+    # previous one - the agent persists that set and hands it back here). For those, the env
     # file is not the authority (the running service still holds the old value), so they must
     # not be treated as in force on redelivery: they stay pending a restart until one succeeds.
-    stale: set[str] = set()
+    stale: set[str] = set(stale_seed or ())
 
     def _wake_model_dir() -> Path:
         env_models_dir = _read_env_key(env_file, "VS_WAKE_MODELS")
