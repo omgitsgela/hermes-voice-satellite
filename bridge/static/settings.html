@@ -184,7 +184,12 @@ function renderDevice(device) {
   // operator changed relative to these, never the whole form: the form is pre-filled
   // with the current values, and re-sending them would clobber a per-device custom value
   // the operator did not intend to touch.
-  const original = Object.assign({}, device.desired);
+  let original = Object.assign({}, device.desired);
+  // The fields the operator has actually edited. Tracked explicitly (not by comparing
+  // input values to the baseline) because a value comparison cannot distinguish an
+  // untouched field from one the operator changed and then changed back to the same
+  // number while a save is in flight.
+  const edited = new Set();
   const heading = document.createElement('h2');
   const summary = document.createElement('p');
   const reportedNotes = new Map();
@@ -214,7 +219,10 @@ function renderDevice(device) {
   for (const [name, spec] of Object.entries(schema.device_settings)) {
     const input = inputFor(name, spec, device.desired[name], card);
     inputs.set(name, input);
-    input.addEventListener('change', () => { card.dataset.dirty = '1'; });
+    input.addEventListener('change', () => {
+      edited.add(name);
+      card.dataset.dirty = '1';
+    });
     if (device.reported[name] !== undefined && device.reported[name] !== device.desired[name]) {
       const note = document.createElement('small');
       note.textContent = `device reports ${device.reported[name]}`;
@@ -276,36 +284,45 @@ function renderDevice(device) {
   }
 
   function refresh(view) {
-    // Polling updates the status, generation, and reported notes in place. It never
-    // touches the editable fields: an unsaved edit survives an auto-refresh, and a save
-    // is issued against the generation the card shows, so a refresh cannot turn it into
-    // a stale write. A card the operator is editing is left completely alone.
+    // Polling updates the card in place: status, generation, reported notes, and the
+    // editable fields for anything the operator has NOT edited. An edited field is left
+    // exactly as the operator left it (and stays flagged dirty), so an unsaved edit
+    // survives an auto-refresh; a save is issued against the generation the card shows,
+    // so a refresh cannot turn it into a stale write. A field the operator has not touched
+    // is repainted from the server and the baseline advances with it, so an external
+    // change (another operator, a fleet write) shows up instead of the card silently
+    // holding a stale value that a save would then report as "nothing changed".
     paintHeading(view);
     paintSummary(view);
+    for (const [name, input] of inputs) {
+      if (edited.has(name)) continue;
+      input.value = view.desired[name];
+      original[name] = view.desired[name];
+    }
     paintNotes(view);
   }
 
   function reconcile(view) {
-    // A save just succeeded. Move the baseline to the server's record so the next save
-    // diffs against the truth and carries the new generation. A field the operator edited
-    // while this request was pending is kept only if the server does not already hold the
-    // edited value; otherwise the server's value wins and the input is repainted. The
-    // dirty flag is recomputed from whatever is still pending, never blindly cleared.
+    // A save just succeeded. Move the baseline and generation to the server's record so
+    // the NEXT save diffs against the truth and carries the new generation. A field the
+    // operator edited while this request was in flight is preserved only if the server
+    // does not already hold the edited value; the edit set is recomputed from what is
+    // still genuinely pending, never blindly cleared.
     paintHeading(view);
     paintSummary(view);
     for (const [name, input] of inputs) {
       const current = readField(input);
-      const pendingEdit = current !== original[name];
-      const serverHasIt = current === view.desired[name];
-      if (!(pendingEdit && !serverHasIt)) {
-        input.value = view.desired[name];
+      if (edited.has(name) && current !== view.desired[name]) {
+        // Edited and not yet in force on the server: keep the operator's value and the
+        // field's edited flag.
+        continue;
       }
-      original[name] = view.desired[name];
+      input.value = view.desired[name];
+      edited.delete(name);
     }
+    original = Object.assign({}, view.desired);
     paintNotes(view);
-    const stillDirty = [...inputs].some(
-      ([name, input]) => readField(input) !== original[name]);
-    if (stillDirty) { card.dataset.dirty = '1'; } else { delete card.dataset.dirty; }
+    if (edited.size) { card.dataset.dirty = '1'; } else { delete card.dataset.dirty; }
   }
 
   card.refresh = refresh;
@@ -362,20 +379,20 @@ async function load() {
     schema = schemaResult;
     if (firstLoad) buildFleetFields();
     const byId = new Map(fleet.devices.map(d => [d.device_id, d]));
-    // Reconcile by device id: a card that already exists is refreshed in place (or left
-    // completely alone while the operator is editing it), so the polling timer never
-    // discards an unsaved edit and a save is issued against the generation the card shows.
-    // Only a brand-new device gets a fresh card; a device that disappeared is removed.
+    // Reconcile by device id: a card that already exists is refreshed in place, so the
+    // polling timer never discards an unsaved edit and a save is issued against the
+    // generation the card shows. Only a brand-new device gets a fresh card; a device that
+    // disappeared is removed. refresh() itself leaves operator-edited fields untouched and
+    // repaints the rest, so it is safe to call on a card in the middle of an edit.
     const existing = new Map(
       [...devicesBox.querySelectorAll('.device')].map(c => [c.dataset.deviceId, c]));
     for (const card of existing.values()) {
       const id = card.dataset.deviceId;
       if (!byId.has(id)) { card.remove(); continue; }
-      if (card.dataset.dirty) continue; // the operator is editing this card
       card.refresh(byId.get(id));
     }
     for (const d of fleet.devices) {
-      if (d.device_id in existing) continue; // refreshed in place above
+      if (existing.has(d.device_id)) continue; // refreshed in place above
       devicesBox.appendChild(renderDevice(d));
     }
     devicesBox.replaceChildren(

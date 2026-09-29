@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import pathlib
+import subprocess
 import sys
 import tempfile
 from typing import Optional
@@ -105,21 +106,32 @@ class FakeMicAmixer:
 
 
 class FakeSystemctl:
-    """Stands in for `systemctl`; records restarts, can be made to fail."""
-    def __init__(self, fail_restart: bool = False) -> None:
+    """Stands in for `systemctl`; records restarts, can be made to fail.
+
+    `fail_mode` selects HOW the restart fails: "rc" returns a nonzero exit code;
+    "timeout" raises subprocess.TimeoutExpired; "oserror" raises OSError. All three must
+    be treated by the adapter as a failed restart (the value stays out of actual, the
+    report is an error, and it is retryable) - that is the point of the regression.
+    """
+    def __init__(self, fail_restart: bool = False, fail_mode: str = "rc") -> None:
         self.calls: list[list[str]] = []
         self.fail_restart = fail_restart
+        self.fail_mode = fail_mode
 
     def __call__(self, argv, **_kwargs):
         self.calls.append(list(argv))
-
+        if self.fail_restart and "restart" in argv:
+            if self.fail_mode == "timeout":
+                raise subprocess.TimeoutExpired(cmd="systemctl", timeout=60)
+            if self.fail_mode == "oserror":
+                raise OSError("systemctl: no such file or directory")
         class R:
             returncode = 0
             stderr = ""
             stdout = ""
 
         r = R()
-        if self.fail_restart and "restart" in argv:
+        if self.fail_restart and "restart" in argv and self.fail_mode == "rc":
             r.returncode = 1
             r.stderr = "systemctl: failed to restart"
         return r
@@ -364,6 +376,33 @@ with tempfile.TemporaryDirectory() as tmp:
     check("the seeded re-attempt actually restarted the coupled group",
           any(c[0] == "systemctl" and c[1] == "restart"
               and set(c[2:]) == set(COUPLED_AUDIO_UNITS) for c in sc_fresh.calls), sc_fresh.calls)
+
+# ---------------------------------------------------------------- subprocess failures are failed restarts (third-pass F2)
+
+# A systemctl that TIMES OUT or cannot be RUN raises subprocess.TimeoutExpired / OSError,
+# not a nonzero exit code. Those are restart failures just like a bad exit code: the value
+# must stay out of actual, the report must be an error, and the setting must stay stale so
+# a redelivery re-attempts the restart instead of trusting the env file and reporting a
+# value that was never restarted into force.
+for mode, label in (("timeout", "a systemctl timeout"), ("oserror", "an OSError from systemctl")):
+    with tempfile.TemporaryDirectory() as tmp:
+        env = make_env(tmp)
+        sc = FakeSystemctl(fail_restart=True, fail_mode=mode)
+        adapter = make_apply_adapter(env_path=env, systemctl=sc)
+        actual, health, error = adapter({"led_brightness": 18})
+        check(f"{label} is reported as an error, not converged",
+              health == "error" and error is not None, (health, error))
+        check(f"{label} does NOT report the value as applied (it stays retryable)",
+              actual.get("led_brightness") is None, actual)
+        check(f"{label} still wrote the value durably",
+              any("VS_LED_BRIGHTNESS=18" in line for line in env.read_text().splitlines()),
+              env.read_text())
+        # Redelivery within the same process must re-attempt the restart, not trust the
+        # env file: once the failure clears, the value converges.
+        sc.fail_restart = False
+        actual2, health2, error2 = adapter({"led_brightness": 18})
+        check(f"{label}: a redelivery after the failure clears re-attempts and converges",
+              health2 == "healthy" and actual2.get("led_brightness") == 18, (health2, actual2))
 
 # ---------------------------------------------------------------- env file: update existing key, preserve others
 

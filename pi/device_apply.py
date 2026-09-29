@@ -191,21 +191,36 @@ def make_apply_adapter(
         return False
 
     def _restart(units: tuple[str, ...]) -> None:
-        """Reload units and restart the named group, or raise. Never restarts the caller."""
-        reload_res = run_systemctl(["systemctl", "daemon-reload"],
-                                   capture_output=True, text=True, timeout=30, check=False)
-        if reload_res.returncode != 0:
-            raise RuntimeError(f"systemctl daemon-reload failed: "
-                               f"{(reload_res.stderr or '').strip()[:160]}")
-        for unit in units:
-            if unit == "outbound-satellite":
-                raise RuntimeError("refusing to restart outbound-satellite: it is the process "
-                                   "applying this change")
-        res = run_systemctl(["systemctl", "restart", *units],
-                            capture_output=True, text=True, timeout=60, check=False)
-        if res.returncode != 0:
-            raise RuntimeError(f"systemctl restart {' '.join(units)} failed: "
-                               f"{(res.stderr or '').strip()[:160]}")
+        """Reload units and restart the named group, or raise RuntimeError. Never restarts
+        the caller.
+
+        Every failure is a RuntimeError, not a raw subprocess exception: a nonzero exit is
+        a failure, and so are TimeoutExpired and OSError (the systemctl binary itself
+        failing to run). The caller's stale-state bookkeeping keys off RuntimeError, so a
+        failure that escaped as a different type would skip it and let a redelivery trust
+        the newly-written env file and report a value that was never restarted into force.
+        """
+        try:
+            reload_res = run_systemctl(["systemctl", "daemon-reload"],
+                                       capture_output=True, text=True, timeout=30, check=False)
+            if reload_res.returncode != 0:
+                raise RuntimeError(f"systemctl daemon-reload failed: "
+                                   f"{(reload_res.stderr or '').strip()[:160]}")
+            for unit in units:
+                if unit == "outbound-satellite":
+                    raise RuntimeError("refusing to restart outbound-satellite: it is the process "
+                                       "applying this change")
+            res = run_systemctl(["systemctl", "restart", *units],
+                                capture_output=True, text=True, timeout=60, check=False)
+            if res.returncode != 0:
+                raise RuntimeError(f"systemctl restart {' '.join(units)} failed: "
+                                   f"{(res.stderr or '').strip()[:160]}")
+        except RuntimeError:
+            raise
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("systemctl timed out while applying the restart-class change") from None
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(f"systemctl could not be run: {exc}") from None
 
     def apply(settings: dict[str, Any]) -> tuple[dict, str, Optional[str]]:
         applied: dict[str, Any] = {}

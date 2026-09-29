@@ -127,12 +127,12 @@ async def main() -> int:
         # per-card refresh() that paints only status/generation/notes; load() reconciles by
         # device id (refreshing in place, sparring dirty cards, rendering only new devices)
         # and a failed poll must not clear the DOM.
-        check("the poll refreshes cards in place and spares unsaved edits (F6)",
+        check("the poll reconciles device cards by id without duplicating them (F6)",
               "card.refresh = refresh;" in html
-              and "card.dataset.dirty" in html
-              and "d.device_id in existing" in html
+              and "existing.has(d.device_id)" in html
+              and "d.device_id in existing" not in html
               and "card.refresh(byId.get(id))" in html,
-              "in-place refresh / id reconciliation not found")
+              "id reconciliation / Map membership not found")
         # A failed poll must not clear the DOM: the operator's unsaved edits and the last
         # good device view stay exactly as they were.
         check("a failed poll does not clear the device cards (F6)",
