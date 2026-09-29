@@ -90,7 +90,7 @@ class DeviceConfigAgent:
         self._load()
 
     @staticmethod
-    def _stage_only(_settings: dict[str, Any]) -> tuple[dict, str, Optional[str]]:
+    def _stage_only(_settings: dict[str, Any], *, applied: dict[str, Any] | None = None) -> tuple[dict, str, Optional[str]]:
         return {}, "degraded", "desired state is staged; no hardware adapter is installed"
 
     def _load(self) -> None:

@@ -141,6 +141,14 @@ State is written to `state/fleet-config.json` through a same-directory temp file
 previous file intact. Reading an unreadable or version-mismatched file is a startup error, not a silent
 reset: a corrupt config file must not look like a device with no settings.
 
+**Legacy out-of-range values are repaired on load, not served.** A device enrolled under an older schema
+can carry a `led_brightness` outside the 1-31 scale (the old page wrote it on a 0-100 percentage scale).
+Such a value would poison every delivery for that device, including an unrelated volume change, because
+validation runs on the merged profile. The plane therefore migrates any out-of-range `led_brightness` to
+`31` — the LED driver's hardware default — when it loads the file, persists the repaired file before the
+plane is used, and bumps that device's generation so the corrected profile is delivered. In-range values
+are left untouched.
+
 ## 5. Endpoints
 
 ### `GET /config/schema`
@@ -201,7 +209,20 @@ generation reaches it immediately. If the patch touches any **restart-class** se
 (`wake_word`, `wake_threshold`, `led_brightness`) the dispatch is **paced**: the bridge spaces out the
 per-device restart-class restarts by `VOICE_FLEET_RESTART_DISPATCH_INTERVAL` seconds (default 8) rather
 than bouncing every room's audio stack in the same instant. Immediate-class settings are dispatched
-without delay.
+without delay. The pacing wait, the dispatch, and the next-deadline update are one critical section, so
+two concurrent fleet writes cannot wake on the same deadline and bounce two rooms at once; and pending
+paced dispatches are cancelled and awaited by `Announcer.stop()`, so a shutdown cannot leave a restart
+firing after the bridge is down.
+
+The configuration page (`GET /configure`, served from `bridge/static/settings.html`) sends **only the
+settings the operator selected** on a fleet apply: each fleet field is checkbox-gated, and an
+unselected field is omitted from the request entirely. This is what makes a fleet apply a *change*
+rather than a *clobber* — a setting the operator did not touch keeps each device's own value, which
+may legitimately differ across the fleet. The page's convergence poll refreshes each device card in
+place (status, generation, reported-state notes only) and rebuilds the card list only when the device
+population changed; a card the operator is editing is left untouched by polling, and a save is issued
+against the generation the card currently shows, so a poll cannot turn an unsaved edit into a stale
+write.
 
 ### `POST /config/devices/{device_id}/reported`
 

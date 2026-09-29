@@ -14,6 +14,7 @@ import asyncio
 import pathlib
 import sys
 import tempfile
+from typing import Optional
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
@@ -35,10 +36,16 @@ def check(label: str, condition: bool, detail="") -> None:
 
 
 class FakeAmixer:
-    """Stands in for `amixer` for the OUTPUT control (volume)."""
-    def __init__(self, fail_set: bool = False) -> None:
+    """Stands in for `amixer` for the OUTPUT control (volume).
+
+    Tracks the raw level it was set to, so the adapter's "already at this level" read path
+    (the point of the full-profile idempotency fix) is exercised honestly: `sget` reports the
+    stored level and `sset` updates it.
+    """
+    def __init__(self, fail_set: bool = False, start_level: Optional[int] = None) -> None:
         self.calls: list[list[str]] = []
         self.fail_set = fail_set
+        self.level: Optional[int] = start_level
 
     def __call__(self, argv, **_kwargs):
         self.calls.append(list(argv))
@@ -49,18 +56,28 @@ class FakeAmixer:
             stderr = ""
 
         r = R()
-        if self.fail_set and "sset" in argv:
+        if "sget" in argv and self.level is not None:
+            r.stdout = (f"Simple mixer control 'PCM',0\n  Capabilities: volume\n"
+                        f"  Playback: [{self.level}]%\n")
+        if "sset" in argv and self.fail_set:
             r.returncode = 1
             r.stderr = "amixer: unable to set"
+        if "sset" in argv and not self.fail_set:
+            for part in argv:
+                if part.endswith("%"):
+                    self.level = int(part.rstrip("%"))
         return r
 
 
 class FakeMicAmixer:
-    """Stands in for `amixer` for the INPUT control (mic gain)."""
+    """Stands in for `amixer` for the INPUT control; tracks the level it was set to, so the
+    readback path (the point of the fix) is exercised honestly."""
     def __init__(self, present: bool = True, fail: bool = False) -> None:
         self.calls: list[list[str]] = []
         self.present = present
         self.fail = fail
+        self.level: Optional[int] = None
+        self._refuse_readback = False
 
     def __call__(self, argv, **_kwargs):
         self.calls.append(list(argv))
@@ -74,9 +91,16 @@ class FakeMicAmixer:
         if "sget" in argv and not self.present:
             r.returncode = 1
             r.stderr = "amixer: control Mic not found"
+        if "sget" in argv and self.present and not self._refuse_readback:
+            r.stdout = (f"Simple mixer control 'Mic',0\n  Capabilities: volume\n  Playback: "
+                        f"[{self.level if self.level is not None else 0}%]\n")
         if "sset" in argv and self.fail:
             r.returncode = 1
-            r.stderr = "amixer: unable to set"
+            r.stderr = "amixer: unable to write"
+        if "sset" in argv and not self.fail and self.present:
+            for part in argv:
+                if part.endswith("%"):
+                    self.level = int(part.rstrip("%"))
         return r
 
 
@@ -254,15 +278,21 @@ with tempfile.TemporaryDirectory() as tmp:
     check("a wake word with its model present is applied", actual.get("wake_word") == "hey_hermes", actual)
     check("a wake word with its model present is healthy", health == "healthy", health)
 
-    # A word whose model is absent: recorded (env + restart happen) but degraded and named.
+    # A word whose model is absent: refused up front - the working config is left untouched,
+    # the value is reported degraded and named, and it is NOT reported as applied (so it stays
+    # retryable once the model is deployed).
     (models / "hey_hermes.tflite").unlink()
     actual, health, error = adapter({"wake_word": "hey_karen"})
-    check("a wake word whose model is missing is still recorded",
-          actual.get("wake_word") == "hey_karen", actual)
+    check("a wake word whose model is missing is NOT reported as applied",
+          actual.get("wake_word") is None, actual)
     check("a wake word whose model is missing is degraded, not healthy",
           health == "degraded", health)
     check("the missing model is named",
           error is not None and "hey_karen.tflite" in error, error)
+    check("the missing-model word was not written into the active config",
+          env.read_text().count("VS_WAKE_WORD=hey_karen") == 0, env.read_text())
+    check("a missing-model word did not restart the wake stack",
+          not any("restart" in c for c in sc.calls), sc.calls)
 
 # ---------------------------------------------------------------- a failed restart is reported, not converged
 
@@ -273,9 +303,19 @@ with tempfile.TemporaryDirectory() as tmp:
     actual, health, error = adapter({"led_brightness": 18})
     check("a failed restart is reported as an error, not converged",
           health == "error" and "restart" in (error or ""), (health, error))
+    check("a failed restart does NOT report the value as applied (it stays retryable)",
+          actual.get("led_brightness") is None, actual)
     check("the value was still written durably before the failed restart",
           any("VS_LED_BRIGHTNESS=18" in line for line in env.read_text().splitlines()),
           env.read_text())
+    # Within the same process, redelivering the same generation must retry the restart, not
+    # trust the env file and skip it: a stale value is re-attempted until a restart succeeds.
+    sc.fail_restart = False
+    actual2, health2, error2 = adapter({"led_brightness": 18})
+    check("a redelivery after a failed restart re-attempts it and converges",
+          health2 == "healthy" and actual2.get("led_brightness") == 18, (health2, actual2))
+    check("the retry actually restarted the led service",
+          any(c == ["systemctl", "restart", "2mic_leds"] for c in sc.calls), sc.calls)
 
 # ---------------------------------------------------------------- env file: update existing key, preserve others
 
@@ -289,6 +329,50 @@ with tempfile.TemporaryDirectory() as tmp:
           text.count("VS_WAKE_THRESHOLD") == 1, text)
     check("unrelated env keys are preserved",
           "VS_DEVICE_NAME=kitchen" in text and "VS_WAKE_WORD=hey_hermes" in text, text)
+
+# ---------------------------------------------------------------- idempotency against the full profile (review F1)
+
+# The bridge re-sends the complete merged profile on every delivery. A volume-only change
+# must not bounce the LED or wake services just because those settings happen to be present
+# (unchanged) in the profile - that is exactly what would restart the whole fleet's audio
+# stack on every volume change.
+with tempfile.TemporaryDirectory() as tmp:
+    env = make_env(tmp)
+    sc = FakeSystemctl()
+    amixer = FakeAmixer(start_level=50)
+    models = pathlib.Path(tmp) / "models"
+    models.mkdir()
+    (models / "hey_hermes.tflite").write_bytes(b"\x00")
+    adapter = make_apply_adapter(
+        volume=AlsaVolume(card="seeed2micvoicec", control="PCM", floor=25, runner=amixer),
+        env_path=env, systemctl=sc, wake_models_dir=models,
+    )
+    # First delivery establishes the restart-class values in force (one coupled restart each
+    # is legitimate).
+    first, h1, e1 = adapter({
+        "playback_volume": 55, "led_brightness": 20, "wake_threshold": 0.4,
+    })
+    check("the first full-profile delivery applies and restarts as needed",
+          h1 == "healthy" and first.get("led_brightness") == 20, (h1, first))
+    restarts_before = sum(1 for c in sc.calls if c[:2] == ["systemctl", "restart"])
+    # A volume-only change, delivered as the full profile again: LED and threshold are
+    # unchanged, so nothing restart-class may be written or restarted.
+    second, h2, e2 = adapter({
+        "playback_volume": 65, "led_brightness": 20, "wake_threshold": 0.4,
+    })
+    restarts_after = sum(1 for c in sc.calls if c[:2] == ["systemctl", "restart"])
+    check("a volume-only change is healthy", h2 == "healthy", (h2, e2))
+    # user->raw->user round trips through an integer ALSA percentage and shifts by at most
+    # 1 (the host's round_trip_tolerance of 1 accepts it), so assert the applied level is the
+    # requested one within that one-step tolerance, not an exact integer match.
+    check("the volume change is applied (within the round-trip tolerance)",
+          second.get("playback_volume") is not None
+          and abs(second["playback_volume"] - 65) <= 1, second)
+    check("a volume-only change does NOT restart the audio stack",
+          restarts_after == restarts_before,
+          f"{restarts_before} -> {restarts_after}")
+    check("an unchanged LED is reported as applied (it is) without a restart",
+          second.get("led_brightness") == 20, second)
 
 # ---------------------------------------------------------------- the agent end-to-end
 

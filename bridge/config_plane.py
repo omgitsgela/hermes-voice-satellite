@@ -148,7 +148,13 @@ class ConfigPlane:
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
+        self._pending_save = False
         self._state = self._load()
+        # _load() may have migrated a legacy profile but cannot save it yet: `self._state`
+        # does not exist until this line. Persist the migration now, before the plane is used.
+        if self._pending_save:
+            self._save(self._state)
+            self._pending_save = False
 
     def schema(self) -> dict[str, Any]:
         return {
@@ -171,7 +177,40 @@ class ConfigPlane:
             raise ConfigValidationError("unsupported configuration-state schema")
         if not isinstance(raw.get("devices"), dict):
             raise ConfigValidationError("configuration state has no devices object")
+        if self._migrate_legacy(raw):
+            # Persist before this becomes the active state: the migrated profile must be on
+            # disk so the first reader after a restart sees values already in range.
+            self._pending_save = True
         return raw
+
+    @staticmethod
+    def _migrate_legacy(state: dict[str, Any]) -> bool:
+        """Migrate out-of-range legacy `led_brightness` values into the current schema.
+
+        Before the schema was corrected to 1-31, the default was 40 on a 0-100 scale that
+        the APA102 LED driver does not have: such a value could never converge, and the
+        device's LED service was actually running at its own default (31). A device enrolled
+        under the old schema therefore still carries an out-of-range desired `led_brightness`.
+        Because that value was never in force, the honest migration is to the level the
+        hardware actually ran (31), and the generation is advanced so the corrected profile
+        is re-delivered to the device. Without this, the new device-side bounds would reject
+        every delivery for that device - even an unrelated volume change - on the strength of
+        the poisoned legacy value.
+        """
+        changed = False
+        for record in (state.get("devices") or {}).values():
+            desired = record.get("desired")
+            if not isinstance(desired, dict):
+                continue
+            led = desired.get("led_brightness")
+            if isinstance(led, bool) or not isinstance(led, int):
+                continue
+            if led < 1 or led > 31:
+                desired["led_brightness"] = 31
+                record["generation"] = int(record.get("generation", 0)) + 1
+                record["desired_updated_at"] = _utc_now()
+                changed = True
+        return changed
 
     def _save(self, state: Optional[dict[str, Any]] = None) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

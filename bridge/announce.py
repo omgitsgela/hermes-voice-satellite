@@ -138,8 +138,12 @@ class Announcer:
         # Pacing for fleet writes that touch a restart-class setting (wake word, threshold):
         # one device per interval, so the rooms go quiet one at a time instead of all at once.
         # The write itself is durable; pacing only shapes *when* each connected device is told.
+        # The lock serializes the wait/dispatch/deadline-update cycle: without it, two
+        # concurrent fleet writes would each sleep until the same deadline and wake up
+        # together, bouncing two rooms at once.
         self._restart_dispatch_at = 0.0
         self._fleet_tasks: set = set()
+        self._fleet_pace_lock = asyncio.Lock()
 
     # -- token ---------------------------------------------------------------
 
@@ -219,6 +223,14 @@ class Announcer:
         if self._runner is not None:
             await self._runner.cleanup()
             self._runner = None
+        # Pending fleet restart-class dispatches are sleeping tasks that would otherwise
+        # survive shutdown and keep bouncing device services after the bridge has stopped.
+        # Cancel them all and wait for the set to drain.
+        if self._fleet_tasks:
+            for task in list(self._fleet_tasks):
+                task.cancel()
+            await asyncio.gather(*self._fleet_tasks, return_exceptions=True)
+            self._fleet_tasks.clear()
         # The satellite connection belongs to the loop, which closes it during its own shutdown.
 
     # -- http ----------------------------------------------------------------
@@ -592,6 +604,11 @@ class Announcer:
         told to bounce. A device that is away is skipped here (it converges on reconnect); a
         dispatch that fails is logged, because the device still holds the generation and will
         take it on its next registration, which is the plane's normal recovery path.
+
+        The wait, the dispatch, and the deadline update are one critical section under
+        `_fleet_pace_lock`: each device is handed a fresh deadline before the next one
+        sleeps, so concurrent fleet writes cannot all wake at the same instant and bounce
+        two rooms at once.
         """
         interval = max(0.0, FLEET_RESTART_DISPATCH_INTERVAL_SECONDS)
         for record in records:
@@ -604,13 +621,14 @@ class Announcer:
                         "fleet restart: %s is not connected; it will take the change on reconnect",
                         device_id)
                     continue
-                if interval:
-                    wait = self._restart_dispatch_at - time.monotonic()
-                    if wait > 0:
-                        await asyncio.sleep(wait)
-                result = self._config_dispatch(device_id, record)
-                ok = bool(await result) if asyncio.iscoroutine(result) else bool(result)
-                self._restart_dispatch_at = time.monotonic() + interval
+                async with self._fleet_pace_lock:
+                    if interval:
+                        wait = self._restart_dispatch_at - time.monotonic()
+                        if wait > 0:
+                            await asyncio.sleep(wait)
+                    result = self._config_dispatch(device_id, record)
+                    ok = bool(await result) if asyncio.iscoroutine(result) else bool(result)
+                    self._restart_dispatch_at = time.monotonic() + interval
                 if not ok:
                     _LOGGER.warning("fleet restart: could not dispatch %s; durable for reconnect",
                                     device_id)

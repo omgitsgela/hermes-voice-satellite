@@ -110,6 +110,29 @@ async def main() -> int:
               page.status == 200 and "/config/devices" in page.text
               and "test-token" not in page.text, page.text[:200])
 
+        # -------------------------------------------------------------------
+        # Fleet page invariants (review F5/F6)
+        # -------------------------------------------------------------------
+        # F5: a fleet save must send only the settings the operator selected, never the
+        # whole schema with defaults for untouched fields - that would clobber a
+        # per-device custom value the operator did not intend to touch. The page pins
+        # this structurally: each fleet field is checkbox-gated and the submit handler
+        # skips unselected fields.
+        html = page.text
+        check("the fleet panel checkbox-gates each setting (F5: no default-filled clobber)",
+              "fleet-pick" in html and "pick.checked" in html
+              and "if (!pick.checked) continue;" in html, "fleet picker not found")
+        # F6: the 5-second convergence poll must update status in place and must not
+        # discard unsaved edits by rebuilding the card DOM. The page pins this with a
+        # per-card refresh() that paints heading/summary/notes only, and a load() that
+        # rebuilds only when the device population changed and skips dirty cards.
+        check("the poll refreshes cards in place and spares unsaved edits (F6)",
+              "card.refresh = refresh;" in html
+              and "populationChanged" in html
+              and "card.dataset.dirty" in html
+              and "if (card.dataset.dirty) continue;" in html,
+              "in-place refresh / dirty-card guard not found")
+
     if problems:
         print("\nFAILURES")
         for problem in problems:

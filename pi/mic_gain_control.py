@@ -115,10 +115,13 @@ class AlsaMicGain:
         return parse_percent(result.stdout or "")
 
     def set(self, percent: object) -> int:
-        """Apply a level, clamped to 0-100. Returns what was applied.
+        """Apply a level and read the hardware back. Returns what the control confirmed.
 
-        Raises VolumeGainError when the control is absent or amixer refuses: reporting a
-        gain the device did not take would make the convergence state a lie.
+        Returns the level the control actually took, not the one requested: ALSA controls
+        can quantize percentages, so a successful `amixer sset` is not proof the requested
+        percentage was applied. Raises VolumeGainError when the control is absent, amixer
+        refuses, or the result cannot be read back: reporting a gain the device did not take
+        would make the convergence state a lie.
         """
         if not self.has_control():
             raise VolumeGainError("no microphone input control configured on this device")
@@ -131,7 +134,16 @@ class AlsaMicGain:
                 f"amixer could not set {self.control} on card {self.card} to {level}%: "
                 f"{(result.stderr or '').strip()[:160]}"
             )
-        return level
+        confirmed = self.read()
+        if confirmed is None:
+            raise VolumeGainError(
+                f"amixer set {self.control} but the level could not be read back; "
+                "not reporting a value the hardware did not confirm")
+        if confirmed != level:
+            log.warning(
+                "mic gain: asked for %d%% but the control confirmed %d%% (the hardware "
+                "quantizes; reporting the confirmed value)", level, confirmed)
+        return confirmed
 
 
 __all__ = [
