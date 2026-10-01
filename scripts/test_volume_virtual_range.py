@@ -111,13 +111,16 @@ check("raw reading full reports user 100%",
 
 # ---------------------------------------------------------------- what the user hears
 
-# "set volume to 30%" must now MEAN 30%, landing at raw 65 - not be clamped to the floor.
+# "set volume to 30%" must use 30% of the configured usable range, not be clamped
+# to the floor. A fresh installation uses the placeholder floor, not a private calibration.
 intent = parse_volume_command("set volume to 30%")
 check("30% is a valid request now, not a clamp",
       intent is not None and intent.percent == 30 and intent.clamped is False,
       intent)
-check("30% maps to raw 65 (30% of the usable range above the floor)",
-      abs(user_percent_to_raw(intent.percent) - (FLOOR_PERCENT + 15)) <= 1,
+expected_raw = FLOOR_PERCENT + round((30 - USER_MIN) * (MAX_PERCENT - FLOOR_PERCENT)
+                                     / (USER_MAX - USER_MIN))
+check("30% maps through the configured usable range above the floor",
+      user_percent_to_raw(intent.percent) == expected_raw,
       user_percent_to_raw(intent.percent))
 
 # The floor itself is requestable and is NOT flagged as clamped.

@@ -21,6 +21,12 @@ cfg = load('VOICE_REGISTRY_ENABLED=1\nVOICE_REGISTRY_HOST=10.1.2.3\nVOICE_REGIST
 assert cfg['REGISTRY_ENABLED'] and cfg['REGISTRY_HOST'] == '10.1.2.3'
 assert cfg['REGISTRY_PORT'] == 12345 and cfg['WAKE_WAIT_SECONDS'] == 42
 assert cfg['VOICE_ROUTE_ALIAS'] == '', 'an empty route disables pinning'
+cfg = load('VOICE_ANNOUNCE_HOST=127.0.0.1\nVOICE_ANNOUNCE_PORT=18765\n')
+assert cfg['ANNOUNCE_HOST'] == '127.0.0.1', 'announcement bind must be configurable'
+assert cfg['ANNOUNCE_PORT'] == 18765, 'announcement port must be configurable'
+cfg = load('VOICE_ANNOUNCE_HOST=127.0.0.1\nVOICE_ANNOUNCE_PORT=18765\n',
+           {'VOICE_ANNOUNCE_HOST': '127.0.0.2', 'VOICE_ANNOUNCE_PORT': '18766'})
+assert cfg['ANNOUNCE_HOST'] == '127.0.0.2' and cfg['ANNOUNCE_PORT'] == 18766
 cfg = load('VOICE_ROUTE_ALIAS=file\n', {'VOICE_ROUTE_ALIAS': ''})
 assert cfg['VOICE_ROUTE_ALIAS'] == '', 'even an empty environment override wins'
 cfg = load('VOICE_ROUTE_ALIAS=file\n', {'VOICE_ROUTE_ALIAS': 'environment'})

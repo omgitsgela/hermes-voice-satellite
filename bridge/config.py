@@ -497,8 +497,9 @@ VOICE_INSTRUCTIONS = (
 #   * an announcement waits until any conversation in progress has finished speaking;
 #   * every announcement opens with a wake tone;
 #   * a failed delivery is dropped silently, with no fallback path.
-ANNOUNCE_HOST = "0.0.0.0"
-ANNOUNCE_PORT = 8765
+# Preserve the LAN deployment default; public hosts must bind to loopback or a trusted interface.
+ANNOUNCE_HOST = _cfg("VOICE_ANNOUNCE_HOST", "0.0.0.0")
+ANNOUNCE_PORT = int(_cfg("VOICE_ANNOUNCE_PORT", "8765"))
 ANNOUNCE_TOKEN_FILE = PROJECT_DIR / "state" / "announce-token.txt"
 ANNOUNCE_TOKEN_ENV = "VOICE_ANNOUNCE_TOKEN"   # set this to override the file
 # The announcement chime (2026-09-22, revised): option A of the three prompt tones auditioned at the
