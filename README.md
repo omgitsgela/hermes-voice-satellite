@@ -108,10 +108,55 @@ Hardware, as built:
   by SSH and runs the bridge as a user service.
 - A Hermes Agent install on that host, version current within a release or so
 
-Software: Python 3 with the pinned set in `requirements.txt` (faster-whisper, piper-tts, wyoming,
-aiohttp, silero VAD, webrtcvad fallback). The Piper voice `en_US-hfc_male-medium` (61 MB, not committed
+Software: Python 3.11 is the tested bridge runtime. Use a dedicated virtual environment
+with `requirements.txt` (faster-whisper, piper-tts, wyoming, aiohttp, silero VAD,
+webrtcvad fallback). Hermes Agent is installed separately; the bridge calls its HTTP API
+and does not need the `hermes-agent` Python distribution in its virtual environment.
+The Piper voice `en_US-hfc_male-medium` (61 MB, not committed
 here) comes from the Piper voices release; the custom wake model is a community TFLite file, see
 `docs/switching-wake-words.md`.
+
+## Install: the bridge host
+
+On Debian/Ubuntu, install Python 3.11 with venv support, Git, `libsndfile1` and
+`libgomp1`. If your Python release lacks wheels for a dependency, compiling it also
+needs `build-essential` and that interpreter's development headers. `alsa-utils` is
+required on an ALSA satellite and by the device-control offline checks, not for
+bridge-only audio synthesis. Newer Python releases are not validated by this guide.
+
+```sh
+git clone https://github.com/omgitsgela/hermes-voice-satellite.git ~/hermes-voice-bridge
+cd ~/hermes-voice-bridge
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pip check
+.venv/bin/python -m piper.download_voices --download-dir voices en_US-hfc_male-medium
+cp bridge.env.example bridge.env
+```
+
+Set your host, device identity, session, registry and announcement bind values in
+`bridge.env`. If using a registry-only deployment, enable it, bind it to a trusted
+interface, and set `VOICE_DIRECT_DIAL_FALLBACK=0`. See `docs/outbound-link.md` for
+credentials and the explicit trusted-network override. Never expose raw Wyoming
+on a public interface. Set `VOICE_ROUTE_ALIAS=` if your Gateway has no named route.
+Provide your own Gateway's `API_SERVER_KEY` through its environment file or the
+bridge service environment. Do not copy another installation's keys or state.
+
+Install the unmodified user unit after configuring the separate Hermes Gateway:
+
+```sh
+mkdir -p ~/.config/systemd/user
+cp hermes/systemd/hermes-voice-bridge.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now hermes-voice-bridge.service
+```
+
+The supplied unit expects `~/hermes-voice-bridge`; for a different clone directory,
+use a systemd drop-in overriding `WorkingDirectory`, `EnvironmentFile` and
+`ExecStart`, not source edits. User services need lingering for unattended boot.
+Verify listeners, registration and actual audio delivery, not just `active`.
+See `docs/portability-acceptance.md` for the fresh-machine proof and its explicit
+synthetic-Gateway and hardware-test boundaries.
 
 ## Install: the Hermes side
 
