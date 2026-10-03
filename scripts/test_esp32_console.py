@@ -21,6 +21,7 @@ RUNNER = r'''#include <assert.h>
 #include "driver/usb_serial_jtag.h"
 #include "provisioning_console.h"
 #include "tls_credentials.h"
+#include "wifi_station.h"
 
 /* Two namespaces (hermes_dev, hermes_wifi) with staged/committed separation, so the
  * tests can prove a value is only visible after a commit and is verified by readback. */
@@ -85,6 +86,16 @@ int nvs_get_str(nvs_handle_t handle, const char *key, char *value, size_t *capac
     return 0;
 }
 
+/* Only prof_n is a number. The stub keeps one staged and one committed byte per namespace so
+ * the same commit rule applies to it as to the strings. */
+static const char *u8_namespace[2] = {NULL, NULL};
+static int u8_present[2];
+static uint8_t u8_committed[2];
+static int u8_staged_present[2];
+static uint8_t u8_staged[2];
+
+static int u8_slot(nvs_handle_t handle);
+
 int nvs_commit(nvs_handle_t handle) {
     if (getenv("FAIL_COMMIT")) return -1;
     const char *ns = ns_for(handle);
@@ -94,6 +105,12 @@ int nvs_commit(nvs_handle_t handle) {
             staged[i] = staged[--staged_count];
         } else ++i;
     }
+    int slot = u8_slot(handle);
+    if (u8_staged_present[slot]) {
+        u8_committed[slot] = u8_staged[slot];
+        u8_present[slot] = 1;
+        u8_staged_present[slot] = 0;
+    }
     return 0;
 }
 
@@ -102,6 +119,33 @@ int nvs_erase_key(nvs_handle_t handle, const char *key) {
     drop(staged, &staged_count, ns, key);
     drop(committed, &committed_count, ns, key);
     return ESP_OK;
+}
+
+static int u8_slot(nvs_handle_t handle) {
+    const char *ns = ns_for(handle);
+    for (int index = 0; index < 2; ++index) {
+        if (u8_namespace[index] && !strcmp(u8_namespace[index], ns)) return index;
+        if (!u8_namespace[index]) { u8_namespace[index] = ns; return index; }
+    }
+    assert(0);
+    return 0;
+}
+
+int nvs_set_u8(nvs_handle_t handle, const char *key, uint8_t value) {
+    assert(!strcmp(key, "prof_n"));
+    if (getenv("FAIL_SET")) return -1;
+    int slot = u8_slot(handle);
+    u8_staged[slot] = value;
+    u8_staged_present[slot] = 1;
+    return 0;
+}
+
+int nvs_get_u8(nvs_handle_t handle, const char *key, uint8_t *value) {
+    assert(!strcmp(key, "prof_n"));
+    int slot = u8_slot(handle);
+    if (!u8_present[slot]) return ESP_ERR_NVS_NOT_FOUND;
+    *value = u8_committed[slot];
+    return 0;
 }
 
 unsigned xTaskGetTickCount(void) { return 1; }
@@ -127,6 +171,36 @@ int usb_serial_jtag_write_bytes(const void *src, size_t length, uint32_t timeout
 }
 
 int usb_wyoming_run(void) { puts("USB_WYOMING_ENTERED"); return -2; }
+
+/* Which of the known networks the radio can see: a comma-separated list of ssid[:rssi], so the
+ * chooser is testable without a radio. Unset means every candidate is visible, strongest first;
+ * the literal "none" means nothing is in range. */
+int wifi_station_scan_match(const char *const *ssids, size_t count, int *rank,
+                            char *out, size_t capacity) {
+    (void)out;
+    (void)capacity;
+    const char *visible = getenv("VISIBLE");
+    if (visible && !strcmp(visible, "none")) {
+        for (size_t index = 0; index < count; ++index) rank[index] = WIFI_STATION_NO_SIGNAL;
+        return 0;
+    }
+    for (size_t index = 0; index < count; ++index)
+        rank[index] = visible ? WIFI_STATION_NO_SIGNAL : (int)(-50 - (int)index);
+    if (!visible) return 0;
+    char list[256];
+    copy_string(list, sizeof(list), visible);
+    for (char *token = strtok(list, ","); token; token = strtok(NULL, ",")) {
+        char *colon = strchr(token, ':');
+        int rssi = -50;
+        if (colon) {
+            *colon = 0;
+            rssi = atoi(colon + 1);
+        }
+        for (size_t index = 0; index < count; ++index)
+            if (!strcmp(ssids[index], token)) rank[index] = rssi;
+    }
+    return 0;
+}
 
 /* Stands in for the real radio: the console's job is only to route and frame the report. */
 int wifi_station_scan(char *out, size_t capacity) {
@@ -244,6 +318,7 @@ class ConsoleTests(unittest.TestCase):
         (tmp / 'esp_err.h').write_text('#pragma once\ntypedef int esp_err_t;\n#define ESP_OK 0\n#define ESP_ERR_NVS_NOT_FOUND 1\n')
         (tmp / 'nvs.h').write_text('''#pragma once
 #include <stddef.h>
+#include <stdint.h>
 #include "esp_err.h"
 typedef unsigned nvs_handle_t;
 #define NVS_READONLY 0
@@ -252,6 +327,8 @@ int nvs_open(const char *, int, nvs_handle_t *);
 void nvs_close(nvs_handle_t);
 int nvs_set_str(nvs_handle_t, const char *, const char *);
 int nvs_get_str(nvs_handle_t, const char *, char *, size_t *);
+int nvs_set_u8(nvs_handle_t, const char *, uint8_t);
+int nvs_get_u8(nvs_handle_t, const char *, uint8_t *);
 int nvs_commit(nvs_handle_t);
 int nvs_erase_key(nvs_handle_t, const char *);
 ''')
@@ -268,10 +345,15 @@ int usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);
 ''')
         (tmp / 'runner.c').write_text(RUNNER)
         executable = tmp / 'console'
-        subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror',
-                        '-I' + str(tmp), '-I' + str(CORE), '-I' + str(MAIN),
-                        str(tmp / 'runner.c'), str(MAIN / 'provisioning_console.c'),
-                        str(CORE / 'provisioning.c'), '-o', str(executable)], check=True)
+        compiled = subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror',
+                                   '-I' + str(tmp), '-I' + str(CORE), '-I' + str(MAIN),
+                                   str(tmp / 'runner.c'), str(MAIN / 'provisioning_console.c'),
+                                   str(CORE / 'provisioning.c'), '-o', str(executable)],
+                                  capture_output=True, text=True)
+        if compiled.returncode != 0:
+            # The compiler's own words: a harness that only says "returned non-zero exit
+            # status" hides the one piece of evidence a failing build has to offer.
+            self.fail('the console did not compile:\n' + compiled.stderr)
         return executable
 
     def console(self, executable, script, **environment):
@@ -578,6 +660,91 @@ int usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);
             self.assertIn('GATEWAY_RELEASED', output)
             self.assertFalse(record.exists())
             self.assertNotIn(SECRET, output)
+
+
+    def test_a_saved_network_is_joined_without_being_staged_again(self):
+        """The point of the feature: a device that already knows a network still joins it.
+
+        Nothing is staged when the join runs, so the pair can only have come from the saved
+        list, and the passphrase that reaches the radio has to be the saved one.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = self.build(tmp)
+            record = Path(tmp) / 'connect-record.txt'
+            output = self.console(executable,
+                                  f'SET_WIFI_SSID GL-Test-AP\nSET_WIFI_PSK {SECRET}\n'
+                                  'WIFI_PROFILE_SAVE\nCLEAR_WIFI\nSTATUS\nWIFI_CONNECT\n',
+                                  CONNECT_RECORD=str(record), EXPECTED_PSK=SECRET)
+            self.assertIn('PROVISION OK WIFI PROFILE SAVED n=1', output)
+            self.assertIn('PROVISION OK WIFI CLEARED', output)
+            self.assertIn('PROVISION WIFI CONNECT BEGIN', output)
+            self.assertIn('profile source=saved index=0 ssid=GL-Test-AP', output)
+            self.assertEqual(record.read_text(),
+                             f'ssid=GL-Test-AP psk_matches=1 psk_len={len(SECRET)}\n',
+                             'the saved passphrase is what must reach the join attempt')
+            self.assertNotIn(SECRET, output, 'the passphrase must never reach the console output')
+
+    def test_the_strongest_visible_network_wins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = self.build(tmp)
+            record = Path(tmp) / 'connect-record.txt'
+            output = self.console(executable,
+                                  f'SET_WIFI_SSID Far-AP\nSET_WIFI_PSK {SECRET}\nWIFI_PROFILE_SAVE\n'
+                                  f'SET_WIFI_SSID Near-AP\nSET_WIFI_PSK {SECRET}\nWIFI_PROFILE_SAVE\n'
+                                  'CLEAR_WIFI\nWIFI_CONNECT\n',
+                                  CONNECT_RECORD=str(record), EXPECTED_PSK=SECRET,
+                                  VISIBLE='Far-AP:-82,Near-AP:-41')
+            self.assertIn('profile source=saved index=1 ssid=Near-AP', output)
+            self.assertEqual(record.read_text(),
+                             f'ssid=Near-AP psk_matches=1 psk_len={len(SECRET)}\n',
+                             'the strongest network in range is the one to join')
+            self.assertNotIn(SECRET, output)
+
+    def test_a_device_whose_networks_are_all_out_of_range_refuses(self):
+        """Joining anyway would mean attaching to a stranger's access point, or to nothing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = self.build(tmp)
+            record = Path(tmp) / 'connect-record.txt'
+            output = self.console(executable,
+                                  f'SET_WIFI_SSID Home-AP\nSET_WIFI_PSK {SECRET}\nWIFI_PROFILE_SAVE\n'
+                                  f'SET_WIFI_SSID Away-AP\nSET_WIFI_PSK {SECRET}\n'
+                                  'WIFI_CONNECT\n',
+                                  CONNECT_RECORD=str(record), VISIBLE='none')
+            self.assertIn('PROVISION ERR WIFI NO_KNOWN_NETWORK', output)
+            self.assertNotIn('WIFI CONNECT BEGIN', output)
+            self.assertFalse(record.exists(),
+                             'no join may be attempted with no known network in range')
+            self.assertNotIn(SECRET, output)
+
+    def test_a_gateway_run_with_no_known_network_in_range_never_dials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = self.build(tmp)
+            dialled = Path(tmp) / 'tls-record.txt'
+            output = self.console(executable,
+                                  f'SET_WIFI_SSID Home-AP\nSET_WIFI_PSK {SECRET}\nWIFI_PROFILE_SAVE\n'
+                                  f'SET_WIFI_SSID Away-AP\nSET_WIFI_PSK {SECRET}\n'
+                                  'SET_ENDPOINT tls://192.0.2.10:10702\nSTART_GATEWAY\n',
+                                  TLS_RECORD=str(dialled), VISIBLE='none')
+            self.assertIn('PROVISION ERR GATEWAY NO_KNOWN_NETWORK', output)
+            self.assertNotIn('GATEWAY BEGIN', output)
+            self.assertFalse(dialled.exists(), 'no socket may be opened without a link')
+            self.assertNotIn(SECRET, output)
+
+    def test_removing_a_network_leaves_the_rest_in_their_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = self.build(tmp)
+            output = self.console(executable,
+                                  f'SET_WIFI_SSID Alpha\nSET_WIFI_PSK {SECRET}\nWIFI_PROFILE_SAVE\n'
+                                  f'SET_WIFI_SSID Beta\nSET_WIFI_PSK {SECRET}\nWIFI_PROFILE_SAVE\n'
+                                  f'SET_WIFI_SSID Gamma\nSET_WIFI_PSK {SECRET}\nWIFI_PROFILE_SAVE\n'
+                                  'WIFI_PROFILE_REMOVE Beta\nWIFI_PROFILES\n')
+            self.assertIn('PROVISION OK WIFI PROFILE REMOVED n=2', output)
+            listing = [line for line in output.splitlines() if 'WIFI PROFILE index=' in line]
+            self.assertEqual(listing, [
+                'PROVISION WIFI PROFILE index=0 ssid=Alpha psk=present',
+                'PROVISION WIFI PROFILE index=1 ssid=Gamma psk=present',
+            ], 'the gap closes and the order of the rest is kept')
+            self.assertNotIn(SECRET, output, 'a listing reports presence, never the passphrase')
 
 
 if __name__ == '__main__':

@@ -29,14 +29,52 @@ int provision_handle(const char *command, provision_save_fn save, provision_load
  * contain spaces, which is why it is not one command with two arguments. */
 #define PROVISION_SSID_MAX 32u
 #define PROVISION_PSK_MAX 64u
+
+/* How many networks a device may hold. Bounded here rather than in the store, so the limit is
+ * one rule wherever the list is kept, and so "the list is full" stays distinguishable from
+ * "the store failed". Four is enough for a device that moves between home, a travel router
+ * and a phone hotspot. */
+#define PROVISION_WIFI_PROFILE_MAX 4u
+
 typedef int (*provision_wifi_save_ssid_fn)(void *, const char *);
 typedef int (*provision_wifi_save_psk_fn)(void *, const char *);
 typedef int (*provision_wifi_clear_fn)(void *);
 typedef int (*provision_wifi_load_fn)(void *, char *, size_t, char *, size_t);
+
+/* The saved-network list: the networks a device may join beyond whatever is staged, in the
+ * order it holds them. Each call returns 0 on success and -1 on failure; `get` fills both
+ * buffers, NUL-terminating each. A store never decides how many networks fit: the core does,
+ * and a store asked to keep more than that says so by returning failure. */
+typedef int (*provision_wifi_profile_save_fn)(void *, const char *ssid, const char *psk);
+typedef int (*provision_wifi_profile_remove_fn)(void *, const char *ssid);
+typedef int (*provision_wifi_profile_clear_fn)(void *);
+typedef int (*provision_wifi_profile_count_fn)(void *);
+typedef int (*provision_wifi_profile_get_fn)(void *, int index, char *ssid, size_t ssid_capacity,
+                                            char *psk, size_t psk_capacity);
+typedef struct {
+    provision_wifi_profile_save_fn save;
+    provision_wifi_profile_remove_fn remove;
+    provision_wifi_profile_clear_fn clear;
+    provision_wifi_profile_count_fn count;
+    provision_wifi_profile_get_fn get;
+} provision_wifi_profiles;
+
 int provision_wifi_ssid_valid(const char *ssid);
 int provision_wifi_psk_valid(const char *psk);
+/* `profiles` may be NULL on a device with no saved-network list, in which case the profile
+ * commands answer ERR WIFI PROFILE UNSUPPORTED rather than guessing. */
 int provision_wifi_handle(const char *command, provision_wifi_save_ssid_fn save_ssid,
                           provision_wifi_save_psk_fn save_psk, provision_wifi_clear_fn clear,
-                          provision_wifi_load_fn load, void *ctx,
-                          char *response, size_t capacity);
+                          provision_wifi_load_fn load, const provision_wifi_profiles *profiles,
+                          void *ctx, char *response, size_t capacity);
+
+/* What a join should try, in order: the saved networks as the store holds them, then the
+ * staged pair when it is not already one of them, so the single-network flow keeps working
+ * unchanged. An entry that could not be joined is skipped rather than offered as a candidate
+ * that would fail at association. `ssids` and `psks` are arrays of rows of PROVISION_SSID_MAX+1
+ * and PROVISION_PSK_MAX+1 bytes. Returns 0 and writes the count, or -1 when the store could
+ * not be read. */
+int provision_wifi_candidates(const provision_wifi_profiles *profiles, provision_wifi_load_fn load,
+                             void *ctx, char (*ssids)[PROVISION_SSID_MAX + 1],
+                             char (*psks)[PROVISION_PSK_MAX + 1], size_t capacity, size_t *count);
 #endif

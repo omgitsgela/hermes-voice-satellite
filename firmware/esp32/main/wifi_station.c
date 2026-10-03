@@ -81,11 +81,15 @@ static int fail(char *out, size_t capacity, const char *reason) {
     return -1;
 }
 
-int wifi_station_scan(char *out, size_t capacity) {
-    if (!out || capacity == 0) return -1;
-    out[0] = 0;
-    if (ensure_initialised() != 0) return fail(out, capacity, "wifi init");
-
+/* One scan, shared by the report and by the chooser, because two scan implementations would
+ * eventually disagree about dwell time or about what "found" means. On success the radio is
+ * still started and *records belongs to the caller, who frees it and stops the radio; on
+ * failure everything done here is undone here. */
+static int scan_collect(wifi_ap_record_t **records, uint16_t *found, uint16_t *wanted,
+                        char *out, size_t capacity) {
+    *records = NULL;
+    *found = 0;
+    *wanted = 0;
     if (esp_wifi_start() != ESP_OK) return fail(out, capacity, "radio start");
     wifi_scan_config_t scan = {0};
     scan.show_hidden = true;
@@ -94,30 +98,41 @@ int wifi_station_scan(char *out, size_t capacity) {
     scan.scan_time.active.max = WIFI_STATION_ACTIVE_MAX_MS;
 
     /* Blocking, so the whole operation is bounded by the dwell time per channel. */
-    esp_err_t started = esp_wifi_scan_start(&scan, true);
-    if (started != ESP_OK) {
+    if (esp_wifi_scan_start(&scan, true) != ESP_OK) {
         esp_wifi_stop();
         return fail(out, capacity, "scan start");
     }
 
-    uint16_t found = 0;
-    if (esp_wifi_scan_get_ap_num(&found) != ESP_OK) found = 0;
-    uint16_t wanted = found > WIFI_STATION_MAX_APS ? WIFI_STATION_MAX_APS : found;
-
-    wifi_ap_record_t *records = NULL;
-    if (wanted > 0) {
-        records = calloc(wanted, sizeof(*records));
-        if (!records) {
+    uint16_t total = 0;
+    if (esp_wifi_scan_get_ap_num(&total) != ESP_OK) total = 0;
+    uint16_t take = total > WIFI_STATION_MAX_APS ? WIFI_STATION_MAX_APS : total;
+    if (take > 0) {
+        *records = calloc(take, sizeof(**records));
+        if (!*records) {
             esp_wifi_clear_ap_list();
             esp_wifi_stop();
             return fail(out, capacity, "no memory");
         }
-        if (esp_wifi_scan_get_ap_records(&wanted, records) != ESP_OK) {
-            free(records);
-            records = NULL;
-            wanted = 0;
+        if (esp_wifi_scan_get_ap_records(&take, *records) != ESP_OK) {
+            free(*records);
+            *records = NULL;
+            take = 0;
         }
     }
+    *found = total;
+    *wanted = take;
+    return 0;
+}
+
+int wifi_station_scan(char *out, size_t capacity) {
+    if (!out || capacity == 0) return -1;
+    out[0] = 0;
+    if (ensure_initialised() != 0) return fail(out, capacity, "wifi init");
+
+    wifi_ap_record_t *records = NULL;
+    uint16_t found = 0;
+    uint16_t wanted = 0;
+    if (scan_collect(&records, &found, &wanted, out, capacity) != 0) return -1;
 
     wifi_report_ap *view = NULL;
     if (wanted > 0) {
@@ -150,6 +165,41 @@ int wifi_station_scan(char *out, size_t capacity) {
     free(records);
     esp_wifi_clear_ap_list();
     esp_wifi_stop();  /* back to quiet: no radio unless a command asks for one */
+    return 0;
+}
+
+int wifi_station_scan_match(const char *const *ssids, size_t count, int *rank,
+                            char *out, size_t capacity) {
+    if (!out || capacity == 0) return -1;
+    out[0] = 0;
+    if (!ssids || !rank || count == 0) return fail(out, capacity, "no networks to match");
+    if (ensure_initialised() != 0) return fail(out, capacity, "wifi init");
+    for (size_t index = 0; index < count; ++index) rank[index] = WIFI_STATION_NO_SIGNAL;
+
+    wifi_ap_record_t *records = NULL;
+    uint16_t found = 0;
+    uint16_t wanted = 0;
+    if (scan_collect(&records, &found, &wanted, out, capacity) != 0) return -1;
+
+    for (uint16_t index = 0; index < wanted; ++index) {
+        /* The driver's SSID field is not promised to be terminated, so it is bounded here and
+         * the staged name is compared over exactly that many bytes. */
+        size_t length = strnlen((const char *)records[index].ssid, WIFI_REPORT_SSID_MAX);
+        if (length == 0) continue;  /* a hidden network cannot be matched by name */
+        for (size_t candidate = 0; candidate < count; ++candidate) {
+            if (strncmp((const char *)records[index].ssid, ssids[candidate], length) != 0) continue;
+            if (ssids[candidate][length] != 0) continue;
+            int rssi = (int)records[index].rssi;
+            if (rank[candidate] == WIFI_STATION_NO_SIGNAL || rssi > rank[candidate])
+                rank[candidate] = rssi;
+        }
+    }
+
+    free(records);
+    esp_wifi_clear_ap_list();
+    esp_wifi_stop();
+    /* A completed scan says nothing by itself: the caller reports which network it chose. */
+    out[0] = 0;
     return 0;
 }
 

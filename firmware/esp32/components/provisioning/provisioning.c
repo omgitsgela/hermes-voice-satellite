@@ -124,9 +124,24 @@ static int reload(const char *context, provision_wifi_load_fn load, void *ctx,
     return 0;
 }
 
+/* Where a network sits in the saved list, or -1 when it is not there. -2 means the store could
+ * not be read, which is a different thing from "not configured" and must never be reported as
+ * one: a device that cannot read its list would otherwise look like a device with no networks. */
+static int profile_index_of(const provision_wifi_profiles *profiles, void *ctx, const char *ssid,
+                            char *ssid_out, size_t ssid_capacity, char *psk_out, size_t psk_capacity) {
+    int total = profiles->count(ctx);
+    if (total < 0) return -2;
+    for (int index = 0; index < total; ++index) {
+        if (profiles->get(ctx, index, ssid_out, ssid_capacity, psk_out, psk_capacity) != 0) return -2;
+        if (strcmp(ssid_out, ssid) == 0) return index;
+    }
+    return -1;
+}
+
 int provision_wifi_handle(const char *command, provision_wifi_save_ssid_fn save_ssid,
                           provision_wifi_save_psk_fn save_psk, provision_wifi_clear_fn clear,
-                          provision_wifi_load_fn load, void *ctx,
+                          provision_wifi_load_fn load, const provision_wifi_profiles *profiles,
+                          void *ctx,
                           char *response, size_t capacity) {
     if (!command || !save_ssid || !save_psk || !clear || !load || !response || capacity < 256) return -1;
     char ssid[PROVISION_SSID_MAX + 1] = {0};
@@ -161,6 +176,87 @@ int provision_wifi_handle(const char *command, provision_wifi_save_ssid_fn save_
                      strcmp(psk, value) != 0) error = "ERR STORAGE";
             else { snprintf(response, capacity, "OK WIFI PSK STAGED"); return 0; }
         }
+    } else if (strcmp(command, "WIFI_PROFILE_SAVE") == 0) {
+        if (!profiles) error = "ERR WIFI PROFILE UNSUPPORTED";
+        else if (reload(command, load, ctx, ssid, sizeof(ssid), psk, sizeof(psk)) != 0)
+            error = "ERR STORAGE";
+        else if (!ssid[0] || !psk[0]) error = "ERR WIFI NOT_STAGED";
+        else {
+            char entry_ssid[PROVISION_SSID_MAX + 1] = {0};
+            char entry_psk[PROVISION_PSK_MAX + 1] = {0};
+            int count = profiles->count(ctx);
+            int found = profile_index_of(profiles, ctx, ssid, entry_ssid, sizeof(entry_ssid),
+                                         entry_psk, sizeof(entry_psk));
+            if (count < 0 || found == -2) error = "ERR STORAGE";
+            else if (found < 0 && (unsigned)count >= PROVISION_WIFI_PROFILE_MAX)
+                error = "ERR WIFI PROFILE FULL";
+            else {
+                /* Read the pair back afterwards: a store that reports success without keeping
+                 * it is not a saved network, and acknowledging it would be a lie. */
+                int stored = profiles->save(ctx, ssid, psk);
+                int after = profiles->count(ctx);
+                int verify = profile_index_of(profiles, ctx, ssid, entry_ssid, sizeof(entry_ssid),
+                                              entry_psk, sizeof(entry_psk));
+                int kept = stored == 0 && after >= 0 && verify >= 0 &&
+                           strcmp(entry_ssid, ssid) == 0 && strcmp(entry_psk, psk) == 0 &&
+                           after == (found < 0 ? count + 1 : count);
+                if (!kept) error = "ERR STORAGE";
+                else { snprintf(response, capacity, "OK WIFI PROFILE SAVED n=%d", after); return 0; }
+            }
+        }
+    } else if (strcmp(command, "WIFI_PROFILES") == 0) {
+        if (!profiles) error = "ERR WIFI PROFILE UNSUPPORTED";
+        else {
+            int count = profiles->count(ctx);
+            int problem = 0;
+            size_t used = 0;
+            if (count < 0) error = "ERR STORAGE";
+            else if (count == 0) { snprintf(response, capacity, "OK WIFI PROFILES n=0"); return 0; }
+            else {
+                for (int index = 0; index < count; ++index) {
+                    char entry_ssid[PROVISION_SSID_MAX + 1] = {0};
+                    char entry_psk[PROVISION_PSK_MAX + 1] = {0};
+                    if (profiles->get(ctx, index, entry_ssid, sizeof(entry_ssid),
+                                      entry_psk, sizeof(entry_psk)) != 0) { problem = 1; break; }
+                    /* The SSID is reported and the passphrase only as present or missing. */
+                    int written = snprintf(response + used, capacity - used,
+                                           "WIFI PROFILE index=%d ssid=%s psk=%s\n", index,
+                                           entry_ssid[0] ? entry_ssid : "missing",
+                                           entry_psk[0] ? "present" : "missing");
+                    if (written < 0 || (size_t)written >= capacity - used) { problem = 2; break; }
+                    used += (size_t)written;
+                }
+                if (problem == 1) error = "ERR STORAGE";
+                /* Never a shortened list: half a list of networks is a wrong answer. */
+                else if (problem == 2) { snprintf(response, capacity, "ERR WIFI PROFILES TOO_LONG"); return -1; }
+                else return 0;
+            }
+        }
+    } else if (strcmp(command, "WIFI_PROFILE_CLEAR") == 0) {
+        if (!profiles) error = "ERR WIFI PROFILE UNSUPPORTED";
+        else if (profiles->clear(ctx) != 0 || profiles->count(ctx) != 0) error = "ERR STORAGE";
+        else { snprintf(response, capacity, "OK WIFI PROFILES CLEARED n=0"); return 0; }
+    } else if (strncmp(command, "WIFI_PROFILE_REMOVE", 19) == 0) {
+        if (!profiles) error = "ERR WIFI PROFILE UNSUPPORTED";
+        else if (command[19] != ' ' || !command[20]) error = "ERR COMMAND";
+        else if (!provision_wifi_ssid_valid(command + 20)) error = "ERR WIFI SSID";
+        else {
+            char entry_ssid[PROVISION_SSID_MAX + 1] = {0};
+            char entry_psk[PROVISION_PSK_MAX + 1] = {0};
+            int count = profiles->count(ctx);
+            int found = profile_index_of(profiles, ctx, command + 20, entry_ssid,
+                                         sizeof(entry_ssid), entry_psk, sizeof(entry_psk));
+            if (count < 0 || found == -2) error = "ERR STORAGE";
+            else if (found < 0) error = "ERR WIFI PROFILE UNKNOWN";
+            else {
+                int removed = profiles->remove(ctx, command + 20);
+                int after = profiles->count(ctx);
+                int gone = profile_index_of(profiles, ctx, command + 20, entry_ssid,
+                                            sizeof(entry_ssid), entry_psk, sizeof(entry_psk));
+                if (removed != 0 || after != count - 1 || gone != -1) error = "ERR STORAGE";
+                else { snprintf(response, capacity, "OK WIFI PROFILE REMOVED n=%d", after); return 0; }
+            }
+        }
     } else if (strcmp(command, "CLEAR_WIFI") == 0) {
         if (clear(ctx) != 0 ||
             reload(command, load, ctx, ssid, sizeof(ssid), psk, sizeof(psk)) != 0 ||
@@ -169,6 +265,43 @@ int provision_wifi_handle(const char *command, provision_wifi_save_ssid_fn save_
     }
     snprintf(response, capacity, "%s", error);
     return -1;
+}
+
+int provision_wifi_candidates(const provision_wifi_profiles *profiles, provision_wifi_load_fn load,
+                              void *ctx, char (*ssids)[PROVISION_SSID_MAX + 1],
+                              char (*psks)[PROVISION_PSK_MAX + 1], size_t capacity, size_t *count) {
+    if (!load || !ssids || !psks || !count || capacity == 0) return -1;
+    *count = 0;
+    if (profiles) {
+        int total = profiles->count(ctx);
+        if (total < 0) return -1;
+        for (int index = 0; index < total && *count < capacity; ++index) {
+            char entry_ssid[PROVISION_SSID_MAX + 1] = {0};
+            char entry_psk[PROVISION_PSK_MAX + 1] = {0};
+            if (profiles->get(ctx, index, entry_ssid, sizeof(entry_ssid),
+                              entry_psk, sizeof(entry_psk)) != 0) return -1;
+            /* An entry that is not a joinable pair is skipped, not offered: a candidate that
+             * cannot associate would turn a working network into a failed join. */
+            if (!provision_wifi_ssid_valid(entry_ssid) || !provision_wifi_psk_valid(entry_psk)) continue;
+            memcpy(ssids[*count], entry_ssid, strlen(entry_ssid) + 1);
+            memcpy(psks[*count], entry_psk, strlen(entry_psk) + 1);
+            ++*count;
+        }
+    }
+    char staged_ssid[PROVISION_SSID_MAX + 1] = {0};
+    char staged_psk[PROVISION_PSK_MAX + 1] = {0};
+    if (load(ctx, staged_ssid, sizeof(staged_ssid), staged_psk, sizeof(staged_psk)) != 0) return -1;
+    if (provision_wifi_ssid_valid(staged_ssid) && provision_wifi_psk_valid(staged_psk)) {
+        int already = 0;
+        for (size_t index = 0; index < *count; ++index)
+            if (strcmp(ssids[index], staged_ssid) == 0) { already = 1; break; }
+        if (!already && *count < capacity) {
+            memcpy(ssids[*count], staged_ssid, strlen(staged_ssid) + 1);
+            memcpy(psks[*count], staged_psk, strlen(staged_psk) + 1);
+            ++*count;
+        }
+    }
+    return 0;
 }
 
 int provision_line_feed(provision_line *line, unsigned char byte) {
