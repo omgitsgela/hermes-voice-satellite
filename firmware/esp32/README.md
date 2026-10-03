@@ -117,8 +117,10 @@ arriving after the link ended were not obeyed as provisioning commands, and a
 real reset restored the console. The whole run passed twice.
 
 The PC-to-gateway relay against the real bridge, Wi-Fi/TLS, enrollment, audio
-payloads, wake, reconnect behavior, combined-workload resources, factory restore
-and Windows acceptance remain unverified.
+payloads, wake, reconnect behaviour, combined-workload resources, factory restore
+and Windows acceptance remain unverified. (Reconnect behaviour is proved by host
+loopback tests of the persistent supervisor; it has not yet been exercised on this
+device over a lost link.)
 
 ## Safety contract
 
@@ -152,8 +154,8 @@ URIs use `tcp://host:port` (explicit plaintext for a trusted LAN) or
 at most 127 host characters, 63 characters per label, and a decimal port 1–65535.
 No credentials, paths, query strings, IPv6 literals, or leading-zero ports are
 accepted. Syntax validation is not DNS resolution or connectivity validation.
-A staged `tls://` URI does not establish that TLS or enrollment is implemented.
-**Neither URI scheme activates any network connection in this build.**
+Staging a `tls://` URI does not establish a connection by itself, but it is the value the
+register-on-boot gate and `START_GATEWAY` use when they do connect (see below).
 
 Commands are at most 255 bytes. Invalid/control-byte/oversize lines and partial
 lines older than five seconds are drained through LF before another command is
@@ -161,6 +163,26 @@ accepted. Send LF, not CRLF. There is one USB reader and one response writer;
 responses have finite write deadlines. This is a development provisioning
 console, not Wyoming audio over USB, and must not share the port with a monitor
 or another client. Physical USB access can change these non-secret settings.
+
+### The full command set
+
+What the console answers, in the order a bring-up meets them. The Wi-Fi profile
+commands and the gateway/audio commands are detailed in their own sections below.
+
+| Command | What it does |
+|---|---|
+| `STATUS` | `OK UNCONFIGURED` or `OK ENDPOINT <uri> STAGED`. |
+| `SET_ENDPOINT <uri>` / `CLEAR_ENDPOINT` | Stage or clear the gateway endpoint (NVS `hermes_dev`). |
+| `SET_WIFI_SSID <ssid>` / `SET_WIFI_PSK <file>` / `CLEAR_WIFI` | Stage the one-shot join pair, or clear it. |
+| `WIFI_STATUS` | `OK WIFI UNCONFIGURED`, or `OK WIFI ssid=<name> psk=staged\|missing`. The passphrase is only ever reported as present or missing. |
+| `WIFI_PROFILE_SAVE` / `WIFI_PROFILES` / `WIFI_PROFILE_REMOVE <ssid>` / `WIFI_PROFILE_CLEAR` | Manage the saved-network list (up to four), which outlives a reboot and is what register-on-boot joins. |
+| `WIFI_SCAN` | One bounded scan, framed `WIFI SCAN BEGIN` / `END`. |
+| `WIFI_CONNECT` | One bounded join of the staged pair, framed `WIFI CONNECT BEGIN` / `END`. |
+| `START_GATEWAY` | Join and register over Wi-Fi with the staged endpoint, framed `GATEWAY BEGIN` / `END`. |
+| `GATEWAY_STATUS` | Read-only: what the persistent gateway task is doing right now. |
+| `AUDIO_BRINGUP` | One bounded I2S/I2C bring-up, framed `AUDIO BRINGUP BEGIN` / `END`. |
+| `TLS_STATUS` | What TLS material is provisioned, without dialling anything. |
+| `START_WYOMING` | Hand the USB port to the Wyoming control core (latches until reset). |
 
 From the repo root, use a Python environment with `pyserial` installed:
 
@@ -276,6 +298,154 @@ assumed.
 Filed 2026-10-03 on hardware: WPA2-PSK handshake completed with the travel router on
 channel 11 at -40 dBm, address `<device-ip>` via `<router-gateway>`. That is the staged
 passphrase proven correct by the access point, not by our own logs.
+
+## Remember the networks
+
+The staged pair (`SET_WIFI_SSID` / `SET_WIFI_PSK`) is one-shot: it is what `WIFI_CONNECT`
+and a manual `START_GATEWAY` join. A device that should register by itself needs networks
+that outlive a reboot, and those are the **saved profiles** — a different thing, a list of
+up to four networks that a join tries before the staged pair:
+
+```sh
+python scripts/esp32_provision.py --port <usb> save-profile <ssid> <psk-file>
+python scripts/esp32_provision.py --port <usb> list-profiles
+python scripts/esp32_provision.py --port <usb> remove-profile <ssid>
+python scripts/esp32_provision.py --port <usb> clear-profiles
+```
+
+The listing reports SSIDs and presence only (`WIFI PROFILE index=<n> ssid=<name> psk=present`);
+a passphrase never leaves the device except as the bytes of `save-profile`, which reads it
+from a file and never prints it. A WPA2 profile accepts an 8–63 character passphrase **or**
+a 64-hex-digit raw key — a value too long to be a passphrase may still be a perfectly valid
+key, so the validator checks the shape before refusing. Saving never consumes the staged
+pair; re-staging never rewrites a saved profile; a re-save replaces in place; and a full
+list refuses rather than evicting a network that works. An unreadable store is
+`ERR STORAGE`, not "not configured": a device that cannot read its list must not look like
+a device with no networks.
+
+With more than one candidate, a join scans and takes the strongest one actually in range;
+with one candidate it does not scan at all, so the single-network path keeps its reliability.
+Every join and gateway run names what it used:
+`profile source=saved|staged index=<n> ssid=<name>` — with several networks, "it
+connected" says nothing without that line. A device that holds networks but can see none of
+them answers `NO_KNOWN_NETWORK` and dials nothing.
+
+## Register on boot, and ask the link what it is doing
+
+A configured device no longer waits for a command. At boot, after the ready marker, the
+console runs a **boot gate**: with a gateway endpoint staged and at least one joinable
+network, it starts the persistent gateway task and says so; without either, it says why,
+in the same words a manual `START_GATEWAY` would:
+
+```
+PROVISION GATEWAY BOOT
+PROVISION profile source=saved index=1 ssid=<name>
+PROVISION GATEWAY BOOT RUNNING
+```
+
+or
+
+```
+PROVISION GATEWAY BOOT IDLE reason=NO_NETWORK
+```
+
+The idle reasons, in the order the decision makes them: `WIFI_UNREADABLE` (the profile
+store could not be read), `NO_NETWORK` (nothing saved or staged that can be joined),
+`NO_ENDPOINT` (networks but nowhere to register), and `BAD_ENDPOINT` (the stored endpoint
+does not parse); plus `NO_JOINABLE` (a join was attempted and could not associate) and
+`FAILED reason=NO_TASK` (the decision said GO but the task would not start). Wi-Fi is
+named before the endpoint, exactly the order a manual `START_GATEWAY` reports in, so a
+boot line and a console command tell the same story for the same configuration. A
+configured network whose access point is off at that moment is still a GO: the decision is
+about what is **configured**, and the task's backoff is the retry that finds the AP when
+it returns.
+
+The task is the device half of item 1: it runs the persistent supervisor for the life of
+the session — establish, register, pump — and re-dials, and re-associates, whenever the
+link goes away. A bridge that **refuses** the registration is the one terminal case: the
+task releases the radio and exits, and stopping is the correct thing.
+
+Because a persistent task owns the radio while it runs, the radio commands defer to it:
+`WIFI_SCAN` and `WIFI_CONNECT` answer `ERR WIFI BUSY` while the gateway is active, and a
+manual `START_GATEWAY` answers `ERR GATEWAY ALREADY_RUNNING`. The queries that read state
+(`STATUS`, `WIFI_STATUS`, `TLS_STATUS`, `GATEWAY_STATUS`) are always available, which is
+what makes a long soak possible.
+
+`GATEWAY_STATUS` is the read-only query the soak uses, and the one a person at the console
+uses to answer "is it connected?" without starting anything:
+
+```
+PROVISION OK GATEWAY IDLE
+PROVISION OK GATEWAY RUNNING last=session=registered
+PROVISION OK GATEWAY RUNNING last=reconnect=registered reconnects=2
+```
+
+It carries the task's **last report line** — the supervisor's own words for what the link
+did most recently — not the whole report, and not a guess: an empty `last=` is a real
+answer (the task is active and has not yet appended a line), and the command dials
+nothing, touches no radio, and never starts the task.
+
+## Bring the audio hardware up (and stop there)
+
+The XVF3800's microphones are processed by the XMOS XS3; its audio reaches the ESP32 over
+I2S, and the codec is configured over I2C. `AUDIO_BRINGUP` proves that path is wired and
+that the codec answers, and does nothing else — it is not capture and not playback:
+
+```
+PROVISION AUDIO BRINGUP BEGIN
+PROVISION i2s=initialized i2c=codec_ok version=<major>.<minor>.<patch>
+PROVISION AUDIO BRINGUP END
+```
+
+Two steps, then both buses are torn down. The I2S interface is initialized for the board
+(ESP32 master, stereo, 32-bit, 16 kHz, on the documented pins) — created and initialized,
+which is the interface bring-up; it is **never started**, so no stream runs and no sample
+is read or written. The codec is probed over I2C and its firmware version read with the
+vendor's own protocol (a three-byte write then a four-byte read, retrying on the codec's
+retry status). The amplifier enable line is an XMOS GPO, not an ESP32 GPIO, and it is
+never touched. A codec that answers without giving a version is not given one to show: the
+report says `i2c=codec_ok` and stops there.
+
+The report is deliberately silent about capture and playback, because they did not happen.
+An I2S pin that is not where the wiring says it is reads `i2s=init_failed`; a board with
+no codec reads `i2c=no_codec`; a bus that faults reads `i2c=bus_error`. Each is a
+different next step, and naming the one that is true is the whole point of the command.
+
+The pure report half (`components/audio_report`) is host-tested on its own; the console
+half is host-tested against a stubbed bring-up; the firmware build proves the real I2S/I2C
+driver calls are linked into the image. What remains unproved, until the board is flashed:
+whether this particular board's codec answers, and on which pins.
+
+## Soak the link
+
+`scripts/run-soak.py` is how you find out whether a registered link **stays** registered.
+It polls the read-only `GATEWAY_STATUS` command for a window, one sample per interval, and
+judges the window:
+
+```sh
+python scripts/run-soak.py --port <usb> --duration 3600 --interval 5
+```
+
+Healthy means the task was active the whole window **and** the link registered at least
+once. A sample whose last line is a backoff or a failed establish is **not** a failure:
+a dropped link that the supervisor reconnects is exactly the property the persistent
+session exists to prove, and the soak treats it as the expected behaviour it is. What
+fails a soak: an `IDLE` sample (the task never ran or terminated), a `LOST` sample (the
+console stopped answering — a flapping USB link, recorded rather than fatal), an
+`UNEXPECTED` sample (the console changed its words), or a window in which the link never
+registered. The verdict is one line and an exit code, so a soak runs equally well at a
+console or as a scheduled job:
+
+```
+SOAK OK samples=721 running=721 idle=0 lost=0 unexpected=0 registered=720 backoffs=2 max_reconnects=2 window=3600.0s reason=ok
+SOAK FAIL ... reason=idle_at_sample_412
+```
+
+The device must already be configured to register on boot for a soak to measure anything;
+the script stages, joins, dials, and starts nothing. The verdict logic is pure and
+host-tested; the polling glue is host-tested with a scripted connection and an injected
+clock, so the loop is exercised on a host with no board and no pyserial. The first real
+soak runs against the board at the flash gate.
 
 ## Register with the gateway over Wi-Fi
 
@@ -398,8 +568,9 @@ printed.
 
 The mbedTLS contexts live in PSRAM and the handshake is the heaviest thing this firmware does on the
 console task, so every run reports the task's remaining stack (`resource=stack_min_free`). The measured
-runs left 4020 bytes. This is a registration probe: it stops at registration, so run/pause handling,
-reconnect-under-loss and audio over this transport are unproven.
+runs left 4020 bytes. A `tls://` endpoint on the register-on-boot path runs the same handshake inside
+the persistent task, so a TLS link also reconnects: the pin check and the clock sync run on every
+dial, not only the first.
 
 ## Flash layout
 
@@ -422,10 +593,69 @@ The table was written on its own, with the reviewed layout parsed and checked be
 readback compared byte for byte, and the bootloader and application regions re-read afterwards to
 prove they did not move.
 
+## Bundle the flash artifact
+
+Flashing is the one act in this project with teeth, and it waits for a gate. `scripts/bundle-esp32-flash.py`
+produces the reviewable artifact that gate runs against: the exact set of files that will be written to
+the chip, at their exact offsets, with sizes and hashes, taken from the build's own flash map
+(`flasher_args.json`) rather than a list that can drift from it.
+
+```sh
+python scripts/bundle-esp32-flash.py --build firmware/esp32/build                 # the manifest
+python scripts/bundle-esp32-flash.py --build firmware/esp32/build \
+  --bundle pending-flash.bundle.bin                                               # + the combined image
+python scripts/bundle-esp32-flash.py --build firmware/esp32/build \
+  --check pending-flash.manifest.txt                                              # re-hash after review
+```
+
+The manifest is self-contained: one `offset= name= size= sha256=` line per component, in flash-map
+order. `--check` re-reads the build and re-hashes every file a reviewed manifest names; if a byte of
+the app changed after review, it fails and names the file. The gate is then a hash comparison, not a
+memory of what the build produced. `--bundle` places each component at its flash offset with zero
+padding between, so a flasher can write the bundle straight to `0x0`, and reports the bundle's own
+hash so it too can be pinned. The script refuses a missing or incomplete flash map rather than
+guessing one: a file written at the wrong offset is not a recoverable mistake.
+
+What flashing touches, in this layout: the bootloader at `0x0`, the partition table at `0x8000`, and
+the application at `0x10000`. The `nvs`, `phy_init`, and `storage` partitions are data and are not
+part of the flash map; the staged configuration, the radio calibration, and the provisioned TLS
+material are therefore never touched by an application flash. The application is flashed to the
+`factory` region only, with the readback that proves the written region matches the reviewed artifact
+and the neighbouring regions did not move.
+
 ## Still pending
 
-Audio-event schemas/general binary decoding; a persistent PC relay service (the relay is one bounded run, and it is what a real deployment would replace with a network link on the device); full bridge configuration/lease interoperability (the probe does not implement the configuration plane, so the bridge holds desired-but-unreported state for a device it registers); secure enrollment (credentials can be staged, a join is proven, and registration reaches the live gateway over plaintext TCP and over mutual TLS, but there is no authenticated enrollment flow: certificates are provisioned out of band, and the device-side material is written over USB rather than exchanged); a session that outlives registration (it currently stops at registration, so run/pause handling and reconnect-under-loss are unproven); USB audio transport; XMOS I2C/I2S adapters; capture/playback; wake inference and selected licensed model; installer; combined workload memory/stack measurements.
+Done in this branch and pending the flash gate: a persistent session that outlives
+registration (the supervisor, the register-on-boot task, and the soak that measures it);
+the XMOS I2C/I2S bring-up (compiled and host-tested, not yet run on this board). What
+remains genuinely open:
 
-Host tests do not validate microphone or acoustic behavior. Diagnostic builds have
-been flashed, read back byte-for-byte, and boot-tested; this does not establish
-production firmware, installer portability, reconnect stability, or full voice functionality.
+- **Device-side verification of this branch's code.** Everything above is proved by host
+  tests and a clean build against the real driver headers; nothing in items 1–7 has been
+  run on the board yet. The device still carries the multi-Wi-Fi build. The first flash is
+  the gate that turns "compiled and host-green" into "on the hardware," and it bundles the
+  manifest and hashes from `bundle-esp32-flash.py`.
+- **A real soak on the board.** The harness is unit-tested; its first hour-long window
+  against the running link has not happened.
+- **Audio capture and playback.** The bring-up proves the path initializes and the codec
+  answers; a stream, a sample, the amplifier, and the 4 Ω/3 W level have all been deferred
+  on purpose. The XMOS audio path (the XS3's own firmware, the mic array) is a separate
+  bring-up with its own checkpoint discipline.
+- **A device-side XMOS readback.** The host tooling (`xmos-firmware.py`) is dry-run-only
+  and reads through an injected driver; no readback of this board's XMOS image has been
+  taken yet.
+- **Wake inference and a selected licensed model**, and the storage it will need from the
+  `storage` partition (after the 8 KB TLS region).
+- **USB audio transport.**
+- **Secure enrollment.** Credentials are provisioned out of band and the device-side
+  material is written over USB; there is no authenticated enrollment flow.
+- **A persistent PC relay service** (the relay is one bounded run) and full bridge
+  configuration/lease interoperability (the probe does not implement the configuration
+  plane, so the bridge holds desired-but-unreported state for a device it registers).
+- **Audio-event schemas / general binary decoding.**
+- **Combined-workload memory and stack measurements**, an installer, and Windows
+  acceptance.
+
+Host tests do not validate microphone or acoustic behavior. Diagnostic and provisioning
+builds have been flashed, read back byte-for-byte, and boot-tested; that does not
+establish production firmware, installer portability, or full voice functionality.
