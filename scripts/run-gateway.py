@@ -1,87 +1,76 @@
 #!/usr/bin/env python3
 """Stage credentials and an endpoint, then ask the device to join and register.
 
-The passphrase is read from a file so it never appears in a process listing or shell
-history, and it is never printed: the console does not echo input, and every report line
-carries no key material.
+The passphrase is read from a file so it never appears in a process listing or shell history, and
+it is never printed: the console does not echo input, and every report line carries no key material.
 
-Usage: run-gateway.py <psk-file> <ssid> <endpoint>
+The serial port comes from --port or HERMES_SATELLITE_SERIAL: nothing in this tree is a device path.
+
+Usage: run-gateway.py <psk-file> <ssid> <endpoint> [--port <usb>]
 """
+import argparse
 import sys
-import time
-import serial
+from pathlib import Path
 
-PORT = '/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_68:EE:8F:4B:59:88-if00'
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from serial_console import open_console, resolve_port, wait_for  # noqa: E402
+
 READY = b'PROVISION READY'
 BLOCK_END = b'PROVISION GATEWAY END'
 
 
-def open_port():
-    connection = serial.Serial(port=None, baudrate=115200, timeout=0.2)
-    connection.dtr = False
-    connection.rts = False
-    connection.port = PORT
-    connection.open()
-    return connection
+def main():
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('psk_file', help='file holding the passphrase; read, never printed')
+    parser.add_argument('ssid')
+    parser.add_argument('endpoint', help='tcp://host:port or tls://host:port')
+    parser.add_argument('--port', help='ESP32 USB serial device; or set HERMES_SATELLITE_SERIAL')
+    args = parser.parse_args()
+    port = resolve_port(args.port)
 
+    with open(args.psk_file, 'rb') as handle:
+        psk = handle.read().strip()
+    assert psk, 'the passphrase file is empty'
 
-def wait_for(connection, needle, seconds):
-    received = bytearray()
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        try:
-            chunk = connection.read(512)
-        except (serial.SerialException, OSError):
-            return received, False
-        if chunk:
-            sys.stdout.write(chunk.decode('utf-8', errors='replace'))
-            sys.stdout.flush()
-            received.extend(chunk)
-            if needle in received:
-                return received, True
-    return received, False
-
-
-if len(sys.argv) < 4:
-    raise SystemExit('usage: run-gateway.py <psk-file> <ssid> <endpoint>')
-with open(sys.argv[1], 'rb') as handle:
-    psk = handle.read().strip()
-assert psk, 'the passphrase file is empty'
-ssid, endpoint = sys.argv[2], sys.argv[3]
-
-connection = open_port()
-try:
-    connection.reset_input_buffer()
-    _, ready = wait_for(connection, READY, 25)
-    if not ready:
-        print('\nNO READY MARKER: the console did not come up')
-        raise SystemExit(1)
-
-    for command in (f'SET_WIFI_SSID {ssid}', f'SET_WIFI_PSK {psk.decode()}', f'SET_ENDPOINT {endpoint}'):
-        connection.write(command.encode() + b'\n')
-        connection.flush()
-        _, acknowledged = wait_for(connection, b'PROVISION ', 10)
-        if not acknowledged:
-            print(f'\nNO ACKNOWLEDGEMENT for {command.split(" ")[0]}')
+    connection = open_console(port)
+    try:
+        connection.reset_input_buffer()
+        _, ready = wait_for(connection, READY, 25, echo=sys.stdout)
+        if not ready:
+            print('\nNO READY MARKER: the console did not come up')
             raise SystemExit(1)
 
-    # Readiness re-checked from the device's own view before asking it to do anything.
-    connection.write(b'WIFI_STATUS\n')
-    connection.flush()
-    wait_for(connection, b'PROVISION ', 10)
+        for command in (f'SET_WIFI_SSID {args.ssid}', f'SET_WIFI_PSK {psk.decode()}',
+                        f'SET_ENDPOINT {args.endpoint}'):
+            connection.write(command.encode() + b'\n')
+            connection.flush()
+            _, acknowledged = wait_for(connection, b'PROVISION ', 10)
+            if not acknowledged:
+                print(f'\nNO ACKNOWLEDGEMENT for {command.split(" ")[0]}')
+                raise SystemExit(1)
 
-    print('\n--- staging confirmed; asking the device to join and register ---')
-    connection.write(b'START_GATEWAY\n')
-    connection.flush()
-    block, finished = wait_for(connection, BLOCK_END, 90)
-finally:
-    connection.close()
+        # Readiness re-checked from the device's own view before asking it to do anything.
+        connection.write(b'WIFI_STATUS\n')
+        connection.flush()
+        wait_for(connection, b'PROVISION ', 10)
 
-if not finished:
-    print('\nINCOMPLETE: no gateway block within the deadline')
-    raise SystemExit(3)
-if b'session=registered' in block:
-    print('\nREGISTERED OVER WI-FI')
-    raise SystemExit(0)
-print('\nGATEWAY RUN DID NOT REACH REGISTRATION')
-raise SystemExit(2)
+        print('\n--- staging confirmed; asking the device to join and register ---')
+        connection.write(b'START_GATEWAY\n')
+        connection.flush()
+        block, finished = wait_for(connection, BLOCK_END, 90, echo=sys.stdout)
+    finally:
+        connection.close()
+
+    if not finished:
+        print('\nINCOMPLETE: no gateway block within the deadline')
+        raise SystemExit(3)
+    if b'session=registered' in block:
+        print('\nREGISTERED OVER WI-FI')
+        raise SystemExit(0)
+    print('\nGATEWAY RUN DID NOT REACH REGISTRATION')
+    raise SystemExit(2)
+
+
+if __name__ == '__main__':
+    main()

@@ -28,10 +28,9 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from serial_console import resolve_port  # noqa: E402
 from tls_credential_blob import REGION_BYTES, build_blob, parse_blob, server_pin  # noqa: E402
 
-DEFAULT_PORT_DEVICE = ('/dev/serial/by-id/'
-                       'usb-Espressif_USB_JTAG_serial_debug_unit_68:EE:8F:4B:59:88-if00')
 PADDING = b'\xff'  # what an unwritten flash byte reads as, so the region's state is unambiguous
 
 
@@ -101,7 +100,8 @@ def main() -> int:
     parser.add_argument('--registry', type=Path,
                         help='state/device-credentials.json, to check the certificate is the one the '
                              'bridge has on file for this device')
-    parser.add_argument('--port-device', default=DEFAULT_PORT_DEVICE)
+    parser.add_argument('--port-device',
+                        help='ESP32 USB serial device for --write; or set HERMES_SATELLITE_SERIAL')
     parser.add_argument('--out', type=Path, default=Path('tls-provisioning'),
                         help='where to write the blob and the record of what was done')
     parser.add_argument('--write', action='store_true',
@@ -154,24 +154,28 @@ def main() -> int:
         print('dry run: nothing written. Re-run with --write to provision the device.')
         return 0
 
+    # The device port is needed only now: a dry run never opens it, and its source is an argument
+    # or the environment, never a path baked into this tree.
+    device_port = resolve_port(arguments.port_device)
+
     # A window one 4 KB sector wider than the region, so the readback can show both that the region
     # holds what was written and that the byte after it was never part of the write.
     window = REGION_BYTES + 4096
     before_path = arguments.out / 'before-region.bin'
     before_path.unlink(missing_ok=True)
-    esptool(arguments.port_device, ['read-flash', '--no-progress', hex(offset), str(window),
-                                    str(before_path)])
+    esptool(device_port, ['read-flash', '--no-progress', hex(offset), str(window),
+                          str(before_path)])
     before = before_path.read_bytes()
     print(f'replaced region: sha256={hashlib.sha256(before[:REGION_BYTES]).hexdigest()[:16]} '
           f'(first bytes {before[:8].hex()})')
 
-    esptool(arguments.port_device, ['write-flash', '--no-progress', '--flash-mode', 'keep',
-                                    '--flash-freq', 'keep', '--flash-size', 'keep',
-                                    hex(offset), str(region_path)])
+    esptool(device_port, ['write-flash', '--no-progress', '--flash-mode', 'keep',
+                          '--flash-freq', 'keep', '--flash-size', 'keep',
+                          hex(offset), str(region_path)])
 
     after_path = arguments.out / 'after-region.bin'
-    esptool(arguments.port_device, ['read-flash', '--no-progress', hex(offset), str(window),
-                                    str(after_path)])
+    esptool(device_port, ['read-flash', '--no-progress', hex(offset), str(window),
+                          str(after_path)])
     after = after_path.read_bytes()
     if after[:REGION_BYTES] != region:
         raise SystemExit('readback of the credential region differs from what was written')
