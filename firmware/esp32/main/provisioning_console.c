@@ -2,6 +2,7 @@
 #include "usb_wyoming.h"
 #include "provisioning.h"
 #include "wifi_station.h"
+#include "audio_bringup.h"
 #include "gateway_tcp.h"
 #include "gateway_tls.h"
 #include "gateway_task.h"
@@ -462,6 +463,20 @@ void provisioning_console_run(void) {
                     reply_block(report);  /* the module writes a one-line reason */
                 }
                 continue;  /* this branch replies for itself; response[] was never filled */
+            } else if (!strcmp(line.data, "AUDIO_BRINGUP")) {
+                /* Item-6 audio bring-up: initialize the I2S interface and confirm the XVF3800
+                 * codec answers over I2C, then tear both down. No stream is started and the
+                 * amplifier is never armed, so it does not conflict with the gateway (which uses
+                 * the radio, not I2S/I2C). The report is one self-describing line. */
+                static char report[256];
+                if (audio_bringup_run(report, sizeof(report)) == 0) {
+                    reply("AUDIO BRINGUP BEGIN");
+                    reply(report);
+                    reply("AUDIO BRINGUP END");
+                } else {
+                    reply_block(report);  /* the module wrote a one-line reason */
+                }
+                continue;  /* this branch replies for itself */
             } else if (!strcmp(line.data, "WIFI_CONNECT")) {
                 static char ssids[WIFI_CANDIDATE_MAX][PROVISION_SSID_MAX + 1];
                 static char psks[WIFI_CANDIDATE_MAX][PROVISION_PSK_MAX + 1];

@@ -23,6 +23,7 @@ RUNNER = r'''#include <assert.h>
 #include "tls_credentials.h"
 #include "wifi_station.h"
 #include "gateway_task.h"
+#include "audio_bringup.h"
 #include <stdbool.h>
 
 /* Two namespaces (hermes_dev, hermes_wifi) with staged/committed separation, so the
@@ -270,6 +271,15 @@ int gateway_task_start(const char *host, unsigned port, int transport, const cha
 bool gateway_task_active(void) { return gateway_task_started > 0; }
 void gateway_task_report(char *out, size_t capacity) { if (out && capacity > 0) out[0] = 0; }
 
+/* The audio bring-up is device I2S/I2C code that does not exist on a host. The console only
+ * asks it to fill a report and return a status, so the stub stands in with a known line. The
+ * console's job here is framing that report into the BEGIN/END block, which is what the test
+ * checks; the bring-up's own behaviour is proved by the audio_report host tests and the build. */
+int audio_bringup_run(char *out, size_t capacity) {
+    if (out && capacity > 0) snprintf(out, capacity, "i2s=initialized i2c=codec_ok version=9.9.9");
+    return 0;
+}
+
 /* The socket leg: reports what it was asked to dial, so the console's routing and framing
  * are what the test checks rather than the network. */
 int gateway_tcp_run(const char *host, unsigned port, char *out, size_t capacity) {
@@ -365,6 +375,7 @@ int usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);
         executable = tmp / 'console'
         compiled = subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror',
                                    '-I' + str(tmp), '-I' + str(CORE), '-I' + str(MAIN),
+                                   '-I' + str(ROOT / 'firmware/esp32/components/audio_report'),
                                    str(tmp / 'runner.c'), str(MAIN / 'provisioning_console.c'),
                                    str(CORE / 'provisioning.c'), '-o', str(executable)],
                                   capture_output=True, text=True)
@@ -510,6 +521,29 @@ int usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);
             self.assertEqual(between[3], 'PROVISION WIFI SCAN END')
             self.assertEqual(between[4], 'PROVISION OK UNCONFIGURED',
                              'exactly one reply may follow the scan block')
+
+    def test_audio_bringup_is_framed_and_emits_exactly_one_block(self):
+        """The audio bring-up branch, like the scan's, replies for itself: BEGIN, its report line,
+        END, and nothing more. The report proves the path and the codec and says nothing about
+        capture or playback, because it did neither."""
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = self.build(tmp)
+            output = self.console(executable, 'AUDIO_BRINGUP\nSTATUS\n')
+            lines = [line for line in output.splitlines() if line.strip()]
+            self.assertIn('PROVISION AUDIO BRINGUP BEGIN', output)
+            self.assertIn('PROVISION AUDIO BRINGUP END', output)
+            # The bring-up's report is one self-describing line inside the markers.
+            self.assertIn('i2s=initialized i2c=codec_ok version=9.9.9', output)
+            framed = [line for line in lines if line.startswith('PROVISION') and 'BRINGUP' in line]
+            self.assertEqual(framed, ['PROVISION AUDIO BRINGUP BEGIN', 'PROVISION AUDIO BRINGUP END'])
+            begin = lines.index('PROVISION AUDIO BRINGUP BEGIN')
+            end = lines.index('PROVISION AUDIO BRINGUP END')
+            self.assertLess(begin, end, 'the markers must frame the report')
+            self.assertEqual(lines[end + 1], 'PROVISION OK UNCONFIGURED',
+                             'exactly one reply may follow the bring-up block')
+            # The report never implies the microphone is open or the speaker armed.
+            for word in ('capture', 'playback', 'armed'):
+                self.assertNotIn(word, output.lower())
 
 
     def test_a_connect_attempt_is_framed_and_reports_where_it_landed(self):
