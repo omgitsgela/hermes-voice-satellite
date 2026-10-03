@@ -42,11 +42,13 @@ import json
 import logging
 import pathlib
 import re
+import ssl
 import time
+from functools import partial
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from wyoming.event import Event, async_write_event
-from wyoming.server import AsyncEventHandler, AsyncTcpServer
+from wyoming.server import AsyncEventHandler, AsyncTcpServer, HandlerFactory
 
 from bridge.net import enable_tcp_keepalive
 
@@ -124,6 +126,109 @@ def load_credential_lookup(
 
     log.info("registry credentials loaded from %s: %d device(s)", path, len(mapping))
     return lookup
+
+
+class TlsConfigError(Exception):
+    """The listener's TLS configuration is present but unusable.
+
+    The same principle as `CredentialConfigError`, for the same reason: a half-deployed certificate
+    must stop the listener rather than leave it silently plaintext. Someone who installs a certificate
+    and sees the bridge come up is entitled to assume the traffic is encrypted, and a listener that
+    quietly stayed plain would be the worst outcome of all.
+    """
+
+
+def load_server_tls_context(
+    cert_path: pathlib.Path, key_path: pathlib.Path, client_ca_path: pathlib.Path
+) -> Optional[ssl.SSLContext]:
+    """The registry listener's TLS context, or None when TLS is not configured.
+
+    TLS is on when the certificate and its key both exist. That is what makes it the standard
+    transport rather than a flag to remember: provisioning a certificate *is* the opt-in, and nobody
+    can end up with certificates installed and an unencrypted listener without being told. Neither
+    present is the plain local case, a socket on a network the household controls.
+
+    Half a pair, or a certificate with no client CA, is refused. Both leave a listener that looks
+    configured and is not, and the failure would only show up as a device that cannot connect.
+
+    Mutually authenticated by construction. The credential is the client certificate's fingerprint, so
+    a listener that let a peer skip its certificate would be authenticating nobody while appearing to
+    do exactly that.
+    """
+    has_cert = cert_path.is_file()
+    has_key = key_path.is_file()
+    if not has_cert and not has_key:
+        return None
+    if has_cert and not has_key:
+        raise TlsConfigError(
+            f"certificate {cert_path} has no key at {key_path}. Refusing to start rather than run the "
+            "listener unencrypted now that a certificate is deployed."
+        )
+    if has_key and not has_cert:
+        raise TlsConfigError(
+            f"key {key_path} has no certificate at {cert_path}. Refusing to start rather than run the "
+            "listener unencrypted now that a key is deployed."
+        )
+    if not client_ca_path.is_file():
+        raise TlsConfigError(
+            f"no client CA at {client_ca_path}. The listener authenticates each device by the fingerprint "
+            "of its certificate, which it cannot check without the CA that signed them."
+        )
+    try:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        # TLS 1.2 is the floor because the ESP32 satellites speak mbedTLS. A floor one end cannot meet
+        # is a connection that fails in the field rather than a decision taken here.
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
+        context.load_verify_locations(cafile=str(client_ca_path))
+    except (ssl.SSLError, OSError, ValueError) as exc:
+        raise TlsConfigError(
+            f"TLS configuration is unusable: {type(exc).__name__}: {exc}"
+        ) from exc
+    context.verify_mode = ssl.CERT_REQUIRED
+    log.info(
+        "registry TLS configured: certificate %s, client CA %s, peer certificates required",
+        cert_path, client_ca_path,
+    )
+    return context
+
+
+class TlsAsyncTcpServer(AsyncTcpServer):
+    """`wyoming.server.AsyncTcpServer` with a TLS context.
+
+    The pinned wyoming release (1.10.2) creates its socket with `asyncio.start_server(host=..., port=...)`
+    and no `ssl` argument, so TLS cannot be turned on through the library as it stands. Only the two
+    methods that create the server are overridden here; the handler callback, the stop signal and
+    `stop()` are inherited, so the handler lifecycle cannot drift away from the library's.
+    """
+
+    def __init__(self, host: str, port: int, *, ssl_context: Optional[ssl.SSLContext] = None) -> None:
+        super().__init__(host, port)
+        self.ssl_context = ssl_context
+
+    async def start(self, handler_factory: HandlerFactory) -> None:
+        """Start server without blocking."""
+        handler_callback = partial(self._handler_callback, handler_factory)
+        self._server = await asyncio.start_server(
+            handler_callback, host=self.host, port=self.port, ssl=self.ssl_context
+        )
+        await self._server.start_serving()
+
+    async def run(self, handler_factory: HandlerFactory) -> None:
+        """Start server and block while it runs."""
+        handler_callback = partial(self._handler_callback, handler_factory)
+        self._server = await asyncio.start_server(
+            handler_callback, host=self.host, port=self.port, ssl=self.ssl_context
+        )
+        self._register_stop_signal()
+        try:
+            await self._server.serve_forever()
+        except asyncio.CancelledError:
+            # Server.close() cancels serve_forever(); only swallow the cancellation the stop signal caused.
+            if not self._stop_requested:
+                raise
+        finally:
+            self._unregister_stop_signal()
 
 
 class RegistrationError(Exception):
@@ -718,6 +823,10 @@ class RegistryServer:
     device id, and returns None for a credential it does not know. When the lookup is None the listener
     accepts any device that registers, which is only appropriate on a trusted network: this must not be
     exposed to the internet without authentication, because the protocol has none of its own.
+
+    `ssl_context` turns on TLS for the listener, with peer certificates required. It is None for the
+    plain local socket, which is a first-class choice on a network the household controls rather than a
+    fallback: build it with `load_server_tls_context`.
     """
 
     def __init__(
@@ -727,6 +836,7 @@ class RegistryServer:
         port: int,
         *,
         credential_lookup: Optional[Callable[[str], Optional[str]]] = None,
+        ssl_context: Optional[ssl.SSLContext] = None,
         on_registered: Optional[Callable[[DeviceSlot], Any]] = None,
         on_control_event: Optional[Callable[[str, Event], Any]] = None,
         registration_timeout: float = REGISTRATION_TIMEOUT_SECONDS,
@@ -735,6 +845,7 @@ class RegistryServer:
         self.host = host
         self.port = port
         self.credential_lookup = credential_lookup
+        self.ssl_context = ssl_context
         self.on_registered = on_registered
         self.on_control_event = on_control_event
         self.registration_timeout = registration_timeout
@@ -769,9 +880,13 @@ class RegistryServer:
         )
 
     async def start(self) -> None:
-        self._server = AsyncTcpServer(self.host, self.port)
+        self._server = TlsAsyncTcpServer(self.host, self.port, ssl_context=self.ssl_context)
         await self._server.start(self._handler_factory)
-        log.info("registry listening on %s:%s", self.host, self.port)
+        log.info(
+            "registry listening on %s:%s%s",
+            self.host, self.port,
+            " with TLS (peer certificates required)" if self.ssl_context is not None else " without TLS",
+        )
 
     async def stop(self) -> None:
         if self._server is not None:
