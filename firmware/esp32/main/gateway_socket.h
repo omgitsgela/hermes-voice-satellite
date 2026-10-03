@@ -8,9 +8,12 @@
  * The plaintext link and the TLS link differ in what travels over the connection, not in how the
  * connection is made or how long it may take. Both therefore dial through this file, and both give
  * a session one absolute deadline measured by our own clock rather than by whatever timeout the
- * stack left on the descriptor: a peer that accepts a connection and then stalls must not be able to
- * hold the console for ever.
+ * stack left on the descriptor: a peer that accepts a connection and then stalls must not be able
+ * to hold the console for ever. A link with no deadline of its own (the persistent session) sets
+ * deadline_us to this value, so gateway_millis_left reports a number of years rather than zero.
  */
+#include <stdint.h>
+#define GATEWAY_SOCKET_NO_DEADLINE INT64_MAX
 typedef struct {
     int descriptor;
     int64_t deadline_us; /* absolute, from esp_timer_get_time() */
@@ -29,6 +32,13 @@ int gateway_socket_dial(const char *host, unsigned port, int64_t deadline_us, ga
  * count, 0 on deadline, or -1 when the peer closed or the deadline passed. */
 int gateway_socket_read(void *context, void *data, size_t size);
 int gateway_socket_write(void *context, const void *data, size_t size);
+
+/* Persistent-link reads and writes: block until data or a real end of stream, with no deadline of
+ * their own, because an idle registered link is healthy (the bridge sends no application ping). A
+ * read returns >0 bytes, 0 for a closed stream, or -1 on an I/O error. Used only by the gateway
+ * supervisor's persistent link; the one-shot console path above keeps its bounded deadlines. */
+int gateway_socket_read_persistent(void *context, void *data, size_t size);
+int gateway_socket_write_persistent(void *context, const void *data, size_t size);
 
 void gateway_socket_close(gateway_socket *socket);
 

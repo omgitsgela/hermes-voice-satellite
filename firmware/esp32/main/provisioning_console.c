@@ -4,6 +4,7 @@
 #include "wifi_station.h"
 #include "gateway_tcp.h"
 #include "gateway_tls.h"
+#include "gateway_task.h"
 #include "tls_credentials_store.h"
 #include "driver/usb_serial_jtag.h"
 #include "freertos/FreeRTOS.h"
@@ -351,12 +352,84 @@ static void reply_lines(const char *block) {
     }
 }
 
+/* Register-on-boot: once, after the READY banner and before the command loop. It reads the saved
+ * endpoint and the networks the device holds, asks the pure decision whether that is "dial now" or
+ * "idle", and acts. On GO it picks a network and hands it to the persistent gateway task (item 1),
+ * which then owns the session for the life of the device -- the radio, the dial, and the reconnect
+ * all happen off this thread. On idle it says why, in the same words a manual START_GATEWAY would.
+ *
+ * A configured network whose access point is off at this moment is still a GO: the decision is
+ * about what is configured, and the task's backoff is the retry that finds the AP when it returns.
+ * The scan here only ranks which configured network is strongest right now; it never makes the
+ * idle/GO call, which the pure decision already made. */
+static void provisioning_boot_gate(bool *storage) {
+    static char endpoint[PROVISION_URI_MAX];
+    static char ssids[WIFI_CANDIDATE_MAX][PROVISION_SSID_MAX + 1];
+    static char psks[WIFI_CANDIDATE_MAX][PROVISION_PSK_MAX + 1];
+    static char report[256];
+    char host[PROVISION_HOST_MAX];
+    char reason[24];
+    unsigned port = 0;
+    int transport = 0;
+    size_t count = 0;
+    size_t chosen = 0;
+    bool from_staged = false;
+
+    if (load_endpoint(storage, endpoint, sizeof(endpoint)) != 0) {
+        reply("GATEWAY BOOT IDLE reason=STORAGE");
+        return;
+    }
+    int stored = 0;
+    if (provision_wifi_candidates(&WIFI_PROFILE_STORE, load_wifi, storage, ssids, psks,
+                                  WIFI_CANDIDATE_MAX, &count) != 0)
+        stored = -1;
+    else
+        stored = (int)count;
+    if (provision_boot_decision(endpoint, stored, reason, sizeof(reason)) == BOOT_IDLE) {
+        char framed[272];
+        snprintf(framed, sizeof(framed), "GATEWAY BOOT IDLE reason=%s", reason);
+        reply(framed);
+        return;
+    }
+
+    provision_endpoint_parse(endpoint, host, sizeof(host), &port, &transport);
+    int saved = count_profiles(storage);
+    if (saved < 0) saved = 0;
+    int pick = choose_candidate(storage, ssids, psks, &count, &chosen, &from_staged, report,
+                                sizeof(report));
+    if (pick == -2) {
+        /* Every configured network is out of range right now. Still start the task on the first
+         * one: it keeps re-associating on its backoff and will register the moment an AP appears. */
+        chosen = 0;
+        from_staged = (saved == 0);
+    } else if (pick <= 0) {
+        reply("GATEWAY BOOT IDLE reason=NO_JOINABLE");
+        memset(psks, 0, sizeof(psks));
+        return;
+    }
+    reply("GATEWAY BOOT");
+    char framed[224];
+    snprintf(framed, sizeof(framed), "profile source=%s index=%u ssid=%s",
+             from_staged ? "staged" : "saved", (unsigned)chosen, ssids[chosen]);
+    reply(framed);
+    if (gateway_task_start(host, port, transport, ssids[chosen], psks[chosen], report,
+                           sizeof(report)) == 0)
+        reply("GATEWAY BOOT RUNNING");
+    else
+        reply("GATEWAY BOOT FAILED reason=NO_TASK");
+    memset(psks, 0, sizeof(psks));
+    memset(report, 0, sizeof(report));
+}
+
 void provisioning_console_run(void) {
     /* Preserve existing flash: incompatible/full NVS is an error, never an erase. */
     bool storage_ready = nvs_flash_init() == ESP_OK;
     usb_serial_jtag_driver_config_t config = {.tx_buffer_size = 512, .rx_buffer_size = 512};
     if (usb_serial_jtag_driver_install(&config) != ESP_OK) return;
     reply("READY 1 NETWORK_INACTIVE AUDIO_INACTIVE");
+    /* A provisioned device now registers itself at boot instead of waiting for a command; an
+     * unprovisioned one says why it is idle and leaves the console free for setup. */
+    provisioning_boot_gate(&storage_ready);
     provision_line line = {0};
     char response[256] = {0};  /* every path that replies must fill it: never print stack */
     TickType_t started = 0;
@@ -379,7 +452,9 @@ void provisioning_console_run(void) {
              * typed here exists only in RAM and in NVS; only the response is sent. */
             if (!strcmp(line.data, "WIFI_SCAN")) {
                 static char report[1400];
-                if (wifi_station_scan(report, sizeof(report)) == 0) {
+                if (gateway_task_active()) {
+                    reply("ERR WIFI BUSY");  /* the gateway holds the radio; a scan would drop it */
+                } else if (wifi_station_scan(report, sizeof(report)) == 0) {
                     reply("WIFI SCAN BEGIN");
                     reply_block(report);
                     reply("WIFI SCAN END");
@@ -395,6 +470,10 @@ void provisioning_console_run(void) {
                 size_t count = 0;
                 size_t chosen = 0;
                 bool from_staged = false;
+                if (gateway_task_active()) {
+                    reply("ERR WIFI BUSY");  /* the gateway holds the radio; a join would drop it */
+                    continue;  /* this branch replies for itself */
+                }
                 int picked = choose_candidate(&storage_ready, ssids, psks, &count, &chosen,
                                               &from_staged, report, sizeof(report));
                 if (picked == -1) {
@@ -433,7 +512,13 @@ void provisioning_console_run(void) {
             } else if (!strcmp(line.data, "START_GATEWAY")) {
                 /* Join over Wi-Fi and register with the staged gateway. Unlike START_WYOMING
                  * this does not latch the console: the protocol runs on a socket, so the
-                 * console stays usable for diagnostics while the link is up. */
+                 * console stays usable for diagnostics while the link is up. A persistent gateway
+                 * already running (auto-started at boot) owns the radio, so a manual run is refused
+                 * rather than racing it. */
+                if (gateway_task_active()) {
+                    reply("ERR GATEWAY ALREADY_RUNNING");
+                    continue;  /* this branch replies for itself */
+                }
                 static char ssids[WIFI_CANDIDATE_MAX][PROVISION_SSID_MAX + 1];
                 static char psks[WIFI_CANDIDATE_MAX][PROVISION_PSK_MAX + 1];
                 static char endpoint[PROVISION_URI_MAX];

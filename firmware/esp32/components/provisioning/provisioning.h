@@ -77,4 +77,26 @@ int provision_wifi_handle(const char *command, provision_wifi_save_ssid_fn save_
 int provision_wifi_candidates(const provision_wifi_profiles *profiles, provision_wifi_load_fn load,
                              void *ctx, char (*ssids)[PROVISION_SSID_MAX + 1],
                              char (*psks)[PROVISION_PSK_MAX + 1], size_t capacity, size_t *count);
+
+/* Whether a freshly booted satellite should register with its gateway now, or stay idle.
+ *
+ * The device has two independent knobs -- a saved gateway endpoint and a list of networks it may
+ * join -- and it should dial only when both are present. This is the whole policy, kept pure so
+ * the host can pin down every "idle" case without a board: the device's boot path reads its config,
+ * calls this, and either starts the gateway or says why it is idle.
+ *
+ * `endpoint` is the staged gateway endpoint ("" or NULL when unset). `wifi_candidates` is the
+ * number of joinable networks the candidate list reports -- the value `provision_wifi_candidates`
+ * writes to its count out, which is negative when the store could not be read at all. The decision
+ * is about what is *configured*, not what is in the air: a stored network whose access point is
+ * currently off still counts as "configured", because dialing it is what discovers that, and it is
+ * the caller that retries the join.
+ *
+ * The idle reasons follow the console's existing order -- what is wrong with the Wi-Fi is named
+ * before what is wrong with the endpoint -- so a boot report and a manual command tell the same
+ * story. `reason` receives a short, stable token ("" for GO); it is best-effort and may be empty
+ * when the buffer is too small, but the return code is the decision and never depends on it.
+ */
+enum { BOOT_GO = 0, BOOT_IDLE = 1 };
+int provision_boot_decision(const char *endpoint, int wifi_candidates, char *reason, size_t reason_cap);
 #endif

@@ -70,21 +70,31 @@ static int pin_the_server_certificate(void *parameter, mbedtls_x509_crt *certifi
     return 0;
 }
 
-/* mbedTLS writes and reads through the same deadline-bounded socket the plaintext transport uses,
- * so a stalled peer cannot outlive the budget this file set. */
+/* mbedTLS writes and reads through the socket the carrier set, and the socket decides whether the
+ * call is bounded or open: during the handshake the deadline is finite (a stalled peer must not
+ * outlive the budget), and once a persistent session raises it to "no deadline" the read blocks
+ * until a real end of stream, which is the healthy idle state. One bio, both regimes. */
 static int tls_send(void *context, const unsigned char *buffer, size_t length) {
-    return gateway_socket_write(context, buffer, length);
+    gateway_socket *socket = context;
+    if (socket->deadline_us == GATEWAY_SOCKET_NO_DEADLINE)
+        return gateway_socket_write_persistent(socket, buffer, length);
+    return gateway_socket_write(socket, buffer, length);
 }
 
 static int tls_receive(void *context, unsigned char *buffer, size_t length) {
-    return gateway_socket_read(context, buffer, length);
+    gateway_socket *socket = context;
+    if (socket->deadline_us == GATEWAY_SOCKET_NO_DEADLINE)
+        return gateway_socket_read_persistent(socket, buffer, length);
+    return gateway_socket_read(socket, buffer, length);
 }
 
-/* The session's own read and write, over the established TLS session. WANT_READ/WANT_WRITE mean the
- * record needs more of the stream, and the call before it blocked inside the socket callback, so
- * these loops cannot spin. */
-static int session_read(void *context, void *data, size_t size) {
-    mbedtls_ssl_context *ssl = context;
+/* Read and write one record over an established link. WANT_READ/WANT_WRITE mean the record needs
+ * more of the stream, and the call before it blocked inside the socket callback, so these loops
+ * cannot spin. The context handed in is the link, so the same two functions serve the one-shot
+ * register call and the supervisor's persistent link alike. */
+int gateway_tls_link_read(void *context, void *data, size_t size) {
+    gateway_tls_link *link = context;
+    mbedtls_ssl_context *ssl = &((tls_contexts *)link->contexts)->ssl;
     for (;;) {
         int count = mbedtls_ssl_read(ssl, data, size);
         if (count > 0) return count;
@@ -93,14 +103,19 @@ static int session_read(void *context, void *data, size_t size) {
     }
 }
 
-static int session_write(void *context, const void *data, size_t size) {
-    mbedtls_ssl_context *ssl = context;
+int gateway_tls_link_write(void *context, const void *data, size_t size) {
+    gateway_tls_link *link = context;
+    mbedtls_ssl_context *ssl = &((tls_contexts *)link->contexts)->ssl;
     for (;;) {
         int count = mbedtls_ssl_write(ssl, data, size);
         if (count > 0) return count;
         if (count == MBEDTLS_ERR_SSL_WANT_READ || count == MBEDTLS_ERR_SSL_WANT_WRITE) continue;
         return -1;
     }
+}
+
+void gateway_tls_link_set_deadline(gateway_tls_link *link, int64_t deadline_us) {
+    if (link) link->socket.deadline_us = deadline_us;
 }
 
 static void contexts_free(tls_contexts *contexts) {
@@ -113,20 +128,24 @@ static void contexts_free(tls_contexts *contexts) {
     heap_caps_free(contexts);
 }
 
-int gateway_tls_run(const char *host, unsigned port, char *out, size_t capacity) {
-    if (!out || capacity == 0) return -1;
-    out[0] = 0;
-    if (!host || !host[0]) {
-        gateway_report_append(out, capacity, "socket=failed reason=no_host");
-        return -1;
-    }
+/* Dial and complete the TLS handshake -- the one place the handshake and the pin check live, so
+ * the one-shot console path and the supervisor's persistent path cannot drift apart. On success
+ * the link's socket keeps the dial deadline (still finite), and the caller decides the session's
+ * deadline: the one-shot leaves it, the persistent path raises it to "no deadline" so an idle link
+ * blocks instead of erroring. Appends the same report lines the run always emitted. */
+int gateway_tls_establish(const char *host, unsigned port, gateway_tls_link *out, char *report,
+                          size_t capacity) {
+    if (!host || !host[0] || !out) return -1;
+    memset(out, 0, sizeof(*out));
+    out->socket.descriptor = -1;
 
     char line[200];
     tls_credentials credentials;
     char reason[96];
-    if (tls_credentials_load(&credentials, reason, sizeof(reason)) != 0) {
+    if (report && capacity > 0 &&
+        tls_credentials_load(&credentials, reason, sizeof(reason)) != 0) {
         snprintf(line, sizeof(line), "tls=failed reason=no_credentials detail=%s", reason);
-        gateway_report_append(out, capacity, line);
+        gateway_report_append(report, capacity, line);
         return -1;
     }
     tls_pin_check check = {.expected = credentials.server_pin};
@@ -136,34 +155,33 @@ int gateway_tls_run(const char *host, unsigned port, char *out, size_t capacity)
      * genuinely wrong, so the state of the clock has to be visible next to the connection result. */
     char clock[128];
     if (time_sync_wait(TLS_CLOCK_WAIT_MS, clock, sizeof(clock)) != 0) {
-        gateway_report_append(out, capacity, clock);
-        gateway_report_append(out, capacity, "tls=failed reason=clock");
+        gateway_report_append(report, capacity, clock);
+        gateway_report_append(report, capacity, "tls=failed reason=clock");
         return -1;
     }
-    gateway_report_append(out, capacity, clock);
+    gateway_report_append(report, capacity, clock);
     if (!tls_clock_is_sane(time_sync_now())) {
-        gateway_report_append(out, capacity, "tls=failed reason=clock");
+        gateway_report_append(report, capacity, "tls=failed reason=clock");
         return -1;
     }
 
-    gateway_socket socket = {.descriptor = -1};
-    if (gateway_socket_dial(host, port, gateway_now_us() + (int64_t)TLS_DIAL_TIMEOUT_MS * 1000,
-                            &socket) != 0) {
+    int64_t dial_deadline = gateway_now_us() + (int64_t)TLS_DIAL_TIMEOUT_MS * 1000;
+    if (gateway_socket_dial(host, port, dial_deadline, &out->socket) != 0) {
         snprintf(line, sizeof(line), "socket=failed host=%s port=%u transport=tls", host, port);
-        gateway_report_append(out, capacity, line);
+        gateway_report_append(report, capacity, line);
         return -1;
     }
     snprintf(line, sizeof(line), "socket=connected host=%s port=%u transport=tls", host, port);
-    gateway_report_append(out, capacity, line);
+    gateway_report_append(report, capacity, line);
 
     tls_contexts *contexts = heap_caps_calloc(1, sizeof(tls_contexts), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!contexts) {
-        gateway_report_append(out, capacity, "tls=failed reason=no_memory");
-        gateway_socket_close(&socket);
+        gateway_report_append(report, capacity, "tls=failed reason=no_memory");
+        gateway_socket_close(&out->socket);
         return -1;
     }
 
-    int result = -1;
+    int established = -1;
     do {
         mbedtls_ssl_init(&contexts->ssl);
         mbedtls_ssl_config_init(&contexts->config);
@@ -175,23 +193,23 @@ int gateway_tls_run(const char *host, unsigned port, char *out, size_t capacity)
          * exactly the strings this device provisioned, with no second copy to keep in step. */
         if (mbedtls_x509_crt_parse(&contexts->ca, (const unsigned char *)credentials.ca,
                                    credentials.ca_len) != 0) {
-            gateway_report_append(out, capacity, "tls=failed reason=ca_parse");
+            gateway_report_append(report, capacity, "tls=failed reason=ca_parse");
             break;
         }
         if (mbedtls_x509_crt_parse(&contexts->client_cert, (const unsigned char *)credentials.cert,
                                    credentials.cert_len) != 0) {
-            gateway_report_append(out, capacity, "tls=failed reason=client_cert_parse");
+            gateway_report_append(report, capacity, "tls=failed reason=client_cert_parse");
             break;
         }
         if (mbedtls_pk_parse_key(&contexts->client_key, (const unsigned char *)credentials.key,
                                  credentials.key_len, NULL, 0) != 0) {
-            gateway_report_append(out, capacity, "tls=failed reason=client_key_parse");
+            gateway_report_append(report, capacity, "tls=failed reason=client_key_parse");
             break;
         }
         if (mbedtls_ssl_config_defaults(&contexts->config, MBEDTLS_SSL_IS_CLIENT,
                                         MBEDTLS_SSL_TRANSPORT_STREAM,
                                         MBEDTLS_SSL_PRESET_DEFAULT) != 0) {
-            gateway_report_append(out, capacity, "tls=failed reason=config");
+            gateway_report_append(report, capacity, "tls=failed reason=config");
             break;
         }
         /* The bridge's side of this link has a TLS 1.2 floor, and so does this one: an old
@@ -204,11 +222,11 @@ int gateway_tls_run(const char *host, unsigned port, char *out, size_t capacity)
         mbedtls_ssl_conf_verify(&contexts->config, pin_the_server_certificate, &check);
         if (mbedtls_ssl_conf_own_cert(&contexts->config, &contexts->client_cert,
                                       &contexts->client_key) != 0) {
-            gateway_report_append(out, capacity, "tls=failed reason=own_cert");
+            gateway_report_append(report, capacity, "tls=failed reason=own_cert");
             break;
         }
         if (mbedtls_ssl_setup(&contexts->ssl, &contexts->config) != 0) {
-            gateway_report_append(out, capacity, "tls=failed reason=setup");
+            gateway_report_append(report, capacity, "tls=failed reason=setup");
             break;
         }
         /* No server name is set, on purpose, and mbedTLS requires that to be said out loud rather
@@ -216,14 +234,13 @@ int gateway_tls_run(const char *host, unsigned port, char *out, size_t capacity)
          * fingerprint of its certificate, below, which admits exactly one certificate, where a name
          * would admit any certificate this CA ever signs for that name. */
         if (mbedtls_ssl_set_hostname(&contexts->ssl, NULL) != 0) {
-            gateway_report_append(out, capacity, "tls=failed reason=hostname");
+            gateway_report_append(report, capacity, "tls=failed reason=hostname");
             break;
         }
         /* The timeout callback is left NULL on purpose: the deadline for this session lives inside
-         * the socket callbacks, which block until data arrives or that deadline passes. Handing
-         * mbedTLS a second, relative notion of time would give one session two clocks that can
-         * disagree about when it is over. */
-        mbedtls_ssl_set_bio(&contexts->ssl, &socket, tls_send, tls_receive, NULL);
+         * the socket callbacks. Handing mbedTLS a second, relative notion of time would give one
+         * session two clocks that can disagree about when it is over. */
+        mbedtls_ssl_set_bio(&contexts->ssl, &out->socket, tls_send, tls_receive, NULL);
 
         int64_t deadline = gateway_now_us() + (int64_t)TLS_HANDSHAKE_TIMEOUT_MS * 1000;
         int handshake;
@@ -246,7 +263,7 @@ int gateway_tls_run(const char *host, unsigned port, char *out, size_t capacity)
                 snprintf(line, sizeof(line), "tls=failed reason=handshake error=-0x%04x",
                          (unsigned int)(-handshake));
             }
-            gateway_report_append(out, capacity, line);
+            gateway_report_append(report, capacity, line);
             break;
         }
 
@@ -256,35 +273,59 @@ int gateway_tls_run(const char *host, unsigned port, char *out, size_t capacity)
              * record rather than the only guard. */
             snprintf(line, sizeof(line), "tls=failed reason=certificate flags=0x%08lx",
                      (unsigned long)verify_flags);
-            gateway_report_append(out, capacity, line);
+            gateway_report_append(report, capacity, line);
             break;
         }
         snprintf(line, sizeof(line), "tls=handshake ok cipher=%s",
                  mbedtls_ssl_get_ciphersuite(&contexts->ssl));
-        gateway_report_append(out, capacity, line);
-        gateway_report_append(out, capacity, "tls=server_pin matched");
+        gateway_report_append(report, capacity, line);
+        gateway_report_append(report, capacity, "tls=server_pin matched");
+        out->contexts = contexts;
+        established = 0;
+    } while (0);
 
-        /* Same handshake as the plaintext transport, over this carrier: one implementation of the
-         * session, two ways of carrying it. */
-        result = gateway_link_register(session_read, session_write, &contexts->ssl,
-                                       gateway_now_us() + (int64_t)TLS_RUN_BUDGET_MS * 1000, out,
-                                       capacity);
+    if (established != 0) {
+        contexts_free(contexts);
+        gateway_socket_close(&out->socket);
+        out->socket.descriptor = -1;
+    }
+    return established;
+}
 
-        /* Best effort, bounded: a bridge that has already gone away must not hold the console. */
+/* Close a link established above: best-effort close_notify (bounded, so a gone bridge cannot hold
+ * the caller), then free the contexts and the socket. Safe on a partially-established link. */
+void gateway_tls_release(gateway_tls_link *link) {
+    if (!link) return;
+    if (link->contexts) {
+        tls_contexts *contexts = link->contexts;
         int64_t close_deadline = gateway_now_us() + (int64_t)TLS_CLOSE_NOTIFY_MS * 1000;
         while (gateway_millis_left(close_deadline) > 0) {
             int notify = mbedtls_ssl_close_notify(&contexts->ssl);
             if (notify != MBEDTLS_ERR_SSL_WANT_READ && notify != MBEDTLS_ERR_SSL_WANT_WRITE) break;
         }
-    } while (0);
+        contexts_free(contexts);
+        link->contexts = NULL;
+    }
+    gateway_socket_close(&link->socket);
+}
 
-    /* Recorded whether the run worked or not: the handshake is the heaviest thing this firmware
-     * does on the console task, and its stack headroom is what says whether that was safe. */
+int gateway_tls_run(const char *host, unsigned port, char *out, size_t capacity) {
+    if (!out || capacity == 0) return -1;
+    out[0] = 0;
+    gateway_tls_link link = {.socket = {.descriptor = -1}};
+    if (gateway_tls_establish(host, port, &link, out, capacity) != 0) return -1;
+
+    /* Same handshake as the plaintext transport, over this carrier: one implementation of the
+     * session, two ways of carrying it. The console path keeps the bounded deadline establish set,
+     * so a stalled peer cannot hold the port. */
+    int result = gateway_link_register(gateway_tls_link_read, gateway_tls_link_write, &link,
+                                       gateway_now_us() + (int64_t)TLS_RUN_BUDGET_MS * 1000, out,
+                                       capacity);
+
+    char line[160];
     snprintf(line, sizeof(line), "resource=stack_min_free=%u",
              (unsigned int)uxTaskGetStackHighWaterMark(NULL));
     gateway_report_append(out, capacity, line);
-
-    contexts_free(contexts);
-    gateway_socket_close(&socket);
+    gateway_tls_release(&link);
     return result;
 }

@@ -53,6 +53,41 @@ int gateway_socket_write(void *context, const void *data, size_t size) {
     return (int)sent;
 }
 
+/* A persistent session (the gateway supervisor) has no deadline of its own: the bridge keeps an
+ * idle link alive with TCP keepalive and sends no application ping, so a read that blocks for a
+ * long time is the normal, healthy state, not a stall. These two block until data or a real end
+ * of stream rather than a budget, and they say which end it was: 0 is the peer closing the stream
+ * (EOF), -1 is an I/O error. The one-shot path above keeps its own deadline because a stalled
+ * peer must not hold the console. */
+int gateway_socket_read_persistent(void *context, void *data, size_t size) {
+    gateway_socket *socket = context;
+    for (;;) {
+        ssize_t count = recv(socket->descriptor, data, size, 0);
+        if (count > 0) return (int)count;
+        if (count == 0) return 0; /* peer closed: the stream is over, not idle */
+        if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) return -1;
+        vTaskDelay(pdMS_TO_TICKS(GATEWAY_POLL_MS));
+    }
+}
+
+int gateway_socket_write_persistent(void *context, const void *data, size_t size) {
+    gateway_socket *socket = context;
+    size_t sent = 0;
+    while (sent < size) {
+        ssize_t count = send(socket->descriptor, (const char *)data + sent, size - sent, 0);
+        if (count > 0) {
+            sent += (size_t)count;
+            continue;
+        }
+        if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+            vTaskDelay(pdMS_TO_TICKS(GATEWAY_POLL_MS));
+            continue;
+        }
+        return -1;
+    }
+    return (int)sent;
+}
+
 int gateway_socket_dial(const char *host, unsigned port, int64_t deadline_us, gateway_socket *out) {
     if (!host || !host[0] || !out) return -1;
     out->descriptor = -1;

@@ -304,6 +304,24 @@ int provision_wifi_candidates(const provision_wifi_profiles *profiles, provision
     return 0;
 }
 
+int provision_boot_decision(const char *endpoint, int wifi_candidates, char *reason, size_t reason_cap) {
+    const char *token;
+    /* Wi-Fi is named before the endpoint, exactly the order a manual START_GATEWAY reports in, so a
+     * boot report and a console command tell the same story for the same configuration. */
+    if (wifi_candidates < 0) token = "WIFI_UNREADABLE";
+    else if (wifi_candidates == 0) token = "NO_NETWORK";
+    else if (!endpoint || endpoint[0] == 0) token = "NO_ENDPOINT";
+    else if (provision_endpoint_parse(endpoint, NULL, 0, NULL, NULL) != 0) token = "BAD_ENDPOINT";
+    else token = "";
+    if (reason && reason_cap > 0) {
+        size_t length = strlen(token);
+        if (length >= reason_cap) length = reason_cap - 1;
+        memcpy(reason, token, length);
+        reason[length] = 0;
+    }
+    return token[0] ? BOOT_IDLE : BOOT_GO;
+}
+
 int provision_line_feed(provision_line *line, unsigned char byte) {
     if (byte == '\n') {
         int result = line->rejected ? -1 : 1;

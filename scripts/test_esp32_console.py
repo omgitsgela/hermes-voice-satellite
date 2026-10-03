@@ -22,6 +22,8 @@ RUNNER = r'''#include <assert.h>
 #include "provisioning_console.h"
 #include "tls_credentials.h"
 #include "wifi_station.h"
+#include "gateway_task.h"
+#include <stdbool.h>
 
 /* Two namespaces (hermes_dev, hermes_wifi) with staged/committed separation, so the
  * tests can prove a value is only visible after a commit and is verified by readback. */
@@ -251,6 +253,22 @@ int wifi_station_associate(const char *ssid, const char *psk, char *out, size_t 
 
 static int released;
 void wifi_station_release(void) { released += 1; puts("GATEWAY_RELEASED"); }
+
+/* The persistent gateway task is FreeRTOS + supervisor + radio, none of which exist on the host.
+ * The console only asks it two things: is it running (which busy-guards the radio commands), and
+ * can it be started (the register-on-boot GO path). Both are stubbed so the boot gate's decision
+ * and framing are host-testable; the task's own behaviour is proved by the supervisor's loopback
+ * tests and by the firmware build. */
+static int gateway_task_started;
+int gateway_task_start(const char *host, unsigned port, int transport, const char *ssid,
+                       const char *psk, char *report, size_t capacity) {
+    (void)host; (void)port; (void)transport; (void)ssid; (void)psk;
+    (void)report; (void)capacity;
+    gateway_task_started += 1;
+    return 0;
+}
+bool gateway_task_active(void) { return gateway_task_started > 0; }
+void gateway_task_report(char *out, size_t capacity) { if (out && capacity > 0) out[0] = 0; }
 
 /* The socket leg: reports what it was asked to dial, so the console's routing and framing
  * are what the test checks rather than the network. */
