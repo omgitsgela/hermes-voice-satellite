@@ -9,7 +9,7 @@ read it, paste it into a chat, or write it into a shell command.
 
     sudo python3 add-wifi-profile-to-card.py \
         --mount /run/media/<user>/rootfs \
-        --source "GL-X750-360" \
+        --source "<ssid>" \
         --name travel-router \
         --priority 5 \
         --home-profile preconfigured --home-priority 10

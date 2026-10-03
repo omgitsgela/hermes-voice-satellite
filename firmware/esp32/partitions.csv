@@ -1,0 +1,25 @@
+# Partition layout for the satellite firmware.
+#
+# The factory image this board shipped with had three small partitions and a 1 MB application slot,
+# and the Wi-Fi join and gateway builds already fill that slot to about 80%. TLS (mbedTLS) and the
+# wake detector will not fit in the remainder, so the layout is stated here rather than inherited
+# from the SDK default.
+#
+# nvs and phy_init keep their existing offsets, which means the staged credentials survive this
+# change and the application keeps its address: flashing a new table does not move or erase either.
+#
+# 8 MB of flash is fitted; this uses 6.1 MB and leaves the rest unallocated on purpose, so a later
+# decision (dual application slots for over-the-air updates, say) has somewhere to go without
+# disturbing anything above.
+#
+# The first 8 KB of `storage` is claimed by the provisioned TLS material (CA, device certificate,
+# device key, and the pinned fingerprint of the bridge's certificate). It is written over the USB
+# download path by scripts/provision-device-tls.py. Any future use of the rest of this partition,
+# a filesystem in particular, has to start after that region: a filesystem puts its own header at
+# the beginning of the partition it is given, and it would land on top of the credentials.
+#
+# Name,     Type, SubType, Offset,    Size,      Flags
+nvs,        data, nvs,     0x9000,    0x6000,
+phy_init,   data, phy,     0xf000,    0x1000,
+factory,    app,  factory, 0x10000,   0x200000,
+storage,    data, spiffs,  0x210000,  0x400000,

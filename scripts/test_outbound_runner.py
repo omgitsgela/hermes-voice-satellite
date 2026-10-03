@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import pathlib
+import random
 import socket
 import sys
 import tempfile
@@ -350,14 +351,28 @@ async def t_tcp_keepalive() -> None:
 @check("6", "the backoff grows with consecutive failures and is capped")
 async def t_backoff() -> None:
     link = BridgeLink(config_for(free_port(), backoff_base=0.5, backoff_max=4.0))
+    class EndpointJitter(random.Random):
+        def __init__(self) -> None:
+            super().__init__(0)
+            self.bounds = []
+
+        def uniform(self, a: float, b: float) -> float:
+            lower, upper = a, b
+            self.bounds.append((lower, upper))
+            # Alternate valid lower/upper draws. Assert the growing cap, not a
+            # probabilistic sample maximum: valid low draws must not fail CI.
+            return lower if len(self.bounds) % 2 else upper
+
+    jitter = EndpointJitter()
+    link._rng = jitter
     delays = [link._next_backoff() for _ in range(8)]
-    assert all(d <= 4.0 for d in delays), f"backoff must be capped: {delays}"
-    assert delays[0] <= 0.5, f"the first delay must be small: {delays[0]}"
-    assert max(delays) >= 2.0, f"the cap must actually grow: {delays}"
+    assert [upper for _, upper in jitter.bounds] == [0.5, 1.0, 2.0, 4.0, 4.0, 4.0, 4.0, 4.0]
+    assert all(lower <= draw <= upper for draw, (lower, upper) in zip(delays, jitter.bounds))
     # A reset only happens on a successful registration, which is what stops a flapping link settling into
     # a tight retry loop.
     link._backoff_index = 0
     assert link._next_backoff() <= 0.5
+    assert jitter.bounds[-1][1] == 0.5
 
 
 @check("7", "a stalled write fails the link instead of hanging the device")

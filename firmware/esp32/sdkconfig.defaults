@@ -1,0 +1,20 @@
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_BOOT_INIT=y
+CONFIG_SPIRAM_MEMTEST=y
+CONFIG_SPIRAM_USE_MALLOC=y
+
+# Use the layout in partitions.csv. The product's flash layout is a decision, not a build default, and
+# without this the build silently uses the SDK's single-application table instead.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# mbedTLS does not check certificate validity dates unless this is on: the SDK defaults to ignoring
+# the "valid from"/"valid to" window entirely, because most boards have no clock. This device does
+# now bring one up before it dials TLS (see time_sync.c), so an expired certificate is a failure
+# rather than a fact mbedTLS is not allowed to notice.
+CONFIG_MBEDTLS_HAVE_TIME_DATE=y
