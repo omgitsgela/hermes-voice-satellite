@@ -3,6 +3,7 @@
 #include "provisioning.h"
 #include "wifi_station.h"
 #include "audio_bringup.h"
+#include "report_tail.h"
 #include "gateway_tcp.h"
 #include "gateway_tls.h"
 #include "gateway_task.h"
@@ -585,6 +586,28 @@ void provisioning_console_run(void) {
                 }
                 memset(psks, 0, sizeof(psks));
                 memset(report, 0, sizeof(report));
+                continue;  /* this branch replies for itself */
+            } else if (!strcmp(line.data, "GATEWAY_STATUS")) {
+                /* A read-only query: what is the persistent link doing right now? The soak
+                 * harness (and a person at the console) reads this while the link runs, so it
+                 * must name the link's last action without dialling, associating, or touching
+                 * the radio. An empty report while running is a real answer, not an error. */
+                static char status_report[256];
+                static char status_line[128];
+                if (gateway_task_active()) {
+                    gateway_task_report(status_report, sizeof(status_report));
+                    /* The prefix is a constant that fits with room; the tail is bounded by
+                     * report_tail_last_line against whatever room the prefix left, so the line
+                     * can never run past the buffer or lose its NUL. */
+                    int used = snprintf(status_line, sizeof(status_line),
+                                        "OK GATEWAY RUNNING last=");
+                    if (used > 0)
+                        report_tail_last_line(status_report, status_line + (size_t)used,
+                                              sizeof(status_line) - (size_t)used);
+                    reply(status_line);
+                } else {
+                    reply("OK GATEWAY IDLE");
+                }
                 continue;  /* this branch replies for itself */
             } else if (!strcmp(line.data, "TLS_STATUS")) {
                 /* What is provisioned, without dialling anything: the full fingerprint is printed

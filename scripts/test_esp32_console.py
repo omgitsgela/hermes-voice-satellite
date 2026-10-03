@@ -9,6 +9,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 MAIN = ROOT / 'firmware/esp32/main'
 CORE = ROOT / 'firmware/esp32/components/provisioning'
+TAIL = ROOT / 'firmware/esp32/components/report_tail'
 
 #: A real-shaped passphrase used only to prove it never appears in console output.
 SECRET = 'SuperSecret123'
@@ -256,11 +257,15 @@ static int released;
 void wifi_station_release(void) { released += 1; puts("GATEWAY_RELEASED"); }
 
 /* The persistent gateway task is FreeRTOS + supervisor + radio, none of which exist on the host.
- * The console only asks it two things: is it running (which busy-guards the radio commands), and
- * can it be started (the register-on-boot GO path). Both are stubbed so the boot gate's decision
- * and framing are host-testable; the task's own behaviour is proved by the supervisor's loopback
- * tests and by the firmware build. */
+ * The console only asks it three things: is it running (which busy-guards the radio commands
+ * and answers GATEWAY_STATUS), what does its latest report line say, and can it be started
+ * (the register-on-boot GO path). All are stubbed so the boot gate's decision and the
+ * status framing are host-testable; the task's own behaviour is proved by the supervisor's
+ * loopback tests and by the firmware build. The report is deliberately two lines so the
+ * console's last-line choice is testable, and GATEWAY_LAST_REPORT can override it. */
 static int gateway_task_started;
+static const char gateway_task_report_lines[] =
+    "session=registered\nreconnect=registered reconnects=2";
 int gateway_task_start(const char *host, unsigned port, int transport, const char *ssid,
                        const char *psk, char *report, size_t capacity) {
     (void)host; (void)port; (void)transport; (void)ssid; (void)psk;
@@ -268,8 +273,15 @@ int gateway_task_start(const char *host, unsigned port, int transport, const cha
     gateway_task_started += 1;
     return 0;
 }
-bool gateway_task_active(void) { return gateway_task_started > 0; }
-void gateway_task_report(char *out, size_t capacity) { if (out && capacity > 0) out[0] = 0; }
+bool gateway_task_active(void) { return getenv("GATEWAY_ACTIVE") != NULL; }
+void gateway_task_report(char *out, size_t capacity) {
+    const char *from = getenv("GATEWAY_LAST_REPORT");
+    if (!from) from = gateway_task_report_lines;
+    if (!out || capacity == 0) return;
+    size_t index = 0;
+    while (index + 1 < capacity && from[index]) { out[index] = from[index]; ++index; }
+    out[index] = 0;
+}
 
 /* The audio bring-up is device I2S/I2C code that does not exist on a host. The console only
  * asks it to fill a report and return a status, so the stub stands in with a known line. The
@@ -376,8 +388,10 @@ int usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);
         compiled = subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror',
                                    '-I' + str(tmp), '-I' + str(CORE), '-I' + str(MAIN),
                                    '-I' + str(ROOT / 'firmware/esp32/components/audio_report'),
+                                   '-I' + str(ROOT / 'firmware/esp32/components/report_tail'),
                                    str(tmp / 'runner.c'), str(MAIN / 'provisioning_console.c'),
-                                   str(CORE / 'provisioning.c'), '-o', str(executable)],
+                                   str(CORE / 'provisioning.c'), str(TAIL / 'report_tail.c'),
+                                   '-o', str(executable)],
                                   capture_output=True, text=True)
         if compiled.returncode != 0:
             # The compiler's own words: a harness that only says "returned non-zero exit
@@ -544,6 +558,34 @@ int usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);
             # The report never implies the microphone is open or the speaker armed.
             for word in ('capture', 'playback', 'armed'):
                 self.assertNotIn(word, output.lower())
+
+    def test_gateway_status_is_read_only_and_names_the_link(self):
+        """GATEWAY_STATUS answers with one self-describing line and dials nothing: the soak's
+        whole job is reading this line while the link runs, so it must say what the link did
+        last without touching it. An empty report is a real answer, not an error; a query must
+        never start the task or a radio."""
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = self.build(tmp)
+            # Idle: the task never ran. The answer is the LAST reply -- the boot banner and the
+            # boot-gate line always precede it -- and says so, and nothing was dialed.
+            idle = self.console(executable, 'GATEWAY_STATUS\n')
+            lines = [line for line in idle.splitlines() if line.strip()]
+            self.assertEqual(lines[-1], 'PROVISION OK GATEWAY IDLE')
+            self.assertEqual(lines.count('PROVISION OK GATEWAY IDLE'), 1,
+                             'exactly one status line may follow')
+            self.assertNotIn('USB_WYOMING_ENTERED', idle)
+            self.assertNotIn('GATEWAY BEGIN', idle)
+            # Running: the status carries the task's LAST report line, not the whole buffer.
+            running = self.console(executable, 'GATEWAY_STATUS\n', GATEWAY_ACTIVE='1')
+            self.assertIn('PROVISION OK GATEWAY RUNNING last=reconnect=registered reconnects=2',
+                          running)
+            self.assertNotIn('session=registered', running.replace('last=reconnect=registered reconnects=2', ''),
+                             'the full report must not leak into the status')
+            # An empty report while running is a complete answer.
+            empty = self.console(executable, 'GATEWAY_STATUS\n', GATEWAY_ACTIVE='1',
+                                 GATEWAY_LAST_REPORT='')
+            self.assertIn('PROVISION OK GATEWAY RUNNING last=', empty)
+            self.assertNotIn('PROVISION OK GATEWAY RUNNING last=PROVISION', empty)
 
 
     def test_a_connect_attempt_is_framed_and_reports_where_it_landed(self):
