@@ -915,6 +915,29 @@ int usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);
             self.assertNotIn('WIFI CONNECT BEGIN', output, 'no join may be attempted without a scan')
             self.assertNotIn('TopSecret0', output)
 
+    def test_a_gateway_run_whose_scan_cannot_run_says_radio_not_no_endpoint(self):
+        """A manual START_GATEWAY whose scan fails must be labelled as a radio fault.
+
+        With a staged endpoint and at least two saved networks, choose_candidate runs a scan;
+        when that scan cannot run the code is -3, which prepare_gateway must remap to its own
+        -5 so the reply is ERR GATEWAY RADIO, not ERR GATEWAY NO_ENDPOINT (the label for a
+        genuinely missing endpoint). Before the fix the remap tested for -5, a value
+        choose_candidate never returns, so a radio fault leaked through as NO_ENDPOINT and the
+        RADIO branch was unreachable.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = self.build(tmp)
+            output = self.console(executable, 'START_GATEWAY\n', MATCH_FAIL='1', NVS_PRELOAD=(
+                'hermes_dev:endpoint_v1=tcp://192.0.2.1:10701|hermes_wifi:prof_n=2'
+                '|hermes_wifi:p0_ssid=Home-AP|hermes_wifi:p0_psk=TopSecret0|'
+                'hermes_wifi:p1_ssid=Away-AP|hermes_wifi:p1_psk=TopSecret1'))
+            self.assertIn('PROVISION ERR GATEWAY RADIO', output,
+                          'a scan that could not run is a radio fault, not a missing endpoint')
+            self.assertNotIn('ERR GATEWAY NO_ENDPOINT', output)
+            self.assertNotIn('ERR GATEWAY STORAGE', output)
+            self.assertNotIn('GATEWAY BEGIN', output, 'no dial may be attempted without a scan')
+            self.assertNotIn('TopSecret0', output)
+
 
 if __name__ == '__main__':
     unittest.main()

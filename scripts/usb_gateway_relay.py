@@ -22,7 +22,7 @@ Exit codes say what happened, so a caller does not have to parse prose:
 
     0 registered       the gateway accepted this device
     2 refused          the gateway refused it; retrying will not help until a human acts
-    3 not registered   no acceptance inside the run (gateway silent, unreachable, or closed)
+    3 not registered   no acceptance inside the run (gateway silent, unreachable, closed, or reset)
     4 device link failed  the port, the banner or the mode acknowledgment was wrong
     5 identity mismatch   the device registered under a different id than expected
 """
@@ -284,9 +284,25 @@ def run_relay(
                 if chunk:
                     outcome.bytes_from_device += len(chunk)
                     upstream.feed(chunk)
-                    gateway_socket.sendall(chunk)
+                    try:
+                        gateway_socket.sendall(chunk)
+                    except OSError as error:
+                        # The gateway is gone mid-forward. That is a gateway-side death, not a
+                        # device fault: the device is still fine, the bridge at the other end
+                        # crashed. It must land as not-registered (3), the same as the FIN death
+                        # below, never as device-link-failed (4) which points at the USB cable.
+                        # So `error` stays empty; stopped_because carries the message.
+                        outcome.stopped_because = f'gateway connection lost ({error})'
+                        break
             if gateway_socket in readable:
-                chunk = gateway_socket.recv(4096)
+                try:
+                    chunk = gateway_socket.recv(4096)
+                except OSError as error:
+                    # A reset (or any socket error) from the gateway: the bridge died on its side,
+                    # not the device. Not registered, and not a device fault either, so `error`
+                    # stays empty and the run falls through to the not-registered exit (3).
+                    outcome.stopped_because = f'gateway connection lost ({error})'
+                    break
                 if not chunk:
                     outcome.stopped_because = 'gateway closed the connection'
                     break

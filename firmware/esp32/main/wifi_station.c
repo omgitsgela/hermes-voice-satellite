@@ -23,6 +23,16 @@
 
 static EventGroupHandle_t station_events;
 static volatile int station_reason;
+/* True only while wifi_station_associate is actually waiting on a join. A disconnect event is
+ * recorded as a failure of the join only in that window: the reconnect path releases the radio
+ * between attempts, and that release (and a previous attempt's teardown) each trigger their own
+ * disconnect event, which the driver dispatches asynchronously. Without the gate, a leftover
+ * event delivered after the bits are cleared would make a healthy join report
+ * status=failed with the PREVIOUS attempt's reason and abort a connect that may already be
+ * succeeding. Events are delivered in order, so a leftover always reaches the handler before
+ * this join's own outcome; the gate plus a re-clear of the bit at arm time close the window in
+ * which a leftover could still be in flight. */
+static volatile bool station_waiting_for_join;
 
 /* One handler for every radio event. It only records facts; the wait in
  * wifi_station_connect decides what they mean. */
@@ -32,8 +42,10 @@ static void station_event(void *argument, esp_event_base_t base, int32_t id, voi
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         xEventGroupSetBits(station_events, WIFI_STATION_STARTED_BIT);
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        if (!station_waiting_for_join) return;  /* a release or a prior teardown, not this join */
         station_reason = (int)((wifi_event_sta_disconnected_t *)data)->reason;
         xEventGroupSetBits(station_events, WIFI_STATION_FAILED_BIT);
+        station_waiting_for_join = false;
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         xEventGroupSetBits(station_events, WIFI_STATION_GOT_IP_BIT);
     }
@@ -257,6 +269,7 @@ int wifi_station_associate(const char *ssid, const char *psk, char *out, size_t 
     xEventGroupClearBits(station_events, WIFI_STATION_STARTED_BIT | WIFI_STATION_GOT_IP_BIT |
                                             WIFI_STATION_FAILED_BIT);
     station_reason = 0;
+    station_waiting_for_join = false;  /* off until we actually ask the driver to join */
 
     esp_err_t configured = esp_wifi_set_config(WIFI_IF_STA, &config);
     memset(&config, 0, sizeof(config));  /* the driver keeps its own copy; ours goes now */
@@ -276,8 +289,17 @@ int wifi_station_associate(const char *ssid, const char *psk, char *out, size_t 
         return fail(out, capacity, "radio did not start");
     }
 
+    /* Arm the join gate, then clear the failure bit one more time: a disconnect event the
+     * driver is still delivering from a prior release or teardown reaches the handler in
+     * order, and while the gate is open it would otherwise plant this join's FAILED bit. The
+     * re-clear here (after the gate is on) is the only place such a leftover can still land,
+     * so it is discarded rather than misreported. */
+    station_waiting_for_join = true;
+    xEventGroupClearBits(station_events, WIFI_STATION_FAILED_BIT);
+
     if (esp_wifi_connect() != ESP_OK) {
         esp_wifi_stop();
+        station_waiting_for_join = false;
         return fail(out, capacity, "connect refused");
     }
 
@@ -285,6 +307,7 @@ int wifi_station_associate(const char *ssid, const char *psk, char *out, size_t 
                                              WIFI_STATION_GOT_IP_BIT | WIFI_STATION_FAILED_BIT,
                                              pdTRUE, pdFALSE,
                                              pdMS_TO_TICKS(WIFI_STATION_CONNECT_TIMEOUT_MS));
+    station_waiting_for_join = false;
     if (result & WIFI_STATION_GOT_IP_BIT) {
         char ip_text[16] = "(none)";
         esp_netif_ip_info_t info = {0};

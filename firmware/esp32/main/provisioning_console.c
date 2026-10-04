@@ -303,7 +303,7 @@ static int prepare_gateway(bool *storage, char *endpoint, size_t endpoint_capaci
     int wifi = choose_candidate(storage, ssids, psks, &count, chosen, from_staged, out, capacity);
     if (wifi == -1) return -1;
     if (wifi == 0) return 0;
-    if (wifi == -5) return -5;  /* the scan could not run: a radio fault, distinct from a missing store */
+    if (wifi == -3) return -5;  /* the scan could not run: a radio fault, distinct from a missing store */
     if (endpoint_state != 1) return endpoint_state;
     return wifi;  /* 1 when chosen, -2 when every known network is out of range */
 }

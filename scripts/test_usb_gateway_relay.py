@@ -13,6 +13,7 @@ import io
 import os
 import select
 import socket
+import struct
 import sys
 import threading
 import time
@@ -273,6 +274,69 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(outcome.exit_code, relay.EXIT_NOT_REGISTERED)
         self.assertIn('gateway unreachable', outcome.stopped_because)
         self.assertEqual(outcome.error, '', 'an unreachable gateway is not a device fault')
+
+    def test_a_gateway_that_dies_with_a_reset_is_not_a_device_fault(self):
+        """A gateway that crashes mid-run answers with a RST, not a FIN. Over a real network
+        socket the relay's recv (or a mid-forward sendall) then raises an OSError on the
+        GATEWAY side: the run must exit not-registered (3), the same as the FIN death that
+        already does, not device-link-failed (4) -- or an operator chasing a crashed bridge is
+        told to reseat the USB cable. This is the crash-shaped case the relay's own pinned
+        principle (an unreachable gateway is not a device fault) must cover. A socketpair RST
+        would not do this: it surfaces as an EOF, so the peer must be a real network listener.
+        """
+        session = FakeSession()
+        self.addCleanup(session.close)
+        listener = socket.socket()
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(('127.0.0.1', 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+        self.addCleanup(listener.close)
+        done = threading.Event()
+
+        def crash_gateway():
+            # Play the gateway: describe, wait for the device's register frame to cross, then
+            # die with a RST (linger on, timeout 0) instead of a clean FIN.
+            conn = None
+            try:
+                conn, _ = listener.accept()
+                conn.sendall(frame_bytes(Event(type='describe')))
+                received = bytearray()
+                deadline = time.monotonic() + 6
+                while time.monotonic() < deadline:
+                    readable, _, _ = select.select([conn], [], [], 0.05)
+                    if not readable:
+                        continue
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    received.extend(chunk)
+                    if b'hermes.register' in received:
+                        break
+            except OSError:
+                pass
+            if conn is not None:
+                try:
+                    conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
+                                    struct.pack('ii', 1, 0))
+                    conn.close()
+                except OSError:
+                    pass
+            done.set()
+
+        peer = threading.Thread(target=crash_gateway, daemon=True)
+        peer.start()
+        outcome = relay.run_relay(lambda: session.port,
+                                  lambda endpoint: socket.create_connection(
+                                      ('127.0.0.1', port), timeout=5),
+                                  endpoint=('127.0.0.1', port), duration=10.0)
+        peer.join(timeout=5.0)
+        self.assertFalse(peer.is_alive(), 'the scripted peer outlived the run')
+        self.assertEqual(outcome.exit_code, relay.EXIT_NOT_REGISTERED,
+                         outcome.error or outcome.stopped_because)
+        self.assertFalse(outcome.registered)
+        self.assertEqual(outcome.error, '',
+                         'a reset from the gateway is a gateway-side death, not a device fault')
 
     def test_device_id_mismatch_is_reported(self):
         session = FakeSession(device_id='esp32-somethingelse')
