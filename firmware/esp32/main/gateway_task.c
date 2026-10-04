@@ -155,8 +155,16 @@ bool gateway_task_active(void) { return active; }
 void gateway_task_report(char *out, size_t capacity) {
     if (!out || capacity == 0) return;
     taskENTER_CRITICAL(&state_lock);
-    size_t length = strnlen(state.report, capacity - 1);
-    memcpy(out, state.report, length);
-    out[length] = 0;
+    size_t used = strnlen(state.report, capacity - 1);
+    /* The report is a single-writer (the gateway task) / single-reader (the console) diagnostic
+     * buffer. The writer appends whole lines -- bytes, then a newline, then the terminator -- so a
+     * line is only complete once its newline is down. This reader runs on a different task (and,
+     * on a multi-core build, possibly a different core) from the writer, so it bounds the copy to
+     * the last complete line rather than trusting the terminator: a concurrent append mid-line can
+     * only ever *add* lines after the copy point, never leave a torn line in it. The critical
+     * section is a best-effort single-core guard, not what makes the read well-formed. */
+    while (used > 0 && state.report[used - 1] != '\n') --used;
+    memcpy(out, state.report, used);
+    out[used] = 0;
     taskEXIT_CRITICAL(&state_lock);
 }

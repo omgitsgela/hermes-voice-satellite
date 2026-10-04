@@ -51,6 +51,18 @@ def read_psk(path) -> bytes:
     return psk
 
 
+def block_terminator(action: str):
+    """The whole end-marker line that closes a framed block, or None for the unframed listing.
+
+    Matched as a whole line, never a substring: a scan's AP lines are sent raw (no PROVISION
+    prefix), so a network whose SSID contains the marker's text (WENDYS, BLEND, LEGEND, WEEKEND)
+    would otherwise truncate the block and the real end marker would be left unread."""
+    return {
+        'scan': 'PROVISION WIFI SCAN END',
+        'connect': 'PROVISION WIFI CONNECT END',
+    }.get(action)
+
+
 def save_profile(connection, ssid, psk_file, timeout=5.0):
     """Stage the Wi-Fi pair and save it as a profile, one acknowledged step at a time.
 
@@ -132,7 +144,10 @@ def exchange_block(connection, command, terminator=None, timeout=30.0):
             current.clear()
             if text:
                 lines.append(text)
-                if terminator and terminator in text:
+                # Match the terminator as a whole line, not a substring: a scan's AP lines are
+                # sent raw (no PROVISION prefix), so a network whose SSID merely contains the
+                # marker's text (e.g. WENDYS) must not end the block early.
+                if terminator is not None and text == terminator:
                     break
             continue
         current.extend(chunk)
@@ -187,9 +202,8 @@ def main():
                 print(line)
         elif args.action in ('list-profiles', 'connect', 'scan'):
             # The listing has no end marker (it stops when the console goes quiet); the framed
-            # actions all end with an explicit ... END line.
-            print(exchange_block(connection, command, terminator='END'
-                                 if args.action != 'list-profiles' else None,
+            # actions all end with an explicit ... END line, matched whole.
+            print(exchange_block(connection, command, terminator=block_terminator(args.action),
                                  timeout=45.0))
         else:
             print(exchange(connection, command))

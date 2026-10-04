@@ -32,9 +32,15 @@ int gateway_tcp_run(const char *host, unsigned port, char *out, size_t capacity)
     snprintf(line, sizeof(line), "socket=connected host=%s port=%u transport=tcp", host, port);
     gateway_report_append(out, capacity, line);
 
+    /* The dial deadline is over: the register exchange is bounded by the session's own budget,
+     * not the 8 s dial limit. The dial stored its deadline on the socket, and the bounded
+     * read/write above enforce it -- so without this raise a slow-but-live bridge would be cut
+     * off mid-registration at 8 s while the run budget (25 s) sits unused. One value for both,
+     * so the session's budget is the single source of truth. */
+    int64_t run_deadline = gateway_now_us() + (int64_t)GATEWAY_RUN_BUDGET_MS * 1000;
+    socket.deadline_us = run_deadline;
     int result = gateway_link_register(gateway_socket_read, gateway_socket_write, &socket,
-                                       gateway_now_us() + (int64_t)GATEWAY_RUN_BUDGET_MS * 1000,
-                                       out, capacity);
+                                       run_deadline, out, capacity);
     gateway_socket_close(&socket);
     return result;
 }

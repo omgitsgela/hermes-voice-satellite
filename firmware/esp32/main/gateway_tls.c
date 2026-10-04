@@ -177,6 +177,14 @@ int gateway_tls_establish(const char *host, unsigned port, gateway_tls_link *out
     snprintf(line, sizeof(line), "socket=connected host=%s port=%u transport=tls", host, port);
     gateway_report_append(report, capacity, line);
 
+    /* The dial deadline is over: the handshake is bounded by its own budget, not the 8 s dial
+     * limit. gateway_socket_dial stored the dial deadline on the socket, and the TLS bio
+     * (tls_send/tls_receive) enforces it -- so without this raise the handshake could never
+     * outlive (8 s - dial time), and TLS_HANDSHAKE_TIMEOUT_MS would be dead. The persistent
+     * path raises this to "no deadline" again once the handshake completes; the one-shot raises
+     * it to the run budget after establish. */
+    out->socket.deadline_us = gateway_now_us() + (int64_t)TLS_HANDSHAKE_TIMEOUT_MS * 1000;
+
     tls_contexts *contexts = heap_caps_calloc(1, sizeof(tls_contexts), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!contexts) {
         gateway_report_append(report, capacity, "tls=failed reason=no_memory");
@@ -319,11 +327,13 @@ int gateway_tls_run(const char *host, unsigned port, char *out, size_t capacity)
     if (gateway_tls_establish(host, port, &link, out, capacity) != 0) return -1;
 
     /* Same handshake as the plaintext transport, over this carrier: one implementation of the
-     * session, two ways of carrying it. The console path keeps the bounded deadline establish set,
-     * so a stalled peer cannot hold the port. */
+     * session, two ways of carrying it. The handshake left the socket on its own budget; the
+     * register exchange gets the session's, so a stalled peer is cut at the run budget rather
+     * than at the handshake budget. */
+    int64_t run_deadline = gateway_now_us() + (int64_t)TLS_RUN_BUDGET_MS * 1000;
+    link.socket.deadline_us = run_deadline;
     int result = gateway_link_register(gateway_tls_link_read, gateway_tls_link_write, &link,
-                                       gateway_now_us() + (int64_t)TLS_RUN_BUDGET_MS * 1000, out,
-                                       capacity);
+                                       run_deadline, out, capacity);
 
     char line[160];
     snprintf(line, sizeof(line), "resource=stack_min_free=%u",

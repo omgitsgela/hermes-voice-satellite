@@ -108,6 +108,27 @@ class ProvisionToolTests(unittest.TestCase):
         self.assertIn('GL-Test-AP ch=6 rssi=-42 auth=WPA2', lines)
         self.assertIn('PROVISION WIFI SCAN END', lines)
 
+    def test_scan_block_survives_a_network_name_that_contains_end(self):
+        module = _module()
+        # A scan whose AP names contain the marker's text. The device sends AP lines raw
+        # (no PROVISION prefix), so a bare 'END' substring terminator would stop the block at
+        # WENDYS and lose the rest plus the real end marker. The framed block must be closed by
+        # its whole end-marker line only.
+        self.assertEqual(module.block_terminator('scan'), 'PROVISION WIFI SCAN END')
+        self.assertEqual(module.block_terminator('connect'), 'PROVISION WIFI CONNECT END')
+        self.assertIsNone(module.block_terminator('list-profiles'))
+        block = (b'PROVISION WIFI SCAN BEGIN\n'
+                 b'WENDYS ch=6 rssi=-42 auth=WPA2\n'
+                 b'LEGEND ch=11 rssi=-60 auth=WPA2\n'
+                 b'PROVISION WIFI SCAN END\n')
+        connection = Stream(block)
+        lines = module.exchange_block(connection, 'WIFI_SCAN',
+                                      terminator=module.block_terminator('scan'), timeout=0.2)
+        for expected in ('WENDYS ch=6 rssi=-42 auth=WPA2',
+                         'LEGEND ch=11 rssi=-60 auth=WPA2',
+                         'PROVISION WIFI SCAN END'):
+            self.assertIn(expected, lines, 'the block must reach its real end marker')
+
     def test_block_reader_collects_a_listing_that_has_no_end_marker(self):
         module = _module()
         # Two profiles, then the console goes quiet (the stream runs dry): the reader must stop on
