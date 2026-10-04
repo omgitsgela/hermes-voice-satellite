@@ -233,13 +233,18 @@ int wifi_station_associate(const char *ssid, const char *psk, char *out, size_t 
      * field, so a value must fit inside its field WITH a terminator. Copy with memcpy, not
      * snprintf: snprintf would silently drop the final byte of a full-length value and hand the
      * driver a wrong credential, which then fails the four-way handshake with a misleading
-     * "wrong password" that points at the access point instead of at the truncation. */
+     * "wrong password" that points at the access point instead of the truncation. Both fields
+     * are checked, because a caller that skips the provisioner's validators reaches this code
+     * directly (the header says the credentials are supplied by the caller), and an unchecked
+     * copy writes past the struct. */
     size_t ssid_len = strlen(ssid);
     size_t psk_len = strlen(psk);
     if (ssid_len >= sizeof(config.sta.ssid))
         return fail(out, capacity, "ssid exceeds the radio field");
     memcpy(config.sta.ssid, ssid, ssid_len);
     config.sta.ssid[ssid_len] = 0;
+    if (psk_len >= sizeof(config.sta.password) + 1)
+        return fail(out, capacity, "psk exceeds the radio field");
     memcpy(config.sta.password, psk, psk_len);
     if (psk_len < sizeof(config.sta.password))
         config.sta.password[psk_len] = 0;

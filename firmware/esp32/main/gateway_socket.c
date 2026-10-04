@@ -20,26 +20,33 @@ int64_t gateway_millis_left(int64_t deadline_us) {
     return left > 0 ? left : 0;
 }
 
+/* Dead-peer keepalive, matching bridge/net.py (the whole project agrees on these values): probe
+ * after 15 s idle, then three probes 5 s apart, and give up. The device's outbound link needs the
+ * same timing as the bridge's accepted sockets, or the two ends discover a dead peer at very
+ * different times. */
+#define GATEWAY_KEEPALIVE_IDLE_S   15
+#define GATEWAY_KEEPALIVE_INTERVAL_S 5
+#define GATEWAY_KEEPALIVE_PROBES   3
+
 /* Ask the stack to notice a peer that dies without a FIN or an RST. Without this, a bridge that
  * loses power, freezes, or is cut off from the AP leaves the device's persistent read blocked for
  * ever and the supervisor's reconnect never runs: this is the fix for that, not a tuning nicety.
- * Both ends enable it (bridge/net.py does the same), so the dead peer is discovered by whichever
+ * Both ends set it (bridge/net.py does the same), so the dead peer is discovered by whichever
  * side probes first.
  *
- * SO_KEEPALIVE is the one keepalive control this lwIP build honours unconditionally: the probe
- * timer in tcp_slowtmr is gated on SOF_KEEPALIVE alone, not on LWIP_TCP_KEEPALIVE. The per-socket
- * TCP_KEEPIDLE/INTVL/CNT setters are compiled out here (that option is off and ESP-IDF 6.1 does
- * not expose it), so we cannot dial the interval and the link runs at lwIP's defaults -- first
- * probe about 2 h after the last segment, then every 75 s, aborting with an RST ~11 min after the
- * first unanswered probe. That is far slower than the project's 15 s device-link standard, which
- * the bridge side meets; tightening this side needs a build-level TCP_KEEPIDLE_DEFAULT override
- * (device-side, unverified until flashed) and is tracked separately rather than bundled here.
- *
- * A failure to set it must not sink the dial: keepalive is a recovery aid, not a precondition for
- * a working link. */
+ * SO_KEEPALIVE arms the probe timer, and the per-socket TCP_KEEPIDLE/INTVL/CNT dial it to the
+ * project's 15 s / 5 s / 3 (the setters are compiled in: this build's lwipopts.h defines
+ * LWIP_TCP_KEEPALIVE 1). All four calls are best-effort -- a setsockopt failure must not sink the
+ * dial, because keepalive is a recovery aid, not a precondition for a working link. */
 static void dial_keepalive(int descriptor) {
     int enabled = 1;
+    int idle = GATEWAY_KEEPALIVE_IDLE_S;
+    int interval = GATEWAY_KEEPALIVE_INTERVAL_S;
+    int probes = GATEWAY_KEEPALIVE_PROBES;
     setsockopt(descriptor, SOL_SOCKET, SO_KEEPALIVE, &enabled, sizeof(enabled));
+    setsockopt(descriptor, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
+    setsockopt(descriptor, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval));
+    setsockopt(descriptor, IPPROTO_TCP, TCP_KEEPCNT, &probes, sizeof(probes));
 }
 
 

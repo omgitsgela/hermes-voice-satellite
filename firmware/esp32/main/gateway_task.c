@@ -126,7 +126,12 @@ int gateway_task_start(const char *host, unsigned port, int transport,
     state.port = port;
     state.transport = transport;
     snprintf(state.ssid, sizeof(state.ssid), "%s", ssid);
-    if (psk) snprintf(state.psk, sizeof(state.psk), "%s", psk);
+    /* A NULL psk means "nothing to join with": the field is cleared, not left holding the
+     * previous session's key, or a new SSID would be associated with the old credential. */
+    if (psk)
+        snprintf(state.psk, sizeof(state.psk), "%s", psk);
+    else
+        state.psk[0] = 0;
 
     if (gateway_supervisor_init(&supervisor, gateway_now_us, gateway_task_establish,
                                 gateway_task_teardown, &state, state.device_id, state.boot_id,

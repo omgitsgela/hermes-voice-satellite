@@ -36,10 +36,13 @@ def psk_shape(psk: bytes) -> str:
 
 
 def read_psk(path) -> bytes:
-    """A passphrase from a file, stripped of its terminator, validated before it is ever sent.
-    The file is the one place the secret lives: it is read, used, and not printed."""
+    """A passphrase from a file, with only the line terminator stripped, validated before it is
+    ever sent. The file is the one place the secret lives: it is read, used, and not printed.
+    Only the trailing newline/carriage-return is removed: a WPA passphrase may legally contain
+    leading or trailing spaces, and stripping them would silently stage a wrong key."""
     with open(path, 'rb') as handle:
-        psk = handle.read().strip()
+        psk = handle.read()
+    psk = psk.rstrip(b'\r\n')
     if not psk:
         raise SystemExit(f'{path} is empty')
     if not psk_shape(psk):

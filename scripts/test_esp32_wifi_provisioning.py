@@ -179,8 +179,12 @@ class WifiProvisioningTests(unittest.TestCase):
 
     def test_ssid_validation(self):
         lib = self.library()
-        for value, expected in [(b'GL-Test-AP', True), (b'a', True), (b'a' * 32, True),
-                                (b'a' * 33, False), (b'', False), (b'has space', True),
+        # A 32-char SSID is legal 802.11, but the station join cannot stage one: the radio
+        # config has no length field, and a full-field SSID cannot carry its terminator, so the
+        # validator must refuse it rather than let it be staged and then fail at every join.
+        for value, expected in [(b'GL-Test-AP', True), (b'a', True), (b'a' * 31, True),
+                                (b'a' * 32, False), (b'a' * 33, False), (b'', False),
+                                (b'has space', True),
                                 (b'bad\x01char', False), (b'bad\x7fchar', False),
                                 (b'tab\there', False), (b'utf8\xc3\xa9', False)]:
             with self.subTest(ssid=value):
@@ -216,6 +220,8 @@ class WifiProvisioningTests(unittest.TestCase):
         lib = self.library()
         state, request, _ = self.harness(lib)
         self.assertEqual(request(b'SET_WIFI_SSID ' + b'a' * 33), b'ERR WIFI SSID')
+        self.assertEqual(request(b'SET_WIFI_SSID ' + b'a' * 32), b'ERR WIFI SSID',
+                         'a 32-char SSID cannot be joined, so it must not be stageable')
         self.assertEqual(request(b'SET_WIFI_SSID'), b'ERR WIFI SSID')
         self.assertEqual(request(b'SET_WIFI_PSK 1234567'), b'ERR WIFI PSK')
         self.assertEqual(request(b'SET_WIFI_PSK'), b'ERR WIFI PSK')

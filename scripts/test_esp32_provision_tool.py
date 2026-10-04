@@ -89,6 +89,12 @@ class ProvisionToolTests(unittest.TestCase):
             short.write_bytes(b'1234567')
             with self.assertRaises(SystemExit):
                 module.read_psk(short)
+            # Only the line terminator is stripped. A WPA passphrase may legally contain
+            # leading or trailing spaces, and stripping them silently would stage a wrong key.
+            spaced = Path(scratch) / 'spaced.psk'
+            spaced.write_bytes(b' padded key \n')
+            self.assertEqual(module.read_psk(spaced), b' padded key ',
+                             'a legal passphrase with edge spaces must survive byte for byte')
 
     def test_block_reader_stops_at_an_end_marker(self):
         module = _module()

@@ -94,9 +94,11 @@ static int printable_ascii(const char *value) {
 int provision_wifi_ssid_valid(const char *ssid) {
     if (!ssid) return 0;
     size_t length = strlen(ssid);
-    /* 802.11 allows 32 octets; only printable ASCII is accepted here so a staged
-     * value is always safe to print back and to type at a console. */
-    return length >= 1 && length <= PROVISION_SSID_MAX && printable_ascii(ssid);
+    /* 802.11 allows 32 octets, but the station join cannot stage one: the radio config has no
+     * length field, and a full-field SSID cannot carry its NUL terminator, so a 32-char name
+     * would be accepted here and then refused at every associate. Refuse it at staging, where
+     * the operator can see why, rather than at the radio. */
+    return length >= 1 && length < PROVISION_SSID_MAX && printable_ascii(ssid);
 }
 
 static int hex_digit(char c) {
