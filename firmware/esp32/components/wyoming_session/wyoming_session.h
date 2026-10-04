@@ -17,8 +17,11 @@ int wy_session_init(wy_session *session, const char *device_id, const char *boot
 int wy_session_state(const wy_session *session);
 /* Read exactly one control event. One owner; callbacks impose finite deadlines.
  * Close the transport on every non-OK result; init a fresh session on reconnect.
- * Config/audio/unknown events are currently unsupported and fail closed.
- */
+ * A well-formed control event this probe does not implement (config, audio, or an unknown
+ * type) is safely ignored and the call returns OK: the frame already passed the strict decode
+ * above, and a real bridge sends several of these -- starting with desired state immediately
+ * after registration -- so tearing the link on the first one would make it unusable. Only a
+ * malformed frame, a payload-bearing control frame, or a refused registration fails. */
 int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_fn, void *ctx);
 
 /* Stable, human-readable names for session state and result codes, used in reports. A code

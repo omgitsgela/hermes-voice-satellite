@@ -242,9 +242,11 @@ static const provision_wifi_profiles WIFI_PROFILE_STORE = {
 #define WIFI_CANDIDATE_MAX ((size_t)PROVISION_WIFI_PROFILE_MAX + 1)
 
 /* What a join should try, and which one it picked. Returns 1 with `chosen` set when a network
- * was chosen, 0 when the device holds none at all, -1 when the store could not be read, and -2
- * when it holds networks but none of them is in range. With a single candidate no scan is run:
- * there is nothing to choose between, and that path must stay exactly as reliable as it was. */
+ * was chosen, 0 when the device holds none at all, -1 when the store could not be read, -2 when
+ * it holds networks but none of them is in range, and -3 when the scan itself failed (a radio
+ * or transport error, not a statement about which networks exist). With a single candidate no
+ * scan is run: there is nothing to choose between, and that path must stay exactly as reliable
+ * as it was. */
 static int choose_candidate(bool *storage, char (*ssids)[PROVISION_SSID_MAX + 1],
                             char (*psks)[PROVISION_PSK_MAX + 1], size_t *count, size_t *chosen,
                             bool *from_staged, char *out, size_t capacity) {
@@ -266,7 +268,9 @@ static int choose_candidate(bool *storage, char (*ssids)[PROVISION_SSID_MAX + 1]
     const char *names[WIFI_CANDIDATE_MAX];
     int rank[WIFI_CANDIDATE_MAX];
     for (size_t index = 0; index < *count; ++index) names[index] = ssids[index];
-    if (wifi_station_scan_match(names, *count, rank, out, capacity) != 0) return -1;
+    /* A scan that could not run is a transient radio condition, not "no joinable network": the
+     * caller decides what to do with a network it simply could not see. */
+    if (wifi_station_scan_match(names, *count, rank, out, capacity) != 0) return -3;
     int best = -1;
     for (size_t index = 0; index < *count; ++index)
         if (rank[index] != WIFI_STATION_NO_SIGNAL && (best < 0 || rank[index] > rank[best]))
@@ -280,7 +284,10 @@ static int choose_candidate(bool *storage, char (*ssids)[PROVISION_SSID_MAX + 1]
 /* Everything START_GATEWAY needs before it dials: the endpoint parsed, and a network chosen.
  * The status codes are the ones the console reports, and the order below keeps the replies what
  * they always were (what is wrong with the Wi-Fi is reported before what is wrong with the
- * endpoint) even though the endpoint is parsed first because it is cheap and radio-free. */
+ * endpoint) even though the endpoint is parsed first because it is cheap and radio-free. The
+ * codes: 1 chosen; 0 no network held; -1 the store could not be read; -2 every known network is
+ * out of range; -3 no endpoint staged; -4 the endpoint is malformed; -5 the scan could not run
+ * (a radio fault -- distinct from a missing store, which would be -1). */
 static int prepare_gateway(bool *storage, char *endpoint, size_t endpoint_capacity,
                            char *host, size_t host_capacity, unsigned *port, int *transport,
                            char (*ssids)[PROVISION_SSID_MAX + 1],
@@ -296,6 +303,7 @@ static int prepare_gateway(bool *storage, char *endpoint, size_t endpoint_capaci
     int wifi = choose_candidate(storage, ssids, psks, &count, chosen, from_staged, out, capacity);
     if (wifi == -1) return -1;
     if (wifi == 0) return 0;
+    if (wifi == -5) return -5;  /* the scan could not run: a radio fault, distinct from a missing store */
     if (endpoint_state != 1) return endpoint_state;
     return wifi;  /* 1 when chosen, -2 when every known network is out of range */
 }
@@ -401,14 +409,19 @@ static void provisioning_boot_gate(bool *storage) {
     provision_endpoint_parse(endpoint, host, sizeof(host), &port, &transport);
     int pick = choose_candidate(storage, ssids, psks, &count, &chosen, &from_staged, report,
                                 sizeof(report));
-    if (pick == -2) {
-        /* Every configured network is out of range right now. Still start the task on the first
-         * one: it keeps re-associating on its backoff and will register the moment an AP appears.
-         * A -2 can only be reached with two or more candidates, and the saved networks come first,
-         * so candidate 0 is a saved one: it is labelled saved, never staged. */
+    if (pick == -2 || pick == -3) {
+        /* -2: every configured network is out of range right now. -3: the scan itself could not
+         * run (a transient radio error), so we do not even know which are in range. Either way the
+         * networks are configured and the answer is the same: start the task on the first one. It
+         * keeps re-associating on its backoff and will register the moment an AP appears (or the
+         * radio recovers). A -2 can only be reached with two or more candidates, and the saved
+         * networks come first, so candidate 0 is a saved one; with -3 the ranking is unknown but
+         * candidate 0 is still the first saved network the store offers. */
         chosen = 0;
         from_staged = false;
     } else if (pick <= 0) {
+        /* -1: the store could not be read, or 0: the device holds no networks at all. Idle is the
+         * honest answer to both; the reason above already said which. */
         reply("GATEWAY BOOT IDLE reason=NO_JOINABLE");
         memset(psks, 0, sizeof(psks));
         return;
@@ -500,6 +513,10 @@ void provisioning_console_run(void) {
                     reply("ERR WIFI STORAGE");
                 } else if (picked == 0) {
                     reply("ERR WIFI NOT_STAGED");
+                } else if (picked == -3) {
+                    /* A scan that could not run is a radio fault, not a missing configuration: a
+                     * store error would have been -1, above. */
+                    reply("ERR WIFI RADIO");
                 } else if (picked == -2) {
                     reply("ERR WIFI NO_KNOWN_NETWORK");
                 } else {
@@ -561,6 +578,10 @@ void provisioning_console_run(void) {
                     reply("ERR GATEWAY NO_ENDPOINT");
                 } else if (picked == -4) {
                     reply("ERR GATEWAY BAD_ENDPOINT");
+                } else if (picked == -5) {
+                    /* The radio could not run its scan: a transient fault, not a configuration
+                     * problem, so the label must not say the store is missing. */
+                    reply("ERR GATEWAY RADIO");
                 } else if (picked == -2) {
                     reply("ERR GATEWAY NO_KNOWN_NETWORK");
                 } else {

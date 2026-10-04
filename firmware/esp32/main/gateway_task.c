@@ -20,6 +20,7 @@
 #define GATEWAY_TASK_STACK 10240
 #define GATEWAY_TASK_PRIORITY 1
 #define GATEWAY_DIAL_TIMEOUT_MS 8000
+#define GATEWAY_REGISTER_BUDGET_MS 25000  /* the register exchange, the same budget the one-shot run uses */
 #define GATEWAY_BACKOFF_BASE_US 2000000LL   /* 2 s: a bridge that just restarted is often back in seconds */
 #define GATEWAY_BACKOFF_MAX_US 60000000LL   /* 60 s: capped so a satellite never gives up, but never hammers */
 
@@ -41,10 +42,14 @@ static volatile bool active;
 static portMUX_TYPE state_lock = portMUX_INITIALIZER_UNLOCKED;
 
 /* Establish one link: bring the radio up to the held network (fresh each attempt, which is also
- * how a dropped Wi-Fi link recovers), then dial the endpoint. For TLS the handshake -- and the pin
- * check -- happen inside gateway_tls_establish; afterwards the socket deadline is raised to "no
- * deadline" so a registered, idle link blocks instead of erroring. On any failure the radio is left
- * as the sub-steps left it and -1 is returned, which makes the supervisor back off and re-try. */
+ * how a dropped Wi-Fi link recovers), then dial the endpoint. For TLS the handshake -- and the
+ * pin check -- happen inside gateway_tls_establish. The link comes up under a FINITE deadline,
+ * not "no deadline": the register exchange is not yet the idle regime, and a bridge whose
+ * per-connection handler is wedged while its kernel keeps answering must not be able to hold the
+ * device in the handshake for ever -- the same rule the one-shot path lives under. The deadline
+ * is lifted to "no deadline" by gateway_task_on_registered, once the session is actually
+ * registered, when an idle read becomes the healthy state. On any failure the radio is left as
+ * the sub-steps left it and -1 is returned, which makes the supervisor back off and re-try. */
 static int gateway_task_establish(void *user, gw_link *link) {
     (void)user;
     char line[192];
@@ -52,12 +57,13 @@ static int gateway_task_establish(void *user, gw_link *link) {
     if (wifi_station_associate(state.ssid, state.psk, line, sizeof(line)) != 0) {
         return -1;  /* no radio; the associate failure path already stopped it. Back off and retry. */
     }
+    int64_t register_budget = gateway_now_us() + (int64_t)GATEWAY_REGISTER_BUDGET_MS * 1000;
     if (state.transport == PROVISION_TRANSPORT_TLS) {
         if (gateway_tls_establish(state.host, state.port, &state.tls_link, state.report,
                                   sizeof(state.report)) != 0) {
             return -1;  /* radio stays up; the next establish refreshes it and re-dials */
         }
-        gateway_tls_link_set_deadline(&state.tls_link, GATEWAY_SOCKET_NO_DEADLINE);
+        gateway_tls_link_set_deadline(&state.tls_link, register_budget);
         link->user = &state.tls_link;
         link->read_fn = gateway_tls_link_read;
         link->write_fn = gateway_tls_link_write;
@@ -68,11 +74,24 @@ static int gateway_task_establish(void *user, gw_link *link) {
                                 &state.tcp_socket) != 0) {
             return -1;
         }
-        state.tcp_socket.deadline_us = GATEWAY_SOCKET_NO_DEADLINE;
+        state.tcp_socket.deadline_us = register_budget;
         link->user = &state.tcp_socket;
         link->read_fn = gateway_socket_read_persistent;
         link->write_fn = gateway_socket_write_persistent;
     }
+    return 0;
+}
+
+/* Called by the supervisor exactly when a session (re)reaches registered: the handshake regime
+ * is over, the idle regime begins, and an idle read is the healthy state. Lifting the deadline
+ * to "no deadline" is what makes the persistent read block until a real end of stream instead of
+ * erroring at the register budget every time the link idles. */
+static int gateway_task_on_registered(void *user) {
+    (void)user;
+    if (state.transport == PROVISION_TRANSPORT_TLS)
+        gateway_tls_link_set_deadline(&state.tls_link, GATEWAY_SOCKET_NO_DEADLINE);
+    else
+        state.tcp_socket.deadline_us = GATEWAY_SOCKET_NO_DEADLINE;
     return 0;
 }
 
@@ -136,7 +155,8 @@ int gateway_task_start(const char *host, unsigned port, int transport,
     if (gateway_supervisor_init(&supervisor, gateway_now_us, gateway_task_establish,
                                 gateway_task_teardown, &state, state.device_id, state.boot_id,
                                 GATEWAY_BACKOFF_BASE_US, GATEWAY_BACKOFF_MAX_US, 0,
-                                state.report, sizeof(state.report)) != 0) {
+                                state.report, sizeof(state.report),
+                                gateway_task_on_registered) != 0) {
         return -1;
     }
 

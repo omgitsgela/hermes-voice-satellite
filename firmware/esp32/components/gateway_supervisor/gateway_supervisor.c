@@ -6,8 +6,9 @@
 
 /* One wy_session_step per registration attempt may make several reads (describe, then the
  * register.ok). The drive is capped so a bridge that accepts the connection but never completes
- * the handshake cannot spin the device. On the device the transport's read enforces its own
- * deadline, so this is a second, independent guard rather than the only one. */
+ * the handshake cannot spin the device; the cap counts iterations, so it is a second, independent
+ * guard on top of the link's own deadline, which is finite until on_registered lifts it -- the
+ * first guard against a peer that blocks the read itself. */
 #define GW_REGISTER_DRIVE_CAP 64
 
 static size_t bounded_len(const char *text, size_t maximum) {
@@ -71,7 +72,7 @@ int gateway_supervisor_init(gateway_supervisor *sup, int64_t (*now_us)(void),
                             void (*teardown)(void *, gw_link *), void *user,
                             const char *device_id, const char *boot_id,
                             int64_t backoff_base_us, int64_t backoff_max_us, int max_attempts,
-                            char *report, size_t report_capacity) {
+                            char *report, size_t report_capacity, int (*on_registered)(void *)) {
     if (!sup || !now_us || !establish || !teardown) return -1;
     if (!device_id || !device_id[0] || !boot_id || !boot_id[0]) return -1;
     if (strlen(device_id) >= sizeof(sup->device_id) || strlen(boot_id) >= sizeof(sup->boot_id))
@@ -95,6 +96,7 @@ int gateway_supervisor_init(gateway_supervisor *sup, int64_t (*now_us)(void),
     sup->max_attempts = max_attempts;
     sup->report = report;
     sup->report_capacity = report_capacity;
+    sup->on_registered = on_registered;
     sup->state = GW_ST_IDLE;
     /* The session buffer is owned by the supervisor for its whole life; allocate it once. */
     sup->session_size = wy_session_size();
@@ -217,6 +219,11 @@ int gateway_supervisor_step(gateway_supervisor *sup) {
             snprintf(line, sizeof(line), "reconnect=registered reconnects=%d", sup->reconnects);
             append(sup, line);
         }
+        /* The handshake is over and the link is idle-healthy: hand the transport to the regime
+         * where an idle read is the normal state. A failing hook leaves the link on its finite
+         * deadline, which still bounds an idle link to a re-dial -- a slower, but safe, posture. */
+        if (sup->on_registered && sup->on_registered(sup->user) != 0)
+            append(sup, "deadline=register_hook_failed");
         sup->registered = 1;
         sup->ever_registered = 1;
         sup->consecutive_failures = 0;

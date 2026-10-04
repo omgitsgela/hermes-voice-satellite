@@ -21,6 +21,9 @@
  *   1. A registered link is long-lived. The bridge keeps an idle link alive with TCP keepalive and
  *      sends no application-level ping, so an idle read is NOT a failure. Only transport EOF/error
  *      or a rejected frame ends a link. The supervisor never imposes an idle timeout of its own.
+ *      Registration is different: the drive to registered is bounded by the link's own deadline
+ *      (finite until on_registered lifts it), so a bridge that accepts a connection and then goes
+ *      silent cannot hold the device inside a handshake.
  *   2. Reconnect is bounded and observable. Backoff is exponential with a ceiling, a fresh
  *      successful registration resets the backoff, and every establish attempt, reconnect and
  *      terminal reason is counted so a device that cannot reach its bridge is legible rather than
@@ -60,6 +63,12 @@ typedef struct {
      * failed establish that may have partially opened a descriptor. Pass-through of `user`. */
     void (*teardown)(void *user, gw_link *link);
     void *user;            /* handed to establish/teardown unchanged. */
+
+    /* Optional lifecycle hook, called exactly when a session (re)reaches registered, with the
+     * same `user`, before pumping begins on that link. The device uses it to lift the link from
+     * its finite registration deadline to "no deadline", so an idle registered link blocks until
+     * a real end of stream. A NULL hook means the link keeps whatever deadline establish set. */
+    int (*on_registered)(void *user);
 
     /* Device identity, supplied to every fresh session. Filled by the caller (device_identity on
      * the device); the supervisor does not read NVS or the MAC itself. */
@@ -104,13 +113,14 @@ enum { GW_ST_IDLE = 0, GW_ST_REGISTERING = 1, GW_ST_PUMPING = 2, GW_ST_BACKING_O
 
 size_t gateway_supervisor_size(void);
 /* Returns 0, or -1 when the arguments are invalid (no clock, no establish, empty identity, or a
- * report buffer that is neither NULL nor non-empty). */
+ * report buffer that is neither NULL nor non-empty). on_registered may be NULL (no deadline
+ * switch at registration). */
 int gateway_supervisor_init(gateway_supervisor *sup, int64_t (*now_us)(void),
                             int (*establish)(void *, gw_link *),
                             void (*teardown)(void *, gw_link *), void *user,
                             const char *device_id, const char *boot_id,
                             int64_t backoff_base_us, int64_t backoff_max_us, int max_attempts,
-                            char *report, size_t report_capacity);
+                            char *report, size_t report_capacity, int (*on_registered)(void *));
 
 /* Advance the state machine one transition. Returns a GW_ code (see above). On GW_WAIT,
  * gateway_supervisor_delay_us reports how long to sleep. */

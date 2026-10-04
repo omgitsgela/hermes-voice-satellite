@@ -34,6 +34,7 @@ IO = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_void_p, C.c_size_t)
 NOW = C.CFUNCTYPE(C.c_int64)
 ESTAB = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_void_p)
 TEARDOWN = C.CFUNCTYPE(None, C.c_void_p, C.c_void_p)
+ONREG = C.CFUNCTYPE(C.c_int, C.c_void_p)
 
 
 class GWLink(C.Structure):
@@ -129,7 +130,7 @@ class SupervisorTests(unittest.TestCase):
         lib.gateway_supervisor_size.restype = C.c_size_t
         lib.gateway_supervisor_init.argtypes = [C.c_void_p, NOW, ESTAB, TEARDOWN, C.c_void_p,
                                                 C.c_char_p, C.c_char_p, C.c_int64, C.c_int64,
-                                                C.c_int, C.c_char_p, C.c_size_t]
+                                                C.c_int, C.c_char_p, C.c_size_t, C.c_void_p]
         lib.gateway_supervisor_step.argtypes = [C.c_void_p]
         lib.gateway_supervisor_delay_us.argtypes = [C.c_void_p]
         lib.gateway_supervisor_delay_us.restype = C.c_int64
@@ -142,14 +143,18 @@ class SupervisorTests(unittest.TestCase):
         lib.gateway_supervisor_state.argtypes = [C.c_void_p]
         return lib
 
-    def run_supervisor(self, lib, transport, base_us=1000, max_us=0, max_attempts=0):
+    def run_supervisor(self, lib, transport, base_us=1000, max_us=0, max_attempts=0, on_registered=None):
         now_fn = NOW(lambda: transport.clock.value)
         estab_fn = ESTAB(transport.establish)
         teardown_fn = TEARDOWN(transport.teardown)
         self._keepalive = [now_fn, estab_fn, teardown_fn]
+        self._onreg_fn = None
+        if on_registered is not None:
+            self._onreg_fn = ONREG(on_registered)
+            self._keepalive.append(self._onreg_fn)
         sup = C.create_string_buffer(lib.gateway_supervisor_size())
         rc = lib.gateway_supervisor_init(sup, now_fn, estab_fn, teardown_fn, None, b'control-fixture', b'boot-1',
-                         base_us, max_us, max_attempts, None, 0)
+                         base_us, max_us, max_attempts, None, 0, self._onreg_fn)
         self.assertEqual(rc, 0, 'supervisor init failed')
         return sup
 
@@ -287,6 +292,44 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(transport.establish_calls, 3, 'two failures then a success')
         self.assertEqual(lib.gateway_supervisor_attempts(sup), 3)
         self.assertEqual(lib.gateway_supervisor_reconnects(sup), 0, 'first-ever registration is not a reconnect')
+
+    def test_on_registered_hook_fires_once_per_registration(self):
+        """The device uses this hook to lift the link from its finite registration deadline to
+        'no deadline' -- so it must fire exactly when a session (re)reaches registered, and never
+        on the pump that follows. A hook that fired early (before registered) would let an idle
+        read outlive a stalled handshake; one that fired on every pump would be noise, and one
+        that missed a reconnect would leave a re-established link on its finite budget forever."""
+        lib = self.library()
+        transport = FakeTransport(eof=True)
+        self._transport = transport
+        # First connection: register, one event, then a clean end-of-link (the queue runs out).
+        transport.add(0, [Event(type='describe'),
+                          Event(type='hermes.register.ok',
+                                data={'device_id': 'control-fixture', 'protocol_version': 1}),
+                          Event(type='run-satellite')])
+        calls = [0]
+        def on_registered(_user):
+            calls[0] += 1
+            return 0
+        sup = self.run_supervisor(lib, transport, base_us=5000, on_registered=on_registered)
+        self.drive(lib, sup, lambda r, l, s: l.gateway_supervisor_events(s) >= 1)
+        self.assertEqual(calls[0], 1, 'the hook fires exactly once, at the first registration')
+        self.assertEqual(lib.gateway_supervisor_registered(sup), 1)
+        self.assertEqual(transport.establish_calls, 1)
+
+        # The link goes away (EOF on an empty queue); back off and reconnect.
+        self.drive(lib, sup, lambda r, l, s: l.gateway_supervisor_registered(s) == 0
+                   and l.gateway_supervisor_events(s) >= 1)
+        self.assertEqual(calls[0], 1, 'the pump and the link loss do not refire the hook')
+
+        transport.add(0, [Event(type='describe'),
+                          Event(type='hermes.register.ok',
+                                data={'device_id': 'control-fixture', 'protocol_version': 1})])
+        transport.clock.value += 5000
+        self.drive(lib, sup, lambda r, l, s: l.gateway_supervisor_registered(s) == 1
+                   and l.gateway_supervisor_reconnects(s) >= 1)
+        self.assertEqual(calls[0], 2, 'the hook fires again on the re-registration')
+        self.assertEqual(transport.establish_calls, 2)
 
 
 if __name__ == '__main__':

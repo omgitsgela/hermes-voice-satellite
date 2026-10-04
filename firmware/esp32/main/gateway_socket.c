@@ -95,6 +95,10 @@ int gateway_socket_write(void *context, const void *data, size_t size) {
 int gateway_socket_read_persistent(void *context, void *data, size_t size) {
     gateway_socket *socket = context;
     for (;;) {
+        /* Finite deadline (the registration regime): a stalled peer ends the read with an error,
+         * which the supervisor turns into a backoff and a fresh dial. Under "no deadline" the
+         * budget reads as years, so this never fires and the read blocks until data or EOF. */
+        if (gateway_millis_left(socket->deadline_us) == 0) return -1;
         ssize_t count = recv(socket->descriptor, data, size, 0);
         if (count > 0) return (int)count;
         if (count == 0) return 0; /* peer closed: the stream is over, not idle */

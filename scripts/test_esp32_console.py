@@ -36,6 +36,42 @@ static int committed_count, staged_count;
 
 static const char *ns_for(nvs_handle_t handle) { return handle == 1 ? "hermes_dev" : "hermes_wifi"; }
 
+static void copy_string(char *target, size_t capacity, const char *source);
+static void put(entry *table, int *count, const char *ns, const char *key, const char *value);
+static int u8_slot(nvs_handle_t handle);
+static uint8_t u8_committed[2];
+static int u8_present[2];
+
+/* Test preload: NVS_PRELOAD=ns:key=value[|ns:key=value] seeds the COMMITTED table before the
+ * console starts, so a test can run the boot gate against a device provisioned by an earlier
+ * (not replayed) session -- the flash the stub cannot otherwise persist. prof_n is a u8 and is
+ * seeded through the same slot lookup the runtime path uses. */
+static void preload_committed(void) {
+    const char *spec = getenv("NVS_PRELOAD");
+    if (!spec) return;
+    char work[1024];
+    copy_string(work, sizeof(work), spec);
+    for (char *item = strtok(work, "|"); item; item = strtok(NULL, "|")) {
+        char *colon = strchr(item, ':');
+        if (!colon) continue;
+        *colon = 0;
+        const char *ns = item;
+        char *key = colon + 1;
+        char *eq = strchr(key, '=');
+        if (!eq) continue;
+        *eq = 0;
+        const char *value = eq + 1;
+        nvs_handle_t handle = !strcmp(ns, "hermes_dev") ? 1 : 2;
+        if (!strcmp(key, "prof_n")) {
+            int slot = u8_slot(handle);
+            u8_committed[slot] = (uint8_t)atoi(value);
+            u8_present[slot] = 1;
+        } else {
+            put(committed, &committed_count, ns, key, value);
+        }
+    }
+}
+
 static void copy_string(char *target, size_t capacity, const char *source) {
     size_t index = 0;
     for (; source[index] && index + 1 < capacity; ++index) target[index] = source[index];
@@ -184,6 +220,7 @@ int wifi_station_scan_match(const char *const *ssids, size_t count, int *rank,
     (void)out;
     (void)capacity;
     const char *visible = getenv("VISIBLE");
+    if (getenv("MATCH_FAIL")) return -1;  /* the scan could not run: a transient radio fault */
     if (visible && !strcmp(visible, "none")) {
         for (size_t index = 0; index < count; ++index) rank[index] = WIFI_STATION_NO_SIGNAL;
         return 0;
@@ -346,7 +383,7 @@ int tls_credentials_probe(tls_credentials *out, char *reason, size_t reason_capa
     return 0;
 }
 void vTaskDelay(unsigned ticks) { assert(ticks > 0); puts("RESET_LATCH_ENTERED"); exit(0); }
-int main(void) { provisioning_console_run(); return 0; }
+int main(void) { preload_committed(); provisioning_console_run(); return 0; }
 '''
 
 
@@ -839,6 +876,44 @@ int usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);
                 'PROVISION WIFI PROFILE index=1 ssid=Gamma psk=present',
             ], 'the gap closes and the order of the rest is kept')
             self.assertNotIn(SECRET, output, 'a listing reports presence, never the passphrase')
+
+    def test_a_boot_gate_whose_scan_cannot_run_still_starts_the_task(self):
+        """A transient radio fault at boot is not a reason to idle a fully provisioned device
+        forever: the file's own design note says a configured-but-unreachable network is still a
+        GO, because the task's backoff is the retry. Before the fix the scan failure was
+        conflated with a store-read failure, and the boot gate answered NO_JOINABLE and never
+        started the gateway task."""
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = self.build(tmp)
+            # A device provisioned before this boot: two saved networks and a committed endpoint,
+            # seeded into the harness's committed NVS (the flash the stub cannot replay in-process).
+            output = self.console(executable, 'WIFI_CONNECT\n', MATCH_FAIL='1', NVS_PRELOAD=(
+                'hermes_dev:endpoint_v1=tcp://192.0.2.1:10701|hermes_wifi:prof_n=2'
+                '|hermes_wifi:p0_ssid=Home-AP|hermes_wifi:p0_psk=TopSecret0|'
+                'hermes_wifi:p1_ssid=Away-AP|hermes_wifi:p1_psk=TopSecret1'))
+            self.assertNotIn('GATEWAY BOOT IDLE', output,
+                             'a scan that could not run is not "no joinable network"')
+            self.assertIn('PROVISION GATEWAY BOOT', output, 'a configured device still starts the task')
+            self.assertIn('profile source=saved index=0 ssid=Home-AP', output,
+                          'it starts on the first saved network, the retry is the task backoff')
+            self.assertIn('GATEWAY BOOT RUNNING', output)
+            self.assertNotIn('TopSecret0', output)
+            self.assertNotIn('TopSecret1', output, 'passphrases are cleared after the decision')
+
+    def test_a_connect_whose_scan_cannot_run_says_radio_not_storage(self):
+        """A manual connect whose scan fails must be labelled as a radio fault: the store read
+        fine (the candidates came from it), so reporting ERR WIFI STORAGE points the operator at
+        the wrong thing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = self.build(tmp)
+            output = self.console(executable, 'WIFI_CONNECT\n', MATCH_FAIL='1', NVS_PRELOAD=(
+                'hermes_wifi:prof_n=2|hermes_wifi:p0_ssid=Home-AP|hermes_wifi:p0_psk=TopSecret0|'
+                'hermes_wifi:p1_ssid=Away-AP|hermes_wifi:p1_psk=TopSecret1'))
+            self.assertIn('PROVISION ERR WIFI RADIO', output,
+                          'a scan that could not run is a radio fault, not a missing store')
+            self.assertNotIn('ERR WIFI STORAGE', output)
+            self.assertNotIn('WIFI CONNECT BEGIN', output, 'no join may be attempted without a scan')
+            self.assertNotIn('TopSecret0', output)
 
 
 if __name__ == '__main__':

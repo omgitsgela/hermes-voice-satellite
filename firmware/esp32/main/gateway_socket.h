@@ -36,10 +36,17 @@ int gateway_socket_dial(const char *host, unsigned port, int64_t deadline_us, ga
 int gateway_socket_read(void *context, void *data, size_t size);
 int gateway_socket_write(void *context, const void *data, size_t size);
 
-/* Persistent-link reads and writes: block until data or a real end of stream, with no deadline of
- * their own, because an idle registered link is healthy (the bridge sends no application ping). A
- * read returns >0 bytes, 0 for a closed stream, or -1 on an I/O error. Used only by the gateway
- * supervisor's persistent link; the one-shot console path above keeps its bounded deadlines. */
+/* Persistent-link reads and writes: block until data or a real end of stream, because an idle
+ * registered link is healthy (the bridge sends no application ping). A read returns >0 bytes, 0
+ * for a closed stream, or -1 on an I/O error. Used only by the gateway supervisor's persistent
+ * link; the one-shot console path above keeps its bounded deadlines.
+ *
+ * "No deadline of their own" means the link the supervisor sets, not an absence of the field:
+ * while the socket's deadline is finite (the registration regime, where a stalled peer must not
+ * hold the device), a read that runs out of budget returns -1 like any other bounded read and the
+ * supervisor backs off and re-dials; while it is "no deadline", the read blocks until a real end
+ * of stream. The write is deadline-blind in both regimes: an idle link is the healthy state and a
+ * stuck send will surface as an error or a keepalive RST on the next read. */
 int gateway_socket_read_persistent(void *context, void *data, size_t size);
 int gateway_socket_write_persistent(void *context, const void *data, size_t size);
 
