@@ -57,13 +57,20 @@ static int gateway_task_establish(void *user, gw_link *link) {
     if (wifi_station_associate(state.ssid, state.psk, line, sizeof(line)) != 0) {
         return -1;  /* no radio; the associate failure path already stopped it. Back off and retry. */
     }
-    int64_t register_budget = gateway_now_us() + (int64_t)GATEWAY_REGISTER_BUDGET_MS * 1000;
     if (state.transport == PROVISION_TRANSPORT_TLS) {
         if (gateway_tls_establish(state.host, state.port, &state.tls_link, state.report,
                                   sizeof(state.report)) != 0) {
             return -1;  /* radio stays up; the next establish refreshes it and re-dials */
         }
-        gateway_tls_link_set_deadline(&state.tls_link, register_budget);
+        /* The register exchange gets its FULL budget, measured AFTER the establish -- exactly
+         * what the one-shot path does (gateway_tcp_run and gateway_tls_run both raise the run
+         * deadline to the session budget only once the dial and handshake are done). Capturing
+         * it before establish would hand a slow first-boot TLS bring-up (clock wait, dial and
+         * handshake, each individually bounded but together able to exceed the budget) an
+         * already-expired deadline, so the link would come up and its first read would error
+         * before any register byte was exchanged. */
+        gateway_tls_link_set_deadline(&state.tls_link,
+                                      gateway_now_us() + (int64_t)GATEWAY_REGISTER_BUDGET_MS * 1000);
         link->user = &state.tls_link;
         link->read_fn = gateway_tls_link_read;
         link->write_fn = gateway_tls_link_write;
@@ -74,7 +81,8 @@ static int gateway_task_establish(void *user, gw_link *link) {
                                 &state.tcp_socket) != 0) {
             return -1;
         }
-        state.tcp_socket.deadline_us = register_budget;
+        state.tcp_socket.deadline_us =
+            gateway_now_us() + (int64_t)GATEWAY_REGISTER_BUDGET_MS * 1000;
         link->user = &state.tcp_socket;
         link->read_fn = gateway_socket_read_persistent;
         link->write_fn = gateway_socket_write_persistent;

@@ -316,6 +316,29 @@ static void reply(const char *value) {
     usb_serial_jtag_write_bytes(output, (size_t)length, pdMS_TO_TICKS(250));
 }
 
+/* The framed actions (scan, connect, audio bring-up) refuse with a `PROVISION ERR ...` line,
+ * the same vocabulary a successful `exchange` surfaces. That is what makes a device-side refusal
+ * a complete, immediately-recognizable answer for the provisioning tool: a raw, unprefixed
+ * `ERROR ...` line is not a `PROVISION` reply at all, so a block reader waiting for the action's
+ * END marker would stall until its deadline and then discard the reason the device already gave.
+ * The radio module writes its reason as `ERROR <reason>\n`; strip that prefix and any trailing
+ * whitespace so the line reads `ERR WIFI SCAN <reason>` rather than carrying the module's own
+ * prefix twice. */
+static void reply_scan_refusal(const char *report, const char *action) {
+    const char *reason = report ? report : "";
+    if (strncmp(reason, "ERROR ", 6) == 0) reason += 6;
+    char line[160];
+    size_t length = strlen(reason);
+    while (length > 0 && (reason[length - 1] == '\n' || reason[length - 1] == '\r' ||
+                          reason[length - 1] == ' '))
+        --length;
+    line[0] = 0;
+    snprintf(line, sizeof(line), "%.*s", (int)length, reason);
+    char full[192];
+    snprintf(full, sizeof(full), "ERR %s %s", action, line);
+    reply(full);
+}
+
 /* Write one finished line. Every emitter goes through here, so the single-writer rule has one
  * implementation rather than one per reply shape. */
 static void emit_line(const char *text, size_t length) {
@@ -478,7 +501,13 @@ void provisioning_console_run(void) {
                     reply_block(report);
                     reply("WIFI SCAN END");
                 } else {
-                    reply_block(report);  /* the module writes a one-line reason */
+                    /* The module wrote a one-line reason. A failed scan answers with that reason
+                     * and then closes the frame it promised: the provisioning tool's scan block
+                     * waits for its END marker, and a bare reason line would leave the block
+                     * open until the reader's deadline, discarding the very fault that was
+                     * reported. */
+                    reply_scan_refusal(report, "WIFI SCAN");
+                    reply("WIFI SCAN END");
                 }
                 continue;  /* this branch replies for itself; response[] was never filled */
             } else if (!strcmp(line.data, "AUDIO_BRINGUP")) {
@@ -511,14 +540,18 @@ void provisioning_console_run(void) {
                                               &from_staged, report, sizeof(report));
                 if (picked == -1) {
                     reply("ERR WIFI STORAGE");
+                    reply("WIFI CONNECT END");  /* close the frame the action promised */
                 } else if (picked == 0) {
                     reply("ERR WIFI NOT_STAGED");
+                    reply("WIFI CONNECT END");
                 } else if (picked == -3) {
                     /* A scan that could not run is a radio fault, not a missing configuration: a
                      * store error would have been -1, above. */
                     reply("ERR WIFI RADIO");
+                    reply("WIFI CONNECT END");
                 } else if (picked == -2) {
                     reply("ERR WIFI NO_KNOWN_NETWORK");
+                    reply("WIFI CONNECT END");
                 } else {
                     reply("WIFI CONNECT BEGIN");
                     /* Which network was used, before the outcome: a device holding several

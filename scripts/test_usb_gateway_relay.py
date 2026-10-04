@@ -411,6 +411,33 @@ class RelayTests(unittest.TestCase):
         self.assertNotIn(b'START_WYOMING', bytes(session.device['received']),
                          'the mode command must not be sent to a device that is still booting')
 
+    def test_a_bad_gateway_endpoint_is_a_usage_error_not_a_device_fault(self):
+        # A malformed --gateway is a command-line fault: nothing is dialed and no device is
+        # touched, so it must not exit EXIT_DEVICE_LINK_FAILED (which names the port, the banner
+        # or the mode acknowledgment) -- it exits EXIT_USAGE. Before this fix it was mislabeled
+        # as a device-link failure.
+        self.assertEqual(relay.EXIT_USAGE, 64)
+        code = relay.main(['--port', '/dev/null', '--gateway', 'host:not-a-port'])
+        self.assertEqual(code, relay.EXIT_USAGE,
+                         'a bad endpoint is a usage error, not a device link failure')
+
+    def test_an_argparse_usage_error_exits_the_usage_code_not_the_refusal_code(self):
+        # argparse's own default for a missing required argument is exit 2, which this tool
+        # documents as "refused ... retrying will not help until a human acts". A typo must not
+        # be read as a gateway refusal: it exits the usage code instead.
+        with self.assertRaises(SystemExit) as raised:
+            relay.main(['--gateway', 'bridge.example:10702'])  # --port missing
+        self.assertEqual(raised.exception.code, relay.EXIT_USAGE)
+        with self.assertRaises(SystemExit) as raised:
+            relay.main(['--port', '/dev/null'])                # --gateway missing
+        self.assertEqual(raised.exception.code, relay.EXIT_USAGE)
+
+    def test_help_still_exits_cleanly(self):
+        # --help must keep exiting 0: remapping usage errors must not swallow help.
+        with self.assertRaises(SystemExit) as raised:
+            relay.main(['--port', '/dev/null', '--gateway', 'bridge.example:10702', '--help'])
+        self.assertEqual(raised.exception.code, 0)
+
 
 if __name__ == '__main__':
     unittest.main()

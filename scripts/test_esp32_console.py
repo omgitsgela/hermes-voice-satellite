@@ -562,13 +562,21 @@ int usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);
             self.assertIn('network-17', output, 'a report inside the cap must not be clipped')
             self.assertIn('SCAN END', output)
 
-    def test_a_failed_scan_reports_the_reason_without_open_markers(self):
+    def test_a_failed_scan_reports_the_reason_and_closes_the_frame(self):
         with tempfile.TemporaryDirectory() as tmp:
             executable = self.build(tmp)
             output = self.console(executable, 'WIFI_SCAN\nSTATUS\n', SCAN_FAIL='1')
-            self.assertIn('ERROR wifi init', output)
-            self.assertNotIn('SCAN BEGIN', output, 'a failed scan must not open a report block')
-            self.assertNotIn('SCAN END', output)
+            # A failed scan refuses in the ERR vocabulary the provisioning tool recognizes,
+            # carrying the radio's own reason, and then closes the frame the action promised.
+            # Before this, the refusal was a raw, unprefixed `ERROR ...` line with no END marker,
+            # so the tool's scan block (which waits for its END marker) stalled until its deadline
+            # and then discarded the very fault that was reported.
+            self.assertIn('PROVISION ERR WIFI SCAN wifi init', output,
+                          'the refusal must carry the radio\'s own reason in the ERR vocabulary')
+            self.assertNotIn('PROVISION WIFI SCAN BEGIN', output,
+                             'a failed scan must not open a report block')
+            self.assertIn('PROVISION WIFI SCAN END', output,
+                          'a failed scan still closes the frame the action promised')
 
     def test_scanning_never_prints_the_passphrase(self):
         with tempfile.TemporaryDirectory() as tmp:

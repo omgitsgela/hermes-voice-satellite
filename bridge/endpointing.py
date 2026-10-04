@@ -287,13 +287,26 @@ class Endpointer:
     # -- streaming ----------------------------------------------------------
 
     def process(self, audio: bytes) -> Optional[EndpointResult]:
-        """Feed raw 16-bit mono PCM. Returns a result once an utterance completes."""
+        """Feed raw 16-bit mono PCM. Returns a result once an utterance completes.
+
+        One result per call, but the feed's UNCONSUMED TAIL is never destroyed: a feed larger
+        than the boundary frame (a chunked reader handing over several 1024-sample chunks at
+        once) holds audio for the NEXT utterance in `self._buffer` when this one ends, and
+        `_finish` resets the state machine. Without carrying that tail back, the onset of the
+        next utterance -- the very class of clipping the pre-roll buffer exists to prevent -- is
+        dropped on every boundary.
+        """
         self._buffer.extend(audio)
         while len(self._buffer) >= self.frame_bytes:
             frame = bytes(self._buffer[: self.frame_bytes])
             del self._buffer[: self.frame_bytes]
+            # Captured BEFORE the frame is processed: when the frame ends an utterance,
+            # _process_frame -> _finish -> reset() replaces self._buffer, and this remainder is
+            # what the next process() continues with. Captured after, it would already be gone.
+            remainder = bytes(self._buffer)
             result = self._process_frame(frame)
             if result is not None:
+                self._buffer.extend(remainder)  # reset() left it fresh; restore this stream's tail
                 return result
         return None
 

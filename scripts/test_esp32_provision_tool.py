@@ -183,6 +183,35 @@ class ProvisionToolTests(unittest.TestCase):
         self.assertIn('PROVISION WIFI CONNECT END', lines)
 
 
+    def test_a_device_refusal_ends_a_framed_block_without_waiting_for_the_marker(self):
+        module = _module()
+        # A framed action the device refuses before it opens its frame (ERR WIFI BUSY, a join
+        # refused because nothing is staged, a failed scan's reason) answers with a single
+        # `PROVISION ERR ...` line and nothing else. Before this fix the reader waited the full
+        # deadline for the action's END marker, then raised TimeoutError -- discarding the very
+        # reason the device had already given, and misreporting every device-side failure of
+        # scan/connect as a 45-second stall. The refusal must surface as the device's own error,
+        # immediately, with no wait.
+        with self.assertRaisesRegex(RuntimeError, 'ERR WIFI NOT_STAGED'):
+            module.exchange_block(Stream(b'PROVISION ERR WIFI NOT_STAGED\n'),
+                                  'WIFI_CONNECT',
+                                  terminator=module.block_terminator('connect'),
+                                  timeout=10.0)
+        # A failed scan refuses in the same vocabulary (the console strips the radio's own
+        # `ERROR ` prefix into the line) and closes the frame it promised: the reader must not
+        # return a partial block that swallows the reason as an ordinary line.
+        with self.assertRaisesRegex(RuntimeError, 'ERR WIFI SCAN'):
+            module.exchange_block(Stream(b'PROVISION ERR WIFI SCAN wifi init\n'
+                                         b'PROVISION WIFI SCAN END\n'),
+                                  'WIFI_SCAN',
+                                  terminator=module.block_terminator('scan'),
+                                  timeout=10.0)
+        # And a refusal is recognized on the unframed listing path too: it must not wait for two
+        # quiet reads before surfacing the device's reason.
+        with self.assertRaisesRegex(RuntimeError, 'ERR WIFI PROFILE UNSUPPORTED'):
+            module.exchange_block(Stream(b'PROVISION ERR WIFI PROFILE UNSUPPORTED\n'),
+                                  'WIFI_PROFILES', terminator=None, timeout=10.0)
+
     def test_save_profile_stages_both_and_surfaces_a_failed_save(self):
         module = _module()
         # Happy path: SSID and PSK are each staged (each with its own ack consumed), then the

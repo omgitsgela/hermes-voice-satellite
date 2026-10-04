@@ -51,6 +51,132 @@ from bridge.endpointing import Endpointer  # noqa: E402
 
 PROJECT = Path(__file__).resolve().parent.parent
 
+
+class ScriptedVad:
+    """A detector with a known mind: it calls exactly the frames in `speech` speech. The
+    boundary-preservation test below needs speech to fall on precise 20 ms frames, and the
+    real Silero model's opinions are not that addressable."""
+
+    def __init__(self, speech=()):
+        self.speech = set(speech)
+        self.index = 0
+
+    def is_speech(self, frame, rate):
+        decision = self.index in self.speech
+        self.index += 1
+        return decision
+
+    def reset(self):
+        pass
+
+
+def make_endpoint(speech):
+    ep = Endpointer(rate=16000, frame_ms=20, vad_aggressiveness=2, silence_ms=60,
+                    min_speech_ms=60, max_utterance_seconds=10.0, pre_roll_ms=0,
+                    tail_ms=40, no_speech_timeout_seconds=5.0)
+    ep._vad = ScriptedVad(speech)
+    # The test drives the detector, not the level gate. All the frames are silence (zero RMS),
+    # so the gate must be forced to pass: threshold_min = threshold_max = -1 makes
+    # passes_rms(0.0) True for every frame, and only the scripted detector decides.
+    ep.gate.threshold_min = -1.0
+    ep.gate.threshold_max = -1.0
+    return ep
+
+
+def frames_to_pcm(n_frames: int, rate: int = 16000, frame_ms: int = 20) -> bytes:
+    """n_frames of 16-bit silence, long enough for the endpointer to slice into exactly that
+    many frames."""
+    n_samples = n_frames * rate * frame_ms // 1000
+    return (np.zeros(n_samples, dtype="<i2")).tobytes()
+
+
+class FeedBoundaryTests(TestCase):
+    """An utterance that completes inside a feed must not destroy the feed's remaining audio.
+
+    The bridge feeds the endpointer chunked audio (the satellite's AudioChunk size, 1024
+    samples). When an utterance ends mid-feed, `process` returns that one result and stops --
+    and `_finish` -> `reset()` replaces the internal buffer. If the audio still held in that
+    buffer when the boundary frame is processed is discarded, the next utterance's onset -- the
+    very class of clipping the pre-roll buffer exists to prevent -- is lost: the next call sees
+    a shorter stream, its frames are misaligned with the detector, and a whole utterance can
+    vanish. The tail is this stream's audio, and it must survive the state reset.
+
+    Frame numbers below use the scripted detector: speech frames 0..12, silence_ms=60 (three
+    trailing frames end the utterance at frame 16), tail_ms=40 (two frames kept).
+    """
+
+    def setUp(self):
+        self.frame_bytes = 16000 * 20 // 1000 * 2  # 320 samples * 2 bytes = 640
+
+    def test_a_partial_frame_held_at_the_boundary_survives_the_reset(self):
+        # The first feed ends 300 bytes into frame 19, after the utterance has already ended at
+        # frame 15: when the boundary frame is processed, the buffer still holds frames 16-18
+        # plus 300 of frame 19's 640 bytes. Before the fix, _finish -> reset() threw that 2220
+        # byte tail away: the second feed then began mid-frame with only SEVEN complete frames
+        # (500 bytes of frame 19 held, never completed), and the second utterance -- whose
+        # trailing silence needs the preserved frames to reach its boundary -- never completed.
+        # r2 came back None. With the tail preserved, the 500 bytes complete frame 18, the
+        # utterance reaches its boundary, and the second call returns it.
+        ep = make_endpoint(range(0, 13))
+        total = frames_to_pcm(27)
+        split = 19 * self.frame_bytes + 300
+        r1 = ep.process(total[:split])
+        self.assertIsNotNone(r1, 'the utterance completes inside the first feed')
+        self.assertEqual(len(r1.audio), 15 * self.frame_bytes,
+                         '13 speech + 3 trailing, 2 tail kept')
+        # The preserved buffer (frames 16-18 + 300) is the START of the second feed's stream:
+        # relative 0-2 are the preserved frames, so absolute frame 21-23 = relative 5-7. The
+        # fresh VAD counts from the second feed's first frame, not from the stream's origin.
+        ep._vad = ScriptedVad(range(5, 8))
+        r2 = ep.process(total[split:])
+        self.assertIsNotNone(r2, 'a lost tail leaves the second utterance unendable')
+        # 1 pre-roll + 3 speech + 2 tail kept.
+        self.assertEqual(len(r2.audio), 6 * self.frame_bytes,
+                         'the second utterance is whole; a lost tail shortens or loses it')
+
+    def test_a_split_exactly_on_the_boundary_keeps_the_following_feed(self):
+        # The clean case: the first feed ends exactly at the boundary frame, so nothing is held.
+        # Pins the happy path -- the tail-preservation must not corrupt the next feed when there
+        # is no tail to preserve.
+        ep = make_endpoint(range(0, 13))
+        total = frames_to_pcm(22)
+        split = 16 * self.frame_bytes
+        r1 = ep.process(total[:split])
+        self.assertIsNotNone(r1)
+        self.assertEqual(len(r1.audio), 15 * self.frame_bytes)
+        ep._vad = ScriptedVad(range(0, 3))
+        r2 = ep.process(total[split:])
+        self.assertIsNotNone(r2, 'the frames fed after the boundary must still be processed')
+        # 6 frames fed: speech at relative 0-2, trailing at 3-5; 6 in, 3 trimmed, 2 tail kept.
+        self.assertEqual(len(r2.audio), 5 * self.frame_bytes)
+
+    def test_a_feed_larger_than_one_utterance_does_not_lose_the_second_onset(self):
+        # Two utterances in two feeds, with a MID-FRAME split: the second onset only completes
+        # if the first call preserves the audio it had already buffered past the boundary. The
+        # first feed holds 100 bytes of frame 19 when its utterance ends at frame 15, so the
+        # second feed's buffer starts with frames 16-18 + 100 bytes (2020 bytes). `process`
+        # returns one result per call, so the second utterance is reachable on a later call --
+        # and only if that 2020-byte tail survived the first call's reset. Before the fix it was
+        # discarded, the second feed saw 13340 bytes (20 misaligned frames), its utterance never
+        # reached its trailing-silence boundary, and r2 came back None.
+        ep = make_endpoint(range(0, 13))
+        total = frames_to_pcm(40)
+        split = 19 * self.frame_bytes + 100  # 100 bytes of frame 19 are still in the feed
+        r1 = ep.process(total[:split])
+        self.assertIsNotNone(r1)
+        self.assertEqual(len(r1.audio), 15 * self.frame_bytes)
+        # The fresh VAD counts from the second feed's first frame. The preserved buffer is
+        # frames 16-18 + 100, so absolute frame N = VAD index (N - 16). Speech at VAD index
+        # 10-17 = absolute frames 26-33.
+        ep._vad = ScriptedVad(range(10, 18))
+        r2 = ep.process(total[split:])
+        self.assertIsNotNone(r2, 'a lost tail drops the frames the second utterance needs')
+        # 2020 + 13340 = 15360 bytes = 24 frames. Speech at VAD index 10-17; the trailing
+        # silence reaches three at VAD index 20, ending the utterance with 12 frames in.
+        # 1 pre-roll + 8 speech + 2 tail kept -> 11 frames.
+        self.assertEqual(len(r2.audio), 11 * self.frame_bytes,
+                         'the second utterance is whole, onset included')
+
 #: Where a fixture might be, most convenient first. The private copy is the durable one; the
 #: others are working copies that a cache clean can remove, which is exactly what happened.
 #: The private directory is a deployment value: it is a path on a network share, so it is named

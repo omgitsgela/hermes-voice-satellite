@@ -158,7 +158,13 @@ int gateway_supervisor_step(gateway_supervisor *sup) {
 
     case GW_ST_IDLE: {
         if (sup->max_attempts > 0 && sup->attempts >= sup->max_attempts) {
-            append(sup, "supervisor=failed reason=no_transport attempts=");
+            /* Re-entry past a terminal stop (the caller stepped again after GW_FAILED). The
+             * line names the actual condition -- the attempt budget, not a missing transport --
+             * and carries the count, the way every other line in this report does. */
+            char line[96];
+            snprintf(line, sizeof(line), "supervisor=failed reason=attempt_budget attempts=%d",
+                     sup->attempts);
+            append(sup, line);
             return GW_FAILED;
         }
         sup->attempts += 1;

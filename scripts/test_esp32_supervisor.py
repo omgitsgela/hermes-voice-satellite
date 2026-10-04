@@ -296,6 +296,40 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(lib.gateway_supervisor_attempts(sup), 3)
         self.assertEqual(lib.gateway_supervisor_reconnects(sup), 0, 'first-ever registration is not a reconnect')
 
+    def test_a_step_past_the_terminal_stop_emits_a_well_formed_reason(self):
+        """The report line for an exhausted attempt budget must be well-formed.
+
+        The line is written on a step taken AFTER the budget already ran out (a caller that
+        keeps stepping past the terminal GW_FAILED). Before the fix it was
+        `supervisor=failed reason=no_transport attempts=` -- a broken field (the attempts=
+        carries no value; every other line writes attempt=%d or reconnects=%d) and a label
+        that names a condition that did not happen: the transport WAS attempted, the budget
+        is what is gone. A device whose supervisor is stepped past its stop is exactly the
+        diagnostic run, so the one run that stops cleanly was the one with the malformed line.
+        """
+        lib = self.library()
+        transport = FakeTransport(eof=True)
+        self._transport = transport
+        transport.establish_ok = False          # every establish fails, back off, try again
+        report = C.create_string_buffer(256)
+        sup = self.run_supervisor(lib, transport, base_us=1000, max_us=2000, max_attempts=2,
+                                  report=report)
+        self.drive(lib, sup, lambda r, l, s: l.gateway_supervisor_attempts(s) >= 1)
+        transport.clock.value += lib.gateway_supervisor_delay_us(sup)
+        self.assertEqual(lib.gateway_supervisor_step(sup), 0,
+                         'the final backoff elapses into the attempt window')
+        self.assertEqual(lib.gateway_supervisor_step(sup), -2,
+                         'the second (final) failure exhausts the budget -> GW_FAILED')
+        self.assertEqual(lib.gateway_supervisor_step(sup), -2,
+                         'a step past the terminal stop is still terminal')
+        text = report.value
+        self.assertIn(b'supervisor=failed reason=attempt_budget attempts=2', text,
+                      'the terminal line must carry the count and name the budget')
+        self.assertNotIn(b'no_transport', text,
+                         'the label must not name a missing transport: one was attempted')
+        self.assertNotIn(b'attempts=\n', text,
+                         'a field with no value is a broken report line')
+
     def test_report_rolls_when_it_fills(self):
         """The supervisor's report is bounded and the session can outlive it: on a device that
         cannot reach its bridge, ten backoff cycles write more than the 96-byte test buffer can

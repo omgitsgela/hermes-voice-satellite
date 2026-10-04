@@ -122,6 +122,8 @@ def exchange_block(connection, command, terminator=None, timeout=30.0):
     The idle escape is for the unframed listing only: a framed block promises its marker, so
     silence mid-block (WIFI_CONNECT is silent for up to 20 s while the association runs) is not
     the end of it, and a deadline reached before the marker is a timeout, not a partial answer.
+    A `PROVISION ERR ...` line ends any block, framed or not: a device-side refusal is a
+    complete answer, and the device's own reason is raised rather than waited out.
     Returns the lines, joined, with the leading `PROVISION ` prefix left on each as the device
     sent it, so a caller can tell exactly what was reported. Raises TimeoutError when a framed
     block never delivered its marker.
@@ -151,6 +153,12 @@ def exchange_block(connection, command, terminator=None, timeout=30.0):
         if chunk == b'\n':
             text = current.decode('ascii', errors='replace').rstrip('\r')
             current.clear()
+            if text.startswith('PROVISION ERR '):
+                # A device-side refusal is a complete answer even on a framed action: the console's
+                # error paths (ERR WIFI BUSY, a failed scan's reason, a join refused before it
+                # begins) never open or close a frame, so waiting for the marker here would stall
+                # until the deadline and then discard the very reason the device gave.
+                raise RuntimeError(text.removeprefix('PROVISION '))
             if text:
                 lines.append(text)
                 # Match the terminator as a whole line, not a substring: a scan's AP lines are

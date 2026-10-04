@@ -28,6 +28,8 @@ Exit codes say what happened, so a caller does not have to parse prose:
     3 not registered   no acceptance inside the run (gateway silent, unreachable, closed, or reset)
     4 device link failed  the port, the banner or the mode acknowledgment was wrong
     5 identity mismatch   the device registered under a different id than expected
+    64 usage error        the command line itself was wrong (bad --gateway, missing --port);
+                          no device or gateway was touched
 """
 
 from __future__ import annotations
@@ -56,6 +58,7 @@ EXIT_REFUSED = 2
 EXIT_NOT_REGISTERED = 3
 EXIT_DEVICE_LINK_FAILED = 4
 EXIT_IDENTITY_MISMATCH = 5
+EXIT_USAGE = 64
 
 REGISTER_EVENT = 'hermes.register'
 REGISTER_OK_EVENT = 'hermes.register.ok'
@@ -379,14 +382,24 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[list] = None) -> int:
-    arguments = build_parser().parse_args(argv)
+    # Usage errors (missing --port, a bad --gateway) are a command-line fault, not a device or
+    # gateway fault: they must exit 64, not the argparse default 2 (which this tool documents as
+    # "refused ... retrying will not help") nor EXIT_DEVICE_LINK_FAILED (which names the port,
+    # the banner or the mode acknowledgment -- none of which was even reached). No device or
+    # gateway is touched before the endpoint is parsed.
+    try:
+        arguments = build_parser().parse_args(argv)
+        try:
+            endpoint = parse_endpoint(arguments.gateway)
+        except ValueError as error:
+            print(f'bad gateway endpoint: {error}', file=sys.stderr)
+            return EXIT_USAGE
+    except SystemExit as exit:
+        if exit.code in (0, 1):
+            raise  # --help / -h exits cleanly; 1 is not one of this tool's documented codes
+        raise SystemExit(EXIT_USAGE)
     logging.basicConfig(level=logging.DEBUG if arguments.verbose else logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
-    try:
-        endpoint = parse_endpoint(arguments.gateway)
-    except ValueError as error:
-        print(f'bad gateway endpoint: {error}', file=sys.stderr)
-        return EXIT_DEVICE_LINK_FAILED
     outcome = run_relay(
         lambda: open_serial(arguments.port),
         lambda target: socket.create_connection(target, timeout=arguments.connect_timeout),
