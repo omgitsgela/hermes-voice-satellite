@@ -119,8 +119,13 @@ def exchange_block(connection, command, terminator=None, timeout=30.0):
     framed commands -- WIFI_SCAN, WIFI_CONNECT, START_GATEWAY -- all end with an explicit ... END
     marker), or the console goes quiet for two reads in a row after it has already sent a line
     (the profile listing has no end marker; the device sends it all in one burst and then stops).
+    The idle escape is for the unframed listing only: a framed block promises its marker, so
+    silence mid-block (WIFI_CONNECT is silent for up to 20 s while the association runs) is not
+    the end of it, and a deadline reached before the marker is a timeout, not a partial answer.
     Returns the lines, joined, with the leading `PROVISION ` prefix left on each as the device
-    sent it, so a caller can tell exactly what was reported."""
+    sent it, so a caller can tell exactly what was reported. Raises TimeoutError when a framed
+    block never delivered its marker.
+    """
     if not command or len(command) > 255:
         raise ValueError('command must be at most 255 characters')
     if connection.write((command + '\n').encode('ascii')) != len(command) + 1:
@@ -129,13 +134,17 @@ def exchange_block(connection, command, terminator=None, timeout=30.0):
     lines = []
     current = bytearray()
     empty_reads = 0
+    closed = False
     while time.monotonic() < deadline:
         chunk = connection.read(1)
         if not chunk:
             empty_reads += 1
-            # Two consecutive quiet reads mean the burst is done. Only meaningful once we have
-            # something: a command that replies with a single line is handled by exchange().
-            if empty_reads >= 2 and lines:
+            # Two consecutive quiet reads mean the burst is done. Only the unframed listing may
+            # end this way -- it has no marker to promise. A framed block's marker is still
+            # owed: WIFI_CONNECT is silent for up to 20 s mid-block while the association runs,
+            # so silence there is the join, not the end of the reply.
+            if terminator is None and empty_reads >= 2 and lines:
+                closed = True
                 break
             continue
         empty_reads = 0
@@ -148,11 +157,18 @@ def exchange_block(connection, command, terminator=None, timeout=30.0):
                 # sent raw (no PROVISION prefix), so a network whose SSID merely contains the
                 # marker's text (e.g. WENDYS) must not end the block early.
                 if terminator is not None and text == terminator:
+                    closed = True
                     break
             continue
         current.extend(chunk)
         if len(current) > 4096:
             raise RuntimeError('oversize serial response line')
+    if not closed and terminator is not None:
+        # The deadline passed before the marker arrived. Returning the lines collected so far
+        # would hand a partial block to the caller as a complete answer (the join's outcome is
+        # what was being waited for), so this is a timeout: the caller decides what an
+        # incomplete block means.
+        raise TimeoutError(f'no {terminator!r} within deadline')
     return '\n'.join(lines)
 
 

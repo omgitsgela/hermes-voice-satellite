@@ -12,9 +12,10 @@
 typedef int (*gateway_read_fn)(void *context, void *data, size_t size);
 typedef int (*gateway_write_fn)(void *context, const void *data, size_t size);
 
-/* Append one report line to a bounded buffer. The buffer is always NUL-terminated, including when
- * the line did not fit or the buffer was already full, so a truncated report cannot read as a
- * different one. */
+/* Append one report line to a bounded buffer. The buffer is always NUL-terminated, including
+ * when the line did not fit. The buffer holds the NEWEST lines: once it fills, the oldest
+ * complete lines are evicted (report_tail_append's rolling contract), so a query that reads the
+ * last line keeps seeing the link's most recent action for the life of the session. */
 void gateway_report_append(char *out, size_t capacity, const char *line);
 
 /* Drive one session to registration over an established stream, appending the session line last.

@@ -98,11 +98,15 @@ class ProvisionToolTests(unittest.TestCase):
 
     def test_block_reader_stops_at_an_end_marker(self):
         module = _module()
+        # The marker is matched as a whole line (the scan's AP lines go out raw), so the test
+        # uses the real full end marker, the same one main() hands exchange_block.
+        module_terminator = module.block_terminator('scan')
         block = (b'PROVISION WIFI SCAN BEGIN\n'
                  b'GL-Test-AP ch=6 rssi=-42 auth=WPA2\n'
                  b'PROVISION WIFI SCAN END\n')
         connection = Stream(block)
-        lines = module.exchange_block(connection, 'WIFI_SCAN', terminator='END', timeout=0.2)
+        lines = module.exchange_block(connection, 'WIFI_SCAN', terminator=module_terminator,
+                                      timeout=0.2)
         self.assertEqual(connection.sent, b'WIFI_SCAN\n')
         self.assertIn('PROVISION WIFI SCAN BEGIN', lines)
         self.assertIn('GL-Test-AP ch=6 rssi=-42 auth=WPA2', lines)
@@ -148,6 +152,35 @@ class ProvisionToolTests(unittest.TestCase):
             module.exchange_block(Stream(b'x' * 4097), 'WIFI_SCAN', terminator='END')
         with self.assertRaises(ValueError):
             module.exchange_block(Stream(b''), 'W' * 256, terminator='END')
+
+    def test_a_framed_block_with_a_silent_gap_midway_reaches_its_end_marker(self):
+        module = _module()
+        # The device's WIFI_CONNECT block has a real silent gap in it: BEGIN and the profile
+        # line come out, then wifi_station_connect blocks for up to 20 s, then the outcome line
+        # and the END marker arrive together. A reader that treats "two quiet reads after a
+        # line" as the end of a framed block returns mid-join with no outcome and no END marker,
+        # and the tool exits 0 as if the join had been reported. The idle escape is the
+        # unframed listing's only end-of-block signal (the listing sends its burst and then
+        # stops); a framed block promises its terminator, so silence mid-block must never end
+        # it. A stream that is quiet after BEGIN and never sends the marker must therefore time
+        # out, not return a partial block.
+        with self.assertRaises(TimeoutError):
+            module.exchange_block(Stream(b'PROVISION WIFI CONNECT BEGIN\n'
+                                         b'profile source=saved index=0 ssid=Alpha\n'),
+                                  'WIFI_CONNECT',
+                                  terminator=module.block_terminator('connect'),
+                                  timeout=0.3)
+        # ...and the full device sequence, with the outcome after the silent join, returns
+        # complete with the marker.
+        block = (b'PROVISION WIFI CONNECT BEGIN\n'
+                 b'profile source=saved index=0 ssid=Alpha\n'
+                 b'status=connected profile index=0\n'
+                 b'PROVISION WIFI CONNECT END\n')
+        lines = module.exchange_block(Stream(block), 'WIFI_CONNECT',
+                                      terminator=module.block_terminator('connect'), timeout=0.3)
+        self.assertIn('status=connected profile index=0', lines,
+                      'the join outcome must not be lost to a mid-block silence')
+        self.assertIn('PROVISION WIFI CONNECT END', lines)
 
 
     def test_save_profile_stages_both_and_surfaces_a_failed_save(self):

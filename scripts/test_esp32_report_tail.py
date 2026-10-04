@@ -57,9 +57,27 @@ CASES = [
     ('abc', 0, None),                  # zero capacity: untouched
 ]
 
+# The C driver's report_tail_append sequence cases, in the same order (their capacities):
+#   0: a,b into 8            -> a\nb\n
+#   1: a,b,c into 8          -> a\nb\nc\n (exactly full, no eviction needed)
+#   2: abcd,efgh into 8      -> efgh\n (abcd evicted, efgh fits)
+#   3: a,b,c,d into 8        -> b\nc\nd\n (evicts keep rolling as long as lines keep coming)
+#   4: abcdef into 6         -> abcd\n (a line longer than the buffer is truncated)
+#   5: abcdef,gh into 6      -> gh\n (truncate, then roll for the next)
+#   6: ab into 4             -> ab\n (fits exactly)
+#   7: a,b into 4            -> b\n (evict a, keep b)
+#   8: "" into 8             -> \n (a bare newline is a line)
+#   9: a into 2              -> "" (not even a bare newline fits: the buffer stays empty)
+APPEND_CAPS = [8, 8, 8, 8, 6, 6, 4, 4, 8, 2]
+
 
 def expected_tokens():
-    return [f'case{i} cap{cap}' for i, (_inp, cap, _exp) in enumerate(CASES)]
+    tokens = [f'case{i} cap{cap}' for i, (_inp, cap, _exp) in enumerate(CASES)]
+    # The C driver then runs the stateful report_tail_append cases (app0..app9): scripted
+    # sequences into a small buffer, exact-bytes oracle -- the rolling contract that keeps the
+    # gateway report's last line live for the life of the session.
+    tokens += [f'app{i} cap{cap}' for i, cap in enumerate(APPEND_CAPS)]
+    return tokens
 
 
 def build(tmp):
@@ -84,8 +102,9 @@ class ReportTailTest(unittest.TestCase):
             self.assertEqual(ran.returncode, 0,
                              'tail test failed:\n' + ran.stdout + '\n' + ran.stderr)
             passed = [line for line in ran.stdout.splitlines() if line.startswith('PASS ')]
-            self.assertEqual(len(passed), len(CASES),
-                             'expected ' + str(len(CASES)) + ' PASS lines:\n' + ran.stdout)
+            self.assertEqual(len(passed), len(CASES) + len(APPEND_CAPS),
+                             'expected ' + str(len(CASES) + len(APPEND_CAPS)) + ' PASS lines:\n'
+                             + ran.stdout)
             for token in expected_tokens():
                 self.assertIn('PASS ' + token, ran.stdout, 'missing case ' + token)
             self.assertNotIn('FAIL', ran.stdout, 'a case failed:\n' + ran.stdout)

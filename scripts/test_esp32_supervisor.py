@@ -119,10 +119,10 @@ class SupervisorTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         library = Path(temporary.name) / 'supervisor.so'
         includes = [COMP / 'wyoming_wire', COMP / 'wyoming_json', COMP / 'wyoming_json/vendor/cjson',
-                    COMP / 'wyoming_session', COMP / 'gateway_supervisor']
+                    COMP / 'wyoming_session', COMP / 'gateway_supervisor', COMP / 'report_tail']
         sources = [COMP / 'wyoming_wire/wyoming_wire.c', COMP / 'wyoming_json/wyoming_json.c',
                    COMP / 'wyoming_json/vendor/cjson/cJSON.c', COMP / 'wyoming_session/wyoming_session.c',
-                   COMP / 'gateway_supervisor/gateway_supervisor.c']
+                   COMP / 'gateway_supervisor/gateway_supervisor.c', COMP / 'report_tail/report_tail.c']
         subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC',
                         '-DCJSON_NESTING_LIMIT=16', *['-I' + str(p) for p in includes],
                         *map(str, sources), '-lm', '-o', str(library)], check=True)
@@ -143,7 +143,8 @@ class SupervisorTests(unittest.TestCase):
         lib.gateway_supervisor_state.argtypes = [C.c_void_p]
         return lib
 
-    def run_supervisor(self, lib, transport, base_us=1000, max_us=0, max_attempts=0, on_registered=None):
+    def run_supervisor(self, lib, transport, base_us=1000, max_us=0, max_attempts=0, on_registered=None,
+                       report=None):
         now_fn = NOW(lambda: transport.clock.value)
         estab_fn = ESTAB(transport.establish)
         teardown_fn = TEARDOWN(transport.teardown)
@@ -153,8 +154,10 @@ class SupervisorTests(unittest.TestCase):
             self._onreg_fn = ONREG(on_registered)
             self._keepalive.append(self._onreg_fn)
         sup = C.create_string_buffer(lib.gateway_supervisor_size())
+        report_ptr = C.cast(report, C.c_char_p) if report is not None else None
+        report_cap = C.sizeof(report) if report is not None else 0
         rc = lib.gateway_supervisor_init(sup, now_fn, estab_fn, teardown_fn, None, b'control-fixture', b'boot-1',
-                         base_us, max_us, max_attempts, None, 0, self._onreg_fn)
+                         base_us, max_us, max_attempts, report_ptr, report_cap, self._onreg_fn)
         self.assertEqual(rc, 0, 'supervisor init failed')
         return sup
 
@@ -292,6 +295,31 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(transport.establish_calls, 3, 'two failures then a success')
         self.assertEqual(lib.gateway_supervisor_attempts(sup), 3)
         self.assertEqual(lib.gateway_supervisor_reconnects(sup), 0, 'first-ever registration is not a reconnect')
+
+    def test_report_rolls_when_it_fills(self):
+        """The supervisor's report is bounded and the session can outlive it: on a device that
+        cannot reach its bridge, ten backoff cycles write more than the 96-byte test buffer can
+        hold. A frozen append would stop writing as soon as the buffer filled (leaving a
+        truncated final fragment), so GATEWAY_STATUS would keep reporting the same stale last
+        line for the rest of the session, and the soak would judge a healthy, flapping link by
+        data it stopped updating. The report must ROLL: the oldest complete lines evicted, the
+        newest lines kept, the buffer always NUL-terminated on a complete line."""
+        lib = self.library()
+        transport = FakeTransport(eof=True)
+        self._transport = transport
+        transport.establish_ok = False          # every establish fails, back off, try again
+        report = C.create_string_buffer(96)
+        sup = self.run_supervisor(lib, transport, base_us=1000, report=report)
+        self.drive(lib, sup, lambda r, l, s: l.gateway_supervisor_attempts(s) >= 10)
+        self.assertEqual(lib.gateway_supervisor_attempts(sup), 10)
+        text = report.value
+        self.assertIn(b'attempt=10\n', text,
+                      'the newest line must still be appended after the report has filled')
+        self.assertNotIn(b'attempt=1\n', text,
+                         'the oldest lines must be evicted, not kept in a frozen buffer')
+        self.assertTrue(text.endswith(b'\n'),
+                        'the report must end on a complete line, not a truncated fragment')
+        self.assertIn(b'backoff=', text, 'the backoff lines are part of the rolling history')
 
     def test_on_registered_hook_fires_once_per_registration(self):
         """The device uses this hook to lift the link from its finite registration deadline to

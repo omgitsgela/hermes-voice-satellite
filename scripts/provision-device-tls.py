@@ -84,6 +84,17 @@ def esptool(port: str, arguments: list) -> None:
     subprocess.run(command, check=True, timeout=300)
 
 
+def _port(value: str) -> int:
+    """A TCP port: 1-65535. The device's blob validator refuses port 0 and anything above
+    65535 (tls_credentials_parse), so an out-of-range value is refused here, before a byte is
+    written, rather than read back clean and reported PROVISIONED for a blob the device will
+    never load."""
+    port = int(value)
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError(f'{value} is not a TCP port (1-65535)')
+    return port
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -94,7 +105,7 @@ def main() -> int:
     parser.add_argument('--server-cert', default='server.crt',
                         help='file in --certs holding the bridge certificate to pin')
     parser.add_argument('--host', required=True, help='the address the device should dial')
-    parser.add_argument('--port', type=int, required=True, help='the port the device should dial')
+    parser.add_argument('--port', type=_port, required=True, help='the port the device should dial (1-65535)')
     parser.add_argument('--partitions', type=Path,
                         default=Path(__file__).resolve().parent.parent / 'firmware/esp32/partitions.csv')
     parser.add_argument('--registry', type=Path,

@@ -38,3 +38,52 @@ size_t report_tail_last_complete_line(const char *report, char *out, size_t capa
     out[length] = 0;
     return length;
 }
+
+void report_tail_append(char *buffer, size_t capacity, const char *line) {
+    if (!buffer || capacity == 0) return;
+    if (!line) line = "";
+    /* The buffer holds complete, newline-terminated lines, is NUL-terminated, and has one
+     * writer (the gateway task's report), so this scan stops either at the NUL or at the end
+     * of the buffer. `used` is the length of the content. */
+    size_t used = 0;
+    while (used + 1 < capacity && buffer[used]) ++used;
+    if (used + 1 >= capacity && buffer[capacity - 1u] != 0) {
+        buffer[capacity - 1u] = 0;  /* not NUL-terminated: not ours to extend */
+        return;
+    }
+    size_t length = strlen(line);
+    /* Room behind the current content: a line that fits is appended in place. */
+    if (used + length + 2u <= capacity) {
+        memcpy(buffer + used, line, length);
+        buffer[used + length] = '\n';
+        buffer[used + length + 1] = 0;
+        return;
+    }
+    /* It does not fit behind what is there: evict the oldest complete lines (their text and
+     * their '\n') until it does, so the report rolls once it fills instead of freezing -- a
+     * status query that reads the last line must keep seeing the newest thing the link did,
+     * for the life of the session. cut only tracks where to look for the next line's newline;
+     * the eviction is always from the head, so next_used is absolute. */
+    size_t cut = 0;
+    while (cut < used) {
+        const char *nl = NULL;
+        for (size_t i = cut; i < used; ++i)
+            if (buffer[i] == '\n') { nl = buffer + i; break; }
+        if (!nl) break;  /* no more complete lines to give up */
+        size_t next_used = used - (size_t)(nl - buffer) - 1u;
+        if (next_used + length + 2u <= capacity) {
+            memmove(buffer, nl + 1, next_used);
+            used = next_used;
+            break;
+        }
+        cut = (size_t)(nl - buffer) + 1u;
+    }
+    /* Bound the line by whatever room the evictions left (a line longer than the buffer is
+     * truncated); a bare '\n' needs only two bytes. */
+    size_t room = capacity > used + 2u ? capacity - used - 2u : 0u;
+    if (length > room) length = room;
+    if (length == 0 && room == 0) return;  /* not even a bare newline fits */
+    memcpy(buffer + used, line, length);
+    buffer[used + length] = '\n';
+    buffer[used + length + 1] = 0;
+}

@@ -193,6 +193,27 @@ class BlobTests(unittest.TestCase):
         self.assert_rejected(raw_blob(host='odd\x01host'),
                              'a corrupted label must not reach the report line')
 
+    def test_parse_blob_enforces_the_device_port_rule(self):
+        """parse_blob claims to be the device's own validator, and the provisioning script's
+        readback check relies on it: a blob the device would refuse at load must be refused
+        before it is written, not read back clean and reported PROVISIONED for a link that can
+        never come up. The C side refuses port 0 and anything above 65535, so the Python side
+        must refuse them too."""
+        with self.assertRaises(ValueError):
+            blob_format.parse_blob(good_blob(port=0))
+        with self.assertRaises(ValueError):
+            blob_format.parse_blob(good_blob(port=70000))
+
+    def test_parse_blob_enforces_the_device_host_rule(self):
+        """The device refuses an empty host and a host with non-printable bytes (the label for
+        its report line); parse_blob must too, so neither reaches flash via the readback check."""
+        with self.assertRaises(ValueError):
+            blob_format.parse_blob(raw_blob(host=''))
+        with self.assertRaises(ValueError):
+            blob_format.parse_blob(raw_blob(host='odd\x01host'))
+        with self.assertRaises(ValueError):
+            blob_format.parse_blob(raw_blob(host='x' * blob_format.SERVER_HOST_MAX))
+
     def test_an_empty_server_pin_is_caught_by_the_pin_check(self):
         out = self.assert_accepted(good_blob(pin=b'\x00' * PIN_LEN))
         self.assertEqual(self.lib.tls_server_pin_matches(bytes(range(PIN_LEN)),

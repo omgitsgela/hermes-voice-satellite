@@ -102,6 +102,39 @@ int main(void) {
         if (ok) printf("PASS %s\n", token);
         else { printf("FAIL %s\n", token); ++failures; }
     }
+    /* report_tail_append: stateful sequences. Each case fills a small buffer with a scripted
+     * list of lines and checks the exact final bytes. The oracle is hand-derived: the buffer
+     * holds complete lines, rolls (evicting the oldest complete line) when the newest does not
+     * fit behind the rest, truncates a line that does not fit at all, and always ends on a
+     * complete line (or stays empty when not even a bare newline fits). */
+    struct append_case { size_t cap; const char *lines[8]; int n; const char *want; };
+    const struct append_case APPEND_CASES[] = {
+        { 8, { "a", "b" }, 2, "a\nb\n" },
+        { 8, { "a", "b", "c" }, 3, "a\nb\nc\n" },
+        { 8, { "abcd", "efgh" }, 2, "efgh\n" },
+        { 8, { "a", "b", "c", "d" }, 4, "b\nc\nd\n" },
+        { 6, { "abcdef" }, 1, "abcd\n" },
+        { 6, { "abcdef", "gh" }, 2, "gh\n" },
+        { 4, { "ab" }, 1, "ab\n" },
+        { 4, { "a", "b" }, 2, "b\n" },
+        { 8, { "" }, 1, "\n" },
+        { 2, { "a" }, 1, "" },
+    };
+    for (int i = 0; i < (int)(sizeof(APPEND_CASES) / sizeof(APPEND_CASES[0])); ++i) {
+        const struct append_case *c = &APPEND_CASES[i];
+        char buffer[64];
+        memset(buffer, 0, sizeof(buffer));
+        for (int j = 0; j < c->n; ++j)
+            report_tail_append(buffer, c->cap, c->lines[j]);
+        int ok = (strcmp(buffer, c->want) == 0);
+        char token[32];
+        snprintf(token, sizeof(token), "app%d cap%zu", i, c->cap);
+        if (ok) printf("PASS %s\n", token);
+        else {
+            printf("FAIL %s want=\"%s\" got=\"%s\"\n", token, c->want, buffer);
+            ++failures;
+        }
+    }
     printf(failures == 0 ? "ALL OK\n" : "FAILURES %d\n", failures);
     return failures ? 1 : 0;
 }

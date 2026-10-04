@@ -76,8 +76,13 @@ def build_blob(ca_pem: bytes, cert_pem: bytes, key_pem: bytes, pin: bytes, host:
 
 
 def parse_blob(blob: bytes) -> dict:
-    """The same validation the device performs, in Python. Used by tests to say what should be
-    accepted, and by the provisioning script's readback check so both ends agree on intactness."""
+    """The same validation the device performs, in Python. The device is the only consumer of
+    the blob (tls_credentials_parse is its one parser), so "the same" means every rule the C
+    side enforces -- the magic, the version, the lengths, the CRC, the PEM shape, AND the port
+    and host the report line prints. The provisioning script's readback check calls this before
+    anything is written to flash: a blob the device would refuse at load must never reach the
+    device, because the write would then read back clean and be reported PROVISIONED while the
+    link can never come up. Used by tests to say what should be accepted."""
     if len(blob) < HEADER_LEN:
         raise ValueError('blob is shorter than the header')
     magic, version, header_len, total_len, ca_len, cert_len, key_len, port, pin, host, crc = \
@@ -92,6 +97,8 @@ def parse_blob(blob: bytes) -> dict:
         raise ValueError('total length does not match the block lengths')
     if total_len > len(blob):
         raise ValueError('blob is shorter than its declared total length')
+    if port == 0 or port > 65535:
+        raise ValueError(f'port {port} would be refused by the device (0 or greater than 65535)')
     payload = blob[HEADER_LEN:total_len]
     if zlib.crc32(payload) & 0xFFFFFFFF != crc:
         raise ValueError('CRC mismatch')
@@ -106,5 +113,11 @@ def parse_blob(blob: bytes) -> dict:
             raise ValueError(f'{name} is not a PEM block')
         texts[name] = block[:-1].decode('ascii')
     host_text = host.split(b'\x00', 1)[0].decode('ascii', 'replace')
+    if not host_text:
+        raise ValueError('the device refuses an empty server host')
+    if len(host_text) >= SERVER_HOST_MAX:
+        raise ValueError('the device refuses a host that does not end inside its field')
+    if not all(32 <= ord(char) <= 126 for char in host_text):
+        raise ValueError(f'the device refuses a non-printable server host: {host_text!r}')
     return {'ca': texts['ca'], 'cert': texts['cert'], 'key': texts['key'],
             'pin': pin, 'host': host_text, 'port': port, 'total_len': total_len}

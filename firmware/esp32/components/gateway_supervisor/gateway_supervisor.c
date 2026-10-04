@@ -1,5 +1,6 @@
 #include "gateway_supervisor.h"
 #include "wyoming_session.h"
+#include "report_tail.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,24 +12,13 @@
  * first guard against a peer that blocks the read itself. */
 #define GW_REGISTER_DRIVE_CAP 64
 
-static size_t bounded_len(const char *text, size_t maximum) {
-    size_t length = 0;
-    while (length + 1 < maximum && text[length]) ++length;
-    return length;
-}
-
 static void append(gateway_supervisor *sup, const char *line) {
     if (!sup->report || sup->report_capacity == 0) return;
-    char *out = sup->report;
-    size_t capacity = sup->report_capacity;
-    size_t used = bounded_len(out, capacity);
-    if (used + 1u >= capacity) { out[capacity - 1u] = 0; return; }
-    size_t available = capacity - used - 1u;
-    size_t length = strlen(line);
-    if (length > available - 1u) length = available > 1u ? available - 1u : 0u;
-    if (length > 0u) { memcpy(out + used, line, length); used += length; }
-    out[used] = '\n';
-    out[used + 1] = 0;
+    /* The report rolls: once it fills, the oldest complete lines are evicted so the newest
+     * lines are what the console's GATEWAY_STATUS keeps reading (report_tail_append's contract).
+     * A frozen, full buffer would hand the soak the same stale last line for the rest of the
+     * session, and judge a healthy, flapping link by data it stopped updating. */
+    report_tail_append(sup->report, sup->report_capacity, line);
 }
 
 /* Close the current transport (if any) and drop the session's live state. The session buffer is

@@ -16,7 +16,10 @@ Boundaries, because a pipe that runs unattended must have them:
   device never shows up as a registered-but-silent satellite;
 * a run has a duration bound and stops on either end closing;
 * a device banner (`PROVISION READY ...`) is consumed as host bookkeeping and never forwarded;
-* nothing is written to the device after the mode command.
+* nothing the host invents is written to the device after the mode command: the relay forwards
+  bytes from one end to the other, so the device does receive the gateway's bytes (that is the
+  point of a pipe), but the host itself writes nothing more -- no protocol, no answers, no
+  second mode command.
 
 Exit codes say what happened, so a caller does not have to parse prose:
 

@@ -27,4 +27,17 @@ size_t report_tail_last_line(const char *report, char *out, size_t capacity);
  */
 size_t report_tail_last_complete_line(const char *report, char *out, size_t capacity);
 
+/* Append one line, line-terminated, to a bounded report buffer that grows for the life of a
+ * session. The buffer always stays NUL-terminated; a line longer than the whole buffer is
+ * truncated so the terminator still fits. When a line does not fit BEHIND what is already there,
+ * the oldest complete line is evicted (its text and its \n) and the line is appended in its
+ * place: the report rolls, and the newest lines are what the buffer holds, so a status query that
+ * reads the last line never freezes on stale data once the buffer fills. A line that is longer
+ * than the buffer minus one line is truncated, and a buffer whose single line already fills it
+ * holds that line alone. A NULL/empty line appends a bare newline; a buffer that is neither
+ * NUL-terminated nor empty is not appended to (the contract is one writer, line-terminated,
+ * NUL-terminated -- the gateway task's report).
+ */
+void report_tail_append(char *buffer, size_t capacity, const char *line);
+
 #endif

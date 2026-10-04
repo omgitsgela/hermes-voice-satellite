@@ -20,6 +20,18 @@ READY = b'PROVISION READY'
 JOIN_TIMEOUT = 45  # the device gives up on its own after 20s; this is the outer bound
 
 
+def read_psk(path) -> bytes:
+    """The passphrase file, with only the line terminator stripped. A WPA passphrase may
+    legally contain leading or trailing spaces, and stripping them would silently stage a
+    wrong key that the join then fails with a misleading reason -- the same contract
+    esp32_provision.read_psk pins for the provisioning tool."""
+    with open(path, 'rb') as handle:
+        psk = handle.read().rstrip(b'\r\n')
+    if not psk:
+        raise SystemExit('the passphrase file is empty')
+    return psk
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -29,9 +41,7 @@ def main():
     args = parser.parse_args()
     port = resolve_port(args.port)
 
-    with open(args.psk_file, 'rb') as handle:
-        psk = handle.read().strip()
-    assert psk, 'the passphrase file is empty'
+    psk = read_psk(args.psk_file)
 
     connection = open_console(port)
     try:

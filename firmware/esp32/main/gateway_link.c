@@ -2,29 +2,14 @@
 #include "device_identity.h"
 #include "gateway_socket.h"
 #include "wyoming_session.h"
+#include "report_tail.h"
 #include "esp_heap_caps.h"
 #include <stdio.h>
 #include <string.h>
 
 void gateway_report_append(char *out, size_t capacity, const char *line) {
     if (!out || capacity == 0) return;
-    size_t used = strnlen(out, capacity - 1u);
-    if (used + 1u >= capacity) {
-        out[capacity - 1u] = 0; /* already full: keep the terminator rather than write past it */
-        return;
-    }
-    size_t available = capacity - used - 1u; /* room for this line plus the terminator */
-    size_t length = strlen(line);
-    if (length > available - 1u) {
-        length = available > 1u ? available - 1u : 0u; /* the newline needs a byte too */
-    }
-    if (length > 0u) {
-        memcpy(out + used, line, length);
-        used += length;
-    }
-    out[used] = '\n';
-    used += 1u;
-    out[used] = 0;
+    report_tail_append(out, capacity, line);
 }
 
 int gateway_link_register(gateway_read_fn read, gateway_write_fn write, void *context,
