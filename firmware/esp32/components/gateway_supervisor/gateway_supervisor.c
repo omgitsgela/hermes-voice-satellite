@@ -77,6 +77,12 @@ int gateway_supervisor_init(gateway_supervisor *sup, int64_t (*now_us)(void),
     if (strlen(device_id) >= sizeof(sup->device_id) || strlen(boot_id) >= sizeof(sup->boot_id))
         return -1;
     if (report && report_capacity == 0) return -1;
+    /* The device re-initialises its file-static supervisor on every gateway start (after a bridge
+     * refusal ends the previous task), so an already-initialised supervisor must release the
+     * session it owns before the fields are overwritten; otherwise every start leaks a whole
+     * wy_session on a device that runs for the life of the machine. A fresh or previously-failed
+     * supervisor has session == NULL, and freeing that is a no-op. */
+    free(sup->session);
     memset(sup, 0, sizeof(*sup));
     sup->now_us = now_us;
     sup->establish = establish;

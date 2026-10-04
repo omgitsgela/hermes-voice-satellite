@@ -48,6 +48,28 @@ def read_psk(path) -> bytes:
     return psk
 
 
+def save_profile(connection, ssid, psk_file, timeout=5.0):
+    """Stage the Wi-Fi pair and save it as a profile, one acknowledged step at a time.
+
+    Three commands go down the wire and each emits its own `PROVISION ...` line -- the SSID, the
+    PSK, and the save. The save's result must be the SAVE's line: before this, the PSK was written
+    raw with no acknowledgment read, so the `WIFI_PROFILE_SAVE` exchange consumed the PSK's stale
+    ack and a save that the device refused (a full list, a bad commit) was reported as whatever
+    the PSK had answered, while the real `ERR` line sat stranded in the buffer and the tool exited
+    0. Routing every stage through exchange() both writes the exact byte count the write check
+    expects (the PSK line is 13 + len(psk) + 1 bytes; the old 12 + len(psk) was two short, so the
+    partial-write check raised on every passphrase) and consumes each acknowledgment before the
+    next command, so a failed stage raises with the device's own reason. Returns the three lines
+    so the caller reports exactly what the device acknowledged."""
+    lines = [exchange(connection, f'SET_WIFI_SSID {ssid}', timeout=timeout)]
+    # psk_shape guarantees every byte is printable ASCII, so the bytes decode to the same string
+    # exchange will re-encode and validate; the raw form is never printed or logged.
+    psk = read_psk(psk_file).decode('ascii')
+    lines.append(exchange(connection, 'SET_WIFI_PSK ' + psk, timeout=timeout))
+    lines.append(exchange(connection, 'WIFI_PROFILE_SAVE', timeout=timeout))
+    return lines
+
+
 def exchange(connection, command, timeout=5.0):
     """One command, one `PROVISION ...` line. Connection reads/writes must themselves have finite
     timeouts."""
@@ -142,8 +164,6 @@ def main():
                'connect': 'WIFI_CONNECT', 'scan': 'WIFI_SCAN'}.get(args.action)
     if args.action == 'set-endpoint':
         command = 'SET_ENDPOINT ' + args.endpoint
-    elif args.action == 'save-profile':
-        command = f'SET_WIFI_SSID {args.ssid}'
     elif args.action == 'remove-profile':
         command = f'WIFI_PROFILE_REMOVE {args.ssid}'
 
@@ -157,12 +177,11 @@ def main():
         connection.open()
         connection.reset_input_buffer()
         if args.action == 'save-profile':
-            # Stage the pair, then save it as a profile. The PSK is sent straight from the file.
-            print(exchange(connection, command))
-            psk = read_psk(args.psk_file)
-            if connection.write(b'SET_WIFI_PSK ' + psk + b'\n') != 12 + len(psk):
-                raise RuntimeError('partial serial write of the passphrase')
-            print(exchange(connection, 'WIFI_PROFILE_SAVE'))
+            # Stage the pair (each step acknowledged), then save it as a profile. The PSK is
+            # read from its file and never printed; a refused save raises, so a failed save is
+            # never reported as success.
+            for line in save_profile(connection, args.ssid, args.psk_file):
+                print(line)
         elif args.action in ('list-profiles', 'connect', 'scan'):
             # The listing has no end marker (it stops when the console goes quiet); the framed
             # actions all end with an explicit ... END line.

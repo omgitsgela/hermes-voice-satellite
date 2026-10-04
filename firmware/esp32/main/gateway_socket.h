@@ -29,7 +29,10 @@ int64_t gateway_millis_left(int64_t deadline_us);
 int gateway_socket_dial(const char *host, unsigned port, int64_t deadline_us, gateway_socket *out);
 
 /* Deadline-bounded reads and writes, shaped for the Wyoming session callbacks. A read returns the
- * count, 0 on deadline, or -1 when the peer closed or the deadline passed. */
+ * number of bytes read, or -1 when the deadline passed, the peer closed, or an I/O error occurred;
+ * it never returns 0. A closed peer is an end of stream, which this bounded path reports as -1,
+ * leaving the 0-for-EOF contract to the persistent pair below. A write returns the count written,
+ * or -1 on the same conditions. */
 int gateway_socket_read(void *context, void *data, size_t size);
 int gateway_socket_write(void *context, const void *data, size_t size);
 

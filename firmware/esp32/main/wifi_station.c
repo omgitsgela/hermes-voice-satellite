@@ -229,8 +229,25 @@ int wifi_station_associate(const char *ssid, const char *psk, char *out, size_t 
     }
 
     wifi_config_t config = {0};
-    snprintf((char *)config.sta.ssid, sizeof(config.sta.ssid), "%s", ssid);
-    snprintf((char *)config.sta.password, sizeof(config.sta.password), "%s", psk);
+    /* The driver reads both values as NUL-terminated strings and the struct carries no length
+     * field, so a value must fit inside its field WITH a terminator. Copy with memcpy, not
+     * snprintf: snprintf would silently drop the final byte of a full-length value and hand the
+     * driver a wrong credential, which then fails the four-way handshake with a misleading
+     * "wrong password" that points at the access point instead of at the truncation. */
+    size_t ssid_len = strlen(ssid);
+    size_t psk_len = strlen(psk);
+    if (ssid_len >= sizeof(config.sta.ssid))
+        return fail(out, capacity, "ssid exceeds the radio field");
+    memcpy(config.sta.ssid, ssid, ssid_len);
+    config.sta.ssid[ssid_len] = 0;
+    memcpy(config.sta.password, psk, psk_len);
+    if (psk_len < sizeof(config.sta.password))
+        config.sta.password[psk_len] = 0;
+    /* A full-field PSK (the 64-hex raw-key form the provisioner accepts) has no byte left inside
+     * the field for a terminator; it is terminated by the zero-initialised field that follows
+     * password[] (scan_method), which is left at 0 because config is {0} and only ssid/password
+     * are written here. That is how the raw key reaches the driver intact. */
+
 
     xEventGroupClearBits(station_events, WIFI_STATION_STARTED_BIT | WIFI_STATION_GOT_IP_BIT |
                                             WIFI_STATION_FAILED_BIT);

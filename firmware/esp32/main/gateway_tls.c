@@ -142,8 +142,11 @@ int gateway_tls_establish(const char *host, unsigned port, gateway_tls_link *out
     char line[200];
     tls_credentials credentials;
     char reason[96];
-    if (report && capacity > 0 &&
-        tls_credentials_load(&credentials, reason, sizeof(reason)) != 0) {
+    /* The load must run even when there is no report to write into: the pin check below reads
+     * credentials.server_pin, and a report-less caller that skipped the load would compare the
+     * pin against uninitialised stack memory. gateway_report_append is already NULL-safe, so the
+     * report is optional on the reporting path but not on the loading path. */
+    if (tls_credentials_load(&credentials, reason, sizeof(reason)) != 0) {
         snprintf(line, sizeof(line), "tls=failed reason=no_credentials detail=%s", reason);
         gateway_report_append(report, capacity, line);
         return -1;

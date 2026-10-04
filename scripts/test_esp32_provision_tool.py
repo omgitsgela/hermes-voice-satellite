@@ -123,5 +123,41 @@ class ProvisionToolTests(unittest.TestCase):
             module.exchange_block(Stream(b''), 'W' * 256, terminator='END')
 
 
+    def test_save_profile_stages_both_and_surfaces_a_failed_save(self):
+        module = _module()
+        # Happy path: SSID and PSK are each staged (each with its own ack consumed), then the
+        # pair is saved. The third line must be the SAVE's acknowledgment, not the PSK's: before
+        # the fix the PSK was written raw with no ack read, so the save's exchange() consumed the
+        # PSK's stale ack and reported the save as whatever the PSK answered with.
+        stream = Stream(b'PROVISION OK WIFI SSID STAGED\n'
+                        b'PROVISION OK WIFI PSK STAGED\n'
+                        b'PROVISION OK WIFI PROFILE SAVED n=1\n')
+        with tempfile.TemporaryDirectory() as scratch:
+            psk_file = Path(scratch) / 'psk'
+            psk_file.write_bytes(b'SuperSecret123\n')
+            lines = module.save_profile(stream, 'HomeNet', psk_file)
+        self.assertEqual(lines, ['OK WIFI SSID STAGED', 'OK WIFI PSK STAGED',
+                                 'OK WIFI PROFILE SAVED n=1'])
+        # The wire shows all three commands in order; the PSK line is the full
+        # 13 + len(psk) + 1 bytes (the old short count of 12 + len(psk) made this a false
+        # "partial write" for every passphrase).
+        self.assertEqual(
+            stream.sent,
+            b'SET_WIFI_SSID HomeNet\n'
+            b'SET_WIFI_PSK SuperSecret123\n'
+            b'WIFI_PROFILE_SAVE\n')
+        # A save that fails after both stages must surface the SAVE's error. Before the fix the
+        # PSK's ack was read as the save's result, so a failed save reported success and the real
+        # ERR line was left stranded in the buffer.
+        stream2 = Stream(b'PROVISION OK WIFI SSID STAGED\n'
+                         b'PROVISION OK WIFI PSK STAGED\n'
+                         b'PROVISION ERR WIFI PROFILE FULL\n')
+        with tempfile.TemporaryDirectory() as scratch:
+            psk_file = Path(scratch) / 'psk'
+            psk_file.write_bytes(b'SuperSecret123\n')
+            with self.assertRaisesRegex(RuntimeError, 'ERR WIFI PROFILE FULL'):
+                module.save_profile(stream2, 'HomeNet', psk_file)
+
+
 if __name__ == '__main__':
     unittest.main()

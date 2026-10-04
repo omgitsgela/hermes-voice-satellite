@@ -41,6 +41,7 @@ import os
 import sys
 import wave
 from pathlib import Path
+from unittest import TestCase
 
 import numpy as np
 
@@ -99,10 +100,53 @@ def truth_onset(pcm: np.ndarray, rate: int) -> float:
     return float(hits[0]) * FRAME_MS / 1000 if hits.size else float("nan")
 
 
+def reset_clears_the_detector() -> int:
+    """A regression check that does not need a recording.
+
+    The endpointer resets after every utterance and at every activation/capture boundary. The
+    energy gate is deliberately left alone (the room's floor is the room's), but the *detector*
+    must be reset too: the default Silero detector latches the last window's speech probability
+    and carries an audio buffer, LSTM h/c state and 64-sample context between windows. A 20 ms
+    frame is only 320 samples, under the 512-sample window, so the FIRST frame of a new utterance
+    never completes a window and returns whatever the previous utterance latched. Left uncleared,
+    an utterance that ended in speech misclassifies the next utterance's first (silent) frame as
+    speech, and up to 32 ms of the previous utterance's tail pollutes the next onset. The
+    detector's own reset() documents "called between utterances"; this proves the endpointer
+    actually does that."""
+    ep = Endpointer(rate=16000)
+    vad = ep._vad
+    # Drive the detector into the state an utterance that ended in speech would leave it in: a
+    # latched speech decision, nonzero recurrent state, and buffered audio.
+    vad._last_probability = 0.9
+    vad._h[:, :] = 1.0
+    vad._c[:, :] = 1.0
+    vad._context[:, :] = 1.0
+    vad._buffer.extend([7]*100)
+    ep.reset()
+    problems = 0
+    if vad._last_probability > 0.5:
+        print(f"  FAIL: detector latched probability {vad._last_probability} survived reset()")
+        problems += 1
+    if not (vad._h == 0).all() or not (vad._c == 0).all() or not (vad._context == 0).all():
+        print("  FAIL: detector recurrent/context state survived reset()")
+        problems += 1
+    if len(vad._buffer) != 0:
+        print(f"  FAIL: {len(vad._buffer)} buffered samples survived reset()")
+        problems += 1
+    if problems == 0:
+        print("  OK    Endpointer.reset() clears the detector's carried state")
+    return problems
+
+
 def main() -> int:
     print("=== ENDPOINTER VALIDATION (silence_ms=700, pre_roll_ms=300, webrtcvad=2) ===")
     problems = 0
     skipped: list[tuple[str, str]] = []
+
+    # The reset invariant runs unconditionally: it needs no fixture and pins the bug this file
+    # used to ship.
+    print("\nreset clears the detector")
+    problems += reset_clears_the_detector()
 
     for label, filename, demonstrates in CAPTURES:
         path = find_fixture(filename)

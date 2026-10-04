@@ -250,6 +250,17 @@ class Endpointer:
         self._gate_rejected_frames = 0
         self._accepted_frames = 0
         self._speech_levels: list[float] = []
+        # The detector is reset here too, not just the endpointer's own buffers. The Silero
+        # detector (the default) carries state between utterances - a 512-sample buffer, LSTM h/c,
+        # and the latched last-window probability - and a 20 ms frame never completes a window, so
+        # the first frame of a fresh utterance would otherwise answer with the previous utterance's
+        # decision. The guard is for the webrtcvad detector, which is stateless and has no reset():
+        # resetting only what is stateful is exactly the reset the Silero detector documents
+        # ("called between utterances"). The energy gate stays on purpose (the room's floor is the
+        # room's, not the utterance's).
+        reset = getattr(self._vad, 'reset', None)
+        if callable(reset):
+            reset()
 
     # -- scope of the no-speech budget ---------------------------------------
 
