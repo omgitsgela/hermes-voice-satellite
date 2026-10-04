@@ -29,8 +29,23 @@ static const char *INPUTS[] = {
     "\n",
     "",
     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\ntail",
+    /* report_tail_last_complete_line: the gateway task's report is line-terminated, so the
+     * last line's TEXT is what a status query must return -- not the empty string after its
+     * terminator. These are the oracle cases for that copier. */
+    "first\nsecond\n",           /* complete, newline-terminated: the last line's text */
+    "first\nsecond\n",           /* same, clipped to 5 + NUL */
+    "second",                    /* no newline: no complete line */
+    "first\npartial",            /* trailing partial line is ignored */
+    "a\nb\nc",                   /* the newest complete line wins */
+    "a\nb\nc",                   /* same, clipped to 1 + NUL */
+    "",                          /* empty report */
+    "\n",                        /* one empty complete line */
+    "x\ny\nz\n",                 /* the newest complete line, not the text after the final \n */
+    "x\ny\nz\n",                 /* same, clipped to 1 + NUL */
+    "abc",                       /* capacity 0: the buffer must be left untouched */
 };
-static const size_t CAPS[] = { 8, 4, 3, 2, 1, 0, 16, 7, 6, 16, 16, 16, 16, 16 };
+static const size_t CAPS[] = { 8, 4, 3, 2, 1, 0, 16, 7, 6, 16, 16, 16, 16, 16,
+                               16, 6, 16, 16, 16, 3, 16, 16, 16, 2, 0 };
 static const char *EXPECTED[] = {
     "abc",
     "abc",
@@ -46,16 +61,31 @@ static const char *EXPECTED[] = {
     "",
     "",
     "tail",
+    "second",
+    "secon",
+    "",
+    "first",
+    "b",
+    "b",
+    "",
+    "",
+    "z",
+    "z",
+    "",          /* untouched sentinel below proves capacity 0 wrote nothing */
 };
 
 int main(void) {
     int failures = 0;
-    for (int i = 0; i < 14; ++i) {
+    for (int i = 0; i < 25; ++i) {
         char buffer[48];
         const char sentinel = 'U';  /* untouched: capacity 0 must leave this intact */
         memset(buffer, sentinel, sizeof(buffer));
         size_t expected_len = strlen(EXPECTED[i]);
-        report_tail_last_line(INPUTS[i], buffer, CAPS[i]);
+        /* Cases 0-13 drive report_tail_last_line; 14-24 drive the complete-line copier. */
+        if (i < 14)
+            report_tail_last_line(INPUTS[i], buffer, CAPS[i]);
+        else
+            report_tail_last_complete_line(INPUTS[i], buffer, CAPS[i]);
         int ok = 1;
         if (CAPS[i] == 0) {
             ok = 1;  /* the capacity-0 case is verified by the sentinel below */

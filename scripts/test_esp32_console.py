@@ -302,7 +302,24 @@ void wifi_station_release(void) { released += 1; puts("GATEWAY_RELEASED"); }
  * console's last-line choice is testable, and GATEWAY_LAST_REPORT can override it. */
 static int gateway_task_started;
 static const char gateway_task_report_lines[] =
-    "session=registered\nreconnect=registered reconnects=2";
+    "gateway=started\n"
+    "gateway=established transport=tls\n"
+    "socket=connected host=bridge.example port=10702\n"
+    "session=registered result=ok device_id=esp32-68ee8f4b5988\n"
+    "link=lost reconnecting\n"
+    "reconnect=registered reconnects=1\n"
+    "link=lost reconnecting\n"
+    "reconnect=registered reconnects=2\n";
+/* The persistent gateway task is FreeRTOS + supervisor + radio, none of which exist on the host.
+ * The console only asks it three things: is it running (which busy-guards the radio commands
+ * and answers GATEWAY_STATUS), what does its latest report say, and can it be started (the
+ * register-on-boot GO path). All are stubbed so the boot gate's decision and the status
+ * framing are host-testable; the task's own behaviour is proved by the supervisor's
+ * loopback tests and by the firmware build. The report is deliberately a LONG,
+ * line-terminated buffer -- the real one grows for the life of the session and every line
+ * ends with '\n' -- and the stub tail-anchors its copy exactly as the real one does, so the
+ * console's choice of last COMPLETE line is what the test checks (a report cut mid-line
+ * still yields a complete answer, because a line is only complete once its newline is down). */
 int gateway_task_start(const char *host, unsigned port, int transport, const char *ssid,
                        const char *psk, char *report, size_t capacity) {
     (void)host; (void)port; (void)transport; (void)ssid; (void)psk;
@@ -315,8 +332,17 @@ void gateway_task_report(char *out, size_t capacity) {
     const char *from = getenv("GATEWAY_LAST_REPORT");
     if (!from) from = gateway_task_report_lines;
     if (!out || capacity == 0) return;
+    size_t length = 0;
+    while (from[length]) ++length;
+    /* Tail-anchored: the newest bytes, backed up to a line boundary so the copy never starts
+     * mid-line -- the report is longer than the query's buffer, by design. */
+    size_t start = 0;
+    if (length > capacity - 1) {
+        start = length - (capacity - 1);
+        while (start < length && from[start] != '\n') ++start;
+    }
     size_t index = 0;
-    while (index + 1 < capacity && from[index]) { out[index] = from[index]; ++index; }
+    while (index + 1 < capacity && from[start + index]) { out[index] = from[start + index]; ++index; }
     out[index] = 0;
 }
 

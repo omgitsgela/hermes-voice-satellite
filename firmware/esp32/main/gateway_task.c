@@ -175,16 +175,25 @@ bool gateway_task_active(void) { return active; }
 void gateway_task_report(char *out, size_t capacity) {
     if (!out || capacity == 0) return;
     taskENTER_CRITICAL(&state_lock);
-    size_t used = strnlen(state.report, capacity - 1);
-    /* The report is a single-writer (the gateway task) / single-reader (the console) diagnostic
-     * buffer. The writer appends whole lines -- bytes, then a newline, then the terminator -- so a
-     * line is only complete once its newline is down. This reader runs on a different task (and,
-     * on a multi-core build, possibly a different core) from the writer, so it bounds the copy to
-     * the last complete line rather than trusting the terminator: a concurrent append mid-line can
-     * only ever *add* lines after the copy point, never leave a torn line in it. The critical
-     * section is a best-effort single-core guard, not what makes the read well-formed. */
-    while (used > 0 && state.report[used - 1] != '\n') --used;
-    memcpy(out, state.report, used);
+    /* The report is a single-writer (the gateway task) / single-reader (the console)
+     * diagnostic buffer, and it grows for the life of the session -- so the query's buffer
+     * is usually smaller than the report, and the answer must be anchored at the END, not
+     * the start: a prefix copy would show the oldest lines, not the newest. Take the newest
+     * capacity-1 bytes and advance to the first complete line within that window (a line is
+     * only complete once its newline is down, so a concurrent append can only ever add
+     * lines after the copy point, never tear one inside it), then drop anything after the
+     * last newline in the copy (a partial tail line, its newline not down yet). The
+     * critical section is a best-effort single-core guard, not what makes the read
+     * well-formed. */
+    size_t length = strnlen(state.report, sizeof(state.report));
+    size_t start = 0;
+    if (length + 1 > capacity) {
+        start = length + 1 - capacity;  /* the oldest byte that could fit */
+        while (start < length && state.report[start] != '\n') ++start;
+    }
+    size_t used = length - start;
+    while (used > 0 && state.report[start + used - 1] != '\n') --used;
+    memcpy(out, state.report + start, used);
     out[used] = 0;
     taskEXIT_CRITICAL(&state_lock);
 }

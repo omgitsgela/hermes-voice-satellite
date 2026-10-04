@@ -621,14 +621,18 @@ void provisioning_console_run(void) {
                 static char status_line[128];
                 if (gateway_task_active()) {
                     gateway_task_report(status_report, sizeof(status_report));
-                    /* The prefix is a constant that fits with room; the tail is bounded by
-                     * report_tail_last_line against whatever room the prefix left, so the line
-                     * can never run past the buffer or lose its NUL. */
+                    /* The task's report is line-terminated (every line ends with '\n'), and it
+                     * grows for the life of the session, so the last line's TEXT is what the
+                     * status must carry: report_tail_last_line would return the empty string
+                     * after the final newline, and a prefix copy of a long report would show
+                     * the oldest lines. report_tail_last_complete_line takes the newest
+                     * complete line from the END of the report; the prefix is a constant that
+                     * fits with room, and the line is bounded against whatever room it left. */
                     int used = snprintf(status_line, sizeof(status_line),
                                         "OK GATEWAY RUNNING last=");
                     if (used > 0)
-                        report_tail_last_line(status_report, status_line + (size_t)used,
-                                              sizeof(status_line) - (size_t)used);
+                        report_tail_last_complete_line(status_report, status_line + (size_t)used,
+                                                       sizeof(status_line) - (size_t)used);
                     reply(status_line);
                 } else {
                     reply("OK GATEWAY IDLE");

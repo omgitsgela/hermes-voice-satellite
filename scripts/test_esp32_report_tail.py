@@ -25,6 +25,9 @@ TAIL = ROOT / 'firmware/esp32/components/report_tail'
 
 # (input, capacity, expected_chars) -- expected_chars is what the buffer holds BEFORE
 # its NUL, so the NUL sits at index len(expected_chars). capacity==0 means "untouched".
+# Cases 0-13 drive report_tail_last_line; 14-24 drive report_tail_last_complete_line
+# (the gateway report's lines are line-terminated, so the last line's TEXT is what a
+# status query must return -- not the empty string after its terminator).
 CASES = [
     ('abc', 8, 'abc'),                 # fits with room to spare
     ('abc', 4, 'abc'),                 # exactly chars + NUL
@@ -40,6 +43,18 @@ CASES = [
     ('\n', 16, ''),
     ('', 16, ''),                      # empty report -> empty last line
     ('x' * 30 + '\ntail', 16, 'tail'), # a long line before the one we want
+    # --- report_tail_last_complete_line ---
+    ('first\nsecond\n', 16, 'second'), # line-terminated: the last line's TEXT
+    ('first\nsecond\n', 6, 'secon'),   # clipped to 5 + NUL
+    ('second', 16, ''),                # no newline: no complete line
+    ('first\npartial', 16, 'first'),   # a trailing partial line is ignored
+    ('a\nb\nc', 16, 'b'),              # the newest complete line wins
+    ('a\nb\nc', 3, 'b'),               # same, clipped to 1 + NUL
+    ('', 16, ''),                      # empty report
+    ('\n', 16, ''),                    # one empty complete line
+    ('x\ny\nz\n', 16, 'z'),            # the newest complete line, not the empty text after \n
+    ('x\ny\nz\n', 2, 'z'),             # same, clipped to 1 + NUL
+    ('abc', 0, None),                  # zero capacity: untouched
 ]
 
 
