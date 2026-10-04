@@ -271,9 +271,11 @@ int provision_wifi_handle(const char *command, provision_wifi_save_ssid_fn save_
 
 int provision_wifi_candidates(const provision_wifi_profiles *profiles, provision_wifi_load_fn load,
                               void *ctx, char (*ssids)[PROVISION_SSID_MAX + 1],
-                              char (*psks)[PROVISION_PSK_MAX + 1], size_t capacity, size_t *count) {
+                              char (*psks)[PROVISION_PSK_MAX + 1], size_t capacity, size_t *count,
+                              size_t *saved_split) {
     if (!load || !ssids || !psks || !count || capacity == 0) return -1;
     *count = 0;
+    if (saved_split) *saved_split = 0;
     if (profiles) {
         int total = profiles->count(ctx);
         if (total < 0) return -1;
@@ -290,6 +292,10 @@ int provision_wifi_candidates(const provision_wifi_profiles *profiles, provision
             ++*count;
         }
     }
+    /* Where the saved candidates end and the staged pair (if any) begins. A skipped,
+     * now-invalid saved profile still occupies a slot in the saved list but not in the
+     * candidates, so the raw list length would mislabel the staged network as saved. */
+    if (saved_split) *saved_split = *count;
     char staged_ssid[PROVISION_SSID_MAX + 1] = {0};
     char staged_psk[PROVISION_PSK_MAX + 1] = {0};
     if (load(ctx, staged_ssid, sizeof(staged_ssid), staged_psk, sizeof(staged_psk)) != 0) return -1;

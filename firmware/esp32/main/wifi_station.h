@@ -6,6 +6,13 @@
  * caller can rank candidates without a second "found" array to keep in step. */
 #define WIFI_STATION_NO_SIGNAL (-1000)
 
+/* One size, shared by the scan report buffer and the console's reply budget. The renderer fills
+ * its buffer up to capacity-1 bytes (including its own TRUNCATED line) when many networks are
+ * visible, so the console must be willing to send a full buffer: any smaller cap would silently
+ * drop a large-but-valid report, and the operator would read an empty scan where there were
+ * networks. Sized for 32 full-escape lines (the driver's AP ceiling) plus the truncation note. */
+#define WIFI_STATION_SCAN_REPORT_MAX 1400u
+
 /* One bounded scan. Brings the station radio up, scans, and leaves the radio off again,
  * so nothing transmits unless a command asked for it. Returns 0 when a scan completed
  * (even if it found nothing) and renders the report into `out`; on failure it writes a

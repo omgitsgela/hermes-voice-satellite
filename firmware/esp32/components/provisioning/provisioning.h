@@ -72,11 +72,15 @@ int provision_wifi_handle(const char *command, provision_wifi_save_ssid_fn save_
  * staged pair when it is not already one of them, so the single-network flow keeps working
  * unchanged. An entry that could not be joined is skipped rather than offered as a candidate
  * that would fail at association. `ssids` and `psks` are arrays of rows of PROVISION_SSID_MAX+1
- * and PROVISION_PSK_MAX+1 bytes. Returns 0 and writes the count, or -1 when the store could
- * not be read. */
+ * and PROVISION_PSK_MAX+1 bytes. `saved_split` (when non-NULL) receives how many of the
+ * candidates are saved networks, so a caller that labels the chosen one "saved" vs "staged"
+ * uses the true boundary rather than the raw length of the saved list (which would count a
+ * skipped, now-invalid profile). Returns 0 and writes the count, or -1 when the store could not
+ * be read. */
 int provision_wifi_candidates(const provision_wifi_profiles *profiles, provision_wifi_load_fn load,
-                             void *ctx, char (*ssids)[PROVISION_SSID_MAX + 1],
-                             char (*psks)[PROVISION_PSK_MAX + 1], size_t capacity, size_t *count);
+                              void *ctx, char (*ssids)[PROVISION_SSID_MAX + 1],
+                              char (*psks)[PROVISION_PSK_MAX + 1], size_t capacity, size_t *count,
+                              size_t *saved_split);
 
 /* Whether a freshly booted satellite should register with its gateway now, or stay idle.
  *

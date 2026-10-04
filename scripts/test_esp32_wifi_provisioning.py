@@ -161,14 +161,17 @@ class WifiProvisioningTests(unittest.TestCase):
             return output.value
 
         lib.provision_wifi_candidates.argtypes = [C.POINTER(Profiles), LOAD, C.c_void_p, C.c_void_p,
-                                                  C.c_void_p, C.c_size_t, C.POINTER(C.c_size_t)]
+                                                  C.c_void_p, C.c_size_t,
+                                                  C.POINTER(C.c_size_t), C.POINTER(C.c_size_t)]
 
         def candidates(capacity=6):
             ssids = C.create_string_buffer(33 * capacity)
             psks = C.create_string_buffer(65 * capacity)
             count = C.c_size_t(0)
+            saved = C.c_size_t(0)
             code = lib.provision_wifi_candidates(C.byref(store), load, None, ssids, psks, capacity,
-                                                 C.byref(count))
+                                                 C.byref(count), C.byref(saved))
+            state['last_saved'] = saved.value
             found = [(ssids.raw[index * 33:index * 33 + 33].split(b'\0')[0],
                       psks.raw[index * 65:index * 65 + 65].split(b'\0')[0])
                      for index in range(count.value)]
@@ -421,6 +424,29 @@ class WifiProfileTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual([ssid for ssid, _psk in found], [b'AP-0'],
                          'an unjoinable entry is not offered as a candidate')
+
+    def test_candidates_report_the_saved_staged_split_when_a_saved_is_skipped(self):
+        """A saved profile that no longer passes the validators is skipped from the candidate list,
+        but a raw count of the saved list would still include it. The caller that labels a chosen
+        network 'saved' vs 'staged' needs the true split point -- how many of the candidates are
+        actually saved -- not the raw list length. Otherwise a legacy 32-octet-SSID profile
+        (rejected since the radio cannot hold it) would make the staged network report as 'saved',
+        and the boot/connect diagnostic would name the wrong network."""
+        lib = self.library()
+        state, request, candidates = self.harness(lib)
+        self.stage(request, ssid=b'AP-0', psk=SECRET)
+        self.assertEqual(request(b'WIFI_PROFILE_SAVE'), b'OK WIFI PROFILE SAVED n=1')
+        # A saved profile the current validators refuse: a 32-octet SSID. It is skipped from the
+        # candidates, but it still occupies a slot in the saved list.
+        state['profiles'].append([b'a' * 32, b'ValidPsk99'])
+        self.stage(request, ssid=b'AP-Staged', psk=OTHER_SECRET)
+        code, found = candidates()
+        self.assertEqual(code, 0)
+        self.assertEqual([ssid for ssid, _psk in found], [b'AP-0', b'AP-Staged'],
+                         'the joinable saved network and the staged pair, in that order')
+        self.assertEqual(state['last_saved'], 1,
+                         'the saved/staged split is where the saved candidates end, not the raw '
+                         'length of the saved list')
 
 
 if __name__ == '__main__':

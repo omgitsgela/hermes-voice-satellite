@@ -251,14 +251,16 @@ static int choose_candidate(bool *storage, char (*ssids)[PROVISION_SSID_MAX + 1]
     *count = 0;
     *chosen = 0;
     *from_staged = false;
+    size_t saved_split = 0;
     if (provision_wifi_candidates(&WIFI_PROFILE_STORE, load_wifi, storage, ssids, psks,
-                                  WIFI_CANDIDATE_MAX, count) != 0)
+                                  WIFI_CANDIDATE_MAX, count, &saved_split) != 0)
         return -1;
     if (*count == 0) return 0;
-    int saved = count_profiles(storage);
-    if (saved < 0) return -1;
     if (*count == 1) {
-        *from_staged = saved == 0;
+        /* The lone candidate is the staged pair only when no saved network made it into the list:
+         * saved_split counts the saved candidates that survived, so a skipped (now-invalid) saved
+         * profile does not flip this label. */
+        *from_staged = saved_split == 0;
         return 1;
     }
     const char *names[WIFI_CANDIDATE_MAX];
@@ -271,7 +273,7 @@ static int choose_candidate(bool *storage, char (*ssids)[PROVISION_SSID_MAX + 1]
             best = (int)index;
     if (best < 0) return -2;  /* every network is out of range: do not dial into the dark */
     *chosen = (size_t)best;
-    *from_staged = (int)*chosen >= saved;  /* candidates put the saved networks first */
+    *from_staged = (size_t)best >= saved_split;  /* candidates put the saved networks first */
     return 1;
 }
 
@@ -330,10 +332,12 @@ static void reply_prefixed(const char *block) {
 }
 
 /* Multi-line payloads (a scan report) go out under the same single-writer rule, with a
- * hard cap so a large result cannot stall the console. */
+ * hard cap so a large result cannot stall the console. The cap is the scan report's own size
+ * (the buffer and the budget are one constant), so a report the renderer can honestly produce
+ * is always delivered in full, truncation line and all. */
 static void reply_block(const char *value) {
     size_t length = strlen(value);
-    if (length == 0 || length > 1200) return;
+    if (length == 0 || length > WIFI_STATION_SCAN_REPORT_MAX) return;
     usb_serial_jtag_write_bytes(value, length, pdMS_TO_TICKS(500));
 }
 
@@ -383,7 +387,7 @@ static void provisioning_boot_gate(bool *storage) {
     }
     int stored = 0;
     if (provision_wifi_candidates(&WIFI_PROFILE_STORE, load_wifi, storage, ssids, psks,
-                                  WIFI_CANDIDATE_MAX, &count) != 0)
+                                  WIFI_CANDIDATE_MAX, &count, NULL) != 0)
         stored = -1;
     else
         stored = (int)count;
@@ -395,15 +399,15 @@ static void provisioning_boot_gate(bool *storage) {
     }
 
     provision_endpoint_parse(endpoint, host, sizeof(host), &port, &transport);
-    int saved = count_profiles(storage);
-    if (saved < 0) saved = 0;
     int pick = choose_candidate(storage, ssids, psks, &count, &chosen, &from_staged, report,
                                 sizeof(report));
     if (pick == -2) {
         /* Every configured network is out of range right now. Still start the task on the first
-         * one: it keeps re-associating on its backoff and will register the moment an AP appears. */
+         * one: it keeps re-associating on its backoff and will register the moment an AP appears.
+         * A -2 can only be reached with two or more candidates, and the saved networks come first,
+         * so candidate 0 is a saved one: it is labelled saved, never staged. */
         chosen = 0;
-        from_staged = (saved == 0);
+        from_staged = false;
     } else if (pick <= 0) {
         reply("GATEWAY BOOT IDLE reason=NO_JOINABLE");
         memset(psks, 0, sizeof(psks));
@@ -453,7 +457,7 @@ void provisioning_console_run(void) {
             /* The received line is never echoed and never logged, so a passphrase
              * typed here exists only in RAM and in NVS; only the response is sent. */
             if (!strcmp(line.data, "WIFI_SCAN")) {
-                static char report[1400];
+                static char report[WIFI_STATION_SCAN_REPORT_MAX];
                 if (gateway_task_active()) {
                     reply("ERR WIFI BUSY");  /* the gateway holds the radio; a scan would drop it */
                 } else if (wifi_station_scan(report, sizeof(report)) == 0) {

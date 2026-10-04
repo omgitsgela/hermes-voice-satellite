@@ -272,5 +272,74 @@ class WifiConnectReportTests(unittest.TestCase):
                               f'capacity {capacity} left a partial escape behind')
 
 
+class ScanDeliveryContractTests(unittest.TestCase):
+    """The console's scan reply path must deliver everything the renderer can honestly produce.
+
+    The scan buffer and the reply cap must be one shared constant: the renderer fills its buffer
+    up to capacity-1 bytes (including its TRUNCATED line) when many networks are visible, so a
+    reply cap smaller than the buffer silently drops a large-but-valid report between WIFI SCAN
+    BEGIN and WIFI SCAN END -- zero networks, no truncation note, exit 0.
+    """
+
+    SCAN_HEADER = ROOT / 'firmware/esp32/main/wifi_station.h'
+    CONSOLE = ROOT / 'firmware/esp32/main/provisioning_console.c'
+
+    def report_cap(self):
+        text = self.SCAN_HEADER.read_text()
+        match = re.search(r'#define\s+WIFI_STATION_SCAN_REPORT_MAX\s+(\d+)', text)
+        self.assertIsNotNone(match,
+                             'wifi_station.h must define WIFI_STATION_SCAN_REPORT_MAX, the single '
+                             'size shared by the scan buffer and the console reply cap')
+        return int(match.group(1))
+
+    def library(self):
+        self.assertTrue((CORE / 'wifi_report.c').exists(), 'renderer missing')
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        library = Path(temporary.name) / 'wifi_report.so'
+        subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC',
+                        str(CORE / 'wifi_report.c'), '-o', str(library)], check=True)
+        lib = C.CDLL(str(library))
+        lib.wifi_report_render.restype = C.c_size_t
+        return lib
+
+    def test_the_console_shares_one_constant_for_buffer_and_reply_cap(self):
+        cap = self.report_cap()
+        console = self.CONSOLE.read_text()
+        self.assertIn('report[WIFI_STATION_SCAN_REPORT_MAX]', console,
+                      'the scan buffer must be sized by the shared constant')
+        self.assertIn('length > WIFI_STATION_SCAN_REPORT_MAX', console,
+                      'the reply cap must be the shared constant, not a separate literal')
+        self.assertNotIn('length > 1200', console,
+                         'a separate literal cap can drift back below the buffer and drop reports')
+
+    def test_every_honest_report_fits_the_console_reply_budget(self):
+        cap = self.report_cap()
+        lib = self.library()
+        # Worst case per line: a 32-octet SSID of unprintable bytes escapes to 128 characters,
+        # plus a 3-digit channel, a 4-character rssi, and the longest auth name. Fill the whole
+        # buffer with exactly that, the way a dense scan does, and the rendered report -- with
+        # its TRUNCATED line -- must still fit the console's reply budget.
+        points = [AccessPoint() for _ in range(32)]
+        for index, point in enumerate(points):
+            point.ssid = b'\x01' * 32
+            point.ssid_length = 32
+            point.channel = 1 + (index % 14)
+            point.rssi = -128 + index
+            point.auth = ENTERPRISE
+        array = (AccessPoint * 32)()
+        for index, point in enumerate(points):
+            array[index] = point
+        buffer = C.create_string_buffer(cap)
+        written = lib.wifi_report_render(array, 32, buffer, cap)
+        self.assertGreater(written, 1200,
+                           'the fixture must actually exercise the drop window above the old '
+                           'literal cap; a shorter report would prove nothing')
+        self.assertLess(written, cap,
+                        'an honest report must always fit the console reply budget, with its '
+                        'TRUNCATED line intact')
+        self.assertIn(b'TRUNCATED', buffer.value, 'the truncation note must survive the delivery')
+
+
 if __name__ == '__main__':
     unittest.main()
