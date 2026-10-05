@@ -101,3 +101,15 @@ size_t wy_apply_volume(int16_t *pcm, size_t n, int percent) {
     }
     return n;
 }
+
+size_t wy_expand_mono16_to_stereo32(const int16_t *mono, size_t n, int32_t *out, size_t cap) {
+    if (!mono || !out || n == 0 || cap < 2 * n) return 0;   /* atomic: all or nothing */
+    for (size_t i = 0; i < n; ++i) {
+        /* 32-bit FULL-SCALE (the XVF's I2S convention, the downmix's inverse): a 16-bit value
+         * lives in the top 16 bits. <<16 of an int16-promoted value is exact and in range. */
+        int32_t v = (int32_t)mono[i] << 16;
+        out[2 * i] = v;
+        out[2 * i + 1] = v;
+    }
+    return 2 * n;
+}

@@ -292,5 +292,56 @@ class AudioTests(unittest.TestCase):
         self.assertEqual(lib.wy_apply_volume(None, 0, 50), 0)
 
 
+    def expand(self):
+        lib = self.library()
+        lib.wy_expand_mono16_to_stereo32.argtypes = [C.POINTER(C.c_int16), C.c_size_t,
+                                                    C.POINTER(C.c_int32), C.c_size_t]
+        lib.wy_expand_mono16_to_stereo32.restype = C.c_size_t
+        return lib
+
+    def test_expand_is_stereo_full_scale(self):
+        """A mono 16 kHz S16 sample becomes the XVF's 32-bit FULL-SCALE form on BOTH channels:
+        +1234 -> 1234 << 16 in L and R. The I2S TX slot is stereo 32-bit, so each mono sample
+        yields two int32 (L=R). Clipping a 16-bit sample into a 16-bit slot would be wrong --
+        the XVF's own 32-bit full-scale convention (the downmix's inverse) is the contract."""
+        lib = self.expand()
+        mono = (C.c_int16 * 3)(1234, -1234, 0)
+        out = (C.c_int32 * 6)()
+        written = lib.wy_expand_mono16_to_stereo32(mono, 3, out, 6)
+        self.assertEqual(written, 6)
+        self.assertEqual(list(out), [1234 << 16, 1234 << 16,
+                                     -1234 << 16, -1234 << 16, 0, 0])
+
+    def test_expand_downmix_round_trip(self):
+        """expand is the exact inverse of the capture downmix: downmix(expand(x)) == x for in-range
+        x. This pins the 32-bit full-scale convention in both directions at once."""
+        lib = self.library()
+        lib.wy_expand_mono16_to_stereo32.argtypes = [C.POINTER(C.c_int16), C.c_size_t,
+                                                    C.POINTER(C.c_int32), C.c_size_t]
+        lib.wy_expand_mono16_to_stereo32.restype = C.c_size_t
+        mono = (C.c_int16 * 64)()
+        import random
+        random.seed(7)
+        for i in range(64):
+            mono[i] = random.randint(-32768, 32767)
+        out = (C.c_int32 * 128)()
+        self.assertEqual(lib.wy_expand_mono16_to_stereo32(mono, 64, out, 128), 128)
+        back = (C.c_int16 * 64)()
+        lib.wy_audio_downmix_mono16(out, 64, back, 64)
+        self.assertEqual(list(back), list(mono), 'downmix(expand(x)) must equal x')
+
+    def test_expand_respects_capacity(self):
+        """A buffer too small for all the frames writes nothing and reports 0 (atomic, so a
+        caller never sees a half-expanded frame)."""
+        lib = self.expand()
+        mono = (C.c_int16 * 4)(1, 2, 3, 4)
+        out = (C.c_int32 * 6)()   # room for only 3 frames
+        self.assertEqual(lib.wy_expand_mono16_to_stereo32(mono, 4, out, 6), 0)
+        self.assertEqual(list(out), [0] * 6, 'an undersized buffer must not be partially written')
+        # exactly the right size is fine
+        out2 = (C.c_int32 * 8)()
+        self.assertEqual(lib.wy_expand_mono16_to_stereo32(mono, 4, out2, 8), 8)
+
+
 if __name__ == '__main__':
     unittest.main()

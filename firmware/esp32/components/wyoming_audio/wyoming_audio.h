@@ -49,6 +49,13 @@ void wy_resampler_reset(wy_resampler *r);   /* fresh stream: cursor and base bac
  * Returns n. Monotonic: a >= b (both clamped) implies |out_a| >= |out_b| per sample. */
 size_t wy_apply_volume(int16_t *pcm, size_t n, int percent);
 
+/* Convert n mono 16 kHz S16 samples to the I2S TX's 32-bit stereo FULL-SCALE frames (two
+ * int32 per sample, L=R, the S16 value scaled to 32-bit full-scale: x << 16). This is the
+ * exact inverse of the capture downmix, which is the XVF's own 32-bit full-scale convention.
+ * Atomic: returns 2*n when cap >= 2*n (writing all frames), else 0 and writes nothing -- a
+ * half-expanded frame would be a corrupted write. */
+size_t wy_expand_mono16_to_stereo32(const int16_t *mono, size_t n, int32_t *out, size_t cap);
+
 /* Serialize the audio-chunk data field for the given format into buffer (capacity bytes,
  * NUL-terminated on success). Returns the number of bytes written (excluding the NUL), or a
  * negative value when the format is not one this device can emit (rate out of range, not
