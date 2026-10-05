@@ -36,9 +36,18 @@ typedef struct gateway_tls_link {
 int gateway_tls_establish(const char *host, unsigned port, gateway_tls_link *out, char *report,
                           size_t capacity);
 
-/* Close a link established above: best-effort close_notify (bounded), then free the contexts and
- * the socket. Safe to call on a partially-established or empty link. */
+/* Close a link established above: best-effort close_notify (bounded by the link's deadline),
+ * then free the contexts and the socket. The one-shot console path; safe on a
+ * partially-established or empty link. The persistent path tears down instead with
+ * gateway_tls_close_socket, a stop of the capture task, and gateway_tls_free, in that order. */
 void gateway_tls_release(gateway_tls_link *link);
+/* Close the carrier only (no farewell alert): the first step of a persistent teardown, so an
+ * in-flight write unwinds on EBADF before anything is freed. Idempotent. */
+void gateway_tls_close_socket(gateway_tls_link *link);
+/* Free the contexts (and close the socket if still open). The caller guarantees no write is in
+ * flight: persistent teardown calls this only after the socket is closed and the capture task
+ * stopped and joined. Idempotent. */
+void gateway_tls_free(gateway_tls_link *link);
 
 /* Read and write one record over an established link. WANT_READ/WANT_WRITE loop, because the call
  * that blocked is the socket read under the mbedTLS record. The context handed in is the link, so

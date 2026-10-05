@@ -44,4 +44,9 @@ int audio_capture_start(void *session, void *user,
 void audio_capture_stop(void);
 
 bool audio_capture_running(void);
+
+/* Bounded confirmation that the writer lock is free (no write in flight); the TLS teardown
+ * gates its contexts free on this. 1 when free within the 2 s bound, 0 otherwise (the caller
+ * then defers the free to the next establish). */
+bool audio_capture_wait_writer_idle(void);
 #endif

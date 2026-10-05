@@ -141,12 +141,30 @@ static void gateway_task_maybe_stop_capture(void) {
 }
 
 /* Close the transport a link was established over. The radio is left alone: the next establish
- * re-associates it, so reconnecting a dropped bridge does not need to re-associate Wi-Fi. */
+ * re-associates it, so reconnecting a dropped bridge does not need to re-associate Wi-Fi.
+ *
+ * The TLS teardown is three phases, and the order is the safety argument. First the socket
+ * closes: an in-flight capture write hits EBADF and unwinds (the persistent write retries only
+ * EAGAIN/EINTR/EWOULDBLOCK, never EBADF), and with the session's streaming flag already
+ * cleared by link_down no new chunk starts. Then the capture task is stopped and joined (the
+ * on_link_down hook, run here rather than by the supervisor's later call so the join happens
+ * before the free, not after). Only then are the mbedTLS contexts freed: the in-flight write
+ * still holds a reference to them through the socket callbacks, and the writer-idle wait is
+ * the gate between the stop and the free. Freeing before the stop is a use-after-free, and a
+ * close_notify in between would wedge on a stuck peer, because the persistent deadline is
+ * "no deadline" and the alert would route through the deadline-blind persistent write. The
+ * one-shot console path keeps close_notify, where its finite deadline bounds it for real. */
 static void gateway_task_teardown(void *user, gw_link *link) {
     (void)user;
     if (!link || !link->user) return;
     if (state.transport == PROVISION_TRANSPORT_TLS) {
-        gateway_tls_release((gateway_tls_link *)link->user);
+        gateway_tls_link *tls = (gateway_tls_link *)link->user;
+        gateway_tls_close_socket(tls);
+        gateway_task_on_link_down(user);   /* stop and join the capture task (idempotent) */
+        if (audio_capture_wait_writer_idle())
+            gateway_tls_free(tls);
+        /* If the wait failed, the contexts stay set on purpose: the next establish frees them
+         * first (before its memset), at a moment when no capture task can be running. */
     } else {
         gateway_socket_close((gateway_socket *)link->user);
     }
@@ -164,10 +182,17 @@ static void gateway_task_fn(void *argument) {
         result = gateway_supervisor_step(&supervisor);
         if (result == GW_OK) {
             int state_after = wy_session_state((wy_session *)session);
-            if (state_after == WY_SESSION_RUN_REQUESTED && state_before != WY_SESSION_RUN_REQUESTED)
-                gateway_task_maybe_start_capture();
-            else if (state_before == WY_SESSION_RUN_REQUESTED && state_after != WY_SESSION_RUN_REQUESTED)
+            if (state_before == WY_SESSION_RUN_REQUESTED && state_after != WY_SESSION_RUN_REQUESTED)
                 gateway_task_maybe_stop_capture();
+            /* Restart is checked on every OK step, not just the armed transition: a capture
+             * task that self-exited on an I2S error leaves the session armed (run-satellite
+             * does not change state), so a repeat run-satellite fires no transition, and the
+             * armed hook would never run again -- the mic dead until a pause or a link bounce.
+             * The guard inside maybe_start_capture is armed-and-not-running, so this is
+             * idempotent, and it is what gives a failed first start (channel still in use) its
+             * retry. */
+            if (state_after == WY_SESSION_RUN_REQUESTED)
+                gateway_task_maybe_start_capture();
             continue;
         }
         if (result == GW_WAIT) {

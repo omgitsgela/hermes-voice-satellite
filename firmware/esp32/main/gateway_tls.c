@@ -136,6 +136,15 @@ static void contexts_free(tls_contexts *contexts) {
 int gateway_tls_establish(const char *host, unsigned port, gateway_tls_link *out, char *report,
                           size_t capacity) {
     if (!host || !host[0] || !out) return -1;
+    /* The persistent link's struct is reused across attempts, and a torn-down link leaves its
+     * contexts set (the deferred free, gateway_tls_free, is what the previous teardown's stop
+     * and join made safe). Free them BEFORE the memset erases the pointer: a re-establish
+     * that did not would leak the old context on every retry after a link-down. On the
+     * one-shot path `out` is fresh and this is a no-op. */
+    if (out->contexts) {
+        contexts_free((tls_contexts *)out->contexts);
+        out->contexts = NULL;
+    }
     memset(out, 0, sizeof(*out));
     out->socket.descriptor = -1;
 
@@ -305,6 +314,35 @@ int gateway_tls_establish(const char *host, unsigned port, gateway_tls_link *out
 
 /* Close a link established above: best-effort close_notify (bounded, so a gone bridge cannot hold
  * the caller), then free the contexts and the socket. Safe on a partially-established link. */
+/* Close the carrier without the TLS farewell: the socket goes, the contexts remain (their
+ * free is deferred). This is the persistent path's first teardown step, and the order is the
+ * safety argument: with the fd closed, a capture write in flight hits EBADF and unwinds --
+ * gateway_socket_write_persistent retries only EAGAIN/EINTR/EWOULDBLOCK, never EBADF -- and
+ * with the session's streaming flag already cleared, no NEW chunk starts. Nothing may free
+ * the contexts until the capture task is stopped and joined, because it holds a reference to
+ * them through the in-flight write. */
+void gateway_tls_close_socket(gateway_tls_link *link) {
+    if (link) gateway_socket_close(&link->socket);
+}
+
+/* Free the contexts (and close the socket if it is still open). The caller guarantees no
+ * write is in flight: on the persistent path the socket was closed first and the capture
+ * task stopped and joined; on the one-shot path the finite deadline bounded everything. */
+void gateway_tls_free(gateway_tls_link *link) {
+    if (!link) return;
+    if (link->contexts) {
+        contexts_free((tls_contexts *)link->contexts);
+        link->contexts = NULL;
+    }
+    gateway_socket_close(&link->socket);
+}
+
+/* Close a link with the TLS farewell: best-effort close_notify, then free. The ONE-SHOT
+ * console path only: its deadline is finite, so the bounded notify loop is bounded for real.
+ * The persistent path deliberately does not call this: its deadline is "no deadline", and a
+ * close_notify that cannot be delivered would route through the deadline-blind
+ * write_persistent and retry EAGAIN for ever, wedging the link-down before the socket was
+ * ever closed. The alert is a courtesy; a link going down is not the moment to require it. */
 void gateway_tls_release(gateway_tls_link *link) {
     if (!link) return;
     if (link->contexts) {
@@ -314,10 +352,8 @@ void gateway_tls_release(gateway_tls_link *link) {
             int notify = mbedtls_ssl_close_notify(&contexts->ssl);
             if (notify != MBEDTLS_ERR_SSL_WANT_READ && notify != MBEDTLS_ERR_SSL_WANT_WRITE) break;
         }
-        contexts_free(contexts);
-        link->contexts = NULL;
     }
-    gateway_socket_close(&link->socket);
+    gateway_tls_free(link);
 }
 
 int gateway_tls_run(const char *host, unsigned port, char *out, size_t capacity) {

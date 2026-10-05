@@ -162,6 +162,52 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(lib.wy_session_wake(session, b'hey-hermes', writer, None), 0)
         self.assertEqual(lib.wy_session_streaming(session), 1)
 
+    def test_wake_now_before_run_satellite_is_dropped(self):
+        """The microphone is armed by run-satellite, and only then. A wake-now that lands
+        registered but still unarmed (after hermes.register.ok, before the first run-satellite)
+        must be dropped, never opened: it would run the wake sequence and set streaming with no
+        capture task running, so the bridge would hold a live mic stream carrying zero chunks
+        until it gave up. The drop is not a fault, and it writes nothing."""
+        lib = self.library()
+        lib.wy_session_streaming.argtypes = [C.c_void_p]
+        lib.wy_session_streaming.restype = C.c_int
+        session = C.create_string_buffer(lib.wy_session_size())
+        self.assertEqual(lib.wy_session_init(session, b'control-fixture', b'boot-1'), 0)
+        source = io.BytesIO()
+        for event in [Event(type='describe'),
+                      Event(type='hermes.register.ok',
+                            data={'device_id': 'control-fixture', 'protocol_version': 1}),
+                      Event(type='wake-now')]:
+            write_event(event, source)
+        source.seek(0)
+        output = io.BytesIO()
+
+        @IO
+        def reader(ctx, target, length):
+            chunk = source.read(min(4, length))
+            C.memmove(target, chunk, len(chunk))
+            return len(chunk)
+
+        @IO
+        def writer(ctx, target, length):
+            output.write(C.string_at(target, length))
+            return length
+
+        for expected in [1, 2]:
+            self.assertEqual(lib.wy_session_step(session, reader, writer, None), 0)
+            self.assertEqual(lib.wy_session_state(session), expected)
+        # The wake-now lands registered but unarmed: dropped, not a fault.
+        self.assertEqual(lib.wy_session_step(session, reader, writer, None), 0)
+        self.assertEqual(lib.wy_session_state(session), 2,
+                         'a dropped wake-now must not move the state')
+        self.assertEqual(lib.wy_session_streaming(session), 0,
+                         'no capture task can feed a stream opened while unarmed')
+        output.seek(0)
+        self.assertEqual(read_event(output).type, 'info')
+        self.assertEqual(read_event(output).type, 'hermes.register')
+        self.assertIsNone(read_event(output),
+                          'a dropped wake-now writes no detection or stream events')
+
     def test_wake_now_opens_the_microphone(self):
         """The bridge's wake-now (the follow-up window's 'open the microphone') must run the
         wake sequence -- detection, run-pipeline, streaming-started -- with the device's wake

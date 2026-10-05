@@ -191,4 +191,27 @@ void audio_capture_stop(void) {
     capture.stopping = 0;
 }
 
+/* Bounded confirmation that no write is in flight: the writer lock is free. The TLS teardown
+ * calls this between stopping the capture task and freeing the mbedTLS contexts, because an
+ * in-flight write still references the contexts through the socket callbacks. In practice the
+ * join inside audio_capture_stop is what makes this succeed on the first poll (a task that has
+ * exited cannot hold the lock, and the socket close that preceded the stop turns any write in
+ * flight into an EBADF that unwinds it); the bound exists so a path that somehow held the lock
+ * past the join cannot wedge the teardown. It PEEKS at the lock (a zero-timeout take, given
+ * straight back) rather than taking-and-holding it, so a real writer never has to wait on the
+ * check. Returns 1 when the lock was found free within the bound, 0 when it was not -- the
+ * caller then defers the free to the next establish, where the capture task is provably absent. */
+bool audio_capture_wait_writer_idle(void) {
+    SemaphoreHandle_t lock = capture.writer_lock;
+    if (!lock) return true;   /* no lock installed: nothing is being serialized, nothing to wait */
+    for (int waited = 0; waited < 400; ++waited) {   /* 400 x 5 ms = 2 s, bounded */
+        if (xSemaphoreTake(lock, 0) == pdPASS) {
+            xSemaphoreGive(lock);
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    return false;
+}
+
 bool audio_capture_running(void) { return capture.task != NULL; }

@@ -36,12 +36,13 @@ static void link_down(gateway_supervisor *sup) {
         sup->registered = 0;
     }
     if (sup->link.read_fn) {
-        /* Quiesce the writer BEFORE the transport is freed: a capture write already in flight
-         * must finish (or error) first, or on a TLS link it would touch the mbedTLS contexts
-         * after contexts_free. Bounded -- at most one small chunk. The teardown still precedes
-         * on_link_down on purpose: the fd close is what unblocks a write stuck on a dead peer,
-         * and the hook stops the capture task only once the transport is dead. */
-        if (sup->session) wy_session_quiesce_writer((wy_session *)sup->session);
+        /* The teardown is responsible for a safe shutdown of the transport and, for TLS, for
+         * freeing the mbedTLS contexts only after the socket is closed and the capture task is
+         * stopped and joined (the device's gateway_task_teardown does exactly that, in that
+         * order, and gates the free on the writer lock being idle). The state and streaming
+         * clears above already stop any NEW chunk; the teardown handles the in-flight one. The
+         * teardown still precedes on_link_down on purpose: the socket close is what unblocks a
+         * write stuck on a dead peer. */
         sup->teardown(sup->user, &sup->link);
     }
     sup->link.user = NULL;

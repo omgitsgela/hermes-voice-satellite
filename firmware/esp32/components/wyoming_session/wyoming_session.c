@@ -55,19 +55,6 @@ static void writer_unlock(wy_session *session) {
     if (session->unlock_writer) session->unlock_writer(session->writer_lock_user);
 }
 
-/* Ensure no write is in flight: take and release the writer lock. The supervisor calls this
- * right before tearing a transport down, so a concurrent capture write cannot race the free of
- * the transport's state (on a TLS link, the mbedTLS contexts). Bounded: the only thing that can
- * hold the lock is one small in-flight chunk, and it either completes or errors when the peer
- * dies -- it is never an unbounded spin. On the host the lock is a no-op (NULL callbacks). */
-int wy_session_quiesce_writer(wy_session *session) {
-    if (!session) return WY_INVALID;
-    int result = writer_lock(session);
-    if (result != WY_OK) return result;
-    writer_unlock(session);
-    return WY_OK;
-}
-
 /* One frame, whole, under the lock. */
 static int locked_send(wy_session *session, wy_write_fn write_fn, void *ctx,
                        const char *type, const char *data, const void *payload, size_t length) {
@@ -124,8 +111,10 @@ int wy_session_init(wy_session *session, const char *device_id, const char *boot
 int __attribute__((used)) wy_session_wake(wy_session *session, const char *wake_word,
                     wy_write_fn write_fn, void *ctx) {
     if (!session || !wake_word || !write_fn) return WY_INVALID;
-    if (session->state != WY_SESSION_REGISTERED && session->state != WY_SESSION_RUN_REQUESTED)
-        return WY_INVALID;
+    /* Armed only: the microphone starts on run-satellite (the armed hook), so a wake in any
+     * other state -- not registered yet, registered but not armed, or the stream already
+     * running -- would open a stream no capture task can feed. That is a drop, not a fault. */
+    if (session->state != WY_SESSION_RUN_REQUESTED) return WY_INVALID;
     if (session->paused || session->streaming) return WY_INVALID;
     if (!token_valid(wake_word, 64)) return WY_INVALID;
     char name[128];
