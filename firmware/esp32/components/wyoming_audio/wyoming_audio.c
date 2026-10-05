@@ -90,12 +90,14 @@ size_t wy_apply_volume(int16_t *pcm, size_t n, int percent) {
     if (percent < WY_VOLUME_FLOOR_PERCENT) percent = WY_VOLUME_FLOOR_PERCENT;
     if (percent > 100) percent = 100;
     for (size_t i = 0; i < n; ++i) {
-        /* int64 so the product cannot overflow; llround (half away from zero) keeps the
-         * rounding symmetric for the negative half of the range, and the result of scaling an
-         * in-range sample by <=100% is in-range, so the clamp is a guard, not the path. */
-        int64_t scaled = (int64_t)pcm[i] * (int64_t)percent / 100.0;
-        int32_t v = (int32_t)llround((double)scaled);
-        if (v > 32767) v = 32767;
+        /* Scale in double and round once: an intermediate integer cast would truncate the
+         * fraction (1 * 50 / 100 = 0, not 0.5 -> 1), which both under-scales quiet samples and
+         * rounds asymmetrically. llround (half away from zero) keeps the rounding symmetric for
+         * the negative half of the range; the product (|sample| <= 32767, percent <= 100) is far
+         * below the double's exact-integer range, so this is exact. */
+        double scaled = (double)pcm[i] * (double)percent / 100.0;
+        int32_t v = (int32_t)llround(scaled);
+        if (v > 32767) v = 32767;              /* in-range by construction; a guard, not the path */
         if (v < -32768) v = -32768;
         pcm[i] = (int16_t)v;
     }

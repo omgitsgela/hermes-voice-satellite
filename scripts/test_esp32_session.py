@@ -287,7 +287,13 @@ class SessionTests(unittest.TestCase):
                         ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
                         ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
                         ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
-                        ('writer_lock_user', C.c_void_p)]
+                        ('writer_lock_user', C.c_void_p),
+                        ('playback_active', C.c_int), ('playback_ended', C.c_int),
+                        ('playback_volume', C.c_int), ('playback_rate', C.c_int),
+                        ('playback_rs', C.c_double * 3),
+                        ('ring', C.c_void_p), ('ring_capacity', C.c_size_t),
+                        ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
+                        ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p)]
         self.assertEqual(C.sizeof(WYSession), lib.wy_session_size(), 'the host struct must match the production layout')
         session = WYSession()
         self.assertEqual(lib.wy_session_init(C.byref(session), b'control-fixture', b'boot-1'), 0)
@@ -634,6 +640,120 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(results, [b'ok', b'invalid', b'io', b'limit', b'refused'])
         self.assertEqual(len(set(results)), 5, 'each result needs its own name')
         self.assertEqual(lib.wy_result_name(7), b'unknown')
+
+
+    def playback_lib(self):
+        lib = self.library()
+        lib.wy_session_playback_configure.argtypes = [C.c_void_p, C.POINTER(C.c_int32),
+                                                      C.c_size_t, C.c_int]
+        lib.wy_session_playback_configure.restype = C.c_int
+        lib.wy_session_playback_active.argtypes = [C.c_void_p]
+        lib.wy_session_playback_active.restype = C.c_int
+        lib.wy_session_playback_ended.argtypes = [C.c_void_p]
+        lib.wy_session_playback_ended.restype = C.c_int
+        lib.wy_session_playback_bytes.argtypes = [C.c_void_p]
+        lib.wy_session_playback_bytes.restype = C.c_size_t
+        lib.wy_session_playback_read.argtypes = [C.c_void_p, C.POINTER(C.c_int32), C.c_size_t]
+        lib.wy_session_playback_read.restype = C.c_size_t
+        return lib
+
+    @staticmethod
+    def _c_llround(x):
+        import math
+        return int(math.floor(x + 0.5)) if x >= 0 else int(math.ceil(x - 0.5))
+
+    @classmethod
+    def _expected_playback_frames(cls, pcm, volume=50):
+        """The canonical reference for the playback conversion, computed independently:
+        resample 22050->16000 (absolute cursor, linear interpolation, the device's exact grid),
+        apply the clamped volume (llround), and expand to stereo 32-bit full-scale (x << 16).
+        Returns the flat list of int32 (L,R interleaved). This is the interop oracle: the device
+        must produce byte-identical frames to what a correct implementation would."""
+        import math
+        R = 22050.0 / 16000.0
+        mono = []
+        k = 0
+        while True:
+            p = k * R
+            i0 = int(math.floor(p))
+            if i0 + 1 >= len(pcm):
+                break
+            frac = p - i0
+            s = pcm[i0] * (1.0 - frac) + pcm[i0 + 1] * frac   # the device's exact lerp
+            v = cls._c_llround(s)
+            if v > 32767: v = 32767
+            if v < -32768: v = -32768
+            mono.append(v)
+            k += 1
+        vol = volume
+        if vol < 25: vol = 25
+        if vol > 100: vol = 100
+        mono = [cls._c_llround(m * vol / 100.0) for m in mono]
+        frames = []
+        for m in mono:
+            frames.append(m << 16)
+            frames.append(m << 16)
+        return frames
+
+    def test_playback_converts_a_canonical_answer_to_the_ring(self):
+        """The full playback path, canonical bridge -> device ring: an audio-start (22050/2/1),
+        an audio-chunk (a known 1024-sample PCM), and an audio-stop. The session resamples the
+        chunk to 16 kHz, applies the configured volume, and expands it to stereo 32-bit
+        full-scale, appending the exact frames to the ring -- byte-identical to an independent
+        reference. This is the device half of 'the bridge speaks, the speaker plays'."""
+        lib = self.playback_lib()
+        pcm = list(range(1024))   # a 1024-sample identity ramp, 22050 Hz mono (the input)
+        pcm_bytes = b''.join(b'%d%02d' % (abs(s) % 256, (abs(s) >> 8) % 256) for s in pcm)
+        # encode as S16_LE properly
+        import struct
+        pcm_bytes = struct.pack('<%dh' % len(pcm), *pcm)
+        expected = self._expected_playback_frames(pcm, volume=50)
+        self.assertGreater(len(expected), 0)
+
+        session = C.create_string_buffer(lib.wy_session_size())
+        self.assertEqual(lib.wy_session_init(session, b'control-fixture', b'boot-1'), 0)
+        ring = (C.c_int32 * 16384)()   # 64 KB of 32-bit frames: room for the answer
+        self.assertEqual(lib.wy_session_playback_configure(session, ring, 65536, 50), 0)
+
+        source = io.BytesIO()
+        from wyoming.audio import AudioStart, AudioChunk, AudioStop
+        write_event(AudioStart(rate=22050, width=2, channels=1).event(), source)
+        write_event(AudioChunk(rate=22050, width=2, channels=1, audio=pcm_bytes).event(), source)
+        write_event(AudioStop().event(), source)
+        source.seek(0)
+        output = io.BytesIO()
+
+        @IO
+        def reader(ctx, target, length):
+            chunk = source.read(min(3, length))
+            C.memmove(target, chunk, len(chunk))
+            return len(chunk)
+
+        @IO
+        def writer(ctx, target, length):
+            output.write(C.string_at(target, length))
+            return length
+
+        # audio-start: arms the playback
+        self.assertEqual(lib.wy_session_step(session, reader, writer, None), 0)
+        self.assertEqual(lib.wy_session_playback_active(session), 1)
+        # audio-chunk: converted into the ring
+        self.assertEqual(lib.wy_session_step(session, reader, writer, None), 0)
+        self.assertEqual(lib.wy_session_playback_active(session), 1)
+        self.assertEqual(lib.wy_session_playback_bytes(session), len(expected) * 4,
+                         'the ring must hold exactly the converted frames')
+        # audio-stop: ends the stream (the ring still holds the frames to drain)
+        self.assertEqual(lib.wy_session_step(session, reader, writer, None), 0)
+        self.assertEqual(lib.wy_session_playback_active(session), 0)
+        self.assertEqual(lib.wy_session_playback_ended(session), 1)
+        self.assertEqual(lib.wy_session_playback_bytes(session), len(expected) * 4)
+        # drain the ring and compare byte-for-byte to the canonical reference
+        got = (C.c_int32 * len(expected))()
+        self.assertEqual(lib.wy_session_playback_read(session, got, len(expected) * 4),
+                         len(expected) * 4)
+        self.assertEqual(list(got), expected,
+                         'the converted ring must be byte-identical to the canonical reference')
+        self.assertEqual(lib.wy_session_playback_bytes(session), 0, 'the ring drains to empty')
 
 
 if __name__ == '__main__':

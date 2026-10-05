@@ -9,9 +9,72 @@
  * word whether it was heard or requested. */
 #define WY_WAKE_WORD_NAME "hey-hermes"
 
+/* Playback conversion scratch, sized for the largest slice wy_session_step reads in one go
+ * (the 4096-byte body, 2048 mono samples). 2048 input samples resample to at most ~1483 mono
+ * samples and 2966 stereo-32 frames, so these hold any slice with margin. File-static (not
+ * heap) and owned by the single gateway task: the conversion runs inside wy_session_step, and
+ * the playback task reads only the ring, never the scratch. */
+#define WY_PLAYBACK_MONO_MAX   2048u   /* int16: resampled 16 kHz mono, one slice */
+#define WY_PLAYBACK_FRAME_MAX  4096u   /* int32: stereo-32 frames, one slice */
+static int16_t playback_mono_scratch[WY_PLAYBACK_MONO_MAX];
+static int32_t playback_frame_scratch[WY_PLAYBACK_FRAME_MAX];
+
+/* Append n stereo-32 frames to the playback ring, dropping the OLDEST on overflow: a late
+ * sample is unplayable the moment it could no longer reach the speaker in time, and dropping
+ * keeps the link (and the conversion) moving instead of wedging on a full ring. */
+static void playback_ring_append(wy_session *session, const int32_t *frames, size_t n) {
+    size_t cap = session->ring_capacity / 4;
+    if (!session->ring || cap == 0 || n == 0) return;
+    for (size_t i = 0; i < n; ++i) {
+        if ((session->ring_tail + 1) % cap == session->ring_head)
+            session->ring_head = (session->ring_head + 1) % cap;   /* full: drop the oldest */
+        session->ring[session->ring_tail] = frames[i];
+        session->ring_tail = (session->ring_tail + 1) % cap;
+    }
+}
+
 size_t wy_session_size(void) { return sizeof(wy_session); }
 int wy_session_state(const wy_session *session) { return session ? session->state : WY_SESSION_FAILED; }
 int wy_session_streaming(const wy_session *session) { return session ? session->streaming : 0; }
+
+int wy_session_playback_configure(wy_session *session, int32_t *ring, size_t ring_capacity,
+                                  int volume) {
+    if (!session || !ring || ring_capacity == 0 || ring_capacity % 4) return WY_INVALID;
+    session->ring = ring;
+    session->ring_capacity = ring_capacity;
+    session->ring_head = 0;
+    session->ring_tail = 0;
+    session->playback_volume = volume;   /* clamped in wy_apply_volume; the floor never silences */
+    session->playback_active = 0;
+    session->playback_ended = 0;
+    wy_resampler_reset(&session->playback_rs);
+    return WY_OK;
+}
+
+int wy_session_playback_active(const wy_session *session) {
+    return session ? session->playback_active : 0;
+}
+int wy_session_playback_ended(const wy_session *session) {
+    return session ? session->playback_ended : 0;
+}
+size_t wy_session_playback_bytes(const wy_session *session) {
+    if (!session || !session->ring || session->ring_capacity % 4) return 0;
+    size_t cap = session->ring_capacity / 4;
+    return ((session->ring_tail - session->ring_head + cap) % cap) * 4;
+}
+size_t wy_session_playback_read(wy_session *session, int32_t *dst, size_t cap) {
+    if (!session || !dst || cap == 0 || !session->ring) return 0;
+    size_t cap_el = session->ring_capacity / 4;
+    if (cap_el == 0) return 0;
+    size_t avail = (session->ring_tail - session->ring_head + cap_el) % cap_el;
+    size_t take = cap / 4;
+    if (take > avail) take = avail;
+    for (size_t i = 0; i < take; ++i) {
+        dst[i] = session->ring[session->ring_head];
+        session->ring_head = (session->ring_head + 1) % cap_el;
+    }
+    return take * 4;
+}
 
 const char *wy_session_state_name(int state) {
     switch (state) {
@@ -193,17 +256,50 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
         }
     }
     if (frame.payload_length) {
-        /* The payload is audio and is drained off the wire but NOT kept: it can be as large as
-         * WY_PAYLOAD_MAX (16 KiB), far beyond the 4 KiB parse body, so it is read in bounded
-         * body-sized slices and discarded. Reading it whole into session->body wrote up to 12 KiB
-         * past the buffer (a heap overflow proven to corrupt the next frame under ASan). Slicing
-         * keeps every read within the body and leaves the wire positioned at the next header. */
-        size_t remaining = frame.payload_length;
-        while (remaining) {
-            size_t slice = remaining < sizeof(session->body) ? remaining : sizeof(session->body);
-            result = wy_read_exact(read_fn, ctx, session->body, slice);
-            if (result) goto done;
-            remaining -= slice;
+        if (session->playback_active && !strcmp(frame.type, "audio-chunk")) {
+            /* Inbound playback for the speaker: convert the PCM as it is drained. The payload
+             * can be as large as WY_PAYLOAD_MAX (16 KiB), beyond the 4 KiB body, so it is read
+             * in bounded body-sized slices -- each slice resampled to the board's 16 kHz (the
+             * resampler's absolute cursor makes the slices continuous), volume-applied (the
+             * floor can never silence), expanded to the I2S TX's stereo-32 full-scale, and
+             * appended to the ring. The wire is left at the next header either way. */
+            size_t remaining = frame.payload_length;
+            while (remaining) {
+                size_t slice = remaining < sizeof(session->body) ? remaining : sizeof(session->body);
+                size_t even = slice & 1 ? slice - 1 : slice;   /* whole 16-bit samples only */
+                if (even) {
+                    result = wy_read_exact(read_fn, ctx, session->body, even);
+                    if (result) goto done;
+                    size_t samples = even / 2;
+                    size_t mono_n = wy_resample_22050_to_16000(&session->playback_rs,
+                                        (const int16_t *)session->body, samples,
+                                        playback_mono_scratch, WY_PLAYBACK_MONO_MAX);
+                    wy_apply_volume(playback_mono_scratch, mono_n, session->playback_volume);
+                    size_t frame_n = wy_expand_mono16_to_stereo32(playback_mono_scratch, mono_n,
+                                        playback_frame_scratch, WY_PLAYBACK_FRAME_MAX);
+                    playback_ring_append(session, playback_frame_scratch, frame_n);
+                    remaining -= even;
+                }
+                if (remaining & 1) {
+                    /* A lone trailing byte cannot be a sample: drain it off the wire and drop it. */
+                    result = wy_read_exact(read_fn, ctx, session->body, 1);
+                    if (result) goto done;
+                    remaining--;
+                }
+            }
+        } else {
+            /* Any other payload (a chunk with no active stream, or a stream this device did not
+             * arm) is drained off the wire but NOT kept: it can be as large as WY_PAYLOAD_MAX
+             * (16 KiB), far beyond the 4 KiB parse body, so it is read in bounded body-sized
+             * slices and discarded. Reading it whole into session->body wrote up to 12 KiB past
+             * the buffer (a heap overflow proven to corrupt the next frame under ASan). */
+            size_t remaining = frame.payload_length;
+            while (remaining) {
+                size_t slice = remaining < sizeof(session->body) ? remaining : sizeof(session->body);
+                result = wy_read_exact(read_fn, ctx, session->body, slice);
+                if (result) goto done;
+                remaining -= slice;
+            }
         }
     }
     if (!strcmp(frame.type, "describe")) {
@@ -266,13 +362,38 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
             result = WY_INVALID;
         else
             result = stop_streaming(session, write_fn, ctx);
-    } else if (!strcmp(frame.type, "audio-start") ||
-               !strcmp(frame.type, "audio-chunk") ||
-               !strcmp(frame.type, "audio-stop")) {
-        /* Inbound playback audio. The speaker path is a later increment, but these frames are
-         * expected parts of the protocol: the payload is already drained, so the link stays
-         * usable. Refusing them -- the old behavior, which refused every payload -- killed the
-         * session the first time the bridge spoke. */
+    } else if (!strcmp(frame.type, "audio-start")) {
+        /* The bridge's answer begins. The device plays the stream on the board's clock: it must
+         * be the bridge's SND_FORMAT (22050 Hz / 16-bit / mono) -- the one rate this device
+         * resamples to its 16 kHz I2S. A start in any other format is not armed: its chunks are
+         * drained and its stop ignored, so an unplayable stream cannot wedge the link or leave
+         * a half-armed ring. Arming is not a fault either way (well-formed, expected). */
+        const cJSON *rate = cJSON_GetObjectItemCaseSensitive(data, "rate");
+        const cJSON *width = cJSON_GetObjectItemCaseSensitive(data, "width");
+        const cJSON *channels = cJSON_GetObjectItemCaseSensitive(data, "channels");
+        if (cJSON_IsNumber(rate) && rate->valuedouble == 22050 &&
+            cJSON_IsNumber(width) && width->valuedouble == 2 &&
+            cJSON_IsNumber(channels) && channels->valuedouble == 1) {
+            wy_resampler_reset(&session->playback_rs);
+            session->ring_head = 0;
+            session->ring_tail = 0;
+            session->playback_active = 1;
+            session->playback_ended = 0;
+        }
+    } else if (!strcmp(frame.type, "audio-chunk")) {
+        /* Inbound playback audio: converted into the ring by the payload block above when the
+         * stream is armed, drained and discarded when it is not. Either way the link stays
+         * usable -- refusing a payload (the old behavior) killed the session the first time the
+         * bridge spoke. */
+    } else if (!strcmp(frame.type, "audio-stop")) {
+        /* The answer is over. The stream ends, but the ring KEEPS whatever has not been played
+         * yet: the playback task drains it at realtime, and only when it is empty and the stream
+         * is ended does the glue arm the amplifier off. A stop with no armed stream is ignored,
+         * not a fault. */
+        if (session->playback_active) {
+            session->playback_active = 0;
+            session->playback_ended = 1;
+        }
     } else if (!strcmp(frame.type, "wake-now")) {
         /* The bridge's "open the microphone" command, for a follow-up window that has no wake
          * word: the reference device's wake shim answers it by injecting a synthetic detection.

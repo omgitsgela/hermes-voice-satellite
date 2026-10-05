@@ -273,9 +273,10 @@ class AudioTests(unittest.TestCase):
         self.assertEqual(list(pcm), [32767, -32768, 12345], '100 percent is the identity')
         pcm2 = (C.c_int16 * 3)(32767, -32768, 12345)
         lib.wy_apply_volume(pcm2, 3, 50)
-        self.assertEqual(pcm2[0], 16383, '50 percent halves (rounded)')
+        # 50 percent halves, rounded half away from zero: 16383.5 -> 16384, 6172.5 -> 6173.
+        self.assertEqual(pcm2[0], 16384, '50 percent halves, rounded half away from zero')
         self.assertEqual(pcm2[1], -16384)
-        self.assertIn(pcm2[2], (6172, 6173), '50 percent halves a mid value (±1 for rounding)')
+        self.assertEqual(pcm2[2], 6173)
 
     def test_volume_stays_in_range_and_is_monotonic(self):
         """Full-scale input at any permitted level stays in the int16 range, and a higher level
@@ -288,6 +289,10 @@ class AudioTests(unittest.TestCase):
         lib.wy_apply_volume(lo, 1, 30)
         lib.wy_apply_volume(hi, 1, 70)
         self.assertGreaterEqual(hi[0], lo[0], 'a higher level must not be quieter')
+        # quiet samples must not be truncated to zero by the scaling: 1 * 50% = 0.5 rounds to 1
+        quiet = (C.c_int16 * 1)(1)
+        lib.wy_apply_volume(quiet, 1, 50)
+        self.assertEqual(quiet[0], 1, 'half a sample rounds to a sample, it is not truncated away')
         # empty is a no-op
         self.assertEqual(lib.wy_apply_volume(None, 0, 50), 0)
 

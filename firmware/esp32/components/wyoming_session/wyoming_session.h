@@ -23,6 +23,23 @@ typedef struct {
     int (*lock_writer)(void *user);
     int (*unlock_writer)(void *user);
     void *writer_lock_user;
+    /* The playback (bridge -> speaker) side: a bounded byte ring of I2S-ready stereo-32 frames
+     * the session core (the gateway task) writes as each inbound audio-chunk is converted, and
+     * the playback task reads at realtime. The ring is caller-provided (PSRAM on the device);
+     * the conversion buffers are internal. Active from audio-start to audio-stop; `ended` marks
+     * the stream complete so the glue can drain, then arm the amp off. */
+    int playback_active;  /* 1 between audio-start and audio-stop */
+    int playback_ended;   /* 1 after audio-stop (the ring still drains) */
+    int playback_volume;  /* percent, the no-silence floor applied in wy_apply_volume */
+    int playback_rate;    /* the stream's rate, from audio-start (the bridge's 22050) */
+    wy_resampler playback_rs;
+    int32_t *ring;        /* caller-provided; NULL on the host until configured */
+    size_t ring_capacity; /* bytes */
+    size_t ring_head;     /* read pointer, bytes consumed */
+    size_t ring_tail;     /* write pointer, bytes appended */
+    int16_t *pcm;         /* inbound chunk PCM (S16), up to WY_PAYLOAD_MAX */
+    int16_t *mono;        /* resampled 16 kHz mono */
+    int32_t *frames;      /* expanded stereo-32, ready for the ring */
 } wy_session;
 size_t wy_session_size(void);
 int wy_session_init(wy_session *session, const char *device_id, const char *boot_id);
@@ -53,6 +70,21 @@ int wy_session_wake(wy_session *session, const char *wake_word,
 int wy_session_send_audio(wy_session *session, const void *pcm, size_t length,
                           wy_write_fn write_fn, void *ctx);
 int wy_session_streaming(const wy_session *session);
+
+/* Playback (bridge -> speaker). configure wires a caller-provided ring (bytes) and the volume
+ * into the session before the link is driven; the device calls it once at startup (PSRAM ring).
+ * The core converts each inbound audio-chunk -- resample to 16 kHz, apply the volume (no
+ * silence floor), expand to the I2S TX's stereo 32-bit full-scale -- and appends the frames to
+ * the ring, dropping the OLDEST on overflow (a late sample is unplayable; the link stays
+ * alive). The playback task reads the ring at realtime. read() drains up to `cap` bytes of
+ * I2S-ready frames from the ring head and advances it. active/ended/bytes report the stream
+ * state. All accessors are safe on a NULL session. */
+int wy_session_playback_configure(wy_session *session, int32_t *ring, size_t ring_capacity,
+                                  int volume);
+int wy_session_playback_active(const wy_session *session);
+int wy_session_playback_ended(const wy_session *session);
+size_t wy_session_playback_bytes(const wy_session *session);
+size_t wy_session_playback_read(wy_session *session, int32_t *dst, size_t cap);
 
 /* Stable, human-readable names for session state and result codes, used in reports. A code
  * this build does not know reports as "unknown" rather than being silently unnamed. */
