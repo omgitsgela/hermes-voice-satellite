@@ -159,10 +159,21 @@ int wy_session_init(wy_session *session, const char *device_id, const char *boot
     int (*lock_writer)(void *) = session->lock_writer;
     int (*unlock_writer)(void *) = session->unlock_writer;
     void *writer_lock_user = session->writer_lock_user;
+    /* The playback ring (a PSRAM buffer the glue allocates once) and the volume are the same
+     * kind of installed-once config: the supervisor re-inits this SAME buffer on every
+     * reconnect, so a re-init that wiped them would leave the session's single writer appending
+     * into a NULL ring (or at a zeroed volume) after the first reconnect. Preserve the config;
+     * the live stream state (active/ended/head/tail/resampler) is correctly reset by the memset. */
+    int32_t *playback_ring = session->ring;
+    size_t playback_ring_capacity = session->ring_capacity;
+    int playback_volume = session->playback_volume;
     memset(session, 0, sizeof(*session));
     session->lock_writer = lock_writer;
     session->unlock_writer = unlock_writer;
     session->writer_lock_user = writer_lock_user;
+    session->ring = playback_ring;
+    session->ring_capacity = playback_ring_capacity;
+    session->playback_volume = playback_volume;
     session->state = WY_SESSION_FAILED;
     if (!token_valid(device_id, 64) || !token_valid(boot_id, 128)) return WY_INVALID;
     strcpy(session->device_id, device_id);

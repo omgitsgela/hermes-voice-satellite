@@ -3,6 +3,7 @@
 import asyncio
 import ctypes as C
 import socket
+import struct
 import sys
 import time
 import io
@@ -316,6 +317,81 @@ class SessionTests(unittest.TestCase):
         # one runs the install. The install ran once; the call below is the second hit.
         session.lock_writer(None)
         self.assertEqual(acquired[0], 1, 'the re-init wiped the writer-lock callback')
+
+    def test_reinit_preserves_the_playback_ring(self):
+        """The device glue configures the playback ring (a PSRAM buffer it owns) once, and the
+        supervisor re-inits the SAME session buffer on every reconnect. An init that memsets the
+        ring fields would leave the session's single writer appending into a NULL ring after the
+        first reconnect. The ring pointer, capacity, and volume must survive a re-init, the way
+        the writer-lock fields already do; the live stream state (active/ended) must be reset,
+        because a reconnect ends the answer. Proven end-to-end: after the re-init, a canonical
+        answer stream must land its converted frames in the ORIGINAL ring buffer."""
+        lib = self.library()
+        WY_HEADER_MAX, WY_DATA_MAX = 1024, 4096
+        class WYSession(C.Structure):
+            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
+                        ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
+                        ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
+                        ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
+                        ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
+                        ('writer_lock_user', C.c_void_p),
+                        ('playback_active', C.c_int), ('playback_ended', C.c_int),
+                        ('playback_volume', C.c_int), ('playback_rate', C.c_int),
+                        ('playback_rs', C.c_double * 3),
+                        ('ring', C.c_void_p), ('ring_capacity', C.c_size_t),
+                        ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
+                        ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p)]
+        self.assertEqual(C.sizeof(WYSession), lib.wy_session_size(), 'the host struct must match the production layout')
+        session = WYSession()
+        self.assertEqual(lib.wy_session_init(C.byref(session), b'control-fixture', b'boot-1'), 0)
+        ring = (C.c_int32 * 4096)()
+        ring_ptr = C.cast(ring, C.c_void_p).value
+        self.assertEqual(lib.wy_session_playback_configure(C.byref(session), ring, 4096 * 4, 30), 0)
+        # Re-init, exactly as the supervisor does on a reconnect.
+        self.assertEqual(lib.wy_session_init(C.byref(session), b'control-fixture', b'boot-2'), 0)
+        # The ring pointer and capacity survive: a wiped field is NULL/0, and the next answer's
+        # ring-append would write through NULL.
+        self.assertEqual(session.ring, ring_ptr, 'the re-init wiped the ring pointer')
+        self.assertEqual(session.ring_capacity, 4096 * 4, 'the re-init wiped the ring capacity')
+        self.assertEqual(session.playback_volume, 30, 'the re-init wiped the volume')
+        # The live stream state must be reset by the re-init, not preserved.
+        self.assertEqual(session.playback_active, 0, 'a re-init ends any live stream')
+        self.assertEqual(session.playback_ended, 0, 'a re-init clears the ended flag')
+        # End-to-end: a canonical answer after the re-init must convert and land in the ORIGINAL
+        # ring buffer. If the ring were wiped, playback_bytes would be 0 and nothing would arrive.
+        pcm = struct.pack('<8h', *range(8))
+        source = io.BytesIO()
+        for event in [Event(type='describe'),
+                      Event(type='hermes.register.ok',
+                            data={'device_id': 'control-fixture', 'protocol_version': 1}),
+                      Event(type='audio-start', data={'rate': 22050, 'width': 2, 'channels': 1}),
+                      Event(type='audio-chunk', data={'rate': 22050, 'width': 2, 'channels': 1,
+                                                      'timestamp': 0}, payload=pcm),
+                      Event(type='audio-stop')]:
+            write_event(event, source)
+        source.seek(0)
+        output = io.BytesIO()
+        @IO
+        def reader(ctx, target, length):
+            chunk = source.read(min(6, length))
+            C.memmove(target, chunk, len(chunk))
+            return len(chunk)
+        @IO
+        def writer(ctx, target, length):
+            out = C.string_at(target, length)
+            output.write(out)
+            return length
+        for expected in [1, 2, 2, 2, 2]:
+            self.assertEqual(lib.wy_session_step(C.byref(session), reader, writer, None), 0)
+            self.assertEqual(lib.wy_session_state(C.byref(session)), expected)
+        self.assertEqual(session.playback_active, 0, 'the answer has ended')
+        self.assertEqual(session.playback_ended, 1, 'the answer has ended')
+        self.assertTrue(lib.wy_session_playback_bytes(C.byref(session)) > 0,
+                        'the converted frames did not reach the original ring after the re-init')
+        # And the frames really are in the buffer the test owns (not a phantom count).
+        got = (C.c_int32 * 16)()
+        self.assertTrue(lib.wy_session_playback_read(C.byref(session), got, len(got) * 4) > 0)
+        self.assertEqual(ring[0], got[0], 'the ring the test owns holds the first frame')
 
     def test_playback_audio_is_accepted_without_tearing_the_link(self):
         """The bridge sends audio-start / audio-chunk / audio-stop for playback, and it sends

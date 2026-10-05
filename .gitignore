@@ -29,6 +29,8 @@ bridge.env
 .worktrees/
 # private operating notes: these live in ~/.hermes/skills, not in a published repo
 skills/
+# the agent's local operating directory (plans and working notes): never committed
+.hermes/
 
 # Private and upstream material: these are kept inside the backup mirror, deliberately outside this
 # tree, and the mirror's pruning protects them there. Nothing here should ever be committed: the

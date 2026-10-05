@@ -7,6 +7,8 @@
 #include "provisioning.h"
 #include "device_identity.h"
 #include "audio_capture.h"
+#include "audio_playback.h"
+#include "wyoming_audio.h"   /* WY_VOLUME_DEFAULT_PERCENT: the device's conservative default level */
 #include "wyoming_session.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -25,6 +27,13 @@
 #define GATEWAY_REGISTER_BUDGET_MS 25000  /* the register exchange, the same budget the one-shot run uses */
 #define GATEWAY_BACKOFF_BASE_US 2000000LL   /* 2 s: a bridge that just restarted is often back in seconds */
 #define GATEWAY_BACKOFF_MAX_US 60000000LL   /* 60 s: capped so a satellite never gives up, but never hammers */
+/* The playback ring, sized for the bridge's 2x send pace. Each slot is one int32 (one channel
+ * sample); a stereo-32 frame is two slots. At 2x pace the device receives each second of an
+ * answer in 0.5 s and plays it in 1 s, so the ring's lead grows to HALF the answer length at the
+ * end of the send, then decays. A 30 s answer therefore needs ~15 s of hold. 16 s of stereo-32
+ * at 16 kHz = 16 * 16000 * 2 = 512000 slots = 2 MiB of PSRAM (ample on the 8 MiB XIAO S3).
+ * Overflow drops the OLDEST frame (a late sample is unplayable), never the link. */
+#define GATEWAY_PLAYBACK_RING_FRAMES 512000
 
 static struct {
     char host[PROVISION_HOST_MAX];
@@ -95,22 +104,37 @@ static int gateway_task_establish(void *user, gw_link *link) {
 /* Called by the supervisor exactly when a session (re)reaches registered: the handshake regime
  * is over, the idle regime begins, and an idle read is the healthy state. Lifting the deadline
  * to "no deadline" is what makes the persistent read block until a real end of stream instead of
- * erroring at the register budget every time the link idles. */
+ * erroring at the register budget every time the link idles. The bridge can also SPEAK from this
+ * moment, so the I2S TX and the pump must exist before the first answer: the DMA is primed, and
+ * there is no channel bring-up latency on the first chunk of a TTS answer. Idempotent, so a
+ * re-registration after a link bounce (which stopped the pump in on_link_down) starts it again. */
 static int gateway_task_on_registered(void *user) {
     (void)user;
     if (state.transport == PROVISION_TRANSPORT_TLS)
         gateway_tls_link_set_deadline(&state.tls_link, GATEWAY_SOCKET_NO_DEADLINE);
     else
         state.tcp_socket.deadline_us = GATEWAY_SOCKET_NO_DEADLINE;
+    audio_playback_start();
     return 0;
 }
 
 /* Stop the microphone when the link goes down. The capture task and this task share the
  * transport's writer; a link-down that left the capture task pointing at a dead transport
- * would hand it a writer that is about to be reused by the next dial. */
+ * would hand it a writer that is about to be reused by the next dial. The speaker is stopped
+ * too (idempotent: the TLS teardown calls this hook twice, once directly and once from the
+ * supervisor's link_down).
+ *
+ * The ORDER is load-bearing, not incidental: the playback TX is created first (at
+ * registration) and is the full-duplex clock MASTER; the capture RX is created later (at
+ * run-satellite) and is demoted to the slave that samples on the TX's looped-back BCLK/WS
+ * (see audio_playback.c). The microphone's clock is therefore the speaker's clock, so the
+ * slave (capture) must be torn down BEFORE the master (playback) -- stop the TX first and the
+ * mic loses its clock for the rest of the link. Reordering these two calls is a live-mic
+ * regression, not a refactor. */
 static void gateway_task_on_link_down(void *user) {
     (void)user;
     audio_capture_stop();
+    audio_playback_stop();
 }
 
 /* Start the microphone the moment the bridge's run-satellite arms the session, and stop it
@@ -207,6 +231,7 @@ static void gateway_task_fn(void *argument) {
         break;
         }
         audio_capture_stop();
+        audio_playback_stop();
         wifi_station_release();
     active = false;
     vTaskDelete(NULL);
@@ -238,6 +263,27 @@ int gateway_task_start(const char *host, unsigned port, int transport,
                                 state.report, sizeof(state.report),
                                 gateway_task_on_registered, gateway_task_on_link_down) != 0) {
         return -1;
+    }
+
+    /* The playback ring is a device-lifetime PSRAM buffer: the bridge's answers convert into it
+     * and the pump reads it at realtime. It is allocated once here and configured into the
+     * session, which the supervisor owns for its whole life -- so it must survive the per-link
+     * re-init (wy_session_init preserves the ring config, proven by the host test). The volume
+     * is the device's conservative default; the live test calibrates it, and increment 3's
+     * configuration plane can later override it per the bridge's volume command. A failed
+     * allocation is not fatal to the link: playback simply has no ring to fill (the session
+     * treats a NULL ring as "drain but don't keep"), so the satellite still registers, listens,
+     * and streams the mic -- it just does not yet speak. */
+    void *session = gateway_supervisor_session(&supervisor);
+    int32_t *ring = heap_caps_calloc(GATEWAY_PLAYBACK_RING_FRAMES, sizeof(int32_t),
+                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (ring) {
+        wy_session_playback_configure((wy_session *)session, ring,
+                                      GATEWAY_PLAYBACK_RING_FRAMES * sizeof(int32_t),
+                                      WY_VOLUME_DEFAULT_PERCENT);
+        audio_playback_set_session(session);
+    } else {
+        gateway_report_append(state.report, sizeof(state.report), "playback=unavailable reason=psram");
     }
 
     TaskHandle_t handle = NULL;
