@@ -51,6 +51,12 @@ static struct {
 static gateway_supervisor supervisor;
 static volatile bool active;
 static portMUX_TYPE state_lock = portMUX_INITIALIZER_UNLOCKED;
+/* The gateway's playback ring (PSRAM). A gateway restart frees the old session (the
+ * supervisor does it on re-init) and thus the only pointer to the old ring, so the ring is
+ * owned HERE, by the gateway, and freed here on the terminal stop and on a restart that
+ * re-allocates. It is cleared only once the new pump is confirmed running (or the start has
+ * failed) so the pump never points at a ring that has just been freed. */
+static int32_t *playback_ring;
 
 /* Establish one link: bring the radio up to the held network (fresh each attempt, which is also
  * how a dropped Wi-Fi link recovers), then dial the endpoint. For TLS the handshake -- and the
@@ -231,7 +237,11 @@ static void gateway_task_fn(void *argument) {
         break;
         }
         audio_capture_stop();
-        audio_playback_stop();
+        audio_playback_stop();   /* the pump is joined and the amp disarmed */
+        if (playback_ring) {     /* the pump no longer reads it: release the ring */
+            heap_caps_free(playback_ring);
+            playback_ring = NULL;
+        }
         wifi_station_release();
     active = false;
     vTaskDelete(NULL);
@@ -266,25 +276,37 @@ int gateway_task_start(const char *host, unsigned port, int transport,
     }
 
     /* The playback ring is a device-lifetime PSRAM buffer: the bridge's answers convert into it
-     * and the pump reads it at realtime. It is allocated once here and configured into the
-     * session, which the supervisor owns for its whole life -- so it must survive the per-link
-     * re-init (wy_session_init preserves the ring config, proven by the host test). The volume
-     * is the device's conservative default; the live test calibrates it, and increment 3's
-     * configuration plane can later override it per the bridge's volume command. A failed
-     * allocation is not fatal to the link: playback simply has no ring to fill (the session
-     * treats a NULL ring as "drain but don't keep"), so the satellite still registers, listens,
-     * and streams the mic -- it just does not yet speak. */
+     * and the pump reads it at realtime. It is owned here (the file-static playback_ring), not
+     * in the session -- a gateway restart frees the old session (the supervisor does it on
+     * re-init), and the old session's ring pointer is the ONLY reference to the old ring, so
+     * the gateway must free the old ring before it allocates the next one, or every restart
+     * leaks 2 MiB (and after ~3 restarts the 8 MiB PSRAM is exhausted). The old pump is
+     * already stopped by the previous run's terminal path, so the old ring has no reader. The
+     * volume is the device's conservative default; the live test calibrates it, and
+     * increment 3's configuration plane can later override it per the bridge's volume command.
+     * A failed allocation is not fatal to the link: playback simply has no ring to fill (the
+     * session treats a NULL ring as "drain but don't keep"), so the satellite still registers,
+     * listens, and streams the mic -- it just does not yet speak. */
     void *session = gateway_supervisor_session(&supervisor);
     int32_t *ring = heap_caps_calloc(GATEWAY_PLAYBACK_RING_FRAMES, sizeof(int32_t),
                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (playback_ring) {   /* a previous run's ring: the old pump is stopped, free it */
+        heap_caps_free(playback_ring);
+        playback_ring = NULL;
+    }
     if (ring) {
         wy_session_playback_configure((wy_session *)session, ring,
                                       GATEWAY_PLAYBACK_RING_FRAMES * sizeof(int32_t),
                                       WY_VOLUME_DEFAULT_PERCENT);
-        audio_playback_set_session(session);
+        playback_ring = ring;
     } else {
         gateway_report_append(state.report, sizeof(state.report), "playback=unavailable reason=psram");
     }
+    /* Point the pump at THIS session unconditionally, not only when the ring allocated: on a
+     * restart the session the pump held before was just freed by the supervisor's re-init, and
+     * a start whose ring allocation failed must not leave the pump reading that freed block
+     * (a use-after-free). Every accessor is safe on a NULL ring. */
+    audio_playback_set_session(session);
 
     TaskHandle_t handle = NULL;
     if (xTaskCreate(gateway_task_fn, "gw_task", GATEWAY_TASK_STACK, NULL,

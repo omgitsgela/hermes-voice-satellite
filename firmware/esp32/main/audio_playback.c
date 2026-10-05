@@ -62,6 +62,11 @@ static i2s_chan_handle_t tx;
 static TaskHandle_t task;
 static volatile int stopping;
 static void *session;   /* the supervisor's session; the ring's single reader is the pump task */
+/* How long audio can still be playing after the ring drains: i2s_channel_write returns when
+ * the DMA has COPIED the chunk, not when it has PLAYED it, so up to the whole DMA queue is
+ * still in flight when the ring empties. total_dma_buf_size (bytes) / (16 kHz * 2 ch * 4 B)
+ * is that many bytes expressed in realtime -- the tail the amp must survive (finding F4). */
+static int32_t playback_drain_ms;
 
 void audio_playback_set_session(void *s) { session = s; }
 
@@ -99,23 +104,33 @@ static void playback_task_fn(void *argument) {
     (void)argument;
     int32_t frame[PLAYBACK_FRAME_BATCH];   /* one I2S write's worth of stereo-32 frames */
     int amp_armed = 0;
+    TickType_t drain_until = 0;   /* tick the amp rests until, once the stream goes quiet */
     for (;;) {
         if (stopping) break;
         void *s = session;
         if (!s) { vTaskDelay(pdMS_TO_TICKS(5)); continue; }
-        /* Drive the amplifier from the session state: it is on exactly while an answer is
-         * active or still draining, and off the moment the last sample has been played -- AND
-         * the session is not already arming the next one (a bridge can start the next answer
-         * while the last is still draining; re-arming mid-drain would click at the seam). The
+        /* Drive the amplifier from the session state: on exactly while an answer is active or
+         * still draining. The subtlety (finding F4): i2s_channel_write returns when the DMA has
+         * COPIED the last chunk, not when the speaker has PLAYED it, so the ring can be empty
+         * while up to the whole DMA queue is still sounding. Disarming the instant the ring
+         * empties would clip the tail of every answer. So when the stream goes quiet we hold
+         * the amp for playback_drain_ms (an upper bound on the in-flight DMA) before resting it,
+         * and cancel that rest the moment the next answer becomes active or queues audio. The
          * I2C write happens at most once per transition, so the per-call bus cost is immaterial. */
         int playing = wy_session_playback_active(s) || wy_session_playback_bytes(s) > 0;
-        if (playing && !amp_armed) {
-            audio_playback_amp(1);
-            amp_armed = 1;
-        } else if (!playing && amp_armed) {
-            audio_playback_amp(0);
-            amp_armed = 0;
-            vTaskDelay(pdMS_TO_TICKS(10));   /* the stream is over and drained: idle */
+        if (playing) {
+            drain_until = 0;   /* audio is flowing or queued: no pending rest */
+            if (!amp_armed) { audio_playback_amp(1); amp_armed = 1; }
+        } else if (amp_armed) {
+            if (!drain_until) drain_until = xTaskGetTickCount() + pdMS_TO_TICKS(playback_drain_ms);
+            if (xTaskGetTickCount() >= drain_until) {
+                drain_until = 0;
+                audio_playback_amp(0);
+                amp_armed = 0;
+                vTaskDelay(pdMS_TO_TICKS(10));   /* the stream is over and the DMA has drained */
+                continue;
+            }
+            vTaskDelay(pdMS_TO_TICKS(2));   /* still discharging the DMA: keep the amp on */
             continue;
         }
         size_t n = wy_session_playback_read(s, frame, sizeof(frame));   /* bytes, <= sizeof(frame) */
@@ -162,6 +177,18 @@ int audio_playback_start(void) {
         tx = NULL;
         return -1;
     }
+    /* Size the amp's drain rest (F4) from the real DMA queue the driver allocated, not a guess.
+     * total_dma_buf_size is the whole queue in bytes; at 16 kHz * 2 ch * 4 B = 64000 B/s that is
+     * a real-time duration. It is an UPPER bound on how long audio can still be sounding after the
+     * ring drains, so resting the amp exactly that long can never clip the tail, and it is short
+     * enough (a few hundred ms) that an idle amp barely overruns its silence. A failed query
+     * leaves the drain at 0, i.e. the pre-fix behaviour, which is still safe (no UAF), just a
+     * possible clipped tail. */
+    i2s_chan_info_t info;
+    if (i2s_channel_get_info(tx, &info) == ESP_OK && info.total_dma_buf_size > 0)
+        playback_drain_ms = (int32_t)((uint64_t)info.total_dma_buf_size * 1000u / 64000u);
+    else
+        playback_drain_ms = 0;
     /* The TX clocks out silence until the first write, and the amp stays off until the session
      * says an answer is playing, so starting the channel early (at registration, before the
      * first wake) is what makes the first answer start clean: the DMA is already primed. */

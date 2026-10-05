@@ -3,6 +3,10 @@
 #include "cJSON.h"
 #include <stdio.h>
 #include <string.h>
+#ifdef ESP_PLATFORM
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#endif
 
 /* The wake word name this device reports. The local detector (a later increment) and the
  * bridge's wake-now both report the same name, so the bridge's capture path sees one wake
@@ -12,17 +16,46 @@
 /* Playback conversion scratch, sized for the largest slice wy_session_step reads in one go
  * (the 4096-byte body, 2048 mono samples). 2048 input samples resample to at most ~1483 mono
  * samples and 2966 stereo-32 frames, so these hold any slice with margin. File-static (not
- * heap) and owned by the single gateway task: the conversion runs inside wy_session_step, and
- * the playback task reads only the ring, never the scratch. */
+ * heap), shared by every wy_session_step driver (the gateway task and the USB console both
+ * drive the session core), so it is used only WHILE HOLDING the ring lock below: a second
+ * converter that began mid-slice would otherwise clobber the first's buffers and append
+ * corrupted frames.
+ *
+ * The ring lock also exists because the ring is NOT a pure single-writer/single-reader queue:
+ * the overflow policy is "drop the OLDEST", which means the WRITER (the gateway task, in
+ * playback_ring_append) must advance the READ pointer (ring_head) when the ring is full. The
+ * reader (the playback task, in wy_session_playback_read) advances the same pointer. Two
+ * non-atomic read-modify-write sites on one size_t, on two cores (CONFIG_FREERTOS_NUMBER_OF_
+ * CORES=2), is a race: a lost update moves the head backwards (replaying dropped samples,
+ * the ring appearing empty when full -- a stall) or skips slots. The mutex makes each
+ * append/read/bytes/reset atomic with respect to the other. On the host the session is
+ * single-threaded, so the lock compiles out and the layout is unchanged. */
 #define WY_PLAYBACK_MONO_MAX   2048u   /* int16: resampled 16 kHz mono, one slice */
 #define WY_PLAYBACK_FRAME_MAX  4096u   /* int32: stereo-32 frames, one slice */
 static int16_t playback_mono_scratch[WY_PLAYBACK_MONO_MAX];
 static int32_t playback_frame_scratch[WY_PLAYBACK_FRAME_MAX];
+#ifdef ESP_PLATFORM
+static SemaphoreHandle_t playback_ring_lock;
+#endif
+
+static void playback_ring_lock_take(void) {
+#ifdef ESP_PLATFORM
+    if (!playback_ring_lock) playback_ring_lock = xSemaphoreCreateMutex();
+    if (playback_ring_lock) xSemaphoreTake(playback_ring_lock, portMAX_DELAY);
+#endif
+}
+static void playback_ring_lock_give(void) {
+#ifdef ESP_PLATFORM
+    if (playback_ring_lock) xSemaphoreGive(playback_ring_lock);
+#endif
+}
 
 /* Append n stereo-32 frames to the playback ring, dropping the OLDEST on overflow: a late
  * sample is unplayable the moment it could no longer reach the speaker in time, and dropping
- * keeps the link (and the conversion) moving instead of wedging on a full ring. */
-static void playback_ring_append(wy_session *session, const int32_t *frames, size_t n) {
+ * keeps the link (and the conversion) moving instead of wedging on a full ring. The caller
+ * already holds the ring lock (it is taken in the payload path, which also protects the
+ * conversion scratch this call reads from). */
+static void playback_ring_append_locked(wy_session *session, const int32_t *frames, size_t n) {
     size_t cap = session->ring_capacity / 4;
     if (!session->ring || cap == 0 || n == 0) return;
     for (size_t i = 0; i < n; ++i) {
@@ -40,6 +73,7 @@ int wy_session_streaming(const wy_session *session) { return session ? session->
 int wy_session_playback_configure(wy_session *session, int32_t *ring, size_t ring_capacity,
                                   int volume) {
     if (!session || !ring || ring_capacity == 0 || ring_capacity % 4) return WY_INVALID;
+    playback_ring_lock_take();
     session->ring = ring;
     session->ring_capacity = ring_capacity;
     session->ring_head = 0;
@@ -48,6 +82,7 @@ int wy_session_playback_configure(wy_session *session, int32_t *ring, size_t rin
     session->playback_active = 0;
     session->playback_ended = 0;
     wy_resampler_reset(&session->playback_rs);
+    playback_ring_lock_give();
     return WY_OK;
 }
 
@@ -60,12 +95,16 @@ int wy_session_playback_ended(const wy_session *session) {
 size_t wy_session_playback_bytes(const wy_session *session) {
     if (!session || !session->ring || session->ring_capacity % 4) return 0;
     size_t cap = session->ring_capacity / 4;
-    return ((session->ring_tail - session->ring_head + cap) % cap) * 4;
+    playback_ring_lock_take();
+    size_t bytes = ((session->ring_tail - session->ring_head + cap) % cap) * 4;
+    playback_ring_lock_give();
+    return bytes;
 }
 size_t wy_session_playback_read(wy_session *session, int32_t *dst, size_t cap) {
     if (!session || !dst || cap == 0 || !session->ring) return 0;
     size_t cap_el = session->ring_capacity / 4;
     if (cap_el == 0) return 0;
+    playback_ring_lock_take();
     size_t avail = (session->ring_tail - session->ring_head + cap_el) % cap_el;
     size_t take = cap / 4;
     if (take > avail) take = avail;
@@ -73,6 +112,7 @@ size_t wy_session_playback_read(wy_session *session, int32_t *dst, size_t cap) {
         dst[i] = session->ring[session->ring_head];
         session->ring_head = (session->ring_head + 1) % cap_el;
     }
+    playback_ring_lock_give();
     return take * 4;
 }
 
@@ -281,6 +321,14 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
                 if (even) {
                     result = wy_read_exact(read_fn, ctx, session->body, even);
                     if (result) goto done;
+                    /* The conversion (file-static scratch) and the ring append are one atomic
+                     * unit under the ring lock: the scratch is shared by every wy_session_step
+                     * driver (the gateway task and the USB console), and the append's drop-
+                     * oldest touches the same head the playback task advances. Holding the
+                     * lock across both is what keeps a second converter or a concurrent pump
+                     * read from clobbering either. The wire read is OUTSIDE the lock, so a
+                     * slow reader never holds the transport up. */
+                    playback_ring_lock_take();
                     size_t samples = even / 2;
                     size_t mono_n = wy_resample_22050_to_16000(&session->playback_rs,
                                         (const int16_t *)session->body, samples,
@@ -288,7 +336,8 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
                     wy_apply_volume(playback_mono_scratch, mono_n, session->playback_volume);
                     size_t frame_n = wy_expand_mono16_to_stereo32(playback_mono_scratch, mono_n,
                                         playback_frame_scratch, WY_PLAYBACK_FRAME_MAX);
-                    playback_ring_append(session, playback_frame_scratch, frame_n);
+                    playback_ring_append_locked(session, playback_frame_scratch, frame_n);
+                    playback_ring_lock_give();
                     remaining -= even;
                 }
                 if (remaining & 1) {
@@ -386,8 +435,13 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
             cJSON_IsNumber(width) && width->valuedouble == 2 &&
             cJSON_IsNumber(channels) && channels->valuedouble == 1) {
             wy_resampler_reset(&session->playback_rs);
+            /* Reset the ring under the lock: the playback task may be mid-read (draining the
+             * last answer) while the bridge starts the next one, so an unlocked reset would
+             * race the reader's head advance. */
+            playback_ring_lock_take();
             session->ring_head = 0;
             session->ring_tail = 0;
+            playback_ring_lock_give();
             session->playback_active = 1;
             session->playback_ended = 0;
         }
