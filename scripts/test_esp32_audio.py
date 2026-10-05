@@ -241,5 +241,56 @@ class AudioTests(unittest.TestCase):
         self.assertEqual(r.position, 0.0)
 
 
+    def volume(self):
+        lib = self.library()
+        lib.wy_apply_volume.argtypes = [C.POINTER(C.c_int16), C.c_size_t, C.c_int]
+        lib.wy_apply_volume.restype = C.c_size_t
+        return lib
+
+    def test_volume_never_reaches_silence(self):
+        """The project rule: no path may take the device to silence. A request of 0 (or a
+        negative or otherwise bad value) must become the floor, a small NON-zero gain -- never
+        zeros the stream. That is the deaf-device regression the floor exists to catch."""
+        lib = self.volume()
+        for bad in (0, -5, 1000):
+            with self.subTest(bad=bad):
+                pcm = (C.c_int16 * 4)(8000, -8000, 12000, -12000)
+                lib.wy_apply_volume(pcm, 4, bad)
+                self.assertNotEqual((pcm[0], pcm[1]), (0, 0), 'a bad value must not silence')
+                self.assertGreater(abs(pcm[0]), 0)
+        # and 0 and the floor agree: both land on the floor gain
+        a = (C.c_int16 * 1)(10000); b = (C.c_int16 * 1)(10000)
+        lib.wy_apply_volume(a, 1, 0)
+        lib.wy_apply_volume(b, 1, 1)   # the floor percent (WY_VOLUME_FLOOR_PERCENT)
+        # 1 is below a 25% floor, so it clamps to the floor too: 0 -> floor, 1 -> floor
+        self.assertEqual(a[0], b[0], '0 and a sub-floor value both become the floor')
+        self.assertGreater(a[0], 0)
+
+    def test_volume_100_is_identity_and_50_halves(self):
+        lib = self.volume()
+        pcm = (C.c_int16 * 3)(32767, -32768, 12345)
+        lib.wy_apply_volume(pcm, 3, 100)
+        self.assertEqual(list(pcm), [32767, -32768, 12345], '100 percent is the identity')
+        pcm2 = (C.c_int16 * 3)(32767, -32768, 12345)
+        lib.wy_apply_volume(pcm2, 3, 50)
+        self.assertEqual(pcm2[0], 16383, '50 percent halves (rounded)')
+        self.assertEqual(pcm2[1], -16384)
+        self.assertIn(pcm2[2], (6172, 6173), '50 percent halves a mid value (±1 for rounding)')
+
+    def test_volume_stays_in_range_and_is_monotonic(self):
+        """Full-scale input at any permitted level stays in the int16 range, and a higher level
+        gives a louder (or equal) magnitude: monotonic, so 'volume up' never gets quieter."""
+        lib = self.volume()
+        pcm = (C.c_int16 * 1)(32767)
+        lib.wy_apply_volume(pcm, 1, 25)
+        self.assertTrue(-32768 <= pcm[0] <= 32767)
+        lo = (C.c_int16 * 1)(16000); hi = (C.c_int16 * 1)(16000)
+        lib.wy_apply_volume(lo, 1, 30)
+        lib.wy_apply_volume(hi, 1, 70)
+        self.assertGreaterEqual(hi[0], lo[0], 'a higher level must not be quieter')
+        # empty is a no-op
+        self.assertEqual(lib.wy_apply_volume(None, 0, 50), 0)
+
+
 if __name__ == '__main__':
     unittest.main()

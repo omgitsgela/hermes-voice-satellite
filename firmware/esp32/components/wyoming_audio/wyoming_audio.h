@@ -37,6 +37,18 @@ size_t wy_resample_22050_to_16000(wy_resampler *r, const int16_t *in, size_t n,
                                   int16_t *out, size_t cap);
 void wy_resampler_reset(wy_resampler *r);   /* fresh stream: cursor and base back to 0 */
 
+/* Playback volume. The project rule (docs/volume.md): NO PATH MAY TAKE THE DEVICE TO SILENCE.
+ * A value of 0, or a value below the floor, becomes the floor -- a small but non-zero gain --
+ * so a bad or refused level cannot deafen the device. The floor matches the bridge's
+ * conservative floor; the default level is a named constant the live test calibrates. */
+#define WY_VOLUME_DEFAULT_PERCENT 50   /* conservative default, below full */
+#define WY_VOLUME_FLOOR_PERCENT   25   /* never silent: a real, audible minimum */
+
+/* Scale n mono S16 samples by `percent` in place, clamping percent to
+ * [WY_VOLUME_FLOOR_PERCENT, 100] first so no input (0, negative, or >100) yields silence.
+ * Returns n. Monotonic: a >= b (both clamped) implies |out_a| >= |out_b| per sample. */
+size_t wy_apply_volume(int16_t *pcm, size_t n, int percent);
+
 /* Serialize the audio-chunk data field for the given format into buffer (capacity bytes,
  * NUL-terminated on success). Returns the number of bytes written (excluding the NUL), or a
  * negative value when the format is not one this device can emit (rate out of range, not

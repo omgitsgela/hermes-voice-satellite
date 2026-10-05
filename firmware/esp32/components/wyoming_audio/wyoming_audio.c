@@ -84,3 +84,20 @@ size_t wy_resample_22050_to_16000(wy_resampler *r, const int16_t *in, size_t n,
     r->prev_value = in[n - 1];        /* keep the last sample for the next seam */
     return written;
 }
+
+size_t wy_apply_volume(int16_t *pcm, size_t n, int percent) {
+    if (!pcm || n == 0) return 0;
+    if (percent < WY_VOLUME_FLOOR_PERCENT) percent = WY_VOLUME_FLOOR_PERCENT;
+    if (percent > 100) percent = 100;
+    for (size_t i = 0; i < n; ++i) {
+        /* int64 so the product cannot overflow; llround (half away from zero) keeps the
+         * rounding symmetric for the negative half of the range, and the result of scaling an
+         * in-range sample by <=100% is in-range, so the clamp is a guard, not the path. */
+        int64_t scaled = (int64_t)pcm[i] * (int64_t)percent / 100.0;
+        int32_t v = (int32_t)llround((double)scaled);
+        if (v > 32767) v = 32767;
+        if (v < -32768) v = -32768;
+        pcm[i] = (int16_t)v;
+    }
+    return n;
+}
