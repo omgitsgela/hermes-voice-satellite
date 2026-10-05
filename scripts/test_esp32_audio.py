@@ -343,5 +343,40 @@ class AudioTests(unittest.TestCase):
         self.assertEqual(lib.wy_expand_mono16_to_stereo32(mono, 4, out2, 8), 8)
 
 
+    def amp_encoder(self):
+        lib = self.library()
+        lib.wy_amp_gpo_command.argtypes = [C.POINTER(C.c_uint8), C.c_int]
+        lib.wy_amp_gpo_command.restype = None
+        return lib
+
+    def test_amp_gpo_command_is_byte_exact(self):
+        """The amplifier is an XMOS GPO (X0D31), NOT an ESP32 GPIO: it is written over the XVF's
+        I2C GPO Servicer. GPO_WRITE_VALUE = ResID 20, CmdID 1, payload [pin, level] = [31, level],
+        and the I2C write form is one 5-byte transaction [resid, cmd, count, p0, p1]. The encoder
+        must emit exactly those bytes -- the device glue is a thin transmit of known-correct
+        bytes, so a wrong constant here is a wrong pin, not a harmless tweak."""
+        lib = self.amp_encoder()
+        buf = (C.c_uint8 * 5)()
+        lib.wy_amp_gpo_command(buf, 1)   # enabled
+        self.assertEqual(list(buf), [20, 1, 2, 31, 0],
+                         'enable: GPO_WRITE_VALUE [resid,cmd,count,pin,level] with active-low LOW')
+        lib.wy_amp_gpo_command(buf, 0)   # disabled
+        self.assertEqual(list(buf), [20, 1, 2, 31, 1],
+                         'disable: the same transaction, level HIGH (active-low)')
+
+    def test_amp_gpo_enable_is_active_low(self):
+        """X0D31 is active-LOW: LOW (0) ENABLES the amp, HIGH (1) disables it. The mapping is the
+        whole safety of the 'arm the amp to play' path -- a swapped mapping would mute every
+        answer. Pinned in both directions."""
+        lib = self.amp_encoder()
+        on = (C.c_uint8 * 5)(); off = (C.c_uint8 * 5)()
+        lib.wy_amp_gpo_command(on, 1)
+        lib.wy_amp_gpo_command(off, 0)
+        self.assertEqual(on[4], 0, 'enabled -> level 0 (LOW, active-low)')
+        self.assertEqual(off[4], 1, 'disabled -> level 1 (HIGH)')
+        # everything else about the command is identical
+        self.assertEqual(list(on[:4]), list(off[:4]))
+
+
 if __name__ == '__main__':
     unittest.main()

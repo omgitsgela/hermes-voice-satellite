@@ -56,6 +56,21 @@ size_t wy_apply_volume(int16_t *pcm, size_t n, int percent);
  * half-expanded frame would be a corrupted write. */
 size_t wy_expand_mono16_to_stereo32(const int16_t *mono, size_t n, int32_t *out, size_t cap);
 
+/* The amplifier is an XMOS GPO (X0D31, active-LOW), controlled over the XVF's I2C GPO
+ * Servicer, NOT an ESP32 GPIO. GPO_WRITE_VALUE = ResID 20, CmdID 1, 2-byte payload
+ * [pin, level]. The I2C write form is one 5-byte transaction [resid, cmd, count, p0, p1]
+ * (no 0x80 read-modify, no read-back) -- the XVF3800 I2C protocol from Seeed's guide. */
+#define XVF_I2C_ADDRESS       0x2C
+#define XVF_I2C_RESID_GPO     20    /* GPO Servicer */
+#define XVF_I2C_CMD_GPO_WRITE 1     /* GPO_WRITE_VALUE */
+#define XVF_I2C_GPO_PIN_AMP   31    /* X0D31: amplifier enable */
+#define XVF_I2C_GPO_CMD_LEN   5
+
+/* Fill out[XVF_I2C_GPO_CMD_LEN] with the GPO_WRITE_VALUE transaction for the amplifier:
+ * [20, 1, 2, 31, level], where level = 0 when `enabled` (LOW = amp on, active-low) and
+ * 1 when disabled (HIGH = amp off). Pure byte encoder; the device glue transmits it. */
+void wy_amp_gpo_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int enabled);
+
 /* Serialize the audio-chunk data field for the given format into buffer (capacity bytes,
  * NUL-terminated on success). Returns the number of bytes written (excluding the NUL), or a
  * negative value when the format is not one this device can emit (rate out of range, not

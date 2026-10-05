@@ -113,3 +113,15 @@ size_t wy_expand_mono16_to_stereo32(const int16_t *mono, size_t n, int32_t *out,
     }
     return 2 * n;
 }
+
+void wy_amp_gpo_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int enabled) {
+    if (!out) return;
+    /* The XVF3800 I2C GPO write form: [resid, cmd, count, p0, p1] in one transaction. The amp
+     * pin X0D31 is active-LOW, so ENABLING the amplifier (to play) is level 0 and disabling it
+     * is level 1. A swapped mapping would mute every answer, so this is pinned by test. */
+    out[0] = XVF_I2C_RESID_GPO;
+    out[1] = XVF_I2C_CMD_GPO_WRITE;
+    out[2] = 2;                     /* two payload bytes: pin, level */
+    out[3] = XVF_I2C_GPO_PIN_AMP;
+    out[4] = enabled ? 0 : 1;
+}
