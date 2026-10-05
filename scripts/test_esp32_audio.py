@@ -102,20 +102,36 @@ class AudioTests(unittest.TestCase):
         data = C.create_string_buffer(4)
         self.assertLess(lib.wy_audio_chunk_data(data, 4, 16000, 2, 1), 0)
 
-    def test_downmix_averages_and_clips_to_int16(self):
-        """32-bit stereo in, 16-bit mono out: each sample is the (L+R)/2 average, clipped to
-        the int16 range rather than overflowing."""
+    def test_downmix_scales_32_bit_full_scale_to_16_bit(self):
+        """The XVF3800 I2S stream is 32-bit FULL-SCALE (Seeed's own TFLM / Edge Impulse
+        guides convert it with `val = i2s_sample >> 16`), not 16-bit samples padded into
+        32-bit slots. So each mono sample is the (L+R)/2 average -- computed in 64 bits so a
+        near-extreme pair cannot overflow -- then SCALED down 16 bits with rounding, and the
+        int16 clip is only a guard for out-of-range input. Clipping instead of scaling turns
+        every real speech sample (well above 2^15 in 32-bit terms) into a sign-only square
+        wave: the bridge would get +32767/-32768, not audio."""
         lib = self.library()
-        stereo = (C.c_int32 * 10)(
-            1000, 2000,            # avg 1500
-            -4000, -2000,          # avg -3000
-            30000000, 30000000,    # avg 30000000 -> clip to +32767
-            -30000000, -30000000,  # avg -30000000 -> clip to -32768
-            1, 1001)               # avg 501
-        out = (C.c_int16 * 5)()
-        written = lib.wy_audio_downmix_mono16(stereo, 5, out, 5)
-        self.assertEqual(written, 5)
-        self.assertEqual(list(out), [1500, -3000, 32767, -32768, 501])
+        stereo = (C.c_int32 * 12)(
+            393216, 786432,        # avg 589824, >>16 = 9 (rounds to 9)
+            655360, 1310720,       # avg 983040, >>16 = 15
+            16777216, 16777216,    # avg 16777216 (2^24), >>16 = 256
+            -33554432, -33554432,  # avg -2^25, >>16 = -512
+            201326591, 201326591,  # near 32-bit full scale, >>16 = 3072 (not clipped)
+            2147483647, 2147483647)  # 32-bit max: avg still in int64, >>16 = 32767
+        out = (C.c_int16 * 6)()
+        written = lib.wy_audio_downmix_mono16(stereo, 6, out, 6)
+        self.assertEqual(written, 6)
+        self.assertEqual(list(out), [9, 15, 256, -512, 3072, 32767])
+
+    def test_downmix_32_bit_near_full_scale_is_not_a_square_wave(self):
+        """A 32-bit value at ordinary speech level must map into the int16 range, not pin to
+        the top: this is the regression that clipping (instead of >>16) would fail."""
+        lib = self.library()
+        # 1,000,000 in 32-bit full-scale is roughly -26 dBFS: comfortably audible speech.
+        stereo = (C.c_int32 * 2)(1000000, 1000000)
+        out = (C.c_int16 * 1)()
+        lib.wy_audio_downmix_mono16(stereo, 1, out, 1)
+        self.assertEqual(out[0], 15, 'speech-level 32-bit sample scales, it does not clip to 32767')
 
     def test_downmix_respects_capacity(self):
         """A short buffer yields as many samples as fit, never one over."""

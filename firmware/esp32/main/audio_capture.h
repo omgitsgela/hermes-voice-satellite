@@ -19,7 +19,9 @@
  * symbols in the ELF; that the microphone actually produces audio is the live-test gate.
  */
 
-/* One I2S read fills this many 32-bit stereo frames (160 = 10 ms at 16 kHz). */
+/* One I2S read fills this many 32-bit stereo frames (160 = 10 ms at 16 kHz). One read is one
+ * audio-chunk -- 160 samples, 320 bytes, a 10 ms cadence for low latency, well under the
+ * WY_AUDIO_CHUNK_SAMPLES (1024) bound the session enforces, so no per-chunk buffering is needed. */
 #define AUDIO_CAPTURE_FRAMES 160u
 
 /* Convert one I2S read into mono and send it if the stream is open. Exposed separately so the

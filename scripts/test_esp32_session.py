@@ -106,7 +106,7 @@ class SessionTests(unittest.TestCase):
             write_event(event, source)
         source.seek(0)
         output = io.BytesIO()
-        pcm = bytes(range(256)) * 8   # 2048 bytes: one full mic chunk
+        pcm = bytes(range(256)) * 8   # 2048 bytes: a full-size (maximum) chunk
 
         @IO
         def reader(ctx, target, length):
@@ -223,8 +223,47 @@ class SessionTests(unittest.TestCase):
         append_at = source.tell()    # where the reader's next read will begin
         write_event(Event(type='wake-now'), source)   # appends, then leaves the position at the end
         source.seek(append_at)       # ...so the reader can actually see the appended event
+        output_start = output.tell()  # a dropped wake-now must write NOTHING: no second detection
         self.assertEqual(lib.wy_session_step(session, reader, writer, None), 0)
         self.assertEqual(lib.wy_session_streaming(session), 1, 'a wake-now mid-stream is dropped, not a fault')
+        self.assertEqual(output.tell(), output_start, 'the dropped wake-now re-ran the wake sequence')
+
+    def test_reinit_preserves_the_writer_lock_callbacks(self):
+        """The device glue installs the writer-lock callbacks once (the gateway task and the
+        capture task both write the link). The supervisor re-inits the SAME session buffer on
+        every reconnect, so an init that memsets the lock fields would leave both writers
+        sending unserialized for the rest of the link. The init must preserve them."""
+        lib = self.library()
+        WY_HEADER_MAX, WY_DATA_MAX = 1024, 4096
+        class WYSession(C.Structure):
+            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
+                        ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
+                        ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
+                        ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
+                        ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
+                        ('writer_lock_user', C.c_void_p)]
+        self.assertEqual(C.sizeof(WYSession), lib.wy_session_size(), 'the host struct must match the production layout')
+        session = WYSession()
+        self.assertEqual(lib.wy_session_init(C.byref(session), b'control-fixture', b'boot-1'), 0)
+        # A device-style install (what audio_capture_install_writer_lock does).
+        acquired = [0]
+        @C.CFUNCTYPE(C.c_int, C.c_void_p)
+        def acquire(user):
+            acquired[0] += 1
+            return 0
+        @C.CFUNCTYPE(None, C.c_void_p)
+        def release(user):
+            pass
+        session.lock_writer = acquire
+        session.unlock_writer = release
+        # Re-init, exactly as the supervisor does on a reconnect: the lock must survive.
+        self.assertEqual(lib.wy_session_init(C.byref(session), b'control-fixture', b'boot-2'), 0)
+        self.assertEqual(session.state, 0, 'state is still reset to describe')
+        # Proof it survived, not by pointer equality (ctypes re-wraps a function on readback) but
+        # by calling the preserved callback: a wiped field would be NULL and crash, a preserved
+        # one runs the install. The install ran once; the call below is the second hit.
+        session.lock_writer(None)
+        self.assertEqual(acquired[0], 1, 'the re-init wiped the writer-lock callback')
 
     def test_playback_audio_is_accepted_without_tearing_the_link(self):
         """The bridge sends audio-start / audio-chunk / audio-stop for playback, and it sends
@@ -261,6 +300,48 @@ class SessionTests(unittest.TestCase):
             self.assertEqual(lib.wy_session_step(session, reader, writer, None), 0)
             self.assertEqual(lib.wy_session_state(session), expected)
         self.assertEqual(lib.wy_session_state(session), 2, 'playback audio must not kill the link')
+
+
+    def test_oversized_inbound_payload_is_drained_not_overwritten(self):
+        """An inbound frame whose payload is at the wire bound (16 KB) is far larger than the
+        session's 4 KB parse body. It must be drained off the wire in bounded slices and
+        DISCARDED -- never written whole into the parse body -- and the next header must still
+        line up. A single read into the 4 KB body (the old shape) wrote 12 KB past it; the
+        regression is proven under AddressSanitizer in the build gate, and here by the fact
+        that the frame after the 16 KB payload still parses to the right state."""
+        lib = self.library()
+        session = C.create_string_buffer(lib.wy_session_size())
+        self.assertEqual(lib.wy_session_init(session, b'control-fixture', b'boot-1'), 0)
+        big = (16384 * b'\x01')           # exactly WY_PAYLOAD_MAX (16 KiB of one byte)
+        source = io.BytesIO()
+        for event in [Event(type='describe'),
+                      Event(type='hermes.register.ok',
+                            data={'device_id': 'control-fixture', 'protocol_version': 1}),
+                      Event(type='audio-chunk', data={'rate': 22050, 'width': 2, 'channels': 1},
+                            payload=big),
+                      Event(type='run-satellite')]:
+            write_event(event, source)
+        source.seek(0)
+        output = io.BytesIO()
+
+        @IO
+        def reader(ctx, target, length):
+            chunk = source.read(min(4, length))
+            C.memmove(target, chunk, len(chunk))
+            return len(chunk)
+
+        @IO
+        def writer(ctx, target, length):
+            output.write(C.string_at(target, length))
+            return length
+
+        # describe -> info (state 1); register.ok (state 2); the 16 KB audio-chunk is accepted
+        # and drained (state stays 2); run-satellite then arms (state 3). If the payload had
+        # desynced the stream, run-satellite would read the tail of the payload and fail.
+        for expected in [1, 2, 2, 3]:
+            self.assertEqual(lib.wy_session_step(session, reader, writer, None), 0)
+            self.assertEqual(lib.wy_session_state(session), expected,
+                             'the frame after a 16 KB payload must still parse')
 
 
     def test_fail_closed_and_fresh_reconnect(self):

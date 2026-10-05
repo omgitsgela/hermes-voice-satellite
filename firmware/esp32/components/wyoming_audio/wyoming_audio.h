@@ -8,9 +8,11 @@
  * 16-bit mono the Wyoming mic contract (16 kHz / S16 / mono) speaks. Pure: no transport, no
  * heap, no RTOS. Proven on the host; the I2S read that feeds it is device-only. */
 
-/* One audio-chunk carries this many mono samples (2048 bytes of 16-bit PCM): well inside the
- * wire's 16 KB payload bound, and about 32 ms of 16 kHz audio -- small enough to send in near
- * real time, large enough to keep the frame rate low. */
+/* The maximum number of mono samples a single audio-chunk frame may carry (2048 bytes of
+ * 16-bit PCM, 64 ms of 16 kHz audio): the bound wy_session_send_audio enforces, sized so an
+ * oversized frame can never reach the wire's 16 KB payload limit. The capture path emits
+ * smaller 10 ms chunks (see audio_capture.h) for low latency, well under this bound; this is
+ * the ceiling, not the cadence. */
 #define WY_AUDIO_CHUNK_SAMPLES 1024u
 
 /* Serialize the audio-chunk data field for the given format into buffer (capacity bytes,

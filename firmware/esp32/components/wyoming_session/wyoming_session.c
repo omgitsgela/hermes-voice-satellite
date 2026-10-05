@@ -70,14 +70,28 @@ static int locked_send(wy_session *session, wy_write_fn write_fn, void *ctx,
  * "stop streaming and go back to wake-word listening", shared by transcript, pause and a
  * second run-satellite. */
 static int stop_streaming(wy_session *session, wy_write_fn write_fn, void *ctx) {
+    /* The flag and the frame move together, under the lock: a mic chunk that checked
+     * streaming before the stop must not be able to land AFTER streaming-stopped. If the send
+     * fails, the flag stays set -- the stream is not actually over, and the link is failing
+     * anyway, so the honest state is "still streaming" until the link goes down. */
     if (!session->streaming) return WY_OK;
-    session->streaming = 0;
-    return locked_send(session, write_fn, ctx, "streaming-stopped", NULL, NULL, 0);
+    int result = locked_send(session, write_fn, ctx, "streaming-stopped", NULL, NULL, 0);
+    if (!result) session->streaming = 0;
+    return result;
 }
 
 int wy_session_init(wy_session *session, const char *device_id, const char *boot_id) {
     if (!session) return WY_INVALID;
+    /* The writer-lock callbacks are installed once by the device glue (audio_capture) and must
+     * survive every per-link re-init: a re-init that wiped them would let the two writers
+     * (gateway task and capture task) send frames unserialized for the rest of the link. */
+    int (*lock_writer)(void *) = session->lock_writer;
+    int (*unlock_writer)(void *) = session->unlock_writer;
+    void *writer_lock_user = session->writer_lock_user;
     memset(session, 0, sizeof(*session));
+    session->lock_writer = lock_writer;
+    session->unlock_writer = unlock_writer;
+    session->writer_lock_user = writer_lock_user;
     session->state = WY_SESSION_FAILED;
     if (!token_valid(device_id, 64) || !token_valid(boot_id, 128)) return WY_INVALID;
     strcpy(session->device_id, device_id);
@@ -120,16 +134,24 @@ int wy_session_send_audio(wy_session *session, const void *pcm, size_t length,
     /* The mic is open only between a wake and the bridge's transcript; outside that window
      * the audio is dropped on the device, exactly like the reference's muted path. Nothing is
      * queued: a chunk that cannot go out now is late by the time it could, and a backlog in
-     * the session would only grow on a dead link. */
+     * the session would only grow on a dead link. The streaming check is repeated UNDER the
+     * writer lock, not just before taking it: a stop that lands between the two would otherwise
+     * let this chunk out after streaming-stopped, and the next utterance would carry the tail
+     * of the last one. */
     if (!session || !pcm || !write_fn) return WY_INVALID;
     if (!session->streaming) return WY_INVALID;
     if (length == 0 || length > WY_AUDIO_CHUNK_SAMPLES * 2 || length % 2) return WY_INVALID;
+    int lock_result = writer_lock(session);
+    if (lock_result != WY_OK) return lock_result;
+    if (!session->streaming) { writer_unlock(session); return WY_INVALID; }
     /* The chunk's format comes from the audio component, the one place that owns it: the
      * builder validates the format and the bytes that leave on the wire are exactly what the
      * host tests check against the canonical reader. */
     char data[64];
-    if (wy_audio_chunk_data(data, sizeof(data), 16000, 2, 1) < 0) return WY_INVALID;
-    return locked_send(session, write_fn, ctx, "audio-chunk", data, pcm, length);
+    if (wy_audio_chunk_data(data, sizeof(data), 16000, 2, 1) < 0) { writer_unlock(session); return WY_INVALID; }
+    int result = wy_send(write_fn, ctx, "audio-chunk", data, pcm, length);
+    writer_unlock(session);
+    return result;
 }
 
 int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_fn, void *ctx) {
@@ -161,8 +183,18 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
         }
     }
     if (frame.payload_length) {
-        result = wy_read_exact(read_fn, ctx, session->body, frame.payload_length);
-        if (result) goto done;
+        /* The payload is audio and is drained off the wire but NOT kept: it can be as large as
+         * WY_PAYLOAD_MAX (16 KiB), far beyond the 4 KiB parse body, so it is read in bounded
+         * body-sized slices and discarded. Reading it whole into session->body wrote up to 12 KiB
+         * past the buffer (a heap overflow proven to corrupt the next frame under ASan). Slicing
+         * keeps every read within the body and leaves the wire positioned at the next header. */
+        size_t remaining = frame.payload_length;
+        while (remaining) {
+            size_t slice = remaining < sizeof(session->body) ? remaining : sizeof(session->body);
+            result = wy_read_exact(read_fn, ctx, session->body, slice);
+            if (result) goto done;
+            remaining -= slice;
+        }
     }
     if (!strcmp(frame.type, "describe")) {
         result = locked_send(session, write_fn, ctx, "info",

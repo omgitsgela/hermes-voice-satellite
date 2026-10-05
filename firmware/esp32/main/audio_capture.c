@@ -49,9 +49,9 @@ static int writer_lock_release(void *user) {
 
 void audio_capture_install_writer_lock(void *session) {
     if (!session) return;
-    /* The supervisor owns this buffer for its whole life and re-inits it per link; the lock
-     * fields are set once at gateway start and must survive the per-link init, which only
-     * touches state, identity and the parse workspace. */
+    /* The supervisor owns this buffer for its whole life and re-inits it per link; wy_session_init
+     * preserves the lock fields across that re-init (a re-init that wiped them would let the
+     * gateway task and this task send unserialized), so installing them once is enough. */
     wy_session *s = session;
     s->lock_writer = writer_lock_acquire;
     s->unlock_writer = writer_lock_release;
@@ -95,6 +95,10 @@ static void capture_task_fn(void *argument) {
             vTaskDelay(pdMS_TO_TICKS(5));
         }
     }
+    /* Announce the exit BEFORE deleting: the join in audio_capture_stop waits for this write
+     * to see capture.task clear, and a stale handle is what makes a later force-delete a
+     * delete of a freed (possibly reused) TCB. */
+    capture.task = NULL;
     vTaskDelete(NULL);
 }
 
@@ -154,19 +158,25 @@ int audio_capture_start(void *session, void *user,
 
 void audio_capture_stop(void) {
     capture.stopping = 1;
-    /* Take the channel first: the task's next read (10 ms timeout at most) returns with no data
-     * and the loop sees the flag. A bounded join keeps the link-down path from wedging; if the
-     * task is somehow still there, delete it outright -- it owns no state the link needs. */
-    if (capture.rx) {
+    /* Disable the channel first: the task's in-flight read returns with an error (the read has
+     * a 10 ms timeout at most) and the loop exits. The channel is not DELETED yet, because the
+     * task may still be inside the read, and deleting a channel mid-read is a use-after-free. */
+    if (capture.rx)
         i2s_channel_disable(capture.rx);
-        i2s_del_channel(capture.rx);
-        capture.rx = NULL;
-    }
+    /* The join waits for the task to clear its own handle (it does so before self-deleting),
+     * so a successful join never touches a freed TCB. The bounded wait keeps the link-down path
+     * from wedging; at this point the transport is already closed (the on_link_down hook runs
+     * after teardown), so any blocked write has already errored out -- the only things the task
+     * can still be doing are the 10 ms read and the 5 ms tick, both safe to delete. */
     if (capture.task) {
         for (int waited = 0; capture.task && waited < 50; ++waited)
             vTaskDelay(pdMS_TO_TICKS(10));
-        if (capture.task) vTaskDelete(capture.task);
+        if (capture.task) vTaskDelete(capture.task);   /* still a live task: the clear above is pending */
         capture.task = NULL;
+    }
+    if (capture.rx) {
+        i2s_del_channel(capture.rx);
+        capture.rx = NULL;
     }
     capture.stopping = 0;
 }

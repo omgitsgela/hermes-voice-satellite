@@ -18,12 +18,18 @@ int wy_audio_downmix_mono16(const int32_t *stereo, size_t frame_count, int16_t *
     if (!stereo || !out || out_capacity == 0) return 0;
     size_t take = frame_count < out_capacity ? frame_count : out_capacity;
     for (size_t i = 0; i < take; ++i) {
-        /* The average is computed in 64 bits: two 32-bit samples near the extremes would
-         * overflow an int32 sum, and a wrapped average would turn silence into a click. */
+        /* The XVF3800 I2S stream is 32-bit FULL-SCALE (Seeed's TFLM / Edge Impulse guides
+         * convert it with `val = i2s_sample >> 16`), not 16-bit samples padded into 32-bit
+         * slots. The average is computed in 64 bits -- two 32-bit samples near the extremes
+         * would overflow an int32 sum -- then scaled down 16 bits with rounding. The int16
+         * clip is a guard for out-of-range input, not the normal path: clipping instead of
+         * scaling would turn every real speech sample (well above 2^15 in 32-bit terms) into
+         * a sign-only square wave, which is not audio. */
         int64_t average = ((int64_t)stereo[2 * i] + (int64_t)stereo[2 * i + 1]) / 2;
-        if (average > 32767) average = 32767;
-        if (average < -32768) average = -32768;
-        out[i] = (int16_t)average;
+        int64_t scaled = (average + 32768) >> 16;
+        if (scaled > 32767) scaled = 32767;
+        if (scaled < -32768) scaled = -32768;
+        out[i] = (int16_t)scaled;
     }
     return (int)take;
 }
