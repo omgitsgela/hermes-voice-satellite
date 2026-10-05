@@ -26,7 +26,7 @@ class USBLinkTests(unittest.TestCase):
                 'esp_random.h': '#include <stdint.h>\nuint32_t esp_random(void);\n',
                 'esp_timer.h': '#include <stdint.h>\nint64_t esp_timer_get_time(void);\n',
                 'esp_log.h': '#include <stdarg.h>\ntypedef int (*vprintf_like_t)(const char *, va_list);\nvprintf_like_t esp_log_set_vprintf(vprintf_like_t);\n',
-                'esp_heap_caps.h': '#include <stddef.h>\n#define MALLOC_CAP_SPIRAM 1\n#define MALLOC_CAP_8BIT 2\nvoid *heap_caps_malloc(size_t, unsigned);\nvoid heap_caps_free(void *);\n',
+                'esp_heap_caps.h': '#include <stddef.h>\n#define MALLOC_CAP_SPIRAM 1\n#define MALLOC_CAP_8BIT 2\nvoid *heap_caps_malloc(size_t, unsigned);\nvoid *heap_caps_calloc(size_t, size_t, int);\nvoid heap_caps_free(void *);\n',
                 'freertos/FreeRTOS.h': '#pragma once\n#include <stdint.h>\ntypedef uint32_t TickType_t;\n#define pdMS_TO_TICKS(ms) ((ms)/10)\n',
                 'driver/usb_serial_jtag.h': '#include <stddef.h>\n#include <stdint.h>\n#include <stdbool.h>\nint usb_serial_jtag_read_bytes(void *, uint32_t, uint32_t);\nint usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);\nint usb_serial_jtag_wait_tx_done(uint32_t);\nbool usb_serial_jtag_is_connected(void);\n',
             }
@@ -52,6 +52,9 @@ vprintf_like_t esp_log_set_vprintf(vprintf_like_t callback) {
 }
 void *heap_caps_malloc(size_t size, unsigned caps) {
     assert(caps == 3); return getenv("FAIL_ALLOC") ? NULL : malloc(size);
+}
+void *heap_caps_calloc(size_t size, size_t count, int caps) {
+    assert(caps == 3); return getenv("FAIL_ALLOC") ? NULL : calloc(size, count);
 }
 void heap_caps_free(void *value) { free(value); }
 _Bool usb_serial_jtag_is_connected(void) { return !ended; }

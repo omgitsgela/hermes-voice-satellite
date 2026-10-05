@@ -26,11 +26,22 @@ static void append(gateway_supervisor *sup, const char *line) {
  * whole life (the device's supervisor is app-lifetime). */
 static void link_down(gateway_supervisor *sup) {
     if (sup->session) {
+        wy_session *s = (wy_session *)sup->session;
         /* Mark the session dead so a stray step cannot advance it. */
-        ((wy_session *)sup->session)->state = WY_SESSION_FAILED;
+        s->state = WY_SESSION_FAILED;
+        /* And close the mic stream: wy_session_send_audio gates on streaming, so clearing it
+         * (with the under-lock re-check) is what drops the capture task's stray chunks before
+         * they reach the transport being torn down. */
+        s->streaming = 0;
         sup->registered = 0;
     }
     if (sup->link.read_fn) {
+        /* Quiesce the writer BEFORE the transport is freed: a capture write already in flight
+         * must finish (or error) first, or on a TLS link it would touch the mbedTLS contexts
+         * after contexts_free. Bounded -- at most one small chunk. The teardown still precedes
+         * on_link_down on purpose: the fd close is what unblocks a write stuck on a dead peer,
+         * and the hook stops the capture task only once the transport is dead. */
+        if (sup->session) wy_session_quiesce_writer((wy_session *)sup->session);
         sup->teardown(sup->user, &sup->link);
     }
     sup->link.user = NULL;
@@ -92,9 +103,12 @@ int gateway_supervisor_init(gateway_supervisor *sup, int64_t (*now_us)(void),
     sup->on_registered = on_registered;
     sup->on_link_down = on_link_down;
     sup->state = GW_ST_IDLE;
-    /* The session buffer is owned by the supervisor for its whole life; allocate it once. */
+    /* The session buffer is owned by the supervisor for its whole life; allocate it once. It
+     * must be ZEROED (calloc, not malloc): wy_session_init preserves the writer-lock fields
+     * across a per-link re-init, and a dirty heap block would restore a garbage function
+     * pointer into them, which the first registration frame would then call. */
     sup->session_size = wy_session_size();
-    sup->session = malloc(sup->session_size ? sup->session_size : 1u);
+    sup->session = calloc(sup->session_size ? sup->session_size : 1u, 1u);
     if (!sup->session) { sup->session_size = 0; return -1; }
     return 0;
 }

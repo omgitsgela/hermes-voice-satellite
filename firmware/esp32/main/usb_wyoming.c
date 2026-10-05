@@ -53,7 +53,9 @@ static int usb_write(void *ctx, const void *data, size_t size) {
 }
 
 int usb_wyoming_run(void) {
-    wy_session *session = heap_caps_malloc(sizeof(*session), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    /* Zeroed: wy_session_init preserves the writer-lock fields, and a dirty SPIRAM block
+     * would otherwise hand the first registration a garbage function pointer. */
+    wy_session *session = heap_caps_calloc(1, sizeof(*session), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!session) return WY_IO;
     int result = WY_IO;
     char device_id[32], boot_id[33];

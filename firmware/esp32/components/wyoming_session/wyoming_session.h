@@ -53,6 +53,9 @@ int wy_session_wake(wy_session *session, const char *wake_word,
 int wy_session_send_audio(wy_session *session, const void *pcm, size_t length,
                           wy_write_fn write_fn, void *ctx);
 int wy_session_streaming(const wy_session *session);
+/* Take and release the writer lock so no write is in flight (the supervisor quiesces before
+ * tearing the transport down). INVALID on a NULL session. */
+int wy_session_quiesce_writer(wy_session *session);
 
 /* Stable, human-readable names for session state and result codes, used in reports. A code
  * this build does not know reports as "unknown" rather than being silently unnamed. */

@@ -15,7 +15,9 @@ void gateway_report_append(char *out, size_t capacity, const char *line) {
 int gateway_link_register(gateway_read_fn read, gateway_write_fn write, void *context,
                           int64_t deadline_us, char *out, size_t capacity) {
     char line[160];
-    wy_session *session = heap_caps_malloc(wy_session_size(), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    /* Zeroed: wy_session_init preserves the writer-lock fields, and a dirty SPIRAM block
+     * would otherwise hand the first registration a garbage function pointer. */
+    wy_session *session = heap_caps_calloc(1, wy_session_size(), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     char device_id[32] = {0}, boot_id[33] = {0};
     if (!session) {
         gateway_report_append(out, capacity, "session=failed reason=no_memory");

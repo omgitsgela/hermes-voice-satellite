@@ -114,6 +114,16 @@ int audio_capture_start(void *session, void *user,
     capture.write = write;
     if (capture.task) return 0;   /* already running: the refresh above is all that is needed */
 
+    /* Release a stale channel left by a task that self-exited on an I2S error: it still owns
+     * CAPTURE_I2S_PORT, so creating a second channel would fail, and the old handle would
+     * otherwise be leaked (the failure path below used to null it). Cleaning it here is what
+     * keeps the microphone alive across a glitch plus a pause/run cycle. */
+    if (capture.rx) {
+        i2s_channel_disable(capture.rx);
+        i2s_del_channel(capture.rx);
+        capture.rx = NULL;
+    }
+
     if (!capture.writer_lock) {
         capture.writer_lock = xSemaphoreCreateMutex();
         if (!capture.writer_lock) return -1;
@@ -122,7 +132,7 @@ int audio_capture_start(void *session, void *user,
 
     i2s_chan_config_t channel = I2S_CHANNEL_DEFAULT_CONFIG(CAPTURE_I2S_PORT, I2S_ROLE_MASTER);
     if (i2s_new_channel(&channel, NULL, &capture.rx) != ESP_OK) {
-        capture.rx = NULL;
+        capture.rx = NULL;   /* nothing was allocated; the stale one was already released above */
         return -1;
     }
     i2s_std_config_t std = {

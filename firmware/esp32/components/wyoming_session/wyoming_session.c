@@ -55,6 +55,19 @@ static void writer_unlock(wy_session *session) {
     if (session->unlock_writer) session->unlock_writer(session->writer_lock_user);
 }
 
+/* Ensure no write is in flight: take and release the writer lock. The supervisor calls this
+ * right before tearing a transport down, so a concurrent capture write cannot race the free of
+ * the transport's state (on a TLS link, the mbedTLS contexts). Bounded: the only thing that can
+ * hold the lock is one small in-flight chunk, and it either completes or errors when the peer
+ * dies -- it is never an unbounded spin. On the host the lock is a no-op (NULL callbacks). */
+int wy_session_quiesce_writer(wy_session *session) {
+    if (!session) return WY_INVALID;
+    int result = writer_lock(session);
+    if (result != WY_OK) return result;
+    writer_unlock(session);
+    return WY_OK;
+}
+
 /* One frame, whole, under the lock. */
 static int locked_send(wy_session *session, wy_write_fn write_fn, void *ctx,
                        const char *type, const char *data, const void *payload, size_t length) {
@@ -70,13 +83,21 @@ static int locked_send(wy_session *session, wy_write_fn write_fn, void *ctx,
  * "stop streaming and go back to wake-word listening", shared by transcript, pause and a
  * second run-satellite. */
 static int stop_streaming(wy_session *session, wy_write_fn write_fn, void *ctx) {
-    /* The flag and the frame move together, under the lock: a mic chunk that checked
-     * streaming before the stop must not be able to land AFTER streaming-stopped. If the send
-     * fails, the flag stays set -- the stream is not actually over, and the link is failing
-     * anyway, so the honest state is "still streaming" until the link goes down. */
+    /* The frame AND the flag move together, under one lock hold: a mic chunk that passed its
+     * streaming check before the stop must not be able to land AFTER streaming-stopped. The
+     * flag is cleared inside the lock, not after locked_send releases it -- on a preemptive
+     * scheduler the capture task (higher priority) wakes at the unlock and would otherwise
+     * still see streaming set and send its chunk into the gap. The under-lock re-check covers
+     * a wake that started the stream between the pre-check and the lock. If the send fails the
+     * flag stays set: the stream is not actually over. */
     if (!session->streaming) return WY_OK;
-    int result = locked_send(session, write_fn, ctx, "streaming-stopped", NULL, NULL, 0);
-    if (!result) session->streaming = 0;
+    int result = writer_lock(session);
+    if (result != WY_OK) return result;
+    if (session->streaming) {
+        result = wy_send(write_fn, ctx, "streaming-stopped", NULL, NULL, 0);
+        if (!result) session->streaming = 0;
+    }
+    writer_unlock(session);
     return result;
 }
 
