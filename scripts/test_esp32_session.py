@@ -10,6 +10,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from wyoming.audio import AudioChunk
 from wyoming.event import Event, read_event, write_event
 from wyoming.info import Info
 
@@ -77,8 +78,123 @@ class SessionTests(unittest.TestCase):
         self.assertFalse(info.data['satellite']['supports_trigger'])
         self.assertEqual(registration.type, 'hermes.register')
         self.assertEqual(registration.data['device_id'], 'control-fixture')
-        self.assertEqual(registration.data['capabilities'], [])
+        self.assertEqual(registration.data['capabilities'], ['microphone'])
         self.assertIsNone(read_event(output))
+
+    def test_capture_turn_streams_mic_audio_and_stops_on_transcript(self):
+        """The documented voice loop, device side: run-satellite arms the microphone, the local
+        wake starts the stream (detection -> run-pipeline -> streaming-started), the capture
+        task's audio leaves as 16 kHz / S16 / mono chunks, and the bridge's transcript stops it
+        (streaming-stopped) while the microphone stays armed for the next wake."""
+        lib = self.library()
+        lib.wy_session_wake.argtypes = [C.c_void_p, C.c_char_p, IO, C.c_void_p]
+        lib.wy_session_wake.restype = C.c_int
+        lib.wy_session_send_audio.argtypes = [C.c_void_p, C.c_void_p, C.c_size_t, IO, C.c_void_p]
+        lib.wy_session_send_audio.restype = C.c_int
+        lib.wy_session_streaming.argtypes = [C.c_void_p]
+        lib.wy_session_streaming.restype = C.c_int
+        session = C.create_string_buffer(lib.wy_session_size())
+        self.assertEqual(lib.wy_session_init(session, b'control-fixture', b'boot-1'), 0)
+        source = io.BytesIO()
+        for event in [Event(type='describe'),
+                      Event(type='hermes.register.ok',
+                            data={'device_id': 'control-fixture', 'protocol_version': 1}),
+                      Event(type='run-satellite'),
+                      Event(type='transcript', data={'text': ''})]:
+            write_event(event, source)
+        source.seek(0)
+        output = io.BytesIO()
+        pcm = bytes(range(256)) * 8   # 2048 bytes: one full mic chunk
+
+        @IO
+        def reader(ctx, target, length):
+            chunk = source.read(min(5, length))
+            C.memmove(target, chunk, len(chunk))
+            return len(chunk)
+
+        @IO
+        def writer(ctx, target, length):
+            output.write(C.string_at(target, length))
+            return length
+
+        for expected in [1, 2, 3]:
+            self.assertEqual(lib.wy_session_step(session, reader, writer, None), 0)
+            self.assertEqual(lib.wy_session_state(session), expected)
+        # The handshake already wrote info + hermes.register; read them at the head (which also
+        # advances the position past them) so the assertions below see only the wake sequence.
+        output.seek(0)
+        self.assertEqual(read_event(output).type, 'info')
+        self.assertEqual(read_event(output).type, 'hermes.register')
+        # The mic is closed until the local wake: audio sent now is dropped, not queued.
+        self.assertEqual(lib.wy_session_send_audio(session, pcm, len(pcm), writer, None), -1)
+        # The local wake fires: the device answers with the three streaming events, in order.
+        wake_start = output.tell()   # the writer appends at the current position
+        self.assertEqual(lib.wy_session_wake(session, b'hey-hermes', writer, None), 0)
+        self.assertEqual(lib.wy_session_streaming(session), 1)
+        output.seek(wake_start)
+        events = []
+        for _ in range(3):
+            event = read_event(output)
+            self.assertIsNotNone(event)
+            events.append(event)
+        self.assertEqual([e.type for e in events],
+                         ['detection', 'run-pipeline', 'streaming-started'])
+        self.assertEqual(events[0].data['name'], 'hey-hermes')
+        self.assertEqual(events[1].data, {'start_stage': 'asr', 'end_stage': 'tts',
+                                          'restart_on_end': False})
+        # The capture task's chunk leaves immediately, on the same link.
+        chunk_start = output.tell()
+        self.assertEqual(lib.wy_session_send_audio(session, pcm, len(pcm), writer, None), 0)
+        output.seek(chunk_start)
+        chunk = AudioChunk.from_event(read_event(output))
+        self.assertEqual((chunk.rate, chunk.width, chunk.channels), (16000, 2, 1))
+        self.assertEqual(chunk.audio, pcm)
+        # transcript: the utterance is over; the stream stops, the mic stays armed (state 3),
+        # so the very next wake starts a fresh stream without another run-satellite.
+        stop_start = output.tell()
+        self.assertEqual(lib.wy_session_step(session, reader, writer, None), 0)
+        self.assertEqual(lib.wy_session_state(session), 3)
+        self.assertEqual(lib.wy_session_streaming(session), 0)
+        output.seek(stop_start)
+        self.assertEqual(read_event(output).type, 'streaming-stopped')
+        self.assertEqual(lib.wy_session_wake(session, b'hey-hermes', writer, None), 0)
+        self.assertEqual(lib.wy_session_streaming(session), 1)
+
+    def test_playback_audio_is_accepted_without_tearing_the_link(self):
+        """The bridge sends audio-start / audio-chunk / audio-stop for playback, and it sends
+        them to a registered device. The session must accept and drain them -- link stays
+        registered -- not refuse the frame the way the old core refused every payload."""
+        lib = self.library()
+        session = C.create_string_buffer(lib.wy_session_size())
+        self.assertEqual(lib.wy_session_init(session, b'control-fixture', b'boot-1'), 0)
+        source = io.BytesIO()
+        for event in [Event(type='describe'),
+                      Event(type='hermes.register.ok',
+                            data={'device_id': 'control-fixture', 'protocol_version': 1}),
+                      Event(type='audio-start', data={'rate': 22050, 'width': 2, 'channels': 1}),
+                      Event(type='audio-chunk', data={'rate': 22050, 'width': 2, 'channels': 1,
+                                                      'timestamp': 0},
+                            payload=b'\x01\x02\x03\x04'),
+                      Event(type='audio-stop')]:
+            write_event(event, source)
+        source.seek(0)
+        output = io.BytesIO()
+
+        @IO
+        def reader(ctx, target, length):
+            chunk = source.read(min(6, length))
+            C.memmove(target, chunk, len(chunk))
+            return len(chunk)
+
+        @IO
+        def writer(ctx, target, length):
+            output.write(C.string_at(target, length))
+            return length
+
+        for expected in [1, 2, 2, 2, 2]:
+            self.assertEqual(lib.wy_session_step(session, reader, writer, None), 0)
+            self.assertEqual(lib.wy_session_state(session), expected)
+        self.assertEqual(lib.wy_session_state(session), 2, 'playback audio must not kill the link')
 
 
     def test_fail_closed_and_fresh_reconnect(self):
@@ -95,10 +211,14 @@ class SessionTests(unittest.TestCase):
             ([Event(type='describe'), Event(type='hermes.register.ok',
                data={'device_id': 'control-fixture', 'protocol_version': True})], -1),
             ([Event(type='describe'), Event(type='hermes.register.refused', data={'reason': 'test'})], -4),
+            # Inbound audio-chunk is the bridge's playback: accepted and drained (the speaker
+            # path is a later increment), and the link stays registered -- the old core refused
+            # every payload and died the first time the bridge spoke.
             ([Event(type='describe'), Event(type='hermes.register.ok', data=good_ack),
-               Event(type='audio-chunk', payload=b'not audio')], -1),
-            # Fail-soft is limited to well-formed control events. Anything carrying a payload is
-            # still refused: this core implements no audio and must never pretend otherwise.
+               Event(type='audio-chunk', payload=b'not audio')], 0),
+            # Fail-soft is limited to well-formed, known event types. An UNKNOWN event carrying a
+            # payload is still refused: a payload the device will not consume cannot be dropped
+            # silently mid-stream, and failing closed is the honest answer.
             ([Event(type='describe'), Event(type='hermes.register.ok', data=good_ack),
                Event(type='some.unknown.event', payload=b'\x00\x01')], -1),
         ]:
@@ -126,14 +246,16 @@ class SessionTests(unittest.TestCase):
                 for _ in events[:-1]:
                     self.assertEqual(lib.wy_session_step(session, reader, writer, None), 0)
                 self.assertEqual(lib.wy_session_step(session, reader, writer, None), expected)
-                self.assertEqual(lib.wy_session_state(session), 4 if expected == -4 else 5)
-                calls = reads
-                self.assertEqual(lib.wy_session_step(session, reader, writer, None), expected)
-                self.assertEqual(reads, calls, 'terminal state must not read again')
-                self.assertEqual(lib.wy_session_init(session, b'control-fixture', b'boot-2'), 0)
-                self.assertEqual(lib.wy_session_state(session), 0)
-                self.assertNotEqual(lib.wy_session_step(session, reader, writer, None), 0)
-                self.assertEqual(lib.wy_session_state(session), 5)
+                terminal_state = {0: 2, -1: 5, -4: 4}[expected]
+                self.assertEqual(lib.wy_session_state(session), terminal_state)
+                if expected != 0:
+                    calls = reads
+                    self.assertEqual(lib.wy_session_step(session, reader, writer, None), expected)
+                    self.assertEqual(reads, calls, 'terminal state must not read again')
+                    self.assertEqual(lib.wy_session_init(session, b'control-fixture', b'boot-2'), 0)
+                    self.assertEqual(lib.wy_session_state(session), 0)
+                    self.assertNotEqual(lib.wy_session_step(session, reader, writer, None), 0)
+                    self.assertEqual(lib.wy_session_state(session), 5)
 
     def test_unrecognised_control_events_are_ignored_and_ping_answered(self):
         """A real bridge sends desired state right after registration.
@@ -237,7 +359,7 @@ class SessionTests(unittest.TestCase):
             async def registered(slot):
                 self.assertTrue(slot.ready)
                 self.assertEqual(slot.identity.protocol_version, 1)
-                self.assertEqual(slot.identity.capabilities, ())
+                self.assertEqual(slot.identity.capabilities, ('microphone',))
                 self.assertEqual(slot.identity.boot_id, 'tcp-boot-1')
                 identities.append(slot.device_id)
                 await slot.connection.send(Event(type='run-satellite'))

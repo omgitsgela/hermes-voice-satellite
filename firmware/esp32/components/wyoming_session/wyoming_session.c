@@ -4,8 +4,14 @@
 #include <stdio.h>
 #include <string.h>
 
+/* The mic chunk's data field, fixed: this device's microphone is 16 kHz / S16 / mono. The
+ * bridge reads the format from each chunk and never assumes it, so it must be right, and it is
+ * a constant rather than a per-frame computation. */
+#define WY_MIC_CHUNK_DATA "{\"rate\":16000,\"width\":2,\"channels\":1}"
+
 size_t wy_session_size(void) { return sizeof(wy_session); }
 int wy_session_state(const wy_session *session) { return session ? session->state : WY_SESSION_FAILED; }
+int wy_session_streaming(const wy_session *session) { return session ? session->streaming : 0; }
 
 const char *wy_session_state_name(int state) {
     switch (state) {
@@ -38,6 +44,37 @@ static int token_valid(const char *value, size_t maximum) {
     return 1;
 }
 
+/* Every write on the link holds the writer lock for exactly one frame (or one short sequence,
+ * see wy_session_wake), because more than one task writes: the gateway task answers control
+ * events and the capture task sends mic chunks. On the host the lock callbacks are NULL and
+ * this is a no-op, which is exactly the single-threaded truth of a host test. */
+static int writer_lock(wy_session *session) {
+    return session->lock_writer ? session->lock_writer(session->writer_lock_user) : WY_OK;
+}
+static void writer_unlock(wy_session *session) {
+    if (session->unlock_writer) session->unlock_writer(session->writer_lock_user);
+}
+
+/* One frame, whole, under the lock. */
+static int locked_send(wy_session *session, wy_write_fn write_fn, void *ctx,
+                       const char *type, const char *data, const void *payload, size_t length) {
+    int lock_result = writer_lock(session);
+    if (lock_result != WY_OK) return lock_result;
+    int result = wy_send(write_fn, ctx, type, data, payload, length);
+    writer_unlock(session);
+    if (result != WY_OK) return result;
+    return WY_OK;
+}
+
+/* Stop the mic stream (idempotent) and tell the bridge: this is the reference satellite's
+ * "stop streaming and go back to wake-word listening", shared by transcript, pause and a
+ * second run-satellite. */
+static int stop_streaming(wy_session *session, wy_write_fn write_fn, void *ctx) {
+    if (!session->streaming) return WY_OK;
+    session->streaming = 0;
+    return locked_send(session, write_fn, ctx, "streaming-stopped", NULL, NULL, 0);
+}
+
 int wy_session_init(wy_session *session, const char *device_id, const char *boot_id) {
     if (!session) return WY_INVALID;
     memset(session, 0, sizeof(*session));
@@ -47,6 +84,47 @@ int wy_session_init(wy_session *session, const char *device_id, const char *boot
     strcpy(session->boot_id, boot_id);
     session->state = WY_SESSION_DESCRIBE;
     return WY_OK;
+}
+
+int wy_session_wake(wy_session *session, const char *wake_word,
+                    wy_write_fn write_fn, void *ctx) {
+    if (!session || !wake_word || !write_fn) return WY_INVALID;
+    if (session->state != WY_SESSION_REGISTERED && session->state != WY_SESSION_RUN_REQUESTED)
+        return WY_INVALID;
+    if (session->paused || session->streaming) return WY_INVALID;
+    if (!token_valid(wake_word, 64)) return WY_INVALID;
+    char name[128];
+    int length = snprintf(name, sizeof(name), "{\"name\":\"%s\"}", wake_word);
+    if (length < 0 || (size_t)length >= sizeof(name)) return WY_INVALID;
+
+    /* The three events go out as one sequence under a single lock hold: the bridge's capture
+     * reader must never see a mic chunk interleaved between detection and streaming-started,
+     * and if the link dies mid-sequence nothing is half-sent as "streaming". */
+    int lock_result = writer_lock(session);
+    if (lock_result != WY_OK) return lock_result;
+    int result = wy_send(write_fn, ctx, "detection", name, NULL, 0);
+    if (!result)
+        result = wy_send(write_fn, ctx, "run-pipeline",
+                         "{\"start_stage\":\"asr\",\"end_stage\":\"tts\",\"restart_on_end\":false}",
+                         NULL, 0);
+    if (!result)
+        result = wy_send(write_fn, ctx, "streaming-started", NULL, NULL, 0);
+    if (!result) session->streaming = 1;
+    writer_unlock(session);
+    if (result != WY_OK) { session->state = WY_SESSION_FAILED; return result; }
+    return WY_OK;
+}
+
+int wy_session_send_audio(wy_session *session, const void *pcm, size_t length,
+                          wy_write_fn write_fn, void *ctx) {
+    /* The mic is open only between a wake and the bridge's transcript; outside that window
+     * the audio is dropped on the device, exactly like the reference's muted path. Nothing is
+     * queued: a chunk that cannot go out now is late by the time it could, and a backlog in
+     * the session would only grow on a dead link. */
+    if (!session || !pcm || !write_fn) return WY_INVALID;
+    if (!session->streaming) return WY_INVALID;
+    if (length == 0 || length > 1024u * 2 || length % 2) return WY_INVALID;
+    return locked_send(session, write_fn, ctx, "audio-chunk", WY_MIC_CHUNK_DATA, pcm, length);
 }
 
 int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_fn, void *ctx) {
@@ -60,27 +138,44 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
     if (result) goto done;
     result = wy_parse_header(session->header, strlen(session->header), &frame);
     if (result) goto done;
-    if (frame.payload_length) { result = WY_INVALID; goto done; }
-    result = wy_read_exact(read_fn, ctx, session->body, frame.data_length);
-    if (result) goto done;
-    result = wy_decode_control(session->header, strlen(session->header),
-                               session->body, frame.data_length, &data);
-    if (result) goto done;
+    /* Wire order is data then payload (the canonical writer emits them in that order), and
+     * both must be drained off the wire before the frame is judged, for whatever it turns out
+     * to be: leaving either behind desynchronizes the next header.
+     *
+     * A frame WITH a payload is audio, not control: its data (the audio format field) is
+     * drained but not decoded, because wy_decode_control is, by design, for control frames
+     * only and refuses any frame that carries a payload. Decoding it is what made the first
+     * inbound audio-chunk fail the whole session. */
+    if (frame.data_length) {
+        result = wy_read_exact(read_fn, ctx, session->body, frame.data_length);
+        if (result) goto done;
+        if (!frame.payload_length) {
+            result = wy_decode_control(session->header, strlen(session->header),
+                                       session->body, frame.data_length, &data);
+            if (result) goto done;
+        }
+    }
+    if (frame.payload_length) {
+        result = wy_read_exact(read_fn, ctx, session->body, frame.payload_length);
+        if (result) goto done;
+    }
     if (!strcmp(frame.type, "describe")) {
-        result = wy_send(write_fn, ctx, "info",
+        result = locked_send(session, write_fn, ctx, "info",
             "{\"satellite\":{\"name\":\"ESP32 control probe\",\"area\":\"\","
             "\"installed\":true,\"attribution\":{\"name\":\"Hermes Voice Satellite\","
             "\"url\":\"https://github.com/omgitsgela/hermes-voice-satellite\"},"
-            "\"active_wake_words\":[],\"max_active_wake_words\":0,\"supports_trigger\":false}}", NULL, 0);
+            "\"active_wake_words\":[],\"max_active_wake_words\":0,\"supports_trigger\":false}}",
+            NULL, 0);
         if (result) goto done;
         if (session->state == WY_SESSION_DESCRIBE) {
             char registration[512];
             int length = snprintf(registration, sizeof(registration),
                 "{\"device_id\":\"%s\",\"boot_id\":\"%s\",\"protocol_version\":1,"
-                "\"name\":\"ESP32 control probe\",\"area\":\"\",\"firmware_version\":\"control-probe-1\","
-                "\"capabilities\":[]}", session->device_id, session->boot_id);
+                "\"name\":\"ESP32 control probe\",\"area\":\"\","
+                "\"firmware_version\":\"esp32-audio-1\","
+                "\"capabilities\":[\"microphone\"]}", session->device_id, session->boot_id);
             if (length <= 0 || (size_t)length >= sizeof(registration)) { result = WY_LIMIT; goto done; }
-            result = wy_send(write_fn, ctx, "hermes.register", registration, NULL, 0);
+            result = locked_send(session, write_fn, ctx, "hermes.register", registration, NULL, 0);
             if (!result) session->state = WY_SESSION_ACK;
         }
     } else if (!strcmp(frame.type, "hermes.register.ok")) {
@@ -93,19 +188,55 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
     } else if (!strcmp(frame.type, "hermes.register.refused")) {
         session->state = WY_SESSION_REFUSED;
         result = WY_REFUSED;
-    } else if (!strcmp(frame.type, "run-satellite") || !strcmp(frame.type, "pause-satellite")) {
+    } else if (!strcmp(frame.type, "run-satellite")) {
         if (session->state != WY_SESSION_REGISTERED && session->state != WY_SESSION_RUN_REQUESTED)
             result = WY_INVALID;
-        else session->state = !strcmp(frame.type, "run-satellite") ?
-                              WY_SESSION_RUN_REQUESTED : WY_SESSION_REGISTERED;
+        else {
+            /* The reference stops a running stream on run-satellite too (it is "back to
+             * wake-word listening"), and clears a pause. */
+            if (session->streaming) result = stop_streaming(session, write_fn, ctx);
+            if (!result) {
+                session->paused = 0;
+                session->state = WY_SESSION_RUN_REQUESTED;
+            }
+        }
+    } else if (!strcmp(frame.type, "pause-satellite")) {
+        if (session->state != WY_SESSION_REGISTERED && session->state != WY_SESSION_RUN_REQUESTED)
+            result = WY_INVALID;
+        else {
+            if (session->streaming) result = stop_streaming(session, write_fn, ctx);
+            if (!result) {
+                session->paused = 1;
+                session->state = WY_SESSION_REGISTERED;
+            }
+        }
+    } else if (!strcmp(frame.type, "transcript")) {
+        /* The bridge's stop signal: the utterance is over. End the stream and go back to
+         * wake-word listening. The state stays where it is (armed or not) -- a transcript does
+         * not undo the host's run request, and the next wake must be able to start a new stream
+         * immediately, which is what the follow-up window relies on. */
+        if (session->state != WY_SESSION_REGISTERED && session->state != WY_SESSION_RUN_REQUESTED)
+            result = WY_INVALID;
+        else
+            result = stop_streaming(session, write_fn, ctx);
+    } else if (!strcmp(frame.type, "audio-start") ||
+               !strcmp(frame.type, "audio-chunk") ||
+               !strcmp(frame.type, "audio-stop")) {
+        /* Inbound playback audio. The speaker path is a later increment, but these frames are
+         * expected parts of the protocol: the payload is already drained, so the link stays
+         * usable. Refusing them -- the old behavior, which refused every payload -- killed the
+         * session the first time the bridge spoke. */
     } else if (!strcmp(frame.type, "ping")) {
         /* The protocol expects an answer to a ping; a silent peer looks like a dead device. */
-        result = wy_send(write_fn, ctx, "pong", NULL, NULL, 0);
+        result = locked_send(session, write_fn, ctx, "pong", NULL, NULL, 0);
     } else {
-        /* A real bridge sends events this probe does not implement, starting with desired state
-         * immediately after registration. Ignoring a well-formed control event keeps the link
-         * usable: the frame already passed the strict decode above, so nothing malformed reaches
-         * this branch, and anything carrying a payload was refused before it. */
+        /* A real bridge sends events this device does not implement, starting with desired
+         * state immediately after registration. Ignoring a well-formed control event keeps
+         * the link usable: the frame already passed the strict decode above. Anything UNKNOWN
+         * that carries a payload is still refused -- a payload this device will not consume
+         * cannot be silently dropped mid-stream without a decision, and failing closed is the
+         * honest answer. (Known playback types above are the expected ones.) */
+        if (frame.payload_length) result = WY_INVALID;
     }
 done:
     cJSON_Delete(data);
