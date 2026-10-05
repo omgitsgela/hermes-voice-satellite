@@ -26,9 +26,11 @@ class SessionTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         library = Path(temporary.name) / 'session.so'
         parser = COMP / 'wyoming_json'
-        includes = [COMP / 'wyoming_wire', parser, parser / 'vendor/cjson', COMP / 'wyoming_session']
+        includes = [COMP / 'wyoming_wire', parser, parser / 'vendor/cjson', COMP / 'wyoming_session',
+                    COMP / 'wyoming_audio']
         sources = [COMP / 'wyoming_wire/wyoming_wire.c', parser / 'wyoming_json.c',
-                   parser / 'vendor/cjson/cJSON.c', COMP / 'wyoming_session/wyoming_session.c']
+                   parser / 'vendor/cjson/cJSON.c', COMP / 'wyoming_session/wyoming_session.c',
+                   COMP / 'wyoming_audio/wyoming_audio.c']
         subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC',
                         '-DCJSON_NESTING_LIMIT=16', *['-I' + str(p) for p in includes],
                         *map(str, sources), '-lm', '-o', str(library)], check=True)
@@ -159,6 +161,70 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(read_event(output).type, 'streaming-stopped')
         self.assertEqual(lib.wy_session_wake(session, b'hey-hermes', writer, None), 0)
         self.assertEqual(lib.wy_session_streaming(session), 1)
+
+    def test_wake_now_opens_the_microphone(self):
+        """The bridge's wake-now (the follow-up window's 'open the microphone') must run the
+        wake sequence -- detection, run-pipeline, streaming-started -- with the device's wake
+        word, because on this device the session core is where the Pi's wake shim lives. A
+        wake-now that lands before the host is ready, or while the stream already runs, is
+        dropped, never a link failure."""
+        lib = self.library()
+        lib.wy_session_send_audio.argtypes = [C.c_void_p, C.c_void_p, C.c_size_t, IO, C.c_void_p]
+        lib.wy_session_send_audio.restype = C.c_int
+        lib.wy_session_streaming.argtypes = [C.c_void_p]
+        lib.wy_session_streaming.restype = C.c_int
+        session = C.create_string_buffer(lib.wy_session_size())
+        self.assertEqual(lib.wy_session_init(session, b'control-fixture', b'boot-1'), 0)
+        source = io.BytesIO()
+        # One wake-now before the host is ready (dropped), and one after run-satellite (the
+        # follow-up window opens the microphone). Both in the stream up front.
+        for event in [Event(type='wake-now'),
+                      Event(type='describe'),
+                      Event(type='hermes.register.ok',
+                            data={'device_id': 'control-fixture', 'protocol_version': 1}),
+                      Event(type='run-satellite'),
+                      Event(type='wake-now')]:
+            write_event(event, source)
+        source.seek(0)
+        output = io.BytesIO()
+
+        @IO
+        def reader(ctx, target, length):
+            chunk = source.read(min(4, length))
+            C.memmove(target, chunk, len(chunk))
+            return len(chunk)
+
+        @IO
+        def writer(ctx, target, length):
+            output.write(C.string_at(target, length))
+            return length
+
+        # Five events in the stream: the early wake-now (state stays describe), describe,
+        # register.ok, run-satellite, and the follow-up wake-now that starts the stream.
+        for expected in [0, 1, 2, 3, 3]:
+            self.assertEqual(lib.wy_session_step(session, reader, writer, None), 0)
+            self.assertEqual(lib.wy_session_state(session), expected)
+        # The early wake-now wrote nothing; the one after run-satellite started the stream.
+        output.seek(0)
+        events = []
+        while True:
+            event = read_event(output)
+            if event is None:
+                break
+            events.append(event)
+        self.assertEqual([e.type for e in events][:2], ['info', 'hermes.register'])
+        self.assertEqual([e.type for e in events][2:],
+                         ['detection', 'run-pipeline', 'streaming-started'])
+        self.assertEqual(events[2].data['name'], 'hey-hermes')
+        self.assertEqual(lib.wy_session_streaming(session), 1)
+        # The stream now carries audio; a wake-now mid-stream is dropped, not a fault.
+        pcm = bytes(range(256)) * 2
+        self.assertEqual(lib.wy_session_send_audio(session, pcm, len(pcm), writer, None), 0)
+        append_at = source.tell()    # where the reader's next read will begin
+        write_event(Event(type='wake-now'), source)   # appends, then leaves the position at the end
+        source.seek(append_at)       # ...so the reader can actually see the appended event
+        self.assertEqual(lib.wy_session_step(session, reader, writer, None), 0)
+        self.assertEqual(lib.wy_session_streaming(session), 1, 'a wake-now mid-stream is dropped, not a fault')
 
     def test_playback_audio_is_accepted_without_tearing_the_link(self):
         """The bridge sends audio-start / audio-chunk / audio-stop for playback, and it sends

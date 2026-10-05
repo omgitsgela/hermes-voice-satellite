@@ -69,6 +69,10 @@ typedef struct {
      * its finite registration deadline to "no deadline", so an idle registered link blocks until
      * a real end of stream. A NULL hook means the link keeps whatever deadline establish set. */
     int (*on_registered)(void *user);
+    /* Optional lifecycle hook, called on every link_down, AFTER the teardown has closed the
+     * transport. The device uses it to stop anything (the audio capture task) that shares the
+     * link's writer. A NULL hook is a no-op. */
+    void (*on_link_down)(void *user);
 
     /* Device identity, supplied to every fresh session. Filled by the caller (device_identity on
      * the device); the supervisor does not read NVS or the MAC itself. */
@@ -120,7 +124,8 @@ int gateway_supervisor_init(gateway_supervisor *sup, int64_t (*now_us)(void),
                             void (*teardown)(void *, gw_link *), void *user,
                             const char *device_id, const char *boot_id,
                             int64_t backoff_base_us, int64_t backoff_max_us, int max_attempts,
-                            char *report, size_t report_capacity, int (*on_registered)(void *));
+                            char *report, size_t report_capacity, int (*on_registered)(void *),
+                            void (*on_link_down)(void *));
 
 /* Advance the state machine one transition. Returns a GW_ code (see above). On GW_WAIT,
  * gateway_supervisor_delay_us reports how long to sleep. */
@@ -128,6 +133,12 @@ int gateway_supervisor_step(gateway_supervisor *sup);
 
 /* Microseconds to sleep before the next step is meaningful; 0 when none is pending. */
 int64_t gateway_supervisor_delay_us(const gateway_supervisor *sup);
+/* The currently-open transport (a copy: the supervisor may replace it on the next step),
+ * all-null when no link is open. Lets the device side reach the live read/write pair --
+ * the audio capture task needs the writer to send mic chunks under the writer lock. */
+gw_link gateway_supervisor_link(const gateway_supervisor *sup);
+/* The session buffer the supervisor owns for its life (NULL before init). */
+void *gateway_supervisor_session(const gateway_supervisor *sup);
 int gateway_supervisor_registered(const gateway_supervisor *sup);
 int gateway_supervisor_events(const gateway_supervisor *sup);
 int gateway_supervisor_attempts(const gateway_supervisor *sup);

@@ -1,6 +1,7 @@
 #ifndef WYOMING_SESSION_H
 #define WYOMING_SESSION_H
 #include "wyoming_wire.h"
+#include "wyoming_audio.h"
 /* State: the host's request to run (RUN_REQUESTED) is the armed state -- the device is
  * listening for its wake word. `streaming` (below) means the mic is being forwarded to the
  * bridge right now, between a wake and the bridge's transcript. */

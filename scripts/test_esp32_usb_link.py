@@ -84,9 +84,10 @@ int main(void) {
 ''')
             parser = COMP / 'wyoming_json'
             includes = [tmp, MAIN, COMP / 'wyoming_session', COMP / 'wyoming_wire',
-                        parser, parser / 'vendor/cjson']
+                        COMP / 'wyoming_audio', parser, parser / 'vendor/cjson']
             sources = [tmp / 'runner.c', MAIN / 'usb_wyoming.c', MAIN / 'device_identity.c',
                        COMP / 'wyoming_session/wyoming_session.c',
+                       COMP / 'wyoming_audio/wyoming_audio.c',
                        COMP / 'wyoming_wire/wyoming_wire.c', parser / 'wyoming_json.c',
                        parser / 'vendor/cjson/cJSON.c']
             binary = tmp / 'usb-link'

@@ -4,10 +4,10 @@
 #include <stdio.h>
 #include <string.h>
 
-/* The mic chunk's data field, fixed: this device's microphone is 16 kHz / S16 / mono. The
- * bridge reads the format from each chunk and never assumes it, so it must be right, and it is
- * a constant rather than a per-frame computation. */
-#define WY_MIC_CHUNK_DATA "{\"rate\":16000,\"width\":2,\"channels\":1}"
+/* The wake word name this device reports. The local detector (a later increment) and the
+ * bridge's wake-now both report the same name, so the bridge's capture path sees one wake
+ * word whether it was heard or requested. */
+#define WY_WAKE_WORD_NAME "hey-hermes"
 
 size_t wy_session_size(void) { return sizeof(wy_session); }
 int wy_session_state(const wy_session *session) { return session ? session->state : WY_SESSION_FAILED; }
@@ -86,7 +86,7 @@ int wy_session_init(wy_session *session, const char *device_id, const char *boot
     return WY_OK;
 }
 
-int wy_session_wake(wy_session *session, const char *wake_word,
+int __attribute__((used)) wy_session_wake(wy_session *session, const char *wake_word,
                     wy_write_fn write_fn, void *ctx) {
     if (!session || !wake_word || !write_fn) return WY_INVALID;
     if (session->state != WY_SESSION_REGISTERED && session->state != WY_SESSION_RUN_REQUESTED)
@@ -123,8 +123,13 @@ int wy_session_send_audio(wy_session *session, const void *pcm, size_t length,
      * the session would only grow on a dead link. */
     if (!session || !pcm || !write_fn) return WY_INVALID;
     if (!session->streaming) return WY_INVALID;
-    if (length == 0 || length > 1024u * 2 || length % 2) return WY_INVALID;
-    return locked_send(session, write_fn, ctx, "audio-chunk", WY_MIC_CHUNK_DATA, pcm, length);
+    if (length == 0 || length > WY_AUDIO_CHUNK_SAMPLES * 2 || length % 2) return WY_INVALID;
+    /* The chunk's format comes from the audio component, the one place that owns it: the
+     * builder validates the format and the bytes that leave on the wire are exactly what the
+     * host tests check against the canonical reader. */
+    char data[64];
+    if (wy_audio_chunk_data(data, sizeof(data), 16000, 2, 1) < 0) return WY_INVALID;
+    return locked_send(session, write_fn, ctx, "audio-chunk", data, pcm, length);
 }
 
 int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_fn, void *ctx) {
@@ -226,6 +231,15 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
          * expected parts of the protocol: the payload is already drained, so the link stays
          * usable. Refusing them -- the old behavior, which refused every payload -- killed the
          * session the first time the bridge spoke. */
+    } else if (!strcmp(frame.type, "wake-now")) {
+        /* The bridge's "open the microphone" command, for a follow-up window that has no wake
+         * word: the reference device's wake shim answers it by injecting a synthetic detection.
+         * Here the session core IS the device, so it runs the wake sequence itself, with the
+         * device's wake word name. A wake-now that lands while the stream is already running or
+         * the device is paused is dropped (wy_session_wake checks both), and one that arrives
+         * before the host is ready fails the same way an out-of-order wake would. */
+        result = wy_session_wake(session, WY_WAKE_WORD_NAME, write_fn, ctx);
+        if (result == WY_INVALID) result = WY_OK;   /* a dropped wake-now is not a fault */
     } else if (!strcmp(frame.type, "ping")) {
         /* The protocol expects an answer to a ping; a silent peer looks like a dead device. */
         result = locked_send(session, write_fn, ctx, "pong", NULL, NULL, 0);

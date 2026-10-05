@@ -6,6 +6,8 @@
 #include "wifi_station.h"
 #include "provisioning.h"
 #include "device_identity.h"
+#include "audio_capture.h"
+#include "wyoming_session.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
@@ -103,6 +105,41 @@ static int gateway_task_on_registered(void *user) {
     return 0;
 }
 
+/* Stop the microphone when the link goes down. The capture task and this task share the
+ * transport's writer; a link-down that left the capture task pointing at a dead transport
+ * would hand it a writer that is about to be reused by the next dial. */
+static void gateway_task_on_link_down(void *user) {
+    (void)user;
+    audio_capture_stop();
+}
+
+/* Start the microphone the moment the bridge's run-satellite arms the session, and stop it
+ * when the session leaves the armed state (pause, or the link going down). The capture task
+ * itself reads the I2S stream continuously while running and drops its audio unless the
+ * session says the stream is open, so starting it at "armed" rather than at "streaming" is
+ * what makes the first utterance start clean: the DMA is already primed, and there is no
+ * half-second of I2S bring-up between the wake and the first chunk. */
+static void gateway_task_maybe_start_capture(void) {
+    void *session = gateway_supervisor_session(&supervisor);
+    if (!session) return;
+    if (wy_session_state((wy_session *)session) == WY_SESSION_RUN_REQUESTED &&
+        !audio_capture_running()) {
+        gw_link link = gateway_supervisor_link(&supervisor);
+        if (link.user && link.write_fn)
+            audio_capture_start(session, link.user, link.write_fn);
+    }
+}
+
+static void gateway_task_maybe_stop_capture(void) {
+    if (!audio_capture_running()) return;
+    void *session = gateway_supervisor_session(&supervisor);
+    if (!session) return;
+    int state_now = wy_session_state((wy_session *)session);
+    if (state_now == WY_SESSION_REGISTERED || state_now == WY_SESSION_REFUSED ||
+        state_now == WY_SESSION_FAILED)
+        audio_capture_stop();
+}
+
 /* Close the transport a link was established over. The radio is left alone: the next establish
  * re-associates it, so reconnecting a dropped bridge does not need to re-associate Wi-Fi. */
 static void gateway_task_teardown(void *user, gw_link *link) {
@@ -122,8 +159,17 @@ static void gateway_task_fn(void *argument) {
     (void)argument;
     int result;
     for (;;) {
+        void *session = gateway_supervisor_session(&supervisor);
+        int state_before = session ? wy_session_state((wy_session *)session) : WY_SESSION_FAILED;
         result = gateway_supervisor_step(&supervisor);
-        if (result == GW_OK) continue;
+        if (result == GW_OK) {
+            int state_after = wy_session_state((wy_session *)session);
+            if (state_after == WY_SESSION_RUN_REQUESTED && state_before != WY_SESSION_RUN_REQUESTED)
+                gateway_task_maybe_start_capture();
+            else if (state_before == WY_SESSION_RUN_REQUESTED && state_after != WY_SESSION_RUN_REQUESTED)
+                gateway_task_maybe_stop_capture();
+            continue;
+        }
         if (result == GW_WAIT) {
             int64_t delay = gateway_supervisor_delay_us(&supervisor);
             vTaskDelay(pdMS_TO_TICKS(delay > 0 ? delay / 1000 : 1));
@@ -134,8 +180,9 @@ static void gateway_task_fn(void *argument) {
                               (result == GW_REFUSED) ? "gateway=stopped reason=refused"
                                                      : "gateway=stopped reason=failed");
         break;
-    }
-    wifi_station_release();
+        }
+        audio_capture_stop();
+        wifi_station_release();
     active = false;
     vTaskDelete(NULL);
 }
@@ -164,7 +211,7 @@ int gateway_task_start(const char *host, unsigned port, int transport,
                                 gateway_task_teardown, &state, state.device_id, state.boot_id,
                                 GATEWAY_BACKOFF_BASE_US, GATEWAY_BACKOFF_MAX_US, 0,
                                 state.report, sizeof(state.report),
-                                gateway_task_on_registered) != 0) {
+                                gateway_task_on_registered, gateway_task_on_link_down) != 0) {
         return -1;
     }
 

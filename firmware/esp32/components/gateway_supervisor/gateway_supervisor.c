@@ -36,6 +36,8 @@ static void link_down(gateway_supervisor *sup) {
     sup->link.user = NULL;
     sup->link.read_fn = NULL;
     sup->link.write_fn = NULL;
+    /* After the transport is closed, so a hook that touches the link sees it dead. */
+    if (sup->on_link_down) sup->on_link_down(sup->user);
 }
 
 /* Compute and record the next backoff. Returns 1 if the attempt budget is exhausted (terminal),
@@ -62,7 +64,8 @@ int gateway_supervisor_init(gateway_supervisor *sup, int64_t (*now_us)(void),
                             void (*teardown)(void *, gw_link *), void *user,
                             const char *device_id, const char *boot_id,
                             int64_t backoff_base_us, int64_t backoff_max_us, int max_attempts,
-                            char *report, size_t report_capacity, int (*on_registered)(void *)) {
+                            char *report, size_t report_capacity, int (*on_registered)(void *),
+                            void (*on_link_down)(void *)) {
     if (!sup || !now_us || !establish || !teardown) return -1;
     if (!device_id || !device_id[0] || !boot_id || !boot_id[0]) return -1;
     if (strlen(device_id) >= sizeof(sup->device_id) || strlen(boot_id) >= sizeof(sup->boot_id))
@@ -87,6 +90,7 @@ int gateway_supervisor_init(gateway_supervisor *sup, int64_t (*now_us)(void),
     sup->report = report;
     sup->report_capacity = report_capacity;
     sup->on_registered = on_registered;
+    sup->on_link_down = on_link_down;
     sup->state = GW_ST_IDLE;
     /* The session buffer is owned by the supervisor for its whole life; allocate it once. */
     sup->session_size = wy_session_size();
@@ -99,6 +103,15 @@ int64_t gateway_supervisor_delay_us(const gateway_supervisor *sup) {
     if (!sup || sup->state != GW_ST_BACKING_OFF) return 0;
     int64_t left = sup->resume_at_us - sup->now_us();
     return left > 0 ? left : 0;
+}
+
+gw_link gateway_supervisor_link(const gateway_supervisor *sup) {
+    gw_link none = {0};
+    return sup ? sup->link : none;
+}
+
+void *gateway_supervisor_session(const gateway_supervisor *sup) {
+    return sup ? sup->session : NULL;
 }
 
 int gateway_supervisor_registered(const gateway_supervisor *sup) { return sup ? sup->registered : 0; }

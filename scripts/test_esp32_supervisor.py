@@ -35,6 +35,7 @@ NOW = C.CFUNCTYPE(C.c_int64)
 ESTAB = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_void_p)
 TEARDOWN = C.CFUNCTYPE(None, C.c_void_p, C.c_void_p)
 ONREG = C.CFUNCTYPE(C.c_int, C.c_void_p)
+ONLINKDOWN = C.CFUNCTYPE(None, C.c_void_p)
 
 
 class GWLink(C.Structure):
@@ -119,10 +120,12 @@ class SupervisorTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         library = Path(temporary.name) / 'supervisor.so'
         includes = [COMP / 'wyoming_wire', COMP / 'wyoming_json', COMP / 'wyoming_json/vendor/cjson',
-                    COMP / 'wyoming_session', COMP / 'gateway_supervisor', COMP / 'report_tail']
+                    COMP / 'wyoming_session', COMP / 'wyoming_audio', COMP / 'gateway_supervisor',
+                    COMP / 'report_tail']
         sources = [COMP / 'wyoming_wire/wyoming_wire.c', COMP / 'wyoming_json/wyoming_json.c',
                    COMP / 'wyoming_json/vendor/cjson/cJSON.c', COMP / 'wyoming_session/wyoming_session.c',
-                   COMP / 'gateway_supervisor/gateway_supervisor.c', COMP / 'report_tail/report_tail.c']
+                   COMP / 'wyoming_audio/wyoming_audio.c', COMP / 'gateway_supervisor/gateway_supervisor.c',
+                   COMP / 'report_tail/report_tail.c']
         subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC',
                         '-DCJSON_NESTING_LIMIT=16', *['-I' + str(p) for p in includes],
                         *map(str, sources), '-lm', '-o', str(library)], check=True)
@@ -130,7 +133,8 @@ class SupervisorTests(unittest.TestCase):
         lib.gateway_supervisor_size.restype = C.c_size_t
         lib.gateway_supervisor_init.argtypes = [C.c_void_p, NOW, ESTAB, TEARDOWN, C.c_void_p,
                                                 C.c_char_p, C.c_char_p, C.c_int64, C.c_int64,
-                                                C.c_int, C.c_char_p, C.c_size_t, C.c_void_p]
+                                                C.c_int, C.c_char_p, C.c_size_t, C.c_void_p,
+                                                C.c_void_p]
         lib.gateway_supervisor_step.argtypes = [C.c_void_p]
         lib.gateway_supervisor_delay_us.argtypes = [C.c_void_p]
         lib.gateway_supervisor_delay_us.restype = C.c_int64
@@ -144,7 +148,7 @@ class SupervisorTests(unittest.TestCase):
         return lib
 
     def run_supervisor(self, lib, transport, base_us=1000, max_us=0, max_attempts=0, on_registered=None,
-                       report=None):
+                       report=None, on_link_down=None):
         now_fn = NOW(lambda: transport.clock.value)
         estab_fn = ESTAB(transport.establish)
         teardown_fn = TEARDOWN(transport.teardown)
@@ -153,11 +157,16 @@ class SupervisorTests(unittest.TestCase):
         if on_registered is not None:
             self._onreg_fn = ONREG(on_registered)
             self._keepalive.append(self._onreg_fn)
+        self._onlinkdown_fn = None
+        if on_link_down is not None:
+            self._onlinkdown_fn = ONLINKDOWN(on_link_down)
+            self._keepalive.append(self._onlinkdown_fn)
         sup = C.create_string_buffer(lib.gateway_supervisor_size())
         report_ptr = C.cast(report, C.c_char_p) if report is not None else None
         report_cap = C.sizeof(report) if report is not None else 0
         rc = lib.gateway_supervisor_init(sup, now_fn, estab_fn, teardown_fn, None, b'control-fixture', b'boot-1',
-                         base_us, max_us, max_attempts, report_ptr, report_cap, self._onreg_fn)
+                         base_us, max_us, max_attempts, report_ptr, report_cap, self._onreg_fn,
+                         self._onlinkdown_fn)
         self.assertEqual(rc, 0, 'supervisor init failed')
         return sup
 
@@ -392,6 +401,38 @@ class SupervisorTests(unittest.TestCase):
                    and l.gateway_supervisor_reconnects(s) >= 1)
         self.assertEqual(calls[0], 2, 'the hook fires again on the re-registration')
         self.assertEqual(transport.establish_calls, 2)
+
+
+    def test_on_link_down_hook_fires_on_tear_down(self):
+        """The device uses this hook to stop the audio capture task when the link goes away:
+        a capture task left pointing at a dead transport would send into the next dial. It must
+        fire on every teardown -- a lost link, a refused registration, and a reconnect -- and
+        never on a link that is still up."""
+        lib = self.library()
+        transport = FakeTransport(eof=True)
+        self._transport = transport
+        transport.add(0, [Event(type='describe'),
+                          Event(type='hermes.register.ok',
+                                data={'device_id': 'control-fixture', 'protocol_version': 1}),
+                          Event(type='run-satellite')])
+        calls = [0]
+        def on_link_down(_user):
+            calls[0] += 1
+        sup = self.run_supervisor(lib, transport, base_us=5000, on_link_down=on_link_down)
+        self.drive(lib, sup, lambda r, l, s: l.gateway_supervisor_events(s) >= 1)
+        self.assertEqual(calls[0], 0, 'no hook call while the link is up')
+        # The link goes away (EOF on an empty queue).
+        self.drive(lib, sup, lambda r, l, s: l.gateway_supervisor_registered(s) == 0
+                   and l.gateway_supervisor_events(s) >= 1)
+        self.assertEqual(calls[0], 1, 'one link loss = one hook call')
+        # A refused second registration is a teardown too.
+        transport.add(0, [Event(type='describe'),
+                          Event(type='hermes.register.refused', data={'reason': 'no slot'})])
+        transport.clock.value += 5000
+        # until=False: drive until the supervisor returns a terminal result (the refusal).
+        result, _ = self.drive(lib, sup, lambda r, l, s: False)
+        self.assertEqual(result, -4, 'refusal is terminal')
+        self.assertEqual(calls[0], 2, 'the refused registration tore the link down')
 
 
 if __name__ == '__main__':
