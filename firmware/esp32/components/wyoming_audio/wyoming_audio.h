@@ -15,6 +15,28 @@
  * the ceiling, not the cadence. */
 #define WY_AUDIO_CHUNK_SAMPLES 1024u
 
+/* One playback resampler per stream: the bridge's TTS arrives at 22050 Hz (SND_FORMAT) but
+ * the board's I2S clock is 16 kHz (shared with the capture), so the device resamples playback
+ * down. It keeps an ABSOLUTE input cursor, so the output grid is independent of how the audio
+ * is chunked: whether a second of speech arrives as one frame or many, the same input yields
+ * the same 16 kHz output, with no step at a seam. Feed chunks in order, one stream per
+ * playback session. */
+typedef struct wy_resampler {
+    double position;    /* absolute input offset (22050 Hz samples) of the next output sample */
+    double consumed;    /* absolute input offset of the start of the NEXT chunk (samples fed) */
+    int32_t prev_value; /* the last sample fed (absolute position consumed-1): it is the lower
+                           sample for a seam interpolation, so the resample is continuous */
+} wy_resampler;
+
+/* Feed the next chunk of `n` 22050 Hz mono S16 samples (in[0] is the first new sample of the
+ * stream) and emit up to `cap` 16000 Hz mono S16 samples by linear interpolation between the
+ * surrounding input samples. Returns how many output samples were written (0 when n or cap is
+ * 0). Bounded: never reads past in[n), never writes past out[cap]. Because the cursor is
+ * absolute, feeding the same total input in any chunking produces the same output sequence. */
+size_t wy_resample_22050_to_16000(wy_resampler *r, const int16_t *in, size_t n,
+                                  int16_t *out, size_t cap);
+void wy_resampler_reset(wy_resampler *r);   /* fresh stream: cursor and base back to 0 */
+
 /* Serialize the audio-chunk data field for the given format into buffer (capacity bytes,
  * NUL-terminated on success). Returns the number of bytes written (excluding the NUL), or a
  * negative value when the format is not one this device can emit (rate out of range, not

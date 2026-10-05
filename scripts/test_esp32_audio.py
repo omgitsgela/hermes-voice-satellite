@@ -148,5 +148,98 @@ class AudioTests(unittest.TestCase):
         self.assertEqual(lib.wy_audio_downmix_mono16(stereo, 1, None, 0), 0)
 
 
+    def resampler(self):
+        """A wy_resampler is a struct {double position}; the ctypes view and the reset/feed
+        bindings. The position is carried across feed() calls, so consecutive chunks resample
+        continuously."""
+        lib = self.library()
+        class Resampler(C.Structure):
+            _fields_ = [('position', C.c_double), ('consumed', C.c_double),
+                        ('prev_value', C.c_int32)]
+        lib.wy_resampler_reset.argtypes = [C.POINTER(Resampler)]
+        lib.wy_resampler_reset.restype = None
+        lib.wy_resample_22050_to_16000.argtypes = [C.POINTER(Resampler), C.POINTER(C.c_int16),
+                                                   C.c_size_t, C.POINTER(C.c_int16), C.c_size_t]
+        lib.wy_resample_22050_to_16000.restype = C.c_size_t
+        return lib, Resampler
+
+    def test_resample_one_second_is_one_second(self):
+        """One second of 22050 Hz input yields ~one second of 16000 Hz output. The exact count
+        is set by the fractional cursor, so allow +/-1 around the theoretical 16000."""
+        lib, R = self.resampler()
+        n = 22050
+        ramp = (C.c_int16 * n)()
+        for i in range(n):
+            ramp[i] = i % 2000   # a bounded ramp (stays well inside int16)
+        out = (C.c_int16 * 16005)()
+        r = R(); lib.wy_resampler_reset(C.byref(r))
+        written = lib.wy_resample_22050_to_16000(C.byref(r), ramp, n, out, 16005)
+        self.assertTrue(15999 <= written <= 16001,
+                        f'one second in should give ~one second out, got {written}')
+
+    def test_resample_is_continuous_across_chunk_boundary(self):
+        """A linear ramp resamples to the same values whether fed as one chunk or as two halves:
+        the fractional cursor carries across the seam, so there is no step at the boundary. A
+        chunked resampler that resets its cursor (or drops/dues a sample at the seam) fails this."""
+        lib, R = self.resampler()
+        n = 22050
+        ramp = (C.c_int16 * n)()
+        for i in range(n):
+            ramp[i] = i          # the identity ramp: resampling it is just the cursor, so the
+                                 # output depends only on the cursor, not the chunking
+        # one-shot
+        out1 = (C.c_int16 * 16005)()
+        r1 = R(); lib.wy_resampler_reset(C.byref(r1))
+        c1 = lib.wy_resample_22050_to_16000(C.byref(r1), ramp, n, out1, 16005)
+        # the same total input, fed as many small chunks with the absolute offset carried:
+        # the resampler is chunking-invariant, so this must equal the one-shot resample
+        chunk = 2048   # the bridge's samples_per_chunk shape
+        offs = range(0, n, chunk)
+        # Each chunk emits at most ceil(2048 * 16000/22050) + 1 samples, so a 2048-slot buffer
+        # per chunk is enough; the values are concatenated in stream order.
+        r2 = R(); lib.wy_resampler_reset(C.byref(r2))
+        parts = []
+        for o in offs:
+            m = min(chunk, n - o)
+            piece = (C.c_int16 * m)()          # the chunk's own array (in[0] = first new sample)
+            for i in range(m):
+                piece[i] = ramp[o + i]
+            buf = (C.c_int16 * 1600)()         # m<=2048 samples -> at most ~1489 out samples
+            k = lib.wy_resample_22050_to_16000(C.byref(r2), piece, m, buf, 1600)
+            parts.extend(buf[:k])
+        chunked = parts
+        oneshot = list(out1[:c1])
+        m = min(len(chunked), len(oneshot))
+        self.assertGreater(m, 15900)
+        self.assertEqual(chunked[:m], oneshot[:m],
+                         'resampling the same ramp in chunks must equal one chunk (absolute cursor)')
+
+    def test_resample_full_scale_stays_in_range(self):
+        """Alternating full-scale input stays in the int16 range (no wrap, no overflow)."""
+        lib, R = self.resampler()
+        n = 22050
+        in_ = (C.c_int16 * n)()
+        for i in range(n):
+            in_[i] = 32767 if (i % 2 == 0) else -32768
+        out = (C.c_int16 * 16005)()
+        r = R(); lib.wy_resampler_reset(C.byref(r))
+        written = lib.wy_resample_22050_to_16000(C.byref(r), in_, n, out, 16005)
+        self.assertGreater(written, 0)
+        for i in range(written):
+            self.assertTrue(-32768 <= out[i] <= 32767)
+
+    def test_resample_empty_and_reset(self):
+        lib, R = self.resampler()
+        r = R(); lib.wy_resampler_reset(C.byref(r))
+        out = (C.c_int16 * 4)()
+        self.assertEqual(lib.wy_resample_22050_to_16000(C.byref(r), None, 0, out, 4), 0)
+        # after a chunk, the stored absolute position is past the chunk; reset puts it back to 0
+        in_ = (C.c_int16 * 22050)()
+        lib.wy_resample_22050_to_16000(C.byref(r), in_, 22050, out, 4)
+        self.assertGreater(r.position, 0.0)
+        lib.wy_resampler_reset(C.byref(r))
+        self.assertEqual(r.position, 0.0)
+
+
 if __name__ == '__main__':
     unittest.main()

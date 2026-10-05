@@ -1,4 +1,5 @@
 #include "wyoming_audio.h"
+#include <math.h>
 #include <stdio.h>
 
 int wy_audio_chunk_data(char *buffer, size_t capacity, int rate, int width, int channels) {
@@ -32,4 +33,54 @@ int wy_audio_downmix_mono16(const int32_t *stereo, size_t frame_count, int16_t *
         out[i] = (int16_t)scaled;
     }
     return (int)take;
+}
+
+/* The playback resampler's ratio, one constant: 22050 Hz in (the bridge's SND_FORMAT) to
+ * 16000 Hz out (the board's I2S clock). A double, because the fractional cursor must not drift
+ * on an integer ratio. */
+#define WY_RESAMPLE_RATIO  (22050.0 / 16000.0)
+
+void wy_resampler_reset(wy_resampler *r) {
+    if (r) { r->position = 0.0; r->consumed = 0.0; r->prev_value = 0; }
+}
+
+size_t wy_resample_22050_to_16000(wy_resampler *r, const int16_t *in, size_t n,
+                                  int16_t *out, size_t cap) {
+    if (!r || !in || !out || n == 0 || cap == 0) return 0;
+    /* The cursor is absolute. `base` is where in[0] sits in the stream, so the local index is
+     * position - base. One output sample is always interpolated between two ABSOLUTE input
+     * samples; at a seam the lower one is the last sample of the previous chunk (prev_value,
+     * absolute base-1), which is what keeps the resample continuous across the boundary. */
+    double base = r->consumed;
+    double prev_pos = base - 1.0;
+    size_t written = 0;
+    while (written < cap) {
+        double p = r->position;
+        int32_t a, b;
+        double frac;
+        if (p < base) {
+            /* In the seam region [base-1, base): between prev_value and in[0]. The cursor can
+             * be at most one sample behind base (the output rate is lower than the input), so
+             * frac is in [0,1). */
+            frac = p - prev_pos;
+            if (frac < 0.0 || frac >= 1.0) break;   /* cannot happen; guard against drift */
+            a = r->prev_value;
+            b = in[0];
+        } else {
+            long i0 = (long)(p - base);
+            if ((size_t)i0 + 1 >= n) break;          /* need a sample ahead to interpolate */
+            frac = p - (double)(long)p;
+            a = in[i0];
+            b = in[i0 + 1];
+        }
+        double sample = (double)a * (1.0 - frac) + (double)b * frac;
+        int32_t v = (int32_t)llround(sample);        /* in-range (a lerp of two int16) */
+        if (v > 32767) v = 32767;                    /* guard, not the path */
+        if (v < -32768) v = -32768;
+        out[written++] = (int16_t)v;
+        r->position += WY_RESAMPLE_RATIO;
+    }
+    r->consumed = base + (double)n;   /* the next chunk begins where this one ends */
+    r->prev_value = in[n - 1];        /* keep the last sample for the next seam */
+    return written;
 }
