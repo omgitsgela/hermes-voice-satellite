@@ -10,6 +10,9 @@
 #include "audio_playback.h"
 #include "wyoming_audio.h"   /* WY_VOLUME_DEFAULT_PERCENT: the device's conservative default level */
 #include "wyoming_session.h"
+#include "wyoming_config.h"  /* the config-plane agent the session transports */
+#include "cJSON.h"           /* the adapter parses the agent's serialized settings */
+#include "nvs.h"             /* the hermes_cfg durable storage backend + inc4 wake staging */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
@@ -122,6 +125,153 @@ static int gateway_task_on_registered(void *user) {
         state.tcp_socket.deadline_us = GATEWAY_SOCKET_NO_DEADLINE;
     audio_playback_start();
     return 0;
+}
+
+/* ---- Configuration plane device glue (increment 3) --------------------------- */
+
+/* The config agent's lifetime matches the gateway session's: it is (re)created in
+ * gateway_task_start and freed on the terminal path, exactly like the playback ring. It is a
+ * SEPARATE allocation from the session so that its durable state -- the generation guard and the
+ * last-applied desired -- outlives every per-reconnect session re-init (the supervisor re-inits
+ * the SAME session buffer on a reconnect, which preserves the session's config_handler/config_user
+ * fields and therefore this agent pointer). After a full reboot the agent is fresh (generation 0)
+ * and its set_storage restore brings the guard back from NVS. */
+static wy_config *config_agent;
+
+/* The session's config handler (the C-side trampoline wy_session_set_config takes). On the
+ * device this is a real function -- no ctypes double-marshal -- so it is a thin forward to the
+ * agent, whose first argument is the agent itself. The session stays the transport; the agent
+ * owns all the config logic. */
+static int cfg_handler_trampoline(void *config, const char *desired_json,
+                                  char *report_out, size_t report_cap) {
+    return wy_config_step((wy_config *)config, desired_json, report_out, report_cap);
+}
+
+/* The agent's restore reads at most WY_CFG_LOAD_MAX (1024) bytes; the blob is well under that in
+ * practice. The load buffer is sized to that cap (+NUL headroom) and lives on the gateway task's
+ * 10 KB stack, comfortably. */
+#define CFG_BLOB_MAX 1024u
+
+/* The agent's durable storage backend: the hermes_cfg NVS blob. save returns 0 only once the
+ * state is committed (durable), which is what makes the agent's "persistence before acceptance"
+ * real. load returns 0 with *outlen set when a blob exists, nonzero when there is none (first
+ * boot) or it will not fit the caller's buffer -- both of which the agent treats as "no
+ * persisted state" and degrades safely to first boot (the plan's torn-write recovery). */
+static int cfg_nvs_save(void *user, const char *json, size_t len) {
+    (void)user;
+    nvs_handle_t handle;
+    if (nvs_open("hermes_cfg", NVS_READWRITE, &handle) != ESP_OK) return -1;
+    esp_err_t result = nvs_set_str(handle, "blob", json);
+    if (result == ESP_OK) result = nvs_commit(handle);
+    nvs_close(handle);
+    return result == ESP_OK ? 0 : -1;
+}
+
+static int cfg_nvs_load(void *user, char *out, size_t cap, size_t *outlen) {
+    (void)user;
+    *outlen = 0;
+    nvs_handle_t handle;
+    esp_err_t opened = nvs_open("hermes_cfg", NVS_READONLY, &handle);
+    if (opened == ESP_ERR_NVS_NOT_FOUND) return -1;   /* first boot: no state */
+    if (opened != ESP_OK) return -1;
+    /* Query the real stored size first (a NULL buffer returns the required size without
+     * copying). For a stored string that size INCLUDES the NUL terminator, so the JSON content
+     * is stored-1 bytes. Refuse a blob whose content will not fit the caller's cap: truncating
+     * it would hand the agent a JSON fragment that fails its schema check and discard a GOOD
+     * persisted state to first boot -- a false corruption. */
+    size_t stored = 0;
+    esp_err_t query = nvs_get_str(handle, "blob", NULL, &stored);
+    if (query != ESP_OK) { nvs_close(handle); return -1; }
+    if (stored == 0) { nvs_close(handle); return -1; }   /* empty string: treat as no state */
+    size_t content = stored - 1;                          /* exclude the NUL */
+    if (content > cap) { nvs_close(handle); return -1; }  /* will not fit the caller's cap */
+    char tmp[CFG_BLOB_MAX + 1];
+    if (stored > sizeof(tmp)) { nvs_close(handle); return -1; }
+    size_t tmp_len = sizeof(tmp);
+    esp_err_t result = nvs_get_str(handle, "blob", tmp, &tmp_len);
+    nvs_close(handle);
+    if (result != ESP_OK) return -1;
+    memcpy(out, tmp, content);
+    out[content] = '\0';
+    *outlen = content;
+    return 0;
+}
+
+/* Best-effort staging of one wake setting to NVS for the wake detector (the next increment).
+ * inc4 reads these at startup. The keys live in hermes_cfg next to the state blob; a staging
+ * failure is not fatal to the load-bearing apply (the live volume), so the error is swallowed
+ * here and only the volume's success drives the report. */
+static void cfg_stage_wake(const char *key, const char *value) {
+    if (!value) return;
+    nvs_handle_t handle;
+    if (nvs_open("hermes_cfg", NVS_READWRITE, &handle) != ESP_OK) return;
+    esp_err_t result = nvs_set_str(handle, key, value);
+    if (result == ESP_OK) result = nvs_commit(handle);
+    nvs_close(handle);
+}
+
+/* The apply adapter: the device's real "what can I actually apply" half. It sets the LIVE
+ * playback volume (the one setting with a live path -- the next audio slice picks it up), stages
+ * the wake settings to NVS for the next increment, and is HONEST about the rest: mic_gain /
+ * led_brightness / locale / update_channel have no live adapter, so they are never put in
+ * `actual`. The health reported is degraded whenever any desired key is not in `actual` (which
+ * is always, on this device, because the bridge sends the full 7-key profile). Only what is
+ * really applied goes in `actual` -- nothing is claimed that was not. */
+static int cfg_apply(void *user, const char *settings_json,
+                     char *out_actual, size_t actual_cap,
+                     int *out_health, char *out_error, size_t err_cap) {
+    (void)err_cap;
+    out_error[0] = '\0';
+    if (!user || !settings_json) { *out_health = WY_CFG_HEALTH_ERROR; return WY_INVALID; }
+    wy_session *session = (wy_session *)user;
+    cJSON *settings = cJSON_Parse(settings_json);
+    if (!settings || !cJSON_IsObject(settings)) {
+        *out_health = WY_CFG_HEALTH_ERROR;
+        return WY_INVALID;
+    }
+    cJSON *actual = cJSON_CreateObject();
+    if (!actual) { cJSON_Delete(settings); *out_health = WY_CFG_HEALTH_ERROR; return WY_INVALID; }
+    int degraded = 0;
+    /* playback_volume: the live, immediately-applied setting. */
+    const cJSON *volume = cJSON_GetObjectItemCaseSensitive(settings, "playback_volume");
+    if (volume) {
+        if (cJSON_IsNumber(volume) && !cJSON_IsBool(volume) &&
+            volume->valuedouble >= 0 && volume->valuedouble <= 100 &&
+            volume->valuedouble == (double)(long)volume->valuedouble &&
+            wy_session_set_playback_volume(session, (int)volume->valuedouble) == WY_OK) {
+            cJSON_AddNumberToObject(actual, "playback_volume", volume->valuedouble);
+        } else {
+            degraded = 1;   /* a value the live path refused: not applied */
+        }
+    }
+    /* wake_threshold / wake_word: staged to NVS for the next increment's detector. They are NOT
+     * live-applied (there is no detector yet), so they are never in `actual` -- they land in the
+     * agent's pending set. Staging is a side effect; its failure does not change the report. */
+    const cJSON *threshold = cJSON_GetObjectItemCaseSensitive(settings, "wake_threshold");
+    if (threshold && cJSON_IsNumber(threshold) && !cJSON_IsBool(threshold)) {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "%.6f", threshold->valuedouble);
+        cfg_stage_wake("wake_threshold", buf);
+    }
+    const cJSON *word = cJSON_GetObjectItemCaseSensitive(settings, "wake_word");
+    if (word && cJSON_IsString(word) && word->valuestring)
+        cfg_stage_wake("wake_word", word->valuestring);
+    /* Any desired key that did not land in `actual` makes this a partial apply. */
+    if (!cJSON_Compare(actual, settings, 1)) degraded = 1;
+    *out_health = degraded ? WY_CFG_HEALTH_DEGRADED : WY_CFG_HEALTH_HEALTHY;
+    /* Serialize `actual` into the out buffer (NUL-terminated, capped). */
+    char *text = cJSON_PrintUnformatted(actual);
+    if (text) {
+        size_t len = strlen(text);
+        if (len + 1 <= actual_cap) memcpy(out_actual, text, len + 1);
+        else if (actual_cap >= 2) memcpy(out_actual, "{}", 2);
+        free(text);
+    } else if (actual_cap >= 2) {
+        memcpy(out_actual, "{}", 2);
+    }
+    cJSON_Delete(actual);
+    cJSON_Delete(settings);
+    return WY_OK;
 }
 
 /* Stop the microphone when the link goes down. The capture task and this task share the
@@ -242,6 +392,16 @@ static void gateway_task_fn(void *argument) {
             heap_caps_free(playback_ring);
             playback_ring = NULL;
         }
+        /* The config agent outlives every per-link re-init but not the gateway session: free it
+         * (it owns its desired/actual cJSON) before the task exits, so a restart re-creates it
+         * fresh (generation 0) and its set_storage restore brings the guard back from NVS. The
+         * session it pointed at (apply's user) is freed by the supervisor on the next start, so
+         * this free precedes that one -- no dangling apply. */
+        if (config_agent) {
+            wy_config_destroy(config_agent);
+            free(config_agent);
+            config_agent = NULL;
+        }
         wifi_station_release();
     active = false;
     vTaskDelete(NULL);
@@ -311,6 +471,31 @@ int gateway_task_start(const char *host, unsigned port, int transport,
      * a start whose ring allocation failed must not leave the pump reading that freed block
      * (a use-after-free). Every accessor is safe on a NULL ring. */
     audio_playback_set_session(session);
+
+    /* ---- Configuration plane: wire the agent into the session (installed once, preserved
+     * across every per-link re-init by wy_session_init). The agent is a separate, app-lifetime
+     * allocation: its durable state (the generation guard) outlives the supervisor's per-reconnect
+     * session re-init, and set_storage's restore is what brings that guard back from the hermes_cfg
+     * NVS blob after a reboot. The apply adapter's user is the session (it sets the live volume);
+     * the handler trampoline forwards the session's desired frames to wy_config_step. A failed
+     * agent allocation is NOT fatal: the session keeps draining config frames and the link stays
+     * alive (a device that cannot wire the plane is not bricked by it), and the report names it. */
+    if (config_agent) {  /* a restart: the previous run's terminal path should have freed it,
+                             but never leak a whole agent across a re-start. */
+        wy_config_destroy(config_agent);
+        free(config_agent);
+        config_agent = NULL;
+    }
+    wy_config *agent = calloc(1, wy_config_size());
+    if (agent && wy_config_init(agent, state.device_id) == WY_OK) {
+        wy_config_set_storage(agent, cfg_nvs_save, cfg_nvs_load, NULL);  /* restores the guard from NVS */
+        wy_config_set_apply(agent, cfg_apply, session);
+        wy_session_set_config((wy_session *)session, cfg_handler_trampoline, agent);
+        config_agent = agent;
+    } else {
+        gateway_report_append(state.report, sizeof(state.report), "config=unavailable reason=alloc");
+        free(agent);
+    }
 
     TaskHandle_t handle = NULL;
     if (xTaskCreate(gateway_task_fn, "gw_task", GATEWAY_TASK_STACK, NULL,

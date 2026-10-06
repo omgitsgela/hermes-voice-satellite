@@ -294,7 +294,9 @@ class SessionTests(unittest.TestCase):
                         ('playback_rs', C.c_double * 3),
                         ('ring', C.c_void_p), ('ring_capacity', C.c_size_t),
                         ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
-                        ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p)]
+                        ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
+                        ('config_handler', C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_char_p, C.c_size_t)),
+                        ('config_user', C.c_void_p)]
         self.assertEqual(C.sizeof(WYSession), lib.wy_session_size(), 'the host struct must match the production layout')
         session = WYSession()
         self.assertEqual(lib.wy_session_init(C.byref(session), b'control-fixture', b'boot-1'), 0)
@@ -340,7 +342,9 @@ class SessionTests(unittest.TestCase):
                         ('playback_rs', C.c_double * 3),
                         ('ring', C.c_void_p), ('ring_capacity', C.c_size_t),
                         ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
-                        ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p)]
+                        ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
+                        ('config_handler', C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_char_p, C.c_size_t)),
+                        ('config_user', C.c_void_p)]
         self.assertEqual(C.sizeof(WYSession), lib.wy_session_size(), 'the host struct must match the production layout')
         session = WYSession()
         self.assertEqual(lib.wy_session_init(C.byref(session), b'control-fixture', b'boot-1'), 0)
@@ -830,6 +834,221 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(list(got), expected,
                          'the converted ring must be byte-identical to the canonical reference')
         self.assertEqual(lib.wy_session_playback_bytes(session), 0, 'the ring drains to empty')
+
+
+    def config_library(self):
+        """Session core + the REAL config agent in one shared object, so the desired->reported
+        round-trip is tested end-to-end through the production agent (not a stand-in)."""
+        self.assertTrue((COMP / 'wyoming_config/wyoming_config.c').exists(), 'config agent missing')
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        library = Path(temporary.name) / 'session_cfg.so'
+        parser = COMP / 'wyoming_json'
+        includes = [COMP / 'wyoming_wire', parser, parser / 'vendor/cjson', COMP / 'wyoming_session',
+                    COMP / 'wyoming_audio', COMP / 'wyoming_config']
+        sources = [COMP / 'wyoming_wire/wyoming_wire.c', parser / 'wyoming_json.c',
+                   parser / 'vendor/cjson/cJSON.c', COMP / 'wyoming_session/wyoming_session.c',
+                   COMP / 'wyoming_audio/wyoming_audio.c', COMP / 'wyoming_config/wyoming_config.c']
+        subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC',
+                        '-DCJSON_NESTING_LIMIT=16', *['-I' + str(p) for p in includes],
+                        *map(str, sources), '-lm', '-o', str(library)], check=True)
+        lib = C.CDLL(str(library))
+        lib.wy_session_size.restype = C.c_size_t
+        lib.wy_session_init.argtypes = [C.c_void_p, C.c_char_p, C.c_char_p]
+        lib.wy_session_state.argtypes = [C.c_void_p]
+        lib.wy_session_step.argtypes = [C.c_void_p, IO, IO, C.c_void_p]
+        lib.wy_config_size.restype = C.c_size_t
+        lib.wy_config_init.argtypes = [C.c_void_p, C.c_char_p]
+        return lib
+
+    def _install_real_config_agent(self, lib, session, volume):
+        """Back the session's config handler with the REAL agent, NVS-like in-memory storage, and
+        a device-accurate apply adapter (only playback_volume is applied; the rest degrade).
+        Returns (keepalive, the desired profile, the expected actual)."""
+        import json as _j
+        keep = []
+        cfg = C.create_string_buffer(lib.wy_config_size())
+        self.assertEqual(lib.wy_config_init(cfg, b'control-fixture'), 0)
+
+        SAVE = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_size_t)
+        LOAD = C.CFUNCTYPE(C.c_int, C.c_void_p, C.POINTER(C.c_char), C.c_size_t, C.POINTER(C.c_size_t))
+        st = {'blob': bytearray()}
+
+        @SAVE
+        def save(user, js, length):
+            st['blob'] = bytearray(C.string_at(js, length))
+            return 0
+
+        @LOAD
+        def load(user, out, cap, outlen):
+            if not st['blob'] or len(st['blob']) + 1 >= cap:
+                return -1
+            C.memmove(out, bytes(st['blob']), len(st['blob']))
+            outlen[0] = len(st['blob'])
+            return 0
+
+        APPLY = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.POINTER(C.c_char), C.c_size_t,
+                            C.POINTER(C.c_int), C.POINTER(C.c_char), C.c_size_t)
+
+        @APPLY
+        def apply(user, settings_json, out_actual, actual_cap, out_health, out_error, err_cap):
+            try:
+                settings = _j.loads(C.string_at(settings_json).decode('utf-8'))
+            except Exception:
+                out_health[0] = 3
+                return -1
+            actual = {}
+            if isinstance(settings.get('playback_volume'), int) and \
+               not isinstance(settings.get('playback_volume'), bool):
+                actual['playback_volume'] = settings['playback_volume']
+            s = _j.dumps(actual).encode('utf-8')
+            C.memmove(out_actual, s, len(s))
+            out_actual[len(s)] = 0
+            out_health[0] = 2   # degraded: the volume applied, the rest have no adapter yet
+            out_error[0] = 0
+            return 0
+
+        keep += [save, load, apply, cfg]
+        lib.wy_config_set_storage.argtypes = [C.c_void_p, SAVE, LOAD, C.c_void_p]
+        lib.wy_config_set_storage(cfg, save, load, None)
+        lib.wy_config_set_apply.argtypes = [C.c_void_p, APPLY, C.c_void_p]
+        lib.wy_config_set_apply(cfg, apply, None)
+
+        profile = {'wake_word': 'hey-hermes', 'wake_threshold': 0.5, 'mic_gain': 40,
+                   'playback_volume': volume, 'led_brightness': 10, 'locale': 'en-US',
+                   'update_channel': 'stable'}
+        expected_actual = {'playback_volume': volume}
+        # The session installs the handler once; the glue (or this test) owns the agent's lifetime.
+        # The report buffer is an OUT parameter: ctypes must hand the C code a WRITABLE pointer,
+        # which means POINTER(c_char), never c_char_p (which converts to an immutable bytes copy
+        # that C must not write through). wy_config_step's own argtypes are set so the forwarder
+        # marshals the out buffer the same way when it calls back into the agent.
+        CFGSTEP = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.POINTER(C.c_char), C.c_size_t)
+        lib.wy_config_step.argtypes = [C.c_void_p, C.c_char_p, C.POINTER(C.c_char), C.c_size_t]
+        lib.wy_config_step.restype = C.c_int
+        handler = CFGSTEP(lambda config, desired, out, cap:
+                          lib.wy_config_step(config, desired, out, cap))
+        lib.wy_session_set_config.argtypes = [C.c_void_p, CFGSTEP, C.c_void_p]
+        lib.wy_session_set_config(session, handler, C.cast(cfg, C.c_void_p))
+        keep.append(handler)
+        return keep, profile, expected_actual
+
+    def _register_then_desired(self, lib, session, profile, generation, output):
+        """Feed describe, register.ok, and one hermes.config.desired; return the sent events."""
+        source = io.BytesIO()
+        for event in [Event(type='describe'),
+                      Event(type='hermes.register.ok',
+                            data={'device_id': 'control-fixture', 'protocol_version': 1}),
+                      Event(type='hermes.config.desired',
+                            data={'schema_version': 1, 'device_id': 'control-fixture',
+                                  'generation': generation, 'settings': profile})]:
+            write_event(event, source)
+        source.seek(0)
+
+        @IO
+        def reader(ctx, target, length):
+            chunk = source.read(min(4, length))
+            C.memmove(target, chunk, len(chunk))
+            return len(chunk)
+
+        @IO
+        def writer(ctx, target, length):
+            output.write(C.string_at(target, length))
+            return length
+
+        for _ in range(3):
+            self.assertEqual(lib.wy_session_step(session, reader, writer, None), 0)
+        output.seek(0)
+        events = []
+        while (event := read_event(output)) is not None:
+            events.append(event)
+        return events
+
+    def test_set_playback_volume_updates_the_live_level(self):
+        """The config plane's apply adapter (the device glue) must change the LIVE playback level
+        for the next audio slice, and it does so under the playback ring lock (the same lock that
+        guards the ring pointers and the volume read in the audio-chunk conversion). A level the
+        bridge requests is applied the moment the config dispatch is processed -- the next answer
+        plays at the new level without a reconnect. The value is stored raw; wy_apply_volume
+        clamps it at use (the no-silence floor), so the setter does not clamp here."""
+        lib = self.playback_lib()
+        lib.wy_session_set_playback_volume.argtypes = [C.c_void_p, C.c_int]
+        lib.wy_session_set_playback_volume.restype = C.c_int
+        WY_HEADER_MAX, WY_DATA_MAX = 1024, 4096
+        class WYSession(C.Structure):
+            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
+                        ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
+                        ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
+                        ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
+                        ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
+                        ('writer_lock_user', C.c_void_p),
+                        ('playback_active', C.c_int), ('playback_ended', C.c_int),
+                        ('playback_volume', C.c_int), ('playback_rate', C.c_int),
+                        ('playback_rs', C.c_double * 3),
+                        ('ring', C.c_void_p), ('ring_capacity', C.c_size_t),
+                        ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
+                        ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
+                        ('config_handler', C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_char_p, C.c_size_t)),
+                        ('config_user', C.c_void_p)]
+        self.assertEqual(C.sizeof(WYSession), lib.wy_session_size(), 'the host struct must match the production layout')
+        session = WYSession()
+        self.assertEqual(lib.wy_session_init(C.byref(session), b'control-fixture', b'boot-1'), 0)
+        ring = (C.c_int32 * 16)()
+        self.assertEqual(lib.wy_session_playback_configure(C.byref(session), ring, 64, 50), 0)
+        self.assertEqual(session.playback_volume, 50)
+        self.assertEqual(lib.wy_session_set_playback_volume(C.byref(session), 30), 0)
+        self.assertEqual(session.playback_volume, 30, 'the live level must change for the next slice')
+        self.assertEqual(lib.wy_session_set_playback_volume(C.byref(session), 0), 0)
+        self.assertEqual(session.playback_volume, 0, '0 is stored raw; the floor applies at use, not here')
+        self.assertEqual(lib.wy_session_set_playback_volume(None, 30), -1, 'a NULL session is refused')
+
+    def test_config_desired_produces_reported(self):
+        """The bridge sends hermes.config.desired right after registration. The session must hand
+        the decoded data to the (injected) config agent and answer with hermes.config.reported --
+        the agent's real report (the device's actual + health), never the rejected desired. This
+        is the wiring; the agent's own logic is proven in test_esp32_config.py."""
+        lib = self.config_library()
+        session = C.create_string_buffer(lib.wy_session_size())
+        self.assertEqual(lib.wy_session_init(session, b'control-fixture', b'boot-1'), 0)
+        keep, profile, expected_actual = self._install_real_config_agent(lib, session, 42)
+        self.addCleanup(lambda: keep)
+        output = io.BytesIO()
+        events = self._register_then_desired(lib, session, profile, 1, output)
+        self.assertEqual([e.type for e in events],
+                         ['info', 'hermes.register', 'hermes.config.reported'])
+        reported = events[2].data
+        self.assertEqual(reported['generation'], 1)
+        self.assertEqual(reported['health'], 'degraded')
+        self.assertEqual(reported['actual'], expected_actual,
+                         'the report carries what the agent really applied, not the desired')
+        self.assertEqual(lib.wy_session_state(session), 2, 'a config event does not move the state')
+
+    def test_config_handler_survives_reinit(self):
+        """The glue installs the config handler once; the supervisor re-inits the SAME session
+        buffer on every reconnect. A re-init that wiped the handler would leave a device that
+        ignores every config dispatch after its first reconnect -- so the handler (and the agent
+        it points at) must survive, the way the writer-lock fields already do."""
+        lib = self.config_library()
+        session = C.create_string_buffer(lib.wy_session_size())
+        self.assertEqual(lib.wy_session_init(session, b'control-fixture', b'boot-1'), 0)
+        keep, profile, expected_actual = self._install_real_config_agent(lib, session, 42)
+        self.addCleanup(lambda: keep)
+        # First link: a desired produces a reported.
+        first = io.BytesIO()
+        events = self._register_then_desired(lib, session, profile, 1, first)
+        self.assertEqual([e.type for e in events],
+                         ['info', 'hermes.register', 'hermes.config.reported'])
+        # The reconnect: the supervisor re-inits the same buffer.
+        self.assertEqual(lib.wy_session_init(session, b'control-fixture', b'boot-2'), 0)
+        self.assertEqual(lib.wy_session_state(session), 0, 'a re-init resets to describe')
+        # The handler must still be wired: the bridge's reconnect re-dispatch still gets an answer.
+        second = io.BytesIO()
+        events = self._register_then_desired(lib, session, profile, 1, second)
+        self.assertEqual([e.type for e in events],
+                         ['info', 'hermes.register', 'hermes.config.reported'],
+                         'the config handler did not survive the re-init')
+        self.assertEqual(events[2].data['generation'], 1)
+        self.assertEqual(events[2].data['actual'], expected_actual)
 
 
 if __name__ == '__main__':

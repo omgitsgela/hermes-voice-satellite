@@ -100,6 +100,20 @@ int wy_session_playback_configure(wy_session *session, int32_t *ring, size_t rin
     return WY_OK;
 }
 
+int wy_session_set_playback_volume(wy_session *session, int volume) {
+    if (!session) return WY_INVALID;
+    /* Change the LIVE level for the next audio slice (the config plane's apply path). The write
+     * takes the ring lock: the audio-chunk conversion reads playback_volume under that same
+     * lock while converting into the ring, so an unlocked write here would race the reader on a
+     * two-core device (a torn 32-bit store is the failure mode). The value is stored raw;
+     * wy_apply_volume clamps it to the no-silence floor at use, so the setter never silences
+     * the speaker and the bridge's conservative values (25..100) pass through unchanged. */
+    playback_ring_lock_take();
+    session->playback_volume = volume;
+    playback_ring_lock_give();
+    return WY_OK;
+}
+
 int wy_session_playback_active(const wy_session *session) {
     return session ? session->playback_active : 0;
 }
@@ -221,6 +235,13 @@ int wy_session_init(wy_session *session, const char *device_id, const char *boot
     int32_t *playback_ring = session->ring;
     size_t playback_ring_capacity = session->ring_capacity;
     int playback_volume = session->playback_volume;
+    /* The config-plane handler and its config object are installed once by the glue, the same
+     * kind of installed-once config as the writer lock and the playback ring: the supervisor
+     * re-inits this SAME buffer on every reconnect, so a re-init that wiped them would leave a
+     * device that silently ignores every config dispatch after its first reconnect (and the
+     * agent's durable state -- the generation guard -- would be orphaned along with it). */
+    int (*config_handler)(void *, const char *, char *, size_t) = session->config_handler;
+    void *config_user = session->config_user;
     memset(session, 0, sizeof(*session));
     session->lock_writer = lock_writer;
     session->unlock_writer = unlock_writer;
@@ -228,11 +249,23 @@ int wy_session_init(wy_session *session, const char *device_id, const char *boot
     session->ring = playback_ring;
     session->ring_capacity = playback_ring_capacity;
     session->playback_volume = playback_volume;
+    session->config_handler = config_handler;
+    session->config_user = config_user;
     session->state = WY_SESSION_FAILED;
     if (!token_valid(device_id, 64) || !token_valid(boot_id, 128)) return WY_INVALID;
     strcpy(session->device_id, device_id);
     strcpy(session->boot_id, boot_id);
     session->state = WY_SESSION_DESCRIBE;
+    return WY_OK;
+}
+
+int wy_session_set_config(wy_session *session,
+                          int (*handler)(void *config, const char *desired_json,
+                                         char *report_out, size_t report_cap),
+                          void *config) {
+    if (!session) return WY_INVALID;
+    session->config_handler = handler;
+    session->config_user = config;
     return WY_OK;
 }
 
@@ -482,6 +515,28 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
          * before the host is ready fails the same way an out-of-order wake would. */
         result = wy_session_wake(session, WY_WAKE_WORD_NAME, write_fn, ctx);
         if (result == WY_INVALID) result = WY_OK;   /* a dropped wake-now is not a fault */
+    } else if (!strcmp(frame.type, "hermes.config.desired")) {
+        /* The bridge's declarative config dispatch, sent right after registration (and on
+         * reconnect). The session is only the transport: it NUL-terminates the decoded data
+         * (body was read raw, not terminated) and hands it to the injected config handler,
+         * which owns all the config logic -- the agent's guard, the apply, the report. The
+         * handler's returned reported JSON goes straight back as hermes.config.reported. A
+         * send failure is a real link fault (the report is the dispatch's only answer); a
+         * handler that fails to build a report is a protocol bug we surface the same way.
+         * With no handler wired the frame is drained and the link stays alive (the pre-config
+         * behavior), so a device that never wires the plane is not bricked by it. */
+        if (session->config_handler) {
+            session->body[frame.data_length < sizeof(session->body) ? frame.data_length
+                                                                    : sizeof(session->body) - 1] = '\0';
+            /* Sized for the agent's worst-case report: generation (12 digits) + the full
+             * 7-setting actual (~200 bytes) + health + a 255-char error, ~520 bytes. 1024 is
+             * double that, comfortably safe, and small for the gateway task's 10 KB stack. */
+            char report[1024];
+            int handled = session->config_handler(session->config_user, session->body,
+                                                  report, sizeof(report));
+            if (handled != WY_OK) { result = handled; goto done; }
+            result = locked_send(session, write_fn, ctx, "hermes.config.reported", report, NULL, 0);
+        }
     } else if (!strcmp(frame.type, "ping")) {
         /* The protocol expects an answer to a ping; a silent peer looks like a dead device. */
         result = locked_send(session, write_fn, ctx, "pong", NULL, NULL, 0);

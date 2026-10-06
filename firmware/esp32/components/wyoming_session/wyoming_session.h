@@ -40,6 +40,14 @@ typedef struct {
     int16_t *pcm;         /* inbound chunk PCM (S16), up to WY_PAYLOAD_MAX */
     int16_t *mono;        /* resampled 16 kHz mono */
     int32_t *frames;      /* expanded stereo-32, ready for the ring */
+    /* The config-plane seam (installed once by the glue, preserved across re-init, exactly
+     * like the writer-lock fields). The session is only the transport: it decodes a
+     * hermes.config.desired frame, passes its data JSON to this handler, and sends the
+     * returned reported JSON as hermes.config.reported. It owns no config state of its own --
+     * the config agent (owned by the glue, whose address is the first argument) owns that.
+     * NULL until wired, where a config frame is drained and the link stays alive. */
+    int (*config_handler)(void *config, const char *desired_json, char *report_out, size_t report_cap);
+    void *config_user;
 } wy_session;
 size_t wy_session_size(void);
 int wy_session_init(wy_session *session, const char *device_id, const char *boot_id);
@@ -55,6 +63,17 @@ int wy_session_state(const wy_session *session);
  * core refused every payload killed the link the first time the bridge spoke. Only a malformed
  * frame, an UNKNOWN event carrying a payload, or a refused registration fails. */
 int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_fn, void *ctx);
+/* Install the config-plane handler (the device glue wires in the config agent). The session
+ * becomes the transport for the declarative configuration plane: a hermes.config.desired is
+ * decoded, its data JSON handed to the handler, and the returned reported JSON sent as
+ * hermes.config.reported. The handler's first argument is the config object it owns (the
+ * glue's agent), which outlives every re-init. Install once; the field survives re-init. A
+ * session with no handler installed drains config frames and stays alive (the pre-config
+ * behavior), so a device that never wires the plane is not bricked by it. */
+int wy_session_set_config(wy_session *session,
+                          int (*handler)(void *config, const char *desired_json,
+                                         char *report_out, size_t report_cap),
+                          void *config);
 /* The wake detector's one call (the local wake word fired): send detection, run-pipeline and
  * streaming-started in that order and start the mic stream. Valid while the host is ready
  * (registered or running) and not paused; a wake that lands while the stream is already
@@ -81,6 +100,11 @@ int wy_session_streaming(const wy_session *session);
  * state. All accessors are safe on a NULL session. */
 int wy_session_playback_configure(wy_session *session, int32_t *ring, size_t ring_capacity,
                                   int volume);
+/* Change the live playback level for the next audio slice (the config plane's apply path). The
+ * write is taken under the playback ring lock (the audio-chunk conversion reads the volume under
+ * that lock); the value is stored raw and wy_apply_volume clamps it to the no-silence floor at
+ * use, so the setter cannot silence the speaker. INVALID on a NULL session. */
+int wy_session_set_playback_volume(wy_session *session, int volume);
 int wy_session_playback_active(const wy_session *session);
 int wy_session_playback_ended(const wy_session *session);
 size_t wy_session_playback_bytes(const wy_session *session);
