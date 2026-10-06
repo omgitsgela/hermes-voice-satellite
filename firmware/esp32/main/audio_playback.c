@@ -58,6 +58,17 @@
 #define PLAYBACK_WRITE_MS       20u   /* ~2x the realtime length of a full batch */
 #define PLAYBACK_FRAME_BATCH    256u  /* int32 per I2S write = 128 stereo frames = 8 ms of audio */
 
+/* With CONFIG_FREERTOS_HZ=100 a sub-10 ms delay rounds to 0 ticks, and vTaskDelay(0) is
+ * "just forces a reschedule" -- it does not block. A polling loop that relied on it would
+ * peg a core (the idle pump is one such loop for the satellite's whole registered life, and
+ * TWDT watches the idle task), so every idle wait in this task is floored at one tick
+ * (10 ms). The I2S DMA queue (~100 ms of audio) is the real playback buffer, so 10 ms of
+ * polling granularity cannot glitch the seam. */
+static TickType_t plb_delay_ms(int ms) {
+    TickType_t ticks = pdMS_TO_TICKS(ms);
+    return ticks ? ticks : 1;
+}
+
 static i2s_chan_handle_t tx;
 static TaskHandle_t task;
 static volatile int stopping;
@@ -104,11 +115,12 @@ static void playback_task_fn(void *argument) {
     (void)argument;
     int32_t frame[PLAYBACK_FRAME_BATCH];   /* one I2S write's worth of stereo-32 frames */
     int amp_armed = 0;
-    TickType_t drain_until = 0;   /* tick the amp rests until, once the stream goes quiet */
+    TickType_t drain_start = 0;   /* tick the stream went quiet (0 = not draining) */
+    TickType_t drain_dur = 0;     /* ticks to hold the amp after the stream went quiet */
     for (;;) {
         if (stopping) break;
         void *s = session;
-        if (!s) { vTaskDelay(pdMS_TO_TICKS(5)); continue; }
+        if (!s) { vTaskDelay(plb_delay_ms(5)); continue; }
         /* Drive the amplifier from the session state: on exactly while an answer is active or
          * still draining. The subtlety (finding F4): i2s_channel_write returns when the DMA has
          * COPIED the last chunk, not when the speaker has PLAYED it, so the ring can be empty
@@ -119,28 +131,39 @@ static void playback_task_fn(void *argument) {
          * I2C write happens at most once per transition, so the per-call bus cost is immaterial. */
         int playing = wy_session_playback_active(s) || wy_session_playback_bytes(s) > 0;
         if (playing) {
-            drain_until = 0;   /* audio is flowing or queued: no pending rest */
+            drain_start = 0;   /* audio is flowing or queued: no pending rest */
             if (!amp_armed) { audio_playback_amp(1); amp_armed = 1; }
         } else if (amp_armed) {
-            if (!drain_until) drain_until = xTaskGetTickCount() + pdMS_TO_TICKS(playback_drain_ms);
-            if (xTaskGetTickCount() >= drain_until) {
-                drain_until = 0;
+            if (!drain_start) {
+                drain_start = xTaskGetTickCount();
+                drain_dur = plb_delay_ms(playback_drain_ms);
+            }
+            /* Wrap-safe: elapsed ticks since the stream went quiet, compared to the window.
+             * Valid for any window below 2^31 ticks (ours is a few hundred ms), so a tick
+             * counter that rolls over ~49.7 days out cannot flip the comparison. */
+            if (xTaskGetTickCount() - drain_start >= drain_dur) {
+                drain_start = 0;
                 audio_playback_amp(0);
                 amp_armed = 0;
-                vTaskDelay(pdMS_TO_TICKS(10));   /* the stream is over and the DMA has drained */
+                vTaskDelay(plb_delay_ms(10));   /* the stream is over and the DMA has drained */
                 continue;
             }
-            vTaskDelay(pdMS_TO_TICKS(2));   /* still discharging the DMA: keep the amp on */
+            vTaskDelay(plb_delay_ms(2));   /* still discharging the DMA: keep the amp on */
             continue;
         }
         size_t n = wy_session_playback_read(s, frame, sizeof(frame));   /* bytes, <= sizeof(frame) */
-        if (n == 0) { vTaskDelay(pdMS_TO_TICKS(1)); continue; }
+        if (n == 0) { vTaskDelay(plb_delay_ms(1)); continue; }
         size_t written = 0;
         if (tx)
-            i2s_channel_write(tx, frame, n, &written, pdMS_TO_TICKS(PLAYBACK_WRITE_MS));
-        /* a short write (timeout) means the DMA could not take the chunk in time; the frames
-         * were already consumed from the ring, so they are dropped rather than re-sent -- a
-         * late answer sample is the same as a dropped one, and re-sending it would repeat audio. */
+            /* The driver converts its timeout_ms to ticks itself (xQueueReceive(pdMS_TO_TICKS
+             * (timeout_ms))), so pass MILLISECONDS, not ticks -- a double conversion at
+             * CONFIG_FREERTOS_HZ=100 would collapse the 20 ms to 0 and every write would
+             * "time out" at the first DMA boundary, dropping the rest of the batch. The short
+             * write then means "the DMA could not take the chunk in time"; the frames were
+             * already consumed from the ring, so they are dropped rather than re-sent -- a
+             * late answer sample is the same as a dropped one, and re-sending would repeat
+             * audio. */
+            i2s_channel_write(tx, frame, n, &written, PLAYBACK_WRITE_MS);
     }
     /* Clear our own handle before self-deleting (the capture task's discipline): a stop that
      * then reads the handle sees NULL for a fully-exited task, and non-NULL only while the
@@ -178,15 +201,15 @@ int audio_playback_start(void) {
         return -1;
     }
     /* Size the amp's drain rest (F4) from the real DMA queue the driver allocated, not a guess.
-     * total_dma_buf_size is the whole queue in bytes; at 16 kHz * 2 ch * 4 B = 64000 B/s that is
-     * a real-time duration. It is an UPPER bound on how long audio can still be sounding after the
-     * ring drains, so resting the amp exactly that long can never clip the tail, and it is short
-     * enough (a few hundred ms) that an idle amp barely overruns its silence. A failed query
-     * leaves the drain at 0, i.e. the pre-fix behaviour, which is still safe (no UAF), just a
-     * possible clipped tail. */
+     * total_dma_buf_size is the whole queue in bytes; at 16 kHz * 2 channels * 4 bytes per
+     * word = 128000 bytes/second that is a real-time duration. It is an UPPER bound on how long
+     * audio can still be sounding after the ring drains, so resting the amp that long can never
+     * clip the tail, and the queue is short (a few hundred ms) so the amp barely overruns its
+     * silence. A failed query leaves the drain at 0, i.e. the pre-fix behaviour: still safe
+     * (no use-after-free), just a possible clipped tail. */
     i2s_chan_info_t info;
     if (i2s_channel_get_info(tx, &info) == ESP_OK && info.total_dma_buf_size > 0)
-        playback_drain_ms = (int32_t)((uint64_t)info.total_dma_buf_size * 1000u / 64000u);
+        playback_drain_ms = (int32_t)((uint64_t)info.total_dma_buf_size * 1000u / 128000u);
     else
         playback_drain_ms = 0;
     /* The TX clocks out silence until the first write, and the amp stays off until the session

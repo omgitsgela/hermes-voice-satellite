@@ -23,6 +23,14 @@
 #define CAPTURE_TASK_STACK     6144
 #define CAPTURE_TASK_PRIORITY  4
 #define CAPTURE_READ_TIMEOUT_MS 10   /* 10 ms of silence is a tick, not a fault */
+/* i2s_channel_read takes its timeout in MILLISECONDS and converts to ticks itself, so the
+ * call below passes CAPTURE_READ_TIMEOUT_MS (ms), not ticks -- that is already correct. */
+/* With CONFIG_FREERTOS_HZ=100 a sub-10 ms vTaskDelay rounds to 0 ticks (a no-op reschedule),
+ * so an idle poll must be floored at one tick or the loop busy-spins. */
+static TickType_t cap_delay_ms(int ms) {
+    TickType_t ticks = pdMS_TO_TICKS(ms);
+    return ticks ? ticks : 1;
+}
 
 static struct {
     wy_session *session;
@@ -90,9 +98,11 @@ static void capture_task_fn(void *argument) {
         if (bytes_read) {
             audio_capture_send_chunk(frames, bytes_read / 8);
         } else {
-            /* Nothing to send (a 10 ms read with no data, or the channel is gone): a short tick
-             * so a channel loss cannot turn this loop into a busy spin. */
-            vTaskDelay(pdMS_TO_TICKS(5));
+            /* Nothing to send (a 10 ms read with no data, or the channel is gone): a floored
+             * tick (one tick minimum; a sub-10 ms delay would be 0 ticks and thus no wait at
+             * CONFIG_FREERTOS_HZ=100) so a channel loss cannot turn this loop into a busy
+             * spin. */
+            vTaskDelay(cap_delay_ms(5));
         }
     }
     /* Announce the exit BEFORE deleting: the join in audio_capture_stop waits for this write
@@ -209,7 +219,8 @@ bool audio_capture_wait_writer_idle(void) {
             xSemaphoreGive(lock);
             return true;
         }
-        vTaskDelay(pdMS_TO_TICKS(5));
+        vTaskDelay(cap_delay_ms(5));   /* floored: at HZ=100 a 5 ms delay would be 0 ticks,
+                                         * turning this 2 s bound into a 400-iteration burst */
     }
     return false;
 }

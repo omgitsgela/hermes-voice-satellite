@@ -36,11 +36,25 @@ static int16_t playback_mono_scratch[WY_PLAYBACK_MONO_MAX];
 static int32_t playback_frame_scratch[WY_PLAYBACK_FRAME_MAX];
 #ifdef ESP_PLATFORM
 static SemaphoreHandle_t playback_ring_lock;
+static portMUX_TYPE playback_ring_lock_mux = portMUX_INITIALIZER_UNLOCKED;
 #endif
 
 static void playback_ring_lock_take(void) {
 #ifdef ESP_PLATFORM
-    if (!playback_ring_lock) playback_ring_lock = xSemaphoreCreateMutex();
+    /* The lock is created lazily at the first take, and two tasks can reach that first take
+     * concurrently (the gateway task and the USB console both drive the session core). A bare
+     * check-then-act would let both create a mutex: the loser's give would release a mutex it
+     * never took (FreeRTOS mutex-ownership corruption), and mutual exclusion for the ring and
+     * scratch sections would be silently lost. The portMUX is the race-free single-creation
+     * guard: whoever wins the critical section creates the mutex; the loser sees the handle
+     * already set. Holding the portMUX across xSemaphoreCreateMutex is safe: it is a small
+     * allocation that does not block or yield, and no task can yet be waiting on a lock that
+     * does not exist yet. */
+    if (!playback_ring_lock) {
+        taskENTER_CRITICAL(&playback_ring_lock_mux);
+        if (!playback_ring_lock) playback_ring_lock = xSemaphoreCreateMutex();
+        taskEXIT_CRITICAL(&playback_ring_lock_mux);
+    }
     if (playback_ring_lock) xSemaphoreTake(playback_ring_lock, portMAX_DELAY);
 #endif
 }

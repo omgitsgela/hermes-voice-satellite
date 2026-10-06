@@ -288,12 +288,16 @@ int gateway_task_start(const char *host, unsigned port, int transport,
      * session treats a NULL ring as "drain but don't keep"), so the satellite still registers,
      * listens, and streams the mic -- it just does not yet speak. */
     void *session = gateway_supervisor_session(&supervisor);
-    int32_t *ring = heap_caps_calloc(GATEWAY_PLAYBACK_RING_FRAMES, sizeof(int32_t),
-                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (playback_ring) {   /* a previous run's ring: the old pump is stopped, free it */
+    /* Free the previous run's ring BEFORE allocating the next one: the old pump is already
+     * stopped (the previous run's terminal path joined it), so the old ring has no reader, and
+     * freeing first keeps the peak at one ring (2 MiB) instead of two (4 MiB) -- a start whose
+     * allocation would fail at 4 MiB can still succeed at 2 MiB. */
+    if (playback_ring) {
         heap_caps_free(playback_ring);
         playback_ring = NULL;
     }
+    int32_t *ring = heap_caps_calloc(GATEWAY_PLAYBACK_RING_FRAMES, sizeof(int32_t),
+                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (ring) {
         wy_session_playback_configure((wy_session *)session, ring,
                                       GATEWAY_PLAYBACK_RING_FRAMES * sizeof(int32_t),
