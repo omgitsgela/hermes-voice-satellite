@@ -183,6 +183,20 @@ static int validate_settings(const cJSON *settings, int allow_empty, char *err, 
         const char *name = item->string ? item->string : "";
         char safe_name[33];
         sanitize_name(name, safe_name, sizeof(safe_name));
+        /* A setting that appears more than once is malformed: the guard's object equality
+         * (json_objects_equal) matches a key against its FIRST occurrence while
+         * cJSON_GetArraySize counts ALL of them, so a duplicate could be applied once and then
+         * refused forever as "same generation has different settings" on every byte-identical
+         * redelivery -- and after a reboot the durable blob carries it, so the volatile value
+         * would never re-apply. The reference collapses duplicates via dict semantics; the wire
+         * is peer-controlled (and the adapter's actual is validated here too), so reject rather
+         * than silently adopt last-wins. A first occurrence's first-look is itself, so the
+         * "first != item" test fires only on a genuine second occurrence. */
+        const cJSON *first = item->string ?
+            cJSON_GetObjectItemCaseSensitive(settings, name) : NULL;
+        if (first && first != item) {
+            snprintf(err, err_cap, "duplicate setting: %s", safe_name); return 0;
+        }
         const cfg_spec *spec = spec_of(name);
         if (!spec) {
             /* The name is peer input: sanitize it (see sanitize_name) so the report's worst
@@ -260,19 +274,51 @@ static int persist(const wy_config *c, long new_generation, const cJSON *new_des
     cJSON_AddNumberToObject(root, "schema_version", WY_CFG_SCHEMA_VERSION);
     cJSON_AddStringToObject(root, "device_id", c->device_id);
     cJSON_AddNumberToObject(root, "generation", (double)new_generation);
+    /* The desired is a REQUIRED field of the blob (restore rejects an empty/missing one). If
+     * it cannot be duplicated (an allocation failure), persist FAILS -- the caller reports
+     * "could not persist configuration state" and leaves the generation unspent -- never
+     * substitutes an empty object and claims success: a success-claim over an empty-desired
+     * blob is a lie across the reboot (the guard the report says is durable is the one
+     * restore must throw away). */
     cJSON *d = cJSON_Duplicate(new_desired, 1);
+    if (!d) { cJSON_Delete(root); return 0; }
     cJSON *p = cJSON_CreateArray();
+    if (!p) { cJSON_Delete(d); cJSON_Delete(root); return 0; }
     for (int i = 0; i < pending_count; ++i) {
         cJSON *s = cJSON_CreateString(pending[i]);
-        if (s) cJSON_AddItemToArray(p, s);
+        if (!s) continue;   /* an optional pending entry cannot defeat the commit */
+        cJSON_AddItemToArray(p, s);
     }
-    cJSON_AddItemToObject(root, "desired", d ? d : cJSON_CreateObject());
+    cJSON_AddItemToObject(root, "desired", d);           /* d was checked non-NULL above */
     cJSON_AddItemToObject(root, "pending", p);
     cJSON_AddNumberToObject(root, "health", (double)health);
     cJSON_AddStringToObject(root, "error", c->error);
     char *s = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
+    cJSON_Delete(root);   /* also frees d and p (root owns both) */
     if (!s) return 0;
+    /* Self-check before claiming durability: the blob is only as durable as restore() is
+     * willing to read it back. An allocation failure at ANY point in the build above (a
+     * number, a string, the "desired" key itself) would leave a required field out of the
+     * serialized string while save still succeeds -- a success-claim over a blob restore must
+     * discard, which is a lie across the reboot. Parse the exact bytes about to be written and
+     * require the four fields restore requires (schema_version, a non-empty device_id, an
+     * integer generation, a non-empty desired); anything less -- including a parse that itself
+     * fails, which is the same exhausted heap that would break the write -- is a failed
+     * persist, and the caller leaves the generation unspent. Cheap: one extra parse of a
+     * ~700-byte string on a rare path (once per accepted config change). */
+    cJSON *check = cJSON_Parse(s);
+    if (!check) { free(s); return 0; }
+    const cJSON *c_sv = cJSON_GetObjectItemCaseSensitive(check, "schema_version");
+    const cJSON *c_id = cJSON_GetObjectItemCaseSensitive(check, "device_id");
+    const cJSON *c_gen = cJSON_GetObjectItemCaseSensitive(check, "generation");
+    const cJSON *c_des = cJSON_GetObjectItemCaseSensitive(check, "desired");
+    int usable = cJSON_IsObject(check) &&
+        cJSON_IsNumber(c_sv) && c_sv->valuedouble == WY_CFG_SCHEMA_VERSION &&
+        cJSON_IsString(c_id) && c_id->valuestring && c_id->valuestring[0] &&
+        cJSON_IsNumber(c_gen) && !cJSON_IsBool(c_gen) && c_gen->valuedouble >= 0 &&
+        cJSON_IsObject(c_des) && cJSON_GetArraySize(c_des) >= 1;
+    cJSON_Delete(check);
+    if (!usable) { free(s); return 0; }
     int rc = c->save(c->storage_user, s, strlen(s));
     free(s);
     return rc == 0;
@@ -328,10 +374,12 @@ static int restore(wy_config *c) {
     }
     long generation = (long)gen->valuedouble;
     /* desired: required, a usable NON-EMPTY object -- the guard's conflict check and the
-     * unapplied check both run against it, and the wire never persists an empty one (an
-     * empty-object blob is the same hole as a missing one: the same-generation path would
-     * no-op everything under that generation). A missing or non-object desired, or a
-     * duplicate that fails, discards the blob. */
+     * unapplied check both run against it. A missing or non-object desired, or a duplicate
+     * that fails, discards the blob. An empty-object desired is rejected too: the wire
+     * validate_settings rejects empty settings AND persist() fails the commit (rather than
+     * substituting an empty object) if the desired cannot be duplicated, so no legitimate
+     * device state ever writes one -- an empty-object blob is corruption, the same hole as a
+     * missing one (the same-generation path would no-op everything under that generation). */
     const cJSON *d = cJSON_GetObjectItemCaseSensitive(root, "desired");
     if (!cJSON_IsObject(d) || cJSON_GetArraySize(d) < 1) { cJSON_Delete(root); return 0; }
     cJSON *new_desired = cJSON_Duplicate(d, 1);

@@ -148,8 +148,11 @@ static int cfg_handler_trampoline(void *config, const char *desired_json,
 }
 
 /* The agent's restore reads at most WY_CFG_LOAD_MAX (1024) bytes; the blob is well under that in
- * practice. The load buffer is sized to that cap (+NUL headroom) and lives on the gateway task's
- * 10 KB stack, comfortably. */
+ * practice. The load buffer is sized to that cap (+NUL headroom). The restore runs on the MAIN
+ * task, not the gateway task: gateway_task_start is called from provisioning_console_run (the
+ * console loop under app_main, before xTaskCreate), and the whole restore is ~2.6 KB at its
+ * deepest point (the blob buffer + the validate-into-locals), comfortably within the main
+ * task's stack. */
 #define CFG_BLOB_MAX 1024u
 
 /* The agent's durable storage backend: the hermes_cfg NVS blob. save returns 0 only once the

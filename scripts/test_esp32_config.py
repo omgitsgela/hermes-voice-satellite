@@ -574,6 +574,107 @@ class ConfigAgentTests(unittest.TestCase):
         self.assertEqual(data['actual'], {}, '... and nothing was applied')
         self.assertIn('unknown', data['error'])
 
+    def test_duplicate_setting_keys_are_rejected(self):
+        """cJSON preserves duplicate object keys, and the guard's equality (json_objects_equal)
+        matches a key against its FIRST occurrence while cJSON_GetArraySize counts ALL of them
+        -- so a desired with a duplicate key could be applied once and then refused forever as
+        'same generation has different settings' on every byte-identical redelivery, and after
+        a reboot the volatile value would never re-apply (the durable blob carries the dups).
+        The wire is peer-controlled, so a setting that appears twice is malformed input and is
+        refused at the validation layer, where malformed input is already refused: never applied,
+        never stored, never reaching the guard. (The reference collapses duplicates via dict
+        semantics; on the wire we reject rather than silently adopt last-wins.) The payload
+        must be hand-built: the harness's desired() goes through a Python dict + json.dumps,
+        which cannot carry duplicate keys."""
+        lib = self.library()
+        calls = [0]
+        session = self.new(lib, calls=calls)
+        payload = ('{"schema_version":1,"device_id":"control-fixture","generation":1,'
+                   '"settings":{"playback_volume":50,"playback_volume":60}}')
+        report = C.create_string_buffer(4096)
+        result = lib.wy_config_step(session, payload.encode('utf-8'), report, 4096)
+        self.assertEqual(result, 0, 'a rejection still produces a report')
+        data = json.loads(report.value.decode('utf-8'))
+        self.assertEqual(data['health'], 'error', 'a duplicate key is malformed and refused')
+        self.assertIn('duplicate', data['error'])
+        self.assertEqual(data['actual'], {}, 'nothing was applied')
+        self.assertEqual(calls[0], 0, 'a duplicate payload must not apply')
+        # And a clean, duplicate-free payload under the same generation still applies: the
+        # refusal did not spend or wedge the guard.
+        clean = self.step(lib, session, self.desired(1, {'playback_volume': 55}))
+        self.assertEqual(clean['generation'], 1)
+        self.assertEqual(clean['actual'], {'playback_volume': 55})
+
+    def test_persist_never_stores_an_empty_desired_under_oom(self):
+        """persist() must never claim durability for a state that restore() must reject. The
+        desired is a REQUIRED field of the blob (restore discards an empty/missing one); if it
+        cannot be duplicated (an allocation failure) persist must FAIL -- the caller then
+        reports 'could not persist configuration state' and leaves the generation unspent --
+        not substitute an empty object and claim success. A success-claim over an empty-desired
+        blob is a lie across the reboot: the guard the report says is durable is the one
+        restore must throw away. Proven by fault injection: a cJSON allocator that fails its
+        Nth allocation is swept across N, and for EVERY N the invariant holds -- any blob that
+        was written has a non-empty, correct desired. (The well-formed no-OOM success path is
+        covered by the persist tests; this is the allocation-failure window they cannot reach.)"""
+        lib = self.library()
+        libc = C.CDLL(None)
+        libc.malloc.argtypes = [C.c_size_t]
+        libc.malloc.restype = C.c_void_p
+        libc.free.argtypes = [C.c_void_p]
+        libc.free.restype = None
+        FREEFN = C.CFUNCTYPE(None, C.c_void_p)
+        real_free = FREEFN(libc.free)   # the real free, as a CFunctionType (kept alive below)
+        class Hooks(C.Structure):
+            _fields_ = [('malloc_fn', C.CFUNCTYPE(C.c_void_p, C.c_size_t)),
+                        ('free_fn', FREEFN)]
+        lib.cJSON_InitHooks.argtypes = [C.POINTER(Hooks)]
+        # Always reset the (process-global, per-library) allocator to the real malloc/free,
+        # even if a subtest hits an unexpected C error -- never leave a failing allocator live.
+        self.addCleanup(lambda: lib.cJSON_InitHooks(None))
+        self._keepalive.append(real_free)
+        SAVE = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_size_t)
+        LOAD = C.CFUNCTYPE(C.c_int, C.c_void_p, C.POINTER(C.c_char), C.c_size_t,
+                           C.POINTER(C.c_size_t))
+        payload = json.dumps(self.desired(1, {'playback_volume': 55})).encode('utf-8')
+        for n in range(1, 97):
+            with self.subTest(n=n):
+                counter = [0]
+                @C.CFUNCTYPE(C.c_void_p, C.c_size_t)
+                def alloc(size, _c=counter):
+                    _c[0] += 1
+                    return None if _c[0] == n else libc.malloc(size)
+                keep = [alloc]
+                # free_fn is the real free (matches malloc's origin, so cJSON also enables its
+                # realloc path; the manual path degrades cleanly on a failed allocation).
+                lib.cJSON_InitHooks(Hooks(alloc, real_free))
+                st = {'blob': bytearray()}
+                try:
+                    @SAVE
+                    def save(user, js, length):
+                        st['blob'] = bytearray(C.string_at(js, length))
+                        return 0
+                    @LOAD
+                    def load(user, out, cap, outlen):
+                        return -1
+                    keep += [save, load]
+                    session = C.create_string_buffer(lib.wy_config_size())
+                    self.assertEqual(lib.wy_config_init(session, b'control-fixture'), 0)
+                    lib.wy_config_set_storage.argtypes = [C.c_void_p, SAVE, LOAD, C.c_void_p]
+                    lib.wy_config_set_storage(session, save, load, None)
+                    report = C.create_string_buffer(4096)
+                    lib.wy_config_step(session, payload, report, 4096)
+                finally:
+                    lib.cJSON_InitHooks(None)
+                # THE INVARIANT (N-independent): any blob that was written carries a
+                # non-empty, correct desired -- never an empty-desired success-claim.
+                if st['blob']:
+                    blob = json.loads(bytes(st['blob']).decode('utf-8'))
+                    self.assertTrue(blob.get('desired'),
+                                    'a written blob must carry a non-empty desired (n=%d)' % n)
+                    self.assertEqual(blob['desired'], {'playback_volume': 55},
+                                     'a written blob must carry the real desired (n=%d)' % n)
+                del keep
+
 
 if __name__ == '__main__':
     unittest.main()
