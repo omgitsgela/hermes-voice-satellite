@@ -279,7 +279,23 @@ static int persist(const wy_config *c, long new_generation, const cJSON *new_des
 }
 
 /* Restore the state blob after a reboot. Returns 1 when a valid state was restored, 0 when
- * there is none (first boot) or it is corrupt (discarded -- the safe state). */
+ * there is none (first boot) or it is corrupt (discarded -- the safe state).
+ *
+ * The restore is ALL-OR-NOTHING: the blob's fields are validated into locals, and the stored
+ * state changes only once every required field is present and valid -- schema version, a
+ * grammar-valid device_id, an integer generation in the device's 32-bit long range, and a
+ * usable NON-EMPTY desired. A partially restored guard is exactly what the discard exists to
+ * prevent: a torn blob's identity left behind would clobber the identity seeded by
+ * wy_config_init and wedge the guard for the device's whole life (the blob re-reads on every
+ * boot, so the wedge never clears), and a missing desired would leave c->desired NULL, which
+ * makes the same-generation path no-op on EVERYTHING -- no re-apply of the volatile value and
+ * a conflicting payload silently accepted. With no valid state the device converges on the
+ * bridge's next dispatch.
+ *
+ * A VALID blob whose device_id is another device's is adopted (faithful to the reference's
+ * state.update): the guard then refuses every desired addressed to the real device -- an
+ * explicit "this state is not this device's; an operator must erase the NVS" wedge, never a
+ * silent adoption of another device's settings. */
 static int restore(wy_config *c) {
     if (!c->load) return 0;
     char blob[WY_CFG_LOAD_MAX];
@@ -290,54 +306,78 @@ static int restore(wy_config *c) {
     cJSON *root = cJSON_Parse(blob);
     if (!cJSON_IsObject(root)) { cJSON_Delete(root); return 0; }
     const cJSON *sv = cJSON_GetObjectItemCaseSensitive(root, "schema_version");
-    if (!cJSON_IsNumber(sv) || sv->valuedouble != WY_CFG_SCHEMA_VERSION) { cJSON_Delete(root); return 0; }
-    const cJSON *id = cJSON_GetObjectItemCaseSensitive(root, "device_id");
-    if (cJSON_IsString(id) && id->valuestring && strlen(id->valuestring) < sizeof(c->device_id)) {
-        snprintf(c->device_id, sizeof(c->device_id), "%s", id->valuestring);
-        c->has_device_id = 1;
+    if (!cJSON_IsNumber(sv) || cJSON_IsBool(sv) || sv->valuedouble != WY_CFG_SCHEMA_VERSION) {
+        cJSON_Delete(root); return 0;
     }
+    /* device_id: required, and it must pass the same grammar the wire guard applies (a blob
+     * with no valid identity is not a guard, it is trash). */
+    const cJSON *id = cJSON_GetObjectItemCaseSensitive(root, "device_id");
+    size_t id_len = cJSON_IsString(id) && id->valuestring ? strlen(id->valuestring) : 0;
+    if (id_len < 1 || id_len >= sizeof(c->device_id) ||
+        !device_id_valid(id->valuestring, id_len)) {
+        cJSON_Delete(root); return 0;
+    }
+    char new_id[65];
+    snprintf(new_id, sizeof(new_id), "%s", id->valuestring);
+    /* generation: required, an integer in the device's 32-bit long range (no UB cast). */
     const cJSON *gen = cJSON_GetObjectItemCaseSensitive(root, "generation");
-    /* A torn or hand-edited blob whose generation is not an integer in the device's 32-bit
-     * long range is corrupt: DISCARD the whole state, not just the field -- a partially
-     * restored guard (a zero generation next to a trusted desired) is exactly the "no partial
-     * restore" violation the schema check exists to prevent. With no valid state the device
-     * converges on the bridge's next dispatch. */
     if (!cJSON_IsNumber(gen) || cJSON_IsBool(gen) || gen->valuedouble < 0 ||
         gen->valuedouble > (double)INT32_MAX ||
         gen->valuedouble != (double)(long)gen->valuedouble) {
-        cJSON_Delete(root);
-        return 0;
+        cJSON_Delete(root); return 0;
     }
-    c->generation = (long)gen->valuedouble;
-    cJSON_Delete(c->desired);
-    /* `actual` is deliberately NOT restored: it describes a live runtime condition (the
-     * session's current volume) that a reboot resets. Restoring a stale "applied" would make
-     * the bridge's post-reboot re-dispatch a no-op and the speaker would keep whatever volume
-     * the fresh session defaults to. Starting from an empty actual is what makes that
-     * redelivery re-apply the value (any_unapplied is true). */
-    cJSON_Delete(c->actual);
-    c->actual = NULL;
+    long generation = (long)gen->valuedouble;
+    /* desired: required, a usable NON-EMPTY object -- the guard's conflict check and the
+     * unapplied check both run against it, and the wire never persists an empty one (an
+     * empty-object blob is the same hole as a missing one: the same-generation path would
+     * no-op everything under that generation). A missing or non-object desired, or a
+     * duplicate that fails, discards the blob. */
     const cJSON *d = cJSON_GetObjectItemCaseSensitive(root, "desired");
-    if (cJSON_IsObject(d)) c->desired = cJSON_Duplicate(d, 1);
+    if (!cJSON_IsObject(d) || cJSON_GetArraySize(d) < 1) { cJSON_Delete(root); return 0; }
+    cJSON *new_desired = cJSON_Duplicate(d, 1);
+    if (!new_desired) { cJSON_Delete(root); return 0; }
+    /* The optional fields default to safe values (unknown health, no pending, empty error);
+     * a torn blob that lost them still restores a working guard that converges on the
+     * bridge's next dispatch (the volatile value re-applies because actual is never
+     * persisted). */
+    int health = WY_CFG_HEALTH_UNKNOWN;
+    const cJSON *health_item = cJSON_GetObjectItemCaseSensitive(root, "health");
+    if (cJSON_IsNumber(health_item) && !cJSON_IsBool(health_item) &&
+        health_item->valuedouble >= 0 && health_item->valuedouble <= WY_CFG_HEALTH_ERROR)
+        health = (int)health_item->valuedouble;
+    char new_error[WY_CFG_ERROR_MAX] = "";
+    const cJSON *error = cJSON_GetObjectItemCaseSensitive(root, "error");
+    if (cJSON_IsString(error) && error->valuestring && error->valuestring[0])
+        snprintf(new_error, sizeof(new_error), "%s", error->valuestring);
+    char new_pending[WY_CFG_PENDING_MAX][32];
+    int new_pending_count = 0;
     const cJSON *pending = cJSON_GetObjectItemCaseSensitive(root, "pending");
-    c->pending_count = 0;
     if (cJSON_IsArray(pending)) {
         const cJSON *item = NULL;
         cJSON_ArrayForEach(item, pending) {
-            if (c->pending_count < (int)WY_CFG_PENDING_MAX && cJSON_IsString(item) &&
-                item->valuestring && strlen(item->valuestring) < sizeof(c->pending[0]))
-                snprintf(c->pending[c->pending_count++], sizeof(c->pending[0]), "%s",
+            if (new_pending_count < (int)WY_CFG_PENDING_MAX && cJSON_IsString(item) &&
+                item->valuestring && strlen(item->valuestring) < sizeof(new_pending[0]))
+                snprintf(new_pending[new_pending_count++], sizeof(new_pending[0]), "%s",
                          item->valuestring);
         }
     }
-    const cJSON *health = cJSON_GetObjectItemCaseSensitive(root, "health");
-    if (cJSON_IsNumber(health) && health->valuedouble >= 0 &&
-        health->valuedouble <= WY_CFG_HEALTH_ERROR)
-        c->health = (int)health->valuedouble;
-    const cJSON *error = cJSON_GetObjectItemCaseSensitive(root, "error");
-    if (cJSON_IsString(error) && error->valuestring && error->valuestring[0])
-        snprintf(c->error, sizeof(c->error), "%s", error->valuestring);
     cJSON_Delete(root);
+    /* Commit all-or-nothing: the stored state changes only after every required field
+     * validated. `actual` is deliberately NOT restored -- it describes a live runtime
+     * condition (the session's current volume) that a reboot resets; starting from an empty
+     * actual is what makes the bridge's reconnect re-dispatch re-apply the volatile value. */
+    cJSON_Delete(c->desired);
+    cJSON_Delete(c->actual);
+    c->desired = new_desired;
+    c->actual = NULL;
+    snprintf(c->device_id, sizeof(c->device_id), "%s", new_id);
+    c->has_device_id = 1;
+    c->generation = generation;
+    c->health = health;
+    snprintf(c->error, sizeof(c->error), "%s", new_error);
+    c->pending_count = new_pending_count;
+    for (int i = 0; i < new_pending_count; ++i)
+        snprintf(c->pending[i], sizeof(c->pending[i]), "%s", new_pending[i]);
     return 1;
 }
 

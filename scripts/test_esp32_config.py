@@ -48,7 +48,7 @@ class ConfigAgentTests(unittest.TestCase):
         lib.wy_config_size.restype = C.c_size_t
         lib.wy_config_init.argtypes = [C.c_void_p, C.c_char_p]
         lib.wy_config_init.restype = C.c_int
-        lib.wy_config_step.argtypes = [C.c_void_p, C.c_char_p, C.c_char_p, C.c_size_t]
+        lib.wy_config_step.argtypes = [C.c_void_p, C.c_char_p, C.POINTER(C.c_char), C.c_size_t]
         lib.wy_config_step.restype = C.c_int
         lib.wy_config_set_apply.argtypes = [C.c_void_p, ADAPTER, C.c_void_p]
         return lib
@@ -479,6 +479,79 @@ class ConfigAgentTests(unittest.TestCase):
                                  'a fractional persisted generation must not block first boot')
                 self.assertEqual(report['actual'], {'playback_volume': 55})
                 self.assertEqual(calls[0], 1, 'a discarded fractional-generation blob must not block apply')
+
+    def test_discarded_blob_does_not_clobber_the_identity(self):
+        """A discarded blob must not leave ANY partial state behind -- including its
+        device_id. The guard compares every desired's device_id against the agent's, and
+        the true identity is seeded by wy_config_init (from device_identity on the device):
+        if a torn blob's identity survived its own discard, every well-formed dispatch is
+        refused ('belongs to another device') forever, because the blob re-reads on every
+        boot -- the plane is wedged for the whole life of the device. A discarded blob is
+        NO state: the real identity applies and generation 1 is treated as new."""
+        lib = self.library()
+        st, save, load = self.new_storage(
+            blob=b'{"schema_version":1,"device_id":"evil-id","generation":1.5,'
+                 b'"desired":{"playback_volume":55}}')
+        calls = [0]
+        session = self.new(lib, calls=calls)
+        self.with_storage(lib, session, st, save, load)
+        report = self.step(lib, session, self.desired(1, {'playback_volume': 55}))
+        self.assertEqual(report['generation'], 1,
+                         'a discarded blob must not clobber the identity: the real ID applies')
+        self.assertEqual(report['actual'], {'playback_volume': 55})
+        self.assertEqual(calls[0], 1, 'a discarded blob must not wedge the plane')
+
+    def test_restore_requires_a_usable_desired(self):
+        """A blob with a valid schema and generation but no usable `desired` is incomplete,
+        not restorable: the guard's conflict check and the unapplied check both depend on
+        c->desired, and with it NULL the same-generation path no-ops on EVERYTHING -- the
+        lost volatile value is never re-applied and a conflicting payload under the spent
+        generation is silently swallowed instead of refused (both pass-1 guarantees,
+        reached through a corrupt-blob door, and through a duplicate OOM). Discard it:
+        generation 5 applies, the conflicting payload is refused, and the converged no-op
+        then holds."""
+        lib = self.library()
+        st, save, load = self.new_storage(
+            blob=b'{"schema_version":1,"device_id":"control-fixture","generation":5,'
+                 b'"health":2}')
+        calls = [0]
+        session = self.new(lib, calls=calls)
+        self.with_storage(lib, session, st, save, load)
+        # (a) the redelivery under the blob's generation APPLIES (discarded, not half-restored):
+        # the volatile value is back.
+        applied = self.step(lib, session, self.desired(5, {'playback_volume': 30}))
+        self.assertEqual(calls[0], 1, 'a blob with no usable desired must be discarded, not restored')
+        self.assertEqual(applied['generation'], 5)
+        self.assertEqual(applied['actual'], {'playback_volume': 30})
+        # (b) a conflicting payload under the now-spent generation is refused, not swallowed.
+        conflict = self.step(lib, session, self.desired(5, {'playback_volume': 99}))
+        self.assertEqual(conflict['health'], 'error')
+        self.assertIn('different settings', conflict['error'])
+        self.assertEqual(calls[0], 1, 'the refused payload must not apply')
+        # (c) the converged same-generation no-op still holds.
+        again = self.step(lib, session, self.desired(5, {'playback_volume': 30}))
+        self.assertEqual(calls[0], 1, 'a converged redelivery must not re-apply')
+        self.assertEqual(again['actual'], {'playback_volume': 30})
+
+    def test_valid_mismatched_device_blob_wedges_the_plane(self):
+        """Documented design (faithful to pi/config_agent.py, which does state.update(data)):
+        a VALID blob (schema and generation intact, usable desired) whose device_id is not
+        this device is adopted, and the guard then refuses every desired addressed to the
+        real device -- an explicit 'this state is not this device's; an operator must erase
+        the NVS' wedge, NOT a silent adoption of another device's settings. The wedge is
+        permanent (the blob re-reads on every boot). This pins the design so the discard
+        fix for torn blobs does not quietly change what a valid foreign blob means."""
+        lib = self.library()
+        st, save, load = self.new_storage(
+            blob=b'{"schema_version":1,"device_id":"other-device","generation":5,'
+                 b'"desired":{"playback_volume":30},"health":2}')
+        calls = [0]
+        session = self.new(lib, calls=calls)
+        self.with_storage(lib, session, st, save, load)
+        refused = self.step(lib, session, self.desired(1, {'playback_volume': 55}))
+        self.assertEqual(refused['health'], 'error')
+        self.assertIn('another device', refused['error'])
+        self.assertEqual(calls[0], 0, 'the wedge refuses the dispatch, it does not apply')
 
     def test_report_fits_the_session_buffer_even_with_a_poisoned_key(self):
         """The session hands the agent a 1024-byte report buffer, and the validation error
