@@ -239,13 +239,31 @@ static int report_json(const wy_config *c, char *out, size_t cap,
                         : (c->error[0] ? c->error : NULL);
     cJSON *o = cJSON_CreateObject();
     if (!o) return 0;
-    cJSON_AddNumberToObject(o, "generation", (double)c->generation);
+    /* Every add is checked. On a key-strdup allocation failure the vendored
+     * add_item_to_object returns false leaving the item UNATTACHED and still caller-owned:
+     * unchecked, the field would silently drop from the serialized report -- breaking the
+     * {generation, actual, health, error} contract (the host logs and drops a report missing
+     * a required field) -- and the unattached item would leak. A build that cannot attach a
+     * field is a failed report: return 0 so the caller maps it to WY_INVALID rather than
+     * emitting a malformed success. The convenience adders (AddNumber/AddString/AddNull)
+     * return NULL on failure and free their own internal item, so only the object needs
+     * deleting; the one AddItemToObject that fails leaves `actual` still ours, so free it. */
+    if (!cJSON_AddNumberToObject(o, "generation", (double)c->generation)) {
+        cJSON_Delete(o); return 0;
+    }
     cJSON *actual = c->actual ? cJSON_Duplicate(c->actual, 1) : cJSON_CreateObject();
     if (!actual) { cJSON_Delete(o); return 0; }
-    cJSON_AddItemToObject(o, "actual", actual);          /* o now owns it */
-    cJSON_AddStringToObject(o, "health", HEALTH_NAMES[health]);
-    if (error) cJSON_AddStringToObject(o, "error", error);
-    else cJSON_AddNullToObject(o, "error");
+    if (!cJSON_AddItemToObject(o, "actual", actual)) {
+        cJSON_Delete(actual); cJSON_Delete(o); return 0;   /* not attached: still ours */
+    }
+    if (!cJSON_AddStringToObject(o, "health", HEALTH_NAMES[health])) {
+        cJSON_Delete(o); return 0;
+    }
+    if (error) {
+        if (!cJSON_AddStringToObject(o, "error", error)) { cJSON_Delete(o); return 0; }
+    } else {
+        if (!cJSON_AddNullToObject(o, "error")) { cJSON_Delete(o); return 0; }
+    }
     char *s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     if (!s) return 0;
@@ -271,57 +289,70 @@ static int persist(const wy_config *c, long new_generation, const cJSON *new_des
     if (!c->save) return 1;   /* no storage installed: nothing to persist, nothing to fail */
     cJSON *root = cJSON_CreateObject();
     if (!root) return 0;
-    cJSON_AddNumberToObject(root, "schema_version", WY_CFG_SCHEMA_VERSION);
-    cJSON_AddStringToObject(root, "device_id", c->device_id);
-    cJSON_AddNumberToObject(root, "generation", (double)new_generation);
+    /* d and p are ours until attached to root: the convenience adders free their own item
+     * on failure (only root needs deleting), but a failed AddItemToObject leaves the item
+     * UNATTACHED and still ours -- checked here, or it silently drops the field from the
+     * blob AND leaks the unattached item while persist still claims durability. After a
+     * successful attach the local is nulled so the root-owned copy is freed exactly once. */
+    cJSON *d = NULL;
+    cJSON *p = NULL;
+    if (!cJSON_AddNumberToObject(root, "schema_version", WY_CFG_SCHEMA_VERSION) ||
+        !cJSON_AddStringToObject(root, "device_id", c->device_id) ||
+        !cJSON_AddNumberToObject(root, "generation", (double)new_generation))
+        goto fail;
     /* The desired is a REQUIRED field of the blob (restore rejects an empty/missing one). If
-     * it cannot be duplicated (an allocation failure), persist FAILS -- the caller reports
-     * "could not persist configuration state" and leaves the generation unspent -- never
-     * substitutes an empty object and claims success: a success-claim over an empty-desired
-     * blob is a lie across the reboot (the guard the report says is durable is the one
-     * restore must throw away). */
-    cJSON *d = cJSON_Duplicate(new_desired, 1);
-    if (!d) { cJSON_Delete(root); return 0; }
-    cJSON *p = cJSON_CreateArray();
-    if (!p) { cJSON_Delete(d); cJSON_Delete(root); return 0; }
+     * it cannot be duplicated, persist FAILS -- the caller reports "could not persist
+     * configuration state" and leaves the generation unspent -- never substitutes an empty
+     * object and claims success: a success-claim over an empty-desired blob is a lie across
+     * the reboot (the guard the report says is durable is the one restore must throw away). */
+    d = cJSON_Duplicate(new_desired, 1);
+    if (!d) goto fail;
+    p = cJSON_CreateArray();
+    if (!p) goto fail;
     for (int i = 0; i < pending_count; ++i) {
         cJSON *s = cJSON_CreateString(pending[i]);
         if (!s) continue;   /* an optional pending entry cannot defeat the commit */
-        cJSON_AddItemToArray(p, s);
+        cJSON_AddItemToArray(p, s);   /* allocation-free list append: cannot fail (s, p non-NULL) */
     }
-    cJSON_AddItemToObject(root, "desired", d);           /* d was checked non-NULL above */
-    cJSON_AddItemToObject(root, "pending", p);
-    cJSON_AddNumberToObject(root, "health", (double)health);
-    cJSON_AddStringToObject(root, "error", c->error);
-    char *s = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);   /* also frees d and p (root owns both) */
-    if (!s) return 0;
-    /* Self-check before claiming durability: the blob is only as durable as restore() is
-     * willing to read it back. An allocation failure at ANY point in the build above (a
-     * number, a string, the "desired" key itself) would leave a required field out of the
-     * serialized string while save still succeeds -- a success-claim over a blob restore must
-     * discard, which is a lie across the reboot. Parse the exact bytes about to be written and
-     * require the four fields restore requires (schema_version, a non-empty device_id, an
-     * integer generation, a non-empty desired); anything less -- including a parse that itself
-     * fails, which is the same exhausted heap that would break the write -- is a failed
-     * persist, and the caller leaves the generation unspent. Cheap: one extra parse of a
-     * ~700-byte string on a rare path (once per accepted config change). */
-    cJSON *check = cJSON_Parse(s);
-    if (!check) { free(s); return 0; }
-    const cJSON *c_sv = cJSON_GetObjectItemCaseSensitive(check, "schema_version");
-    const cJSON *c_id = cJSON_GetObjectItemCaseSensitive(check, "device_id");
-    const cJSON *c_gen = cJSON_GetObjectItemCaseSensitive(check, "generation");
-    const cJSON *c_des = cJSON_GetObjectItemCaseSensitive(check, "desired");
-    int usable = cJSON_IsObject(check) &&
-        cJSON_IsNumber(c_sv) && c_sv->valuedouble == WY_CFG_SCHEMA_VERSION &&
-        cJSON_IsString(c_id) && c_id->valuestring && c_id->valuestring[0] &&
-        cJSON_IsNumber(c_gen) && !cJSON_IsBool(c_gen) && c_gen->valuedouble >= 0 &&
-        cJSON_IsObject(c_des) && cJSON_GetArraySize(c_des) >= 1;
-    cJSON_Delete(check);
-    if (!usable) { free(s); return 0; }
-    int rc = c->save(c->storage_user, s, strlen(s));
-    free(s);
-    return rc == 0;
+    if (!cJSON_AddItemToObject(root, "desired", d)) goto fail;   /* d stays ours on failure */
+    d = NULL;   /* root owns it now */
+    if (!cJSON_AddItemToObject(root, "pending", p)) goto fail;   /* p stays ours on failure */
+    p = NULL;   /* root owns it now */
+    if (!cJSON_AddNumberToObject(root, "health", (double)health) ||
+        !cJSON_AddStringToObject(root, "error", c->error))
+        goto fail;
+    {
+        char *s = cJSON_PrintUnformatted(root);
+        cJSON_Delete(root);   /* also frees d and p (root owns both); locals already nulled */
+        if (!s) return 0;
+        /* Final parse-back confirmation: the bytes about to be written must read back with
+         * every field restore requires (schema_version, a non-empty device_id, an integer
+         * generation, a non-empty desired). The checked adds above already guarantee each
+         * field is present in the tree, so this re-verifies the SERIALIZED string -- the
+         * exact durability claim restore will be made to honour. Cheap: one extra parse of a
+         * ~700-byte string on a rare path (once per accepted config change). */
+        cJSON *check = cJSON_Parse(s);
+        if (!check) { free(s); return 0; }
+        const cJSON *c_sv = cJSON_GetObjectItemCaseSensitive(check, "schema_version");
+        const cJSON *c_id = cJSON_GetObjectItemCaseSensitive(check, "device_id");
+        const cJSON *c_gen = cJSON_GetObjectItemCaseSensitive(check, "generation");
+        const cJSON *c_des = cJSON_GetObjectItemCaseSensitive(check, "desired");
+        int usable = cJSON_IsObject(check) &&
+            cJSON_IsNumber(c_sv) && c_sv->valuedouble == WY_CFG_SCHEMA_VERSION &&
+            cJSON_IsString(c_id) && c_id->valuestring && c_id->valuestring[0] &&
+            cJSON_IsNumber(c_gen) && !cJSON_IsBool(c_gen) && c_gen->valuedouble >= 0 &&
+            cJSON_IsObject(c_des) && cJSON_GetArraySize(c_des) >= 1;
+        cJSON_Delete(check);
+        if (!usable) { free(s); return 0; }
+        int rc = c->save(c->storage_user, s, strlen(s));
+        free(s);
+        return rc == 0;
+    }
+fail:
+    if (d) cJSON_Delete(d);   /* unattached and ours (a failed AddItemToObject) */
+    if (p) cJSON_Delete(p);
+    cJSON_Delete(root);   /* frees any children already attached */
+    return 0;
 }
 
 /* Restore the state blob after a reboot. Returns 1 when a valid state was restored, 0 when

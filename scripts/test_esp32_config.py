@@ -9,9 +9,11 @@ the live volume and stages the wake settings; the test installs a faithful stand
 that reports which settings it applied. The canonical wyoming events and the session
 wire framing are exercised at the session level (task 5).
 """
+import base64
 import ctypes as C
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -673,7 +675,145 @@ class ConfigAgentTests(unittest.TestCase):
                                     'a written blob must carry a non-empty desired (n=%d)' % n)
                     self.assertEqual(blob['desired'], {'playback_volume': 55},
                                      'a written blob must carry the real desired (n=%d)' % n)
-                del keep
+
+    _OOM_SWEEP_CHILD = r'''
+import base64, ctypes as C, json, subprocess, sys, tempfile
+from pathlib import Path
+ROOT = Path(sys.argv[1]).resolve()
+COMP = ROOT / 'firmware/esp32/components'
+payload = base64.b64decode(sys.argv[2])
+nmax = int(sys.argv[3])
+parser = COMP / 'wyoming_json'
+includes = [COMP / 'wyoming_config', COMP / 'wyoming_wire', parser, parser / 'vendor/cjson']
+sources = [COMP / 'wyoming_config' / 'wyoming_config.c', parser / 'wyoming_json.c',
+           parser / 'vendor/cjson' / 'cJSON.c']
+tmp = tempfile.TemporaryDirectory()
+libpath = Path(tmp.name) / 'config.so'
+subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC',
+                '-DCJSON_NESTING_LIMIT=16', *['-I' + str(p) for p in includes],
+                *map(str, sources), '-lm', '-o', str(libpath)], check=True)
+lib = C.CDLL(str(libpath))
+lib.wy_config_size.restype = C.c_size_t
+lib.wy_config_init.argtypes = [C.c_void_p, C.c_char_p]; lib.wy_config_init.restype = C.c_int
+lib.wy_config_step.argtypes = [C.c_void_p, C.c_char_p, C.POINTER(C.c_char), C.c_size_t]
+lib.wy_config_step.restype = C.c_int
+SAVE = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_size_t)
+LOAD = C.CFUNCTYPE(C.c_int, C.c_void_p, C.POINTER(C.c_char), C.c_size_t, C.POINTER(C.c_size_t))
+lib.wy_config_set_storage.argtypes = [C.c_void_p, SAVE, LOAD, C.c_void_p]
+libc = C.CDLL(None); libc.malloc.argtypes = [C.c_size_t]; libc.malloc.restype = C.c_void_p
+libc.free.argtypes = [C.c_void_p]; libc.free.restype = None
+FREEFN = C.CFUNCTYPE(None, C.c_void_p); real_free = FREEFN(libc.free)
+class Hooks(C.Structure):
+    _fields_ = [('malloc_fn', C.CFUNCTYPE(C.c_void_p, C.c_size_t)), ('free_fn', FREEFN)]
+lib.cJSON_InitHooks.argtypes = [C.POINTER(Hooks)]
+for n in range(1, nmax + 1):
+    counter = [0]
+    @C.CFUNCTYPE(C.c_void_p, C.c_size_t)
+    def alloc(size, _c=counter):
+        _c[0] += 1
+        return None if _c[0] == n else libc.malloc(size)
+    st = {'blob': bytearray()}
+    @SAVE
+    def save(user, js, length):
+        st['blob'] = bytearray(C.string_at(js, length))
+        return 0
+    @LOAD
+    def load(user, out, cap, outlen):
+        return -1
+    lib.cJSON_InitHooks(Hooks(alloc, real_free))
+    session = C.create_string_buffer(lib.wy_config_size())
+    lib.wy_config_init(session, b'control-fixture')
+    lib.wy_config_set_storage(session, save, load, None)
+    report = C.create_string_buffer(4096)
+    rc = lib.wy_config_step(session, payload, report, 4096)
+    lib.cJSON_InitHooks(None)
+    print(json.dumps({'n': n, 'rc': rc,
+                      'report': base64.b64encode(bytes(report.value)).decode('ascii'),
+                      'blob': base64.b64encode(bytes(st['blob'])).decode('ascii')}))
+'''
+
+    def _oom_sweep(self, lib, payload, nmax):
+        """Shared fault-injection driver for the OOM-window tests: a cJSON allocator that fails
+        its Nth allocation, swept across N; each subtest yields (n, rc, report_bytes, blob).
+
+        The sweep runs in a FRESH child interpreter, not in this process. The window that a
+        failing key-strdup allocation lands on is a property of the glibc malloc arena: the
+        earlier tests in this suite each dlopen a freshly-compiled .so and drive wy_config_step,
+        which warms the parent's arena and shifts (or masks) which N lands on the "pending"/
+        "actual" key allocation. A clean child process -- one .so load, no prior steps -- starts
+        from the same cold arena every run, so the window is deterministic and the invariant the
+        tests check is actually exercised (an in-process sweep here was a false green: it
+        passed on the unfixed code because the warmed heap moved the window out of the sweep).
+        `lib` is accepted for signature stability but unused: the child compiles its own."""
+        child_dir = tempfile.mkdtemp(prefix='oom-sweep-')
+        self.addCleanup(lambda: __import__('shutil').rmtree(child_dir, ignore_errors=True))
+        child_path = Path(child_dir) / 'oom_sweep_child.py'
+        child_path.write_text(self._OOM_SWEEP_CHILD)
+        proc = subprocess.run(
+            [sys.executable, '-B', str(child_path), str(ROOT),
+             base64.b64encode(payload).decode('ascii'), str(nmax)],
+            capture_output=True, text=True, check=True, timeout=300)
+        results = []
+        for line in proc.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            d = json.loads(line)
+            results.append((d['n'], d['rc'],
+                            base64.b64decode(d['report']),
+                            base64.b64decode(d['blob'])))
+        self.assertEqual(len(results), nmax, 'the OOM-sweep child must yield one row per N')
+        return results
+
+    def test_written_blob_is_complete_on_any_successful_persist(self):
+        """persist() writes the blob through unchecked cJSON_AddItemToObject calls: on a
+        key-strdup allocation failure the vendored add_item_to_object returns false with the
+        item UNATTACHED and caller-owned, so a failed 'pending' add leaks the array AND saves
+        a blob silently missing the 'pending' key while persist still claims success (the
+        durability claim stays honest because restore treats pending as optional, but the
+        advisory list is lost and the tree leaks). Invariant (N-independent): any blob that
+        was written is COMPLETE -- it carries every field persist is supposed to write,
+        including the 'pending' array (present even when empty). The RED window on the
+        unfixed code is the 'pending' add (an empty-object substitution there, or a missing
+        key with a claimed success)."""
+        lib = self.library()
+        payload = json.dumps(self.desired(1, {'playback_volume': 55})).encode('utf-8')
+        for n, rc, report, blob in self._oom_sweep(lib, payload, 120):
+            if not blob:
+                continue   # persist failed (or was skipped): nothing written to check
+            parsed = json.loads(blob.decode('utf-8'))
+            self.assertIn('pending', parsed,
+                          'a written blob must carry the pending array (n=%d); a failed '
+                          'AddItemToObject leaves it out while persist claims success' % n)
+            self.assertTrue(isinstance(parsed['pending'], list),
+                            'a written blob must carry a real pending array (n=%d)' % n)
+
+    def test_successful_report_always_has_the_actual_field(self):
+        """report_json() builds the report through unchecked cJSON_AddItemToObject calls: on
+        a key-strdup allocation failure the 'actual' item is unattached and caller-owned, so
+        the printed report is {generation, health, error} -- the contract's exact shape
+        (item 3: always {generation, actual, health, error}) is broken ON THE WIRE -- while
+        report_json returns success and wy_config_step returns WY_OK, so the session sends
+        the malformed report. Invariant (N-independent): every successful (WY_OK) report
+        carries every field the contract requires, in particular 'actual'. The RED window on
+        the unfixed code is the 'actual' add (a report missing the field, exit ok)."""
+        lib = self.library()
+        payload = json.dumps(self.desired(1, {'playback_volume': 55})).encode('utf-8')
+        saw_success = False
+        for n, rc, report, blob in self._oom_sweep(lib, payload, 120):
+            if rc != 0:
+                continue   # a failed step is allowed to produce no report
+            saw_success = True
+            data = json.loads(report.decode('utf-8'))
+            self.assertIn('actual', data,
+                          'a WY_OK report must carry the actual field (n=%d); a failed '
+                          'AddItemToObject emits the report without it while claiming '
+                          'success' % n)
+            self.assertIn('generation', data, 'a WY_OK report must carry generation (n=%d)' % n)
+            self.assertIn('health', data, 'a WY_OK report must carry health (n=%d)' % n)
+            self.assertNotIn('schema_version', data,
+                             'the report must not carry schema_version (n=%d)' % n)
+        self.assertTrue(saw_success, 'the sweep must include at least one successful report')
 
 
 if __name__ == '__main__':
