@@ -226,6 +226,10 @@ static int cfg_apply(void *user, const char *settings_json,
     wy_session *session = (wy_session *)user;
     cJSON *settings = cJSON_Parse(settings_json);
     if (!settings || !cJSON_IsObject(settings)) {
+        /* A non-object (a malformed or mis-shape-parsed JSON) is an error, not an apply; the
+         * parsed tree (if any) is freed here -- it is unreachable through the agent (which
+         * serializes a validated object), but a future caller must not leak it. */
+        cJSON_Delete(settings);
         *out_health = WY_CFG_HEALTH_ERROR;
         return WY_INVALID;
     }

@@ -1002,6 +1002,68 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(session.playback_volume, 0, '0 is stored raw; the floor applies at use, not here')
         self.assertEqual(lib.wy_session_set_playback_volume(None, 30), -1, 'a NULL session is refused')
 
+    def test_config_desired_with_a_payload_fails_closed(self):
+        """A hermes.config.desired carries its state in `data` ONLY. A frame that also carries
+        a payload is malformed, and the session must refuse it BEFORE the handler runs -- the
+        payload drain reuses the parse body, so by dispatch time the body holds the payload,
+        not the desired: handing it to the handler would let a payload tail that happens to
+        parse as a desired be silently APPLIED, and a non-parsing one is nondeterministic
+        garbage. Failing closed (the same policy as an unknown-with-payload) is the only
+        honest answer: no handler call, no report, the link is down, the bridge reconnects
+        and re-dispatches the well-formed desired."""
+        lib = self.config_library()
+        session = C.create_string_buffer(lib.wy_session_size())
+        self.assertEqual(lib.wy_session_init(session, b'control-fixture', b'boot-1'), 0)
+        calls = [0]
+        REPORT = b'{"generation":1,"actual":{},"health":"degraded","error":null}'
+        CFGSTEP = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.POINTER(C.c_char), C.c_size_t)
+
+        @CFGSTEP
+        def handler(user, desired, out, cap):
+            calls[0] += 1
+            C.memmove(out, REPORT, len(REPORT))
+            out[len(REPORT)] = 0
+            return 0
+
+        lib.wy_session_set_config.argtypes = [C.c_void_p, CFGSTEP, C.c_void_p]
+        lib.wy_session_set_config(session, handler, None)
+        profile = {'playback_volume': 42}
+        source = io.BytesIO()
+        for event in [Event(type='describe'),
+                      Event(type='hermes.register.ok',
+                            data={'device_id': 'control-fixture', 'protocol_version': 1}),
+                      Event(type='hermes.config.desired',
+                            data={'schema_version': 1, 'device_id': 'control-fixture',
+                                  'generation': 1, 'settings': profile},
+                            payload=b'\x00\x01\x02\x03')]:
+            write_event(event, source)
+        source.seek(0)
+        output = io.BytesIO()
+
+        @IO
+        def reader(ctx, target, length):
+            chunk = source.read(min(4, length))
+            C.memmove(target, chunk, len(chunk))
+            return len(chunk)
+
+        @IO
+        def writer(ctx, target, length):
+            output.write(C.string_at(target, length))
+            return length
+
+        self.assertEqual(lib.wy_session_step(session, reader, writer, None), 0)
+        self.assertEqual(lib.wy_session_step(session, reader, writer, None), 0)
+        self.assertEqual(lib.wy_session_step(session, reader, writer, None), -1,
+                         'a config frame carrying a payload must fail closed')
+        self.assertEqual(lib.wy_session_state(session), 5, 'a malformed config frame fails the link')
+        self.assertEqual(calls[0], 0, 'the handler must not run on a malformed config frame')
+        output.seek(0)
+        events = []
+        while (event := read_event(output)) is not None:
+            events.append(event)
+        self.assertEqual([e.type for e in events], ['info', 'hermes.register'],
+                         'a refused config frame sends no report')
+
     def test_config_desired_produces_reported(self):
         """The bridge sends hermes.config.desired right after registration. The session must hand
         the decoded data to the (injected) config agent and answer with hermes.config.reported --

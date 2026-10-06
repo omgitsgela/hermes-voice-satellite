@@ -524,13 +524,25 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
          * send failure is a real link fault (the report is the dispatch's only answer); a
          * handler that fails to build a report is a protocol bug we surface the same way.
          * With no handler wired the frame is drained and the link stays alive (the pre-config
-         * behavior), so a device that never wires the plane is not bricked by it. */
-        if (session->config_handler) {
+         * behavior), so a device that never wires the plane is not bricked by it.
+         *
+         * A config frame carrying a payload is malformed and is refused BEFORE the handler:
+         * the desired state rides in `data` only, and the payload drain above REUSES this same
+         * parse body -- by dispatch time the body holds the payload, not the desired. Handing
+         * it to the handler would let a payload tail that happens to parse as a desired be
+         * silently APPLIED; refusing (the same policy as an unknown-with-payload) is the only
+         * honest answer, and the bridge reconnects and re-dispatches the well-formed desired. */
+        if (frame.payload_length) {
+            result = WY_INVALID;
+        } else if (session->config_handler) {
             session->body[frame.data_length < sizeof(session->body) ? frame.data_length
                                                                     : sizeof(session->body) - 1] = '\0';
-            /* Sized for the agent's worst-case report: generation (12 digits) + the full
-             * 7-setting actual (~200 bytes) + health + a 255-char error, ~520 bytes. 1024 is
-             * double that, comfortably safe, and small for the gateway task's 10 KB stack. */
+            /* Sized for the agent's worst-case report: generation (11 digits, the INT32_MAX
+             * bound) + the full 7-setting actual (~200 bytes) + health + a SANITIZED error
+             * (validate_settings caps the peer-controlled key at 31 printable chars, so the
+             * error is bounded ~50 bytes and adds nothing under JSON escaping). The real
+             * worst case is ~300 bytes; 1024 is a comfortable multiple, small for the gateway
+             * task's 10 KB stack, and gives headroom if the settings grow. */
             char report[1024];
             int handled = session->config_handler(session->config_user, session->body,
                                                   report, sizeof(report));

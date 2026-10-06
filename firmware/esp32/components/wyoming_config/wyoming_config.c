@@ -1,5 +1,7 @@
 #include "wyoming_config.h"
 #include "wyoming_wire.h"
+#include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -100,6 +102,25 @@ static int wake_word_valid(const char *w, size_t len) {
     return 1;
 }
 
+/* Copy a peer-controlled name into a report, keeping it SHORT and PRINTABLE. The validation
+ * error interpolates the desired key, and the desired key is peer input: a hostile key (control
+ * characters) expands under JSON escaping (\u00XX, 6x), which used to push the report past the
+ * session's 1024-byte buffer -- the agent then produced no report, the session treated that as
+ * a link fault, and the bridge re-dispatched the SAME poisoned frame on every registration: a
+ * reconnect storm the device could never clear. A non-printable byte is a '?' and anything past
+ * 31 chars is dropped (the detail is not the point of the error; the event is still a clean,
+ * parseable refusal), so the report's worst case stays far below the buffer at any peer input.
+ * Returns the number of chars written (the buffer is always NUL-terminated by the caller's use). */
+static size_t sanitize_name(const char *name, char *out, size_t cap) {
+    size_t n = 0;
+    for (size_t i = 0; name && name[i] && n + 1 < cap; ++i) {
+        unsigned char ch = (unsigned char)name[i];
+        out[n++] = (ch >= 0x21 && ch <= 0x7e) ? (char)ch : '?';   /* printable ASCII only */
+    }
+    out[n] = '\0';
+    return n;
+}
+
 static int json_values_equal(const cJSON *a, const cJSON *b) {
     if (a == b) return 1;
     if (!a || !b) return 0;
@@ -124,7 +145,11 @@ static int json_objects_equal(const cJSON *a, const cJSON *b) {
     return 1;
 }
 
-/* Any desired key whose actual value differs (or is missing) is "unapplied". */
+/* Any desired key whose actual value differs (or is missing) is "unapplied". After a restore,
+ * `actual` is deliberately NULL (it was not persisted), and every desired key is then
+ * unapplied: that is the intended "the volatile value is gone, re-apply on redelivery" state.
+ * A NULL `actual` therefore reports unapplied, not a crash: cJSON_GetObjectItemCaseSensitive is
+ * NULL-safe (returns NULL), so each key misses and the check fires. */
 static int any_unapplied(const cJSON *desired, const cJSON *actual) {
     if (!cJSON_IsObject(desired)) return 0;
     const cJSON *it = NULL;
@@ -156,8 +181,14 @@ static int validate_settings(const cJSON *settings, int allow_empty, char *err, 
     const cJSON *item = NULL;
     cJSON_ArrayForEach(item, settings) {
         const char *name = item->string ? item->string : "";
+        char safe_name[33];
+        sanitize_name(name, safe_name, sizeof(safe_name));
         const cfg_spec *spec = spec_of(name);
-        if (!spec) { snprintf(err, err_cap, "unknown setting: %s", name); return 0; }
+        if (!spec) {
+            /* The name is peer input: sanitize it (see sanitize_name) so the report's worst
+             * case stays far below the buffer at any input, even if the key repeats. */
+            snprintf(err, err_cap, "unknown setting: %s", safe_name); return 0;
+        }
         int ok = 0;
         if (spec->kind == CFG_INT) {
             if (cJSON_IsNumber(item) && !cJSON_IsBool(item) &&
@@ -266,8 +297,18 @@ static int restore(wy_config *c) {
         c->has_device_id = 1;
     }
     const cJSON *gen = cJSON_GetObjectItemCaseSensitive(root, "generation");
-    if (cJSON_IsNumber(gen) && gen->valuedouble >= 0 && gen->valuedouble < 1e12)
-        c->generation = (long)gen->valuedouble;
+    /* A torn or hand-edited blob whose generation is not an integer in the device's 32-bit
+     * long range is corrupt: DISCARD the whole state, not just the field -- a partially
+     * restored guard (a zero generation next to a trusted desired) is exactly the "no partial
+     * restore" violation the schema check exists to prevent. With no valid state the device
+     * converges on the bridge's next dispatch. */
+    if (!cJSON_IsNumber(gen) || cJSON_IsBool(gen) || gen->valuedouble < 0 ||
+        gen->valuedouble > (double)INT32_MAX ||
+        gen->valuedouble != (double)(long)gen->valuedouble) {
+        cJSON_Delete(root);
+        return 0;
+    }
+    c->generation = (long)gen->valuedouble;
     cJSON_Delete(c->desired);
     /* `actual` is deliberately NOT restored: it describes a live runtime condition (the
      * session's current volume) that a reboot resets. Restoring a stale "applied" would make
@@ -356,7 +397,13 @@ int wy_config_step(wy_config *c, const char *desired_json, char *report_out, siz
     } else if (c->has_device_id && strcmp(id->valuestring, c->device_id)) {
         snprintf(err, sizeof(err), "desired state belongs to another device"); guard_failed = 1;
     } else if (cJSON_IsBool(gen) || !cJSON_IsNumber(gen) || gen->valuedouble < 1 ||
-               gen->valuedouble > 1e12) {
+               gen->valuedouble > (double)INT32_MAX ||
+               gen->valuedouble != (double)(long)gen->valuedouble) {
+        /* A fraction (1.5) is not an integer, and a value above INT32_MAX is refused: the
+         * generation must fit the device's 32-bit long on the wire, whatever the host's long
+         * is (on the 64-bit test host a 2^32 value would pass a plain cast and only the
+         * device-bound bound catches it). The integrality check is the same one
+         * validate_settings uses for the integer settings. */
         snprintf(err, sizeof(err), "generation must be a positive integer"); guard_failed = 1;
     }
     if (!guard_failed && !c->has_device_id) {
@@ -388,14 +435,15 @@ int wy_config_step(wy_config *c, const char *desired_json, char *report_out, siz
             cJSON_Delete(desired);
             return rc ? WY_OK : WY_INVALID;
         }
-        /* Same settings. Idempotent when fully healthy and applied (nothing left to do).
-         * Otherwise re-apply once: on this device the immediate settings (the volume) are
-         * volatile -- a reboot loses the live value -- so the bridge's reconnect
-         * re-dispatch (the same generation) is what restores them. Re-applying the same
-         * value is harmless and is the only way a power cycle converges. */
+        /* Same settings. Idempotent only when there is genuinely nothing left to apply: the
+         * state is not in error and nothing is unapplied. The decision must depend on
+         * `actual` (what was applied), never on the persisted health ALONE: after a restore,
+         * health survives the blob but actual is deliberately empty (the volatile value is
+         * gone), so a healthy-but-lost state must re-apply on the bridge's reconnect
+         * re-dispatch -- a no-op keyed on health would leave the speaker at the fresh
+         * default for the life of the link. Re-applying the same value is harmless. */
         int unapplied = c->desired ? any_unapplied(c->desired, c->actual) : 0;
-        if (c->health == WY_CFG_HEALTH_HEALTHY ||
-            (c->health != WY_CFG_HEALTH_ERROR && !unapplied)) {
+        if (c->health != WY_CFG_HEALTH_ERROR && !unapplied) {
             int rc = report_json(c, report_out, report_cap, -1, NULL);
             cJSON_Delete(desired);
             return rc ? WY_OK : WY_INVALID;

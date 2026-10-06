@@ -19,8 +19,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 COMP = ROOT / 'firmware/esp32/components'
 
+# out_actual / out_error are OUT parameters: POINTER(c_char) (a writable buffer the C code
+# writes through), never c_char_p (which ctypes converts to an immutable bytes copy that C
+# must not write -- that is exactly the segfault this harness used to hit).
 ADAPTER = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.POINTER(C.c_char),
-                      C.c_size_t, C.POINTER(C.c_int), C.c_char_p, C.c_size_t)
+                      C.c_size_t, C.POINTER(C.c_int), C.POINTER(C.c_char), C.c_size_t)
 
 
 class ConfigAgentTests(unittest.TestCase):
@@ -397,6 +400,106 @@ class ConfigAgentTests(unittest.TestCase):
         self.assertEqual(landed['generation'], 1)
         self.assertEqual(landed['health'], 'degraded')
         self.assertEqual(landed['actual'], {'playback_volume': 60})
+
+    def test_healthy_restore_redelivery_reapplies(self):
+        """A REBOOT (or a gateway restart that re-seeds the volume) loses the live value even
+        when the last apply was FULLY APPLIED: the adapter reported every setting, so the
+        durable state is healthy -- and actual was deliberately not persisted (it is a live
+        runtime condition, not durable state). The bridge's reconnect re-dispatch under the
+        same generation must therefore RE-APPLY, not take the healthy no-op fast path: the
+        no-op decision has to depend on `actual` (which is empty after restore), never on the
+        persisted health alone. Proven by the adapter's call count advancing after restore."""
+        lib = self.library()
+        st, save, load = self.new_storage()
+        session = self.new(lib)
+        self.with_storage(lib, session, st, save, load)
+        calls = [0]
+        session2 = self.new(lib, calls=calls, mode='healthy')
+        self.with_storage(lib, session2, st, save, load)
+        # First apply: the adapter reports EVERY setting applied -> a fully healthy state.
+        first = self.step(lib, session2, self.desired(1, {'playback_volume': 55}))
+        self.assertEqual(first['health'], 'healthy')
+        self.assertEqual(first['actual'], {'playback_volume': 55})
+        self.assertEqual(calls[0], 1)
+        # The healthy same-generation no-op still holds WHILE the value is live in RAM ...
+        again = self.step(lib, session2, self.desired(1, {'playback_volume': 55}))
+        self.assertEqual(calls[0], 1, 'a converged live healthy state must not re-apply')
+        # ... but after a reboot the volatile value is GONE (the fresh session defaults it),
+        # and the same-generation redelivery must restore it: no-op-on-health alone would
+        # leave the speaker at the default level for the rest of the life of the link.
+        calls2 = [0]
+        session3 = self.new(lib, calls=calls2, mode='healthy')
+        self.with_storage(lib, session3, st, save, load)
+        redelivered = self.step(lib, session3, self.desired(1, {'playback_volume': 55}))
+        self.assertEqual(calls2[0], 1,
+                         'the healthy-but-lost volatile value must be re-applied after a reboot')
+        self.assertEqual(redelivered['generation'], 1)
+        self.assertEqual(redelivered['actual'], {'playback_volume': 55})
+        self.assertEqual(redelivered['health'], 'healthy')
+
+    def test_fractional_or_huge_generation_is_rejected(self):
+        """The generation must be a POSITIVE INTEGER within the platform's long. A fraction
+        (1.5) is not an integer -- the reference requires isinstance(int) -- and a value that
+        overflows the device's 32-bit long (above 2^31) must be refused before it is cast,
+        not truncated into the stored state (a wrapped 0 would silently land in the
+        same-generation no-op path). Both are refused with an error, and the stored state is
+        untouched: a correct generation still applies afterwards."""
+        lib = self.library()
+        for bad in [1.5, 4294967296]:   # a fraction; 2^32 (a 32-bit long wrap to 0)
+            with self.subTest(generation=bad):
+                calls = [0]
+                session = self.new(lib, calls=calls)
+                reported = self.step(lib, session, self.desired(bad, {'playback_volume': 55}))
+                self.assertEqual(reported['health'], 'error')
+                self.assertIn('generation', reported['error'])
+                self.assertEqual(reported['actual'], {})
+                self.assertEqual(calls[0], 0, 'a refused generation must not apply')
+                # The stored state is still empty: the correct generation still applies.
+                fresh = self.step(lib, session, self.desired(1, {'playback_volume': 55}))
+                self.assertEqual(fresh['generation'], 1)
+                self.assertEqual(fresh['actual'], {'playback_volume': 55})
+
+    def test_corrupt_blob_with_fractional_generation_is_discarded(self):
+        """The RESTORE path has the same guard: a torn or hand-edited blob whose generation is
+        not an integer (or is out of long range) must be treated as no persisted state at
+        all -- not a half-restored guard. The device converges on the bridge's next dispatch:
+        generation 1 must be treated as NEW, and the redelivery must apply."""
+        lib = self.library()
+        for bad in [b'{"schema_version":1,"device_id":"control-fixture",'
+                    b'"generation":1.5,"desired":{"playback_volume":55}}',
+                    b'{"schema_version":1,"device_id":"control-fixture",'
+                    b'"generation":4294967296,"desired":{"playback_volume":55}}']:
+            with self.subTest(blob=bad):
+                st, save, load = self.new_storage(blob=bad)
+                calls = [0]
+                session = self.new(lib, calls=calls)
+                self.with_storage(lib, session, st, save, load)
+                report = self.step(lib, session, self.desired(1, {'playback_volume': 55}))
+                self.assertEqual(report['generation'], 1,
+                                 'a fractional persisted generation must not block first boot')
+                self.assertEqual(report['actual'], {'playback_volume': 55})
+                self.assertEqual(calls[0], 1, 'a discarded fractional-generation blob must not block apply')
+
+    def test_report_fits_the_session_buffer_even_with_a_poisoned_key(self):
+        """The session hands the agent a 1024-byte report buffer, and the validation error
+        interpolates the PEER's key into it: a hostile key (control characters) can be JSON-
+        escaped to 6x its raw size (\\u00XX), which used to push the report past the buffer --
+        the agent then produced no report, the session treated that as a link fault, and the
+        bridge re-dispatched the SAME poisoned frame on every registration: a reconnect storm
+        the device could never clear. The report must ALWAYS fit the 1024 buffer at any peer
+        input: the error may drop the untrusted detail (the key is not the fix) but the event
+        is still a clean, parseable error report -- never silence, never a link failure."""
+        lib = self.library()
+        session = self.new(lib)
+        poison = {'\x01' * 255: 55}   # 255 control chars: escapes to ~1530 bytes
+        payload = json.dumps(self.desired(1, poison)).encode('utf-8')
+        report = C.create_string_buffer(1024)
+        result = lib.wy_config_step(session, payload, report, 1024)
+        self.assertEqual(result, 0, 'a hostile key must not defeat the 1024-byte report buffer')
+        data = json.loads(report.value.decode('utf-8'))
+        self.assertEqual(data['health'], 'error', 'the unknown setting is still refused ...')
+        self.assertEqual(data['actual'], {}, '... and nothing was applied')
+        self.assertIn('unknown', data['error'])
 
 
 if __name__ == '__main__':
