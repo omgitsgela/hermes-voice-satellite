@@ -285,7 +285,8 @@ static int report_json(const wy_config *c, char *out, size_t cap,
  * schema check and degrades to "no persisted state", which is safe because the bridge
  * re-dispatches the desired on the next registration. */
 static int persist(const wy_config *c, long new_generation, const cJSON *new_desired,
-                   int health, const char (*pending)[32], int pending_count) {
+                   int health, const char *new_error, const char *new_device_id,
+                   const char (*pending)[32], int pending_count) {
     if (!c->save) return 1;   /* no storage installed: nothing to persist, nothing to fail */
     cJSON *root = cJSON_CreateObject();
     if (!root) return 0;
@@ -293,11 +294,15 @@ static int persist(const wy_config *c, long new_generation, const cJSON *new_des
      * on failure (only root needs deleting), but a failed AddItemToObject leaves the item
      * UNATTACHED and still ours -- checked here, or it silently drops the field from the
      * blob AND leaks the unattached item while persist still claims durability. After a
-     * successful attach the local is nulled so the root-owned copy is freed exactly once. */
+     * successful attach the local is nulled so the root-owned copy is freed exactly once.
+     * The device_id and error are passed IN (not read from c->device_id / c->error): they
+     * belong to the state ABOUT to be committed, and a persist failure must leave the
+     * stored state -- identity and error included -- untouched. The caller commits them
+     * into c-> only when this returns true. */
     cJSON *d = NULL;
     cJSON *p = NULL;
     if (!cJSON_AddNumberToObject(root, "schema_version", WY_CFG_SCHEMA_VERSION) ||
-        !cJSON_AddStringToObject(root, "device_id", c->device_id) ||
+        !cJSON_AddStringToObject(root, "device_id", new_device_id) ||
         !cJSON_AddNumberToObject(root, "generation", (double)new_generation))
         goto fail;
     /* The desired is a REQUIRED field of the blob (restore rejects an empty/missing one). If
@@ -319,7 +324,7 @@ static int persist(const wy_config *c, long new_generation, const cJSON *new_des
     if (!cJSON_AddItemToObject(root, "pending", p)) goto fail;   /* p stays ours on failure */
     p = NULL;   /* root owns it now */
     if (!cJSON_AddNumberToObject(root, "health", (double)health) ||
-        !cJSON_AddStringToObject(root, "error", c->error))
+        !cJSON_AddStringToObject(root, "error", new_error))
         goto fail;
     {
         char *s = cJSON_PrintUnformatted(root);
@@ -525,10 +530,17 @@ int wy_config_step(wy_config *c, const char *desired_json, char *report_out, siz
          * validate_settings uses for the integer settings. */
         snprintf(err, sizeof(err), "generation must be a positive integer"); guard_failed = 1;
     }
-    if (!guard_failed && !c->has_device_id) {
-        snprintf(c->device_id, sizeof(c->device_id), "%s", id->valuestring);
-        c->has_device_id = 1;
-    }
+    /* Identity is NOT adopted in the guard. The reference (pi/config_agent.py) binds the
+     * device_id in the COMMITTING state.update only -- a REJECTED frame (a bad setting, a
+     * wrong generation, a different payload) must not bind the identity. Adopting here
+     * (before validate_settings can reject) let one malformed frame pin the identity, and
+     * every later well-formed frame addressed to the real device was then refused as
+     * "belongs to another device": the guard re-reads the adopted id on every step, so the
+     * wedge lasts the device's whole life. `new_id` carries the event's device_id into the
+     * commit block, where it is committed only if the event is accepted and durable. */
+    char new_id[65] = "";
+    if (!guard_failed)
+        snprintf(new_id, sizeof(new_id), "%s", id->valuestring);
     if (guard_failed) {
         int rc = report_json(c, report_out, report_cap, WY_CFG_HEALTH_ERROR, err);
         cJSON_Delete(desired);
@@ -584,12 +596,20 @@ int wy_config_step(wy_config *c, const char *desired_json, char *report_out, siz
     cJSON *new_actual = cJSON_CreateObject();
     if (!new_actual) { cJSON_Delete(desired); return WY_INVALID; }
     int health = WY_CFG_HEALTH_DEGRADED;
-    c->error[0] = '\0';
+    /* new_error is the error for the state ABOUT to be committed. It is built in a LOCAL
+     * (not c->error) for the whole apply section: persist() serializes the error into the
+     * blob, and a persist failure must leave the STORED state untouched -- including the
+     * error. Writing c->error here (before the commit) used to leave the RAM a mix of the
+     * NEW/cleared error and the OLD generation/health/desired once the persist failed: a
+     * divergence from the durable blob that a same-session current-state read (an
+     * older-generation event) would expose. new_error is committed into c->error only after
+     * the persist succeeds (below), so a failed step never mutates the stored error. */
+    char new_error[WY_CFG_ERROR_MAX] = "";
     if (c->apply) {
         char *s = cJSON_PrintUnformatted(settings);
         if (!s) {
             health = WY_CFG_HEALTH_ERROR;
-            snprintf(c->error, sizeof(c->error), "could not serialize settings");
+            snprintf(new_error, sizeof(new_error), "could not serialize settings");
         } else {
             char actual_json[256] = "{}";
             char out_error[WY_CFG_ERROR_MAX] = {0};
@@ -604,18 +624,18 @@ int wy_config_step(wy_config *c, const char *desired_json, char *report_out, siz
                 health = out_health;
                 cJSON_Delete(new_actual);
                 new_actual = parsed; parsed = NULL;
-                if (out_error[0]) snprintf(c->error, sizeof(c->error), "%s", out_error);
+                if (out_error[0]) snprintf(new_error, sizeof(new_error), "%s", out_error);
             } else {
                 health = WY_CFG_HEALTH_ERROR;
-                if (err[0]) snprintf(c->error, sizeof(c->error), "%s", err);
-                else snprintf(c->error, sizeof(c->error), "%s",
+                if (err[0]) snprintf(new_error, sizeof(new_error), "%s", err);
+                else snprintf(new_error, sizeof(new_error), "%s",
                               (good && out_error[0]) ? out_error : "apply failed");
             }
             free(s);
             cJSON_Delete(parsed);
         }
     } else {
-        snprintf(c->error, sizeof(c->error),
+        snprintf(new_error, sizeof(new_error),
                  "desired state is staged; no hardware adapter is installed");
     }
 
@@ -641,7 +661,15 @@ int wy_config_step(wy_config *c, const char *desired_json, char *report_out, siz
             }
         }
     }
-    if (!persist(c, generation, new_desired, health, pending, pending_count)) {
+    /* The identity that would become durable on commit. A device seeded without an id
+     * (an embedding that does not give wy_config_init a valid id, so the plane
+     * self-identifies from the first accepted frame) adopts the event's device_id ONLY
+     * when the commit is durable -- never before, so a rejected frame cannot pin it. A
+     * seeded device (the shipped path) always carries its own id and this passes it
+     * straight through. */
+    const char *commit_id = c->has_device_id ? c->device_id : new_id;
+    if (!persist(c, generation, new_desired, health, new_error, commit_id,
+                 pending, pending_count)) {
         cJSON_Delete(new_desired);
         cJSON_Delete(new_actual);
         int rc = report_json(c, report_out, report_cap, WY_CFG_HEALTH_ERROR,
@@ -649,12 +677,22 @@ int wy_config_step(wy_config *c, const char *desired_json, char *report_out, siz
         cJSON_Delete(desired);
         return rc ? WY_OK : WY_INVALID;
     }
+    /* -- commit: the persist is durable, so the stored state now changes -- including the
+     * fields that only become durable here: the error (built in new_error above, never
+     * written to c->error before the commit) and the identity (adopted on commit, not on
+     * the guard). Until this point a failed step left the stored state byte-for-byte
+     * intact: generation, health, desired, error, and identity all still the durable ones. */
     cJSON_Delete(c->desired);
     cJSON_Delete(c->actual);
     c->desired = new_desired;
     c->actual = new_actual;
     c->generation = generation;
     c->health = health;
+    snprintf(c->error, sizeof(c->error), "%s", new_error);
+    if (!c->has_device_id) {
+        snprintf(c->device_id, sizeof(c->device_id), "%s", new_id);
+        c->has_device_id = 1;
+    }
     c->pending_count = pending_count;
     for (int i = 0; i < pending_count; ++i)
         snprintf(c->pending[i], sizeof(c->pending[0]), "%s", pending[i]);

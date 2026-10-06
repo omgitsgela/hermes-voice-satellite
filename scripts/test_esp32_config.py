@@ -439,6 +439,95 @@ class ConfigAgentTests(unittest.TestCase):
         self.assertEqual(redelivered['actual'], {'playback_volume': 55})
         self.assertEqual(redelivered['health'], 'healthy')
 
+    def test_persist_failure_leaves_stored_state_untouched(self):
+        """A failed persist must leave the STORED state untouched -- every field that is
+        durable, including c->error (it is persisted in the blob and restored on reboot).
+        The apply section used to write c->error in RAM before the commit (it is cleared at
+        the top of the apply and set from the adapter result), so a persist failure left the
+        RAM a mix: the NEW/cleared error with the OLD generation/health/desired. The RAM
+        then DIVERGED from the durable blob: a current-state read on the same session
+        (e.g. an older-generation event, which re-reports the stored state) returned the
+        mutated RAM error while the blob still carried the durable one, and a reboot would
+        restore yet another value. The invariant: after a failed step, the RAM still equals
+        the durable state, so a current-state read agrees with what restore will bring back.
+        Proven on the SAME session: the durable error must survive the failed persist into
+        the next current-state read."""
+        lib = self.library()
+        # Phase 1 (durable baseline, gen 2): no adapter -> degraded, error "staged; no
+        # hardware adapter installed", committed twice so the stored state is gen 2.
+        st1, save1, load1 = self.new_storage()
+        session = self.new(lib, with_adapter=False)
+        self.with_storage(lib, session, st1, save1, load1)
+        self.step(lib, session, self.desired(1, {'playback_volume': 55}))
+        second = self.step(lib, session, self.desired(2, {'playback_volume': 55}))
+        self.assertEqual(second['health'], 'degraded')
+        self.assertIn('staged', second['error'])
+        self.assertEqual(second['generation'], 2, 'the baseline must reach generation 2')
+        # Phase 2 (the failed commit): a fresh session restores the durable gen-2 state
+        # (actual is NULL, not persisted); storage now FAILS once. A healthy-mode adapter
+        # applies the value, so the apply SUCCEEDS and clears the staged error in RAM -- but
+        # the persist fails, so the commit is refused and the generation does not advance.
+        st2, save2, load2 = self.new_storage(blob=bytes(st1['blob']), fail_first=1)
+        session = self.new(lib, calls=[0], mode='healthy')
+        self.with_storage(lib, session, st2, save2, load2)
+        failed = self.step(lib, session, self.desired(2, {'playback_volume': 55}))
+        self.assertEqual(failed['health'], 'error')
+        self.assertIn('persist', failed['error'].lower())
+        # Phase 3 (the probe, SAME session): an older-generation event re-reports the stored
+        # state and reads c->error from RAM. The durable (staged) error must still be there --
+        # the failed persist must not have let the cleared RAM error become the reported state.
+        current = self.step(lib, session, self.desired(1, {'playback_volume': 55}))
+        self.assertEqual(current['generation'], 2,
+                         'the stored generation must not have advanced (persist failed)')
+        self.assertIsNotNone(current['error'],
+                             'the stored (durable) error must survive the failed persist in '
+                             'RAM; a cleared/None error means the apply section mutated '
+                             'c->error before the commit')
+        self.assertIn('staged', current['error'],
+                      'a failed persist must leave the stored error in RAM untouched; the '
+                      'apply section clearing c->error before the commit leaks the mutated '
+                      'value into the current-state report')
+        # And the unspent generation still converges once storage recovers (a fresh session
+        # re-dispatching the same gen-2 payload applies and persists it).
+        st3, save3, load3 = self.new_storage(blob=bytes(st1['blob']))
+        session3 = self.new(lib, calls=[0], mode='healthy')
+        self.with_storage(lib, session3, st3, save3, load3)
+        landed = self.step(lib, session3, self.desired(2, {'playback_volume': 55}))
+        self.assertEqual(landed['generation'], 2)
+        self.assertEqual(landed['actual'], {'playback_volume': 55})
+        self.assertEqual(landed['health'], 'healthy')
+
+    def test_rejected_frame_does_not_bind_the_device_identity(self):
+        """Identity binding follows the reference (adopt-on-commit): a device that starts
+        without a stored identity (wy_config_init with no valid id) adopts the event's
+        device_id only when the event is ACCEPTED and committed. The C agent adopted it as
+        soon as the guard passed -- BEFORE validate_settings could reject -- so a REJECTED
+        frame still pinned the identity, and every later well-formed frame addressed to
+        the real device was then refused as "belongs to another device": one bad frame
+        wedged the device's whole life (the guard re-reads the adopted id on every step).
+        The reference (pi/config_agent.py) binds the identity in the committing
+        state.update only, so a rejected frame never binds. Invariant: a frame that is
+        rejected must not bind the identity; the next well-formed frame still lands."""
+        lib = self.library()
+        # A device with no stored identity (the embedding seeds it from the event).
+        session = self.new(lib, device_id=b'')
+        calls = [0]
+        self._install_adapter(lib, session, calls, 'degraded')
+        # A REJECTED frame (an unknown setting) addressed to some id.
+        bad = self.step(lib, session,
+                        self.desired(1, {'no_such_setting': 5}, device_id='evil-pin'))
+        self.assertEqual(bad['health'], 'error')
+        self.assertIn('unknown', bad['error'])
+        # The identity must NOT have been bound by the rejected frame: a later well-formed
+        # frame addressed to the real device must apply, not be refused as another device's.
+        good = self.step(lib, session,
+                         self.desired(2, {'playback_volume': 55}, device_id='real-device'))
+        self.assertEqual(good['generation'], 2,
+                         'a rejected frame must not bind the identity; the next well-formed '
+                         'frame must not be refused as another device\'s')
+        self.assertEqual(good['health'], 'degraded')
+        self.assertEqual(good['actual'], {'playback_volume': 55})
+
     def test_fractional_or_huge_generation_is_rejected(self):
         """The generation must be a POSITIVE INTEGER within the platform's long. A fraction
         (1.5) is not an integer -- the reference requires isinstance(int) -- and a value that
@@ -790,13 +879,15 @@ for n in range(1, nmax + 1):
 
     def test_successful_report_always_has_the_actual_field(self):
         """report_json() builds the report through unchecked cJSON_AddItemToObject calls: on
-        a key-strdup allocation failure the 'actual' item is unattached and caller-owned, so
-        the printed report is {generation, health, error} -- the contract's exact shape
-        (item 3: always {generation, actual, health, error}) is broken ON THE WIRE -- while
-        report_json returns success and wy_config_step returns WY_OK, so the session sends
-        the malformed report. Invariant (N-independent): every successful (WY_OK) report
-        carries every field the contract requires, in particular 'actual'. The RED window on
-        the unfixed code is the 'actual' add (a report missing the field, exit ok)."""
+        a key-strdup allocation failure the item is unattached and caller-owned, so the
+        printed report drops that field -- the contract's exact shape (item 3: always exactly
+        {generation, actual, health, error}) is broken ON THE WIRE -- while report_json
+        returns success and wy_config_step returns WY_OK, so the session sends the malformed
+        report (the host logs and drops a report missing a required field). Invariant
+        (N-independent): every successful (WY_OK) report is EXACTLY the four contract fields
+        -- generation, actual, health, error, and nothing else. The RED window on the
+        unfixed code is any of the field adds (a report missing that field, exit ok); the
+        exact-set check also pins the shape against future fields sneaking in."""
         lib = self.library()
         payload = json.dumps(self.desired(1, {'playback_volume': 55})).encode('utf-8')
         saw_success = False
@@ -811,8 +902,10 @@ for n in range(1, nmax + 1):
                           'success' % n)
             self.assertIn('generation', data, 'a WY_OK report must carry generation (n=%d)' % n)
             self.assertIn('health', data, 'a WY_OK report must carry health (n=%d)' % n)
-            self.assertNotIn('schema_version', data,
-                             'the report must not carry schema_version (n=%d)' % n)
+            self.assertIn('error', data, 'a WY_OK report must carry the error field (n=%d)' % n)
+            self.assertEqual(set(data), {'generation', 'actual', 'health', 'error'},
+                             'a WY_OK report must be exactly the contract shape, '
+                             'no extra keys (n=%d): %s' % (n, sorted(data)))
         self.assertTrue(saw_success, 'the sweep must include at least one successful report')
 
 
