@@ -214,7 +214,9 @@ void audio_capture_stop(void) {
 bool audio_capture_wait_writer_idle(void) {
     SemaphoreHandle_t lock = capture.writer_lock;
     if (!lock) return true;   /* no lock installed: nothing is being serialized, nothing to wait */
-    for (int waited = 0; waited < 400; ++waited) {   /* 400 x 5 ms = 2 s, bounded */
+    /* 400 x one tick, bounded (1 tick at CONFIG_FREERTOS_HZ=100 is 10 ms, so the bound is up to
+     * 4 s; the cap_delay_ms floor is what makes the wait real at all). */
+    for (int waited = 0; waited < 400; ++waited) {
         if (xSemaphoreTake(lock, 0) == pdPASS) {
             xSemaphoreGive(lock);
             return true;
