@@ -47,6 +47,8 @@ class ModelBlobTests(unittest.TestCase):
         lib.wy_model_header_pack.restype = C.c_int
         lib.wy_model_header_parse.argtypes = [C.c_void_p, C.c_size_t, C.c_void_p]
         lib.wy_model_header_parse.restype = C.c_int
+        lib.wy_model_header_peek.argtypes = [C.c_void_p, C.c_size_t, C.c_void_p]
+        lib.wy_model_header_peek.restype = C.c_int
         return lib
 
     def header_struct(self, lib):
@@ -70,6 +72,14 @@ class ModelBlobTests(unittest.TestCase):
         buf = C.create_string_buffer(len(blob))
         C.memmove(buf, blob, len(blob))
         rc = lib.wy_model_header_parse(buf, len(blob), C.byref(h))
+        return rc, h
+
+    def peek(self, lib, header_bytes):
+        H = self.header_struct(lib)
+        h = H()
+        buf = C.create_string_buffer(len(header_bytes))
+        C.memmove(buf, header_bytes, len(header_bytes))
+        rc = lib.wy_model_header_peek(buf, len(header_bytes), C.byref(h))
         return rc, h
 
     def good_blob(self, name=b'hey_hermes', data_len=2048, sha=None,
@@ -138,6 +148,45 @@ class ModelBlobTests(unittest.TestCase):
         self.assertEqual(h.name, b'hey_hermes')
         self.assertEqual(h.data_len, 2048)
         self.assertEqual(bytes(h.sha256), bytes(range(SHA_LEN)))
+
+    def test_peek_reads_the_header_length_before_the_blob_exists(self):
+        """The device loader must learn a model's length BEFORE it reads the model bytes (to size
+        its buffer). peek reads the fixed header fields only and does NOT require the blob to hold
+        data_len bytes -- so a header-only buffer parses for any length. This is exactly where the
+        loader went wrong: it used wy_model_header_parse (which demands the whole blob) on a
+        header-only buffer, so every real model failed to parse and was silently discarded. peek
+        succeeds on the header alone; parse on that same header alone must still FAIL (that
+        whole-blob check is parse's job and is deliberately kept)."""
+        lib = self.library()
+        header = self.good_blob(data_len=2048)[:HEADER_SIZE]   # header only, no model bytes
+        rc, h = self.peek(lib, header)
+        self.assertEqual(rc, 0, 'peek must parse a header-only buffer for any length')
+        self.assertEqual(h.data_len, 2048)
+        self.assertEqual(h.name, b'hey_hermes')
+        # The authoritative whole-blob parse still rejects a header-only buffer (by design).
+        rc2, _ = self.parse(lib, header)
+        self.assertEqual(rc2, -1, 'parse keeps the whole-blob length check')
+
+    def test_peek_rejects_bad_fields_but_needs_no_blob(self):
+        """peek validates the fixed fields (magic, version, reserved, name) without needing the
+        model bytes: a header-only buffer with bad magic or an unterminated name is still
+        rejected, and a name longer than its 64-byte field cannot run past the header."""
+        lib = self.library()
+        header = bytearray(self.good_blob(data_len=2048)[:HEADER_SIZE])
+        header[0:1] = b'X'                       # bad magic
+        rc, _ = self.peek(lib, bytes(header))
+        self.assertEqual(rc, -1)
+        header = bytearray(self.good_blob(data_len=2048)[:HEADER_SIZE])
+        struct.pack_into('<H', header, 4, 2)     # wrong version
+        rc, _ = self.peek(lib, bytes(header))
+        self.assertEqual(rc, -1)
+        header = bytearray(self.good_blob(data_len=2048)[:HEADER_SIZE])
+        header[8:8 + NAME_MAX] = b'x' * NAME_MAX # unterminated name
+        rc, _ = self.peek(lib, bytes(header))
+        self.assertEqual(rc, -1)
+        # Truncated below the header is rejected the same as parse.
+        rc, _ = self.peek(lib, self.good_blob(data_len=2048)[:HEADER_SIZE - 1])
+        self.assertEqual(rc, -1)
 
     def test_parse_rejects_bad_magic(self):
         lib = self.library()

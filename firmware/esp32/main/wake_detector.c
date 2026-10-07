@@ -113,11 +113,17 @@ static int model_load(void *user, const char *model_name, void **out_model, size
     const esp_partition_t *part =
         esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "model");
     if (part && part->size >= WY_MODEL_HEADER_SIZE) {
-        /* Read the header first to learn the model's real length before allocating. */
+        /* Read the header first to learn the model's real length before allocating. This is a
+         * header-ONLY read, so it must go through wy_model_header_peek (fixed fields, no
+         * whole-blob length check) -- NOT wy_model_header_parse, whose "does the blob hold
+         * data_len bytes" check can never pass against a buffer holding only the header. Using
+         * parse here made the entire real-model branch unreachable and silently discarded every
+         * valid provisioned model. The authoritative whole-blob parse happens below on the full
+         * read, where that length check is exactly right. */
         uint8_t header_buf[WY_MODEL_HEADER_SIZE];
         if (esp_partition_read(part, 0, header_buf, sizeof(header_buf)) == ESP_OK) {
             wy_model_header header;
-            if (wy_model_header_parse(header_buf, sizeof(header_buf), &header) == 0 &&
+            if (wy_model_header_peek(header_buf, sizeof(header_buf), &header) == 0 &&
                 header.data_len > 0 &&
                 (uint64_t)WY_MODEL_HEADER_SIZE + header.data_len <= part->size &&
                 model_name && strcmp(header.name, model_name) == 0) {

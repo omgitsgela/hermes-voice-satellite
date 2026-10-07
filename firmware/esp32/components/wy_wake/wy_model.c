@@ -38,39 +38,51 @@ int wy_model_header_pack(const char *name, uint32_t data_len,
     return 0;
 }
 
-int wy_model_header_parse(const uint8_t *blob, size_t blob_len, wy_model_header *out)
+int wy_model_header_peek(const uint8_t *header, size_t header_len, wy_model_header *out)
 {
     uint32_t magic;
     uint16_t version, reserved;
     uint32_t data_len;
     size_t name_len;
-    if (blob == NULL || out == NULL || blob_len < WY_MODEL_HEADER_SIZE)
+    if (header == NULL || out == NULL || header_len < WY_MODEL_HEADER_SIZE)
         return -1;
-    memcpy(&magic, blob + 0, 4);
+    memcpy(&magic, header + 0, 4);
     if (magic != WY_MODEL_MAGIC)
         return -1;
-    memcpy(&version, blob + 4, 2);
+    memcpy(&version, header + 4, 2);
     if (version != WY_MODEL_VERSION)
         return -1;
-    memcpy(&reserved, blob + 6, 2);
+    memcpy(&reserved, header + 6, 2);
     if (reserved != 0)
         return -1;   /* unknown fields must stay zero */
     /* The name is NUL-terminated WITHIN its 64 bytes; a full field of
      * non-NULs would make a strlen run past the blob. */
     for (name_len = 0; name_len < WY_MODEL_NAME_MAX; name_len++)
-        if (blob[8 + name_len] == 0)
+        if (header[8 + name_len] == 0)
             break;
     if (name_len == WY_MODEL_NAME_MAX)
         return -1;
-    memcpy(&data_len, blob + 72, 4);
-    if (blob_len - WY_MODEL_HEADER_SIZE < data_len)
-        return -1;   /* the blob does not hold what the header claims */
+    memcpy(&data_len, header + 72, 4);
     out->magic = magic;
     out->version = version;
     out->reserved = reserved;
-    memcpy(out->name, blob + 8, name_len + 1u);
+    memcpy(out->name, header + 8, name_len + 1u);
     memset(out->name + name_len + 1u, 0, WY_MODEL_NAME_MAX - (name_len + 1u));
     out->data_len = data_len;
-    memcpy(out->sha256, blob + 76, WY_MODEL_SHA256_LEN);
+    memcpy(out->sha256, header + 76, WY_MODEL_SHA256_LEN);
+    return 0;
+}
+
+int wy_model_header_parse(const uint8_t *blob, size_t blob_len, wy_model_header *out)
+{
+    if (blob == NULL || out == NULL || blob_len < WY_MODEL_HEADER_SIZE)
+        return -1;
+    /* Fixed fields first (the same checks peek does) ... */
+    if (wy_model_header_peek(blob, blob_len, out) != 0)
+        return -1;
+    /* ... then the whole-blob length check that only a full read can make:
+     * the blob must actually hold the data the header claims. */
+    if (blob_len - WY_MODEL_HEADER_SIZE < out->data_len)
+        return -1;   /* the blob does not hold what the header claims */
     return 0;
 }

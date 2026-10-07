@@ -52,12 +52,21 @@ int wy_model_header_pack(const char *name, uint32_t data_len,
                          const uint8_t sha256[WY_MODEL_SHA256_LEN],
                          uint8_t *out, size_t cap, size_t *out_len);
 
+/* Read just the fixed-size header fields from a header-only buffer (no model bytes needed).
+ * Returns 0 on success with *out filled, -1 on a bad magic/version/reserved or an unterminated
+ * name. Unlike wy_model_header_parse this does NOT check that the buffer holds data_len model
+ * bytes -- a peek is exactly the "I have the header, tell me the length" read the device loader
+ * does first (to size its buffer) before the full read + authoritative parse. A data_len of 0
+ * is NOT rejected here (that is a caller policy); it is left to the caller. */
+int wy_model_header_peek(const uint8_t *header, size_t header_len, wy_model_header *out);
+
 /* Parse and validate the header of a blob read from the partition. Returns 0
  * on success with *out filled, -1 (with *out untouched) when the blob is
  * truncated, the magic or version is wrong, the name is not terminated, or
  * data_len claims more bytes than the blob holds (a length that exactly fills
  * the blob is valid). The model bytes themselves are NOT touched: the caller
- * owns validating their hash. */
+ * owns validating their hash. This is the whole-blob check; use
+ * wy_model_header_peek for a header-only first read. */
 int wy_model_header_parse(const uint8_t *blob, size_t blob_len, wy_model_header *out);
 
 #endif
