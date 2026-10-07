@@ -36,6 +36,7 @@ DO_PROVISION=0
 DRY_RUN=0
 TLS_MANIFEST=""
 MODEL_FILE=""
+MODEL_URL=""
 MODEL_NAME="hey_hermes"
 WIFI_SSID=""
 WIFI_PSK_FILE=""
@@ -77,6 +78,7 @@ while [ $# -gt 0 ]; do
         --bundle-dir) BUNDLE_DIR="${2:-}"; shift ;;
         --tls-manifest) TLS_MANIFEST="${2:-}"; shift ;;
         --model)     MODEL_FILE="${2:-}"; shift ;;
+        --download-model) MODEL_URL="${2:-}"; shift ;;
         --model-name) MODEL_NAME="${2:-}"; shift ;;
         --wifi-ssid) WIFI_SSID="${2:-}"; shift ;;
         --wifi-psk-file) WIFI_PSK_FILE="${2:-}"; shift ;;
@@ -137,6 +139,19 @@ if [ "$DO_PROVISION" = 1 ]; then
         run python3 "$REPO_ROOT/scripts/provision-device-tls.py" --port "$PORT" --manifest "$TLS_MANIFEST"
     fi
     if [ -n "$MODEL_FILE" ]; then
+        # The wake-model choice: --model is a local file the user already has; --download-model
+        # fetches whatever model they can get (a community microwakeword model for testing, our
+        # own hey_hermes later) from its URL. The bytes land in a temp file the provisioning
+        # helper reads -- nothing model-related travels through argv.
+        if [ -n "$MODEL_URL" ]; then
+            MODEL_FILE="$(mktemp "${TMPDIR:-/tmp}/wy_model.XXXXXX.tflite")"
+            echo "   fetching wake model: $MODEL_URL"
+            [ "$DRY_RUN" = 1 ] || curl -fsSL -o "$MODEL_FILE" "$MODEL_URL" || die "model download failed: $MODEL_URL"
+            echo "   saved to $MODEL_FILE"
+            # The detection name defaults to the model's file stem (hey_hermes.tflite -> hey_hermes),
+            # which is exactly what the device reports as the wake word, matching the Pi.
+            [ -n "$MODEL_NAME" ] || MODEL_NAME="$(basename "$MODEL_FILE" | sed 's/\.tflite$//')"
+        fi
         [ "$DRY_RUN" = 1 ] || [ -f "$MODEL_FILE" ] || die "model file not found: $MODEL_FILE"
         run python3 "$REPO_ROOT/scripts/provision-device-model.py" --port "$PORT" \
             --model "$MODEL_FILE" --name "$MODEL_NAME"

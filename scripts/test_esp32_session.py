@@ -20,6 +20,12 @@ COMP = ROOT / 'firmware/esp32/components'
 IO = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_void_p, C.c_size_t)
 
 
+class Identity(C.Structure):
+    """The ctypes mirror of wy_session_identity (the device identity the glue sets)."""
+    _fields_ = [('name', C.c_char_p), ('area', C.c_char_p),
+                ('firmware_version', C.c_char_p), ('wake_name', C.c_char_p)]
+
+
 class SessionTests(unittest.TestCase):
     def library(self):
         self.assertTrue((COMP / 'wyoming_session/wyoming_session.c').exists(), 'session core missing')
@@ -46,6 +52,8 @@ class SessionTests(unittest.TestCase):
         lib.wy_session_playback_read.restype = C.c_size_t
         lib.wy_session_local_play.argtypes = [C.c_void_p, C.c_void_p, C.c_size_t]
         lib.wy_session_local_play.restype = C.c_int
+        lib.wy_session_set_identity.argtypes = [C.c_void_p, C.POINTER(Identity)]
+        lib.wy_session_set_identity.restype = None
         return lib
 
     def test_registration_is_not_arming(self):
@@ -89,6 +97,80 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(registration.data['device_id'], 'control-fixture')
         self.assertEqual(registration.data['capabilities'], ['microphone', 'speaker'])
         self.assertIsNone(read_event(output))
+
+    def test_identity_is_configurable_like_the_pi_env(self):
+        """The Pi reads name/area/firmware_version from env and reports the model name as the
+        detection name; the ESP32 reads them from NVS + the loaded model
+        (wy_session_set_identity) so the two variants report the same fields on the wire. This
+        pins that a configured identity flows into the describe/info and registration payloads,
+        and that it survives a reconnect the way the other installed-once config does."""
+        lib = self.library()
+        session = C.create_string_buffer(lib.wy_session_size())
+        self.assertEqual(lib.wy_session_init(session, b'control-fixture', b'boot-1'), 0)
+        # The identity the glue read from NVS + the loaded model's name.
+        identity = Identity(name=b'Kitchen', area=b'Kitchen',
+                            firmware_version=b'2.0.0', wake_name=b'hey_hermes')
+        lib.wy_session_set_identity(session, C.byref(identity))
+        source = io.BytesIO()
+        for event in [Event(type='describe'), Event(type='hermes.register.ok',
+                      data={'device_id': 'control-fixture', 'protocol_version': 1})]:
+            write_event(event, source)
+        source.seek(0)
+        output = io.BytesIO()
+
+        @IO
+        def reader(ctx, target, length):
+            chunk = source.read(min(3, length))
+            C.memmove(target, chunk, len(chunk))
+            return len(chunk)
+
+        @IO
+        def writer(ctx, target, length):
+            chunk = C.string_at(target, min(2, length))
+            output.write(chunk)
+            return len(chunk)
+
+        for expected in [1, 2]:
+            self.assertEqual(lib.wy_session_step(session, reader, writer, None), 0)
+            self.assertEqual(lib.wy_session_state(session), expected)
+        output.seek(0)
+        info = read_event(output)
+        registration = read_event(output)
+        assert info is not None and registration is not None
+        satellite = Info.from_event(info).satellite
+        assert satellite is not None
+        self.assertEqual(satellite.name, 'Kitchen', 'describe/info reports the configured name')
+        self.assertEqual(registration.data['name'], 'Kitchen')
+        self.assertEqual(registration.data['area'], 'Kitchen')
+        self.assertEqual(registration.data['firmware_version'], '2.0.0')
+
+        # A re-init (the supervisor does this per reconnect) must keep the identity, exactly as
+        # it keeps the writer-lock callbacks and the playback ring.
+        self.assertEqual(lib.wy_session_init(session, b'control-fixture', b'boot-2'), 0)
+        output2 = io.BytesIO()
+        source2 = io.BytesIO()
+        write_event(Event(type='describe'), source2)
+        source2.seek(0)
+
+        @IO
+        def reader2(ctx, target, length):
+            chunk = source2.read(min(3, length))
+            C.memmove(target, chunk, len(chunk))
+            return len(chunk)
+
+        @IO
+        def writer2(ctx, target, length):
+            chunk = C.string_at(target, min(2, length))
+            output2.write(chunk)
+            return len(chunk)
+
+        self.assertEqual(lib.wy_session_step(session, reader2, writer2, None), 0)
+        output2.seek(0)
+        info2 = read_event(output2)
+        assert info2 is not None
+        satellite2 = Info.from_event(info2).satellite
+        assert satellite2 is not None
+        self.assertEqual(satellite2.name, 'Kitchen', 'the identity survives a re-init')
 
     def test_capture_turn_streams_mic_audio_and_stops_on_transcript(self):
         """The documented voice loop, device side: run-satellite arms the microphone, the local
@@ -291,6 +373,10 @@ class SessionTests(unittest.TestCase):
         class WYSession(C.Structure):
             _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
                         ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
+                        ('name', C.c_char * 65),
+                        ('area', C.c_char * 65),
+                        ('firmware_version', C.c_char * 33),
+                        ('wake_name', C.c_char * 65),
                         ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
                         ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
                         ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
@@ -339,6 +425,10 @@ class SessionTests(unittest.TestCase):
         class WYSession(C.Structure):
             _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
                         ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
+                        ('name', C.c_char * 65),
+                        ('area', C.c_char * 65),
+                        ('firmware_version', C.c_char * 33),
+                        ('wake_name', C.c_char * 65),
                         ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
                         ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
                         ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
@@ -417,6 +507,10 @@ class SessionTests(unittest.TestCase):
         class WYSession(C.Structure):
             _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
                         ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
+                        ('name', C.c_char * 65),
+                        ('area', C.c_char * 65),
+                        ('firmware_version', C.c_char * 33),
+                        ('wake_name', C.c_char * 65),
                         ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
                         ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
                         ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
@@ -464,6 +558,10 @@ class SessionTests(unittest.TestCase):
         class WYSession(C.Structure):
             _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
                         ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
+                        ('name', C.c_char * 65),
+                        ('area', C.c_char * 65),
+                        ('firmware_version', C.c_char * 33),
+                        ('wake_name', C.c_char * 65),
                         ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
                         ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
                         ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
@@ -1071,6 +1169,10 @@ class SessionTests(unittest.TestCase):
         class WYSession(C.Structure):
             _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
                         ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
+                        ('name', C.c_char * 65),
+                        ('area', C.c_char * 65),
+                        ('firmware_version', C.c_char * 33),
+                        ('wake_name', C.c_char * 65),
                         ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
                         ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
                         ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),

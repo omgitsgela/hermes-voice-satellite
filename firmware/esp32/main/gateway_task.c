@@ -414,6 +414,36 @@ static void gateway_task_fn(void *argument) {
     vTaskDelete(NULL);
 }
 
+/* Read one string from the hermes_cfg namespace, or empty when it was never staged. The Pi
+ * reads its identity from env (VOICE_DEVICE_NAME / VOICE_DEVICE_AREA / VOICE_FIRMWARE_VERSION);
+ * the ESP32 reads the same three from NVS so the two variants report the same fields on the
+ * wire. A staging failure or an absent key is an empty value, never a guess. */
+static void nvs_read_str(const char *key, char *out, size_t cap) {
+    if (!out || cap == 0) return;
+    out[0] = 0;
+    nvs_handle_t handle;
+    if (nvs_open("hermes_cfg", NVS_READONLY, &handle) != ESP_OK) return;
+    size_t len = cap;
+    if (nvs_get_str(handle, key, out, &len) != ESP_OK) out[0] = 0;
+    nvs_close(handle);
+}
+
+/* Install the device identity on the session: the name / area / firmware_version the bridge
+ * and the house know it by, and the detection name (the LOADED MODEL's name, which is what
+ * makes the two satellite variants report the same wake word -- the Pi reports whatever model
+ * it loaded). Empty values fall back to the session's own defaults. */
+static void gateway_task_set_identity(wy_session *session) {
+    char name[65], area[65], firmware_version[33], wake_word[65];
+    nvs_read_str("device_name", name, sizeof(name));
+    nvs_read_str("device_area", area, sizeof(area));
+    nvs_read_str("firmware_version", firmware_version, sizeof(firmware_version));
+    /* The detection name IS the model name: wake_word is the model selector (the model file's
+     * stem, e.g. hey_hermes), and the detection event reports that same name. */
+    nvs_read_str("wake_word", wake_word, sizeof(wake_word));
+    wy_session_identity identity = { name, area, firmware_version, wake_word };
+    wy_session_set_identity(session, &identity);
+}
+
 int gateway_task_start(const char *host, unsigned port, int transport,
                        const char *ssid, const char *psk, char *report, size_t capacity) {
     if (active) return -1;  /* one gateway session at a time */
@@ -441,6 +471,12 @@ int gateway_task_start(const char *host, unsigned port, int transport,
                                 gateway_task_on_registered, gateway_task_on_link_down) != 0) {
         return -1;
     }
+
+    /* The identity (name / area / firmware_version / detection name) is installed-once config
+     * the session reports in its registration, describe/info and wake sequences. It is set
+     * here, once, right after the session exists; it survives the supervisor's per-link
+     * re-init exactly like the writer-lock callbacks and the playback ring. */
+    gateway_task_set_identity((wy_session *)gateway_supervisor_session(&supervisor));
 
     /* The playback ring is a device-lifetime PSRAM buffer: the bridge's answers convert into it
      * and the pump reads it at realtime. It is owned here (the file-static playback_ring), not

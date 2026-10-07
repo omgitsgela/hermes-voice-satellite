@@ -11,16 +11,35 @@ enum { WY_REFUSED = -4 };
 /* The wake word name this device reports in the detection event. The local wake detector
  * (the device glue) and the bridge's wake-now both report this SAME name, so the bridge's
  * capture path sees one wake word whether it was heard locally or requested over the link.
- * It is deliberately DISTINCT from the config-plane wake_word (the model SELECTOR, e.g.
- * "hey_hermes"): the model is chosen by what it was trained to hear, the detection event is
- * what the pipeline is told. One each, two different strings (the plan's D5). */
+ * It is the DEFAULT detection name: the glue may override it per device with the model's own
+ * name (the config-plane wake_word) via wy_session_set_identity, which is what makes the two
+ * satellite variants report the same name on the wire -- the Pi reports whatever model it
+ * loaded, so the ESP32 reports its model name too. The model file is named by the config
+ * wake_word (e.g. hey_hermes); the detection event reports that same model name. */
 #define WYAKE_WORD_NAME "hey-hermes"
+
+/* The device's identity as the bridge and the house know it: the same fields the Pi reads from
+ * env (VOICE_DEVICE_NAME / VOICE_DEVICE_AREA / VOICE_FIRMWARE_VERSION) and the model name it
+ * reports as the detection name. Set once by the device glue (from NVS + the loaded model);
+ * the session core keeps them across re-init and uses them in its registration, describe/info
+ * and wake sequences. A caller that never sets them keeps the historical defaults. */
+typedef struct {
+    const char *name;             /* the satellite's name (the Pi's VOICE_DEVICE_NAME) */
+    const char *area;             /* the room/area (the Pi's VOICE_DEVICE_AREA) */
+    const char *firmware_version; /* (the Pi's VOICE_FIRMWARE_VERSION) */
+    const char *wake_name;        /* the detection name: the model name / config wake_word */
+} wy_session_identity;
+
 typedef struct {
     int state;
     int streaming;        /* 1 while the mic stream is being forwarded to the bridge */
     int paused;           /* 1 after pause-satellite; run-satellite clears it */
     char device_id[65];
     char boot_id[129];
+    char name[65];             /* the identity (wy_session_set_identity); empty = default */
+    char area[65];
+    char firmware_version[33];
+    char wake_name[65];        /* the detection name; empty = WYAKE_WORD_NAME */
     char header[WY_HEADER_MAX];
     char body[WY_DATA_MAX + 1];
     /* Every byte the device puts on the link goes through the writer lock, because more than
@@ -58,6 +77,12 @@ typedef struct {
 } wy_session;
 size_t wy_session_size(void);
 int wy_session_init(wy_session *session, const char *device_id, const char *boot_id);
+/* Set the device identity (name / area / firmware_version / detection name) that the
+ * registration, describe/info and wake sequences report. The glue calls it once with the values
+ * it read from NVS and the loaded model's name (the detection name is the model name, which is
+ * what makes the two satellite variants report the same wake word on the wire). NULL or empty
+ * fields fall back to the historical defaults, and the values survive a per-link re-init. */
+void wy_session_set_identity(wy_session *session, const wy_session_identity *identity);
 int wy_session_state(const wy_session *session);
 /* Read exactly one inbound event. One owner (the gateway task); callbacks impose finite
  * deadlines. Close the transport on every non-OK result; init a fresh session on reconnect.

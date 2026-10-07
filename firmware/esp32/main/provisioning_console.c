@@ -40,6 +40,20 @@ static int load_endpoint(void *ctx, char *value, size_t capacity) {
     return result == ESP_OK ? 0 : -1;
 }
 
+/* The device identity fields (the Pi reads these from env: VOICE_DEVICE_NAME /
+ * VOICE_DEVICE_AREA / VOICE_FIRMWARE_VERSION). Staged to the hermes_cfg namespace so the
+ * registration and describe/info report the real name, area and firmware version instead of
+ * the placeholders. A failure is reported as ERR STORAGE, never silently dropped. */
+static int save_identity_field(void *ctx, const char *key, const char *value) {
+    if (!*(bool *)ctx) return -1;
+    nvs_handle_t handle;
+    if (nvs_open("hermes_cfg", NVS_READWRITE, &handle) != ESP_OK) return -1;
+    esp_err_t result = nvs_set_str(handle, key, value);
+    if (result == ESP_OK) result = nvs_commit(handle);
+    nvs_close(handle);
+    return result == ESP_OK ? 0 : -1;
+}
+
 static int save_wifi_ssid(void *ctx, const char *value) {
     if (!*(bool *)ctx) return -1;
     nvs_handle_t handle;
@@ -713,6 +727,21 @@ void provisioning_console_run(void) {
                     wake_detector_status(status, sizeof(status));
                     snprintf(response, sizeof(response), "OK WAKE %s", status);
                 }
+            } else if (!strncmp(line.data, "SET_NAME ", 9) ||
+                       !strncmp(line.data, "SET_AREA ", 9) ||
+                       !strncmp(line.data, "SET_FIRMWARE_VERSION ", 22)) {
+                /* The device identity the bridge and the house know it by. The name and area are
+                 * what describe/info and the registration report; firmware_version is the build
+                 * label. Staged to NVS like the Wi-Fi profile, so a re-flash keeps them. */
+                const char *key = !strncmp(line.data, "SET_NAME ", 9) ? "device_name"
+                                 : !strncmp(line.data, "SET_AREA ", 9) ? "device_area"
+                                 : "firmware_version";
+                const char *value = strchr(line.data, ' ');
+                value = value ? value + 1 : "";
+                if (save_identity_field(&storage_ready, key, value) == 0)
+                    snprintf(response, sizeof(response), "OK SAVED STAGED");
+                else
+                    snprintf(response, sizeof(response), "ERR STORAGE");
             } else if (!strncmp(line.data, "SET_WIFI", 8) || !strcmp(line.data, "CLEAR_WIFI") ||
                        !strcmp(line.data, "WIFI_STATUS") ||
                        !strcmp(line.data, "WIFI_PROFILE_SAVE") ||

@@ -13,6 +13,24 @@
  * it was heard or requested. It is the DETECTION name, distinct from the config-plane
  * wake_word (the model selector) -- see the plan's D5. */
 
+/* The device identity (wy_session_set_identity) with its historical defaults: a device whose
+ * glue never set a field reports exactly what it always has, and a configured one reports its
+ * own name / area / firmware version / detection name. The detection name defaults to
+ * WYAKE_WORD_NAME; the glue overrides it with the model's name so the two satellite variants
+ * report the same wake word on the wire. */
+static const char *session_name(const wy_session *s) {
+    return s->name[0] ? s->name : "ESP32 control probe";
+}
+static const char *session_area(const wy_session *s) {
+    return s->area[0] ? s->area : "";
+}
+static const char *session_firmware(const wy_session *s) {
+    return s->firmware_version[0] ? s->firmware_version : "esp32-audio-1";
+}
+static const char *session_wake_name(const wy_session *s) {
+    return s->wake_name[0] ? s->wake_name : WYAKE_WORD_NAME;
+}
+
 /* Playback conversion scratch, sized for the largest slice wy_session_step reads in one go
  * (the 4096-byte body, 2048 mono samples). 2048 input samples resample to at most ~1483 mono
  * samples and 2966 stereo-32 frames, so these hold any slice with margin. File-static (not
@@ -273,6 +291,13 @@ int wy_session_init(wy_session *session, const char *device_id, const char *boot
      * agent's durable state -- the generation guard -- would be orphaned along with it). */
     int (*config_handler)(void *, const char *, char *, size_t) = session->config_handler;
     void *config_user = session->config_user;
+    /* The device identity is the same kind of installed-once config: a reconnect must not
+     * forget the satellite's name, area, firmware version or detection name. */
+    char name[65], area[65], firmware_version[33], wake_name[65];
+    memcpy(name, session->name, sizeof(name));
+    memcpy(area, session->area, sizeof(area));
+    memcpy(firmware_version, session->firmware_version, sizeof(firmware_version));
+    memcpy(wake_name, session->wake_name, sizeof(wake_name));
     memset(session, 0, sizeof(*session));
     session->lock_writer = lock_writer;
     session->unlock_writer = unlock_writer;
@@ -282,12 +307,32 @@ int wy_session_init(wy_session *session, const char *device_id, const char *boot
     session->playback_volume = playback_volume;
     session->config_handler = config_handler;
     session->config_user = config_user;
+    memcpy(session->name, name, sizeof(name));
+    memcpy(session->area, area, sizeof(area));
+    memcpy(session->firmware_version, firmware_version, sizeof(firmware_version));
+    memcpy(session->wake_name, wake_name, sizeof(wake_name));
     session->state = WY_SESSION_FAILED;
     if (!token_valid(device_id, 64) || !token_valid(boot_id, 128)) return WY_INVALID;
     strcpy(session->device_id, device_id);
     strcpy(session->boot_id, boot_id);
     session->state = WY_SESSION_DESCRIBE;
     return WY_OK;
+}
+
+void wy_session_set_identity(wy_session *session, const wy_session_identity *identity) {
+    if (!session || !identity) return;
+    /* A NULL or empty field keeps the historical default (see the payload builders): the glue
+     * passes what it read from NVS, and an unset setting stays the documented default rather
+     * than becoming an empty string on the wire. */
+    if (identity->name && identity->name[0])
+        snprintf(session->name, sizeof(session->name), "%s", identity->name);
+    if (identity->area && identity->area[0])
+        snprintf(session->area, sizeof(session->area), "%s", identity->area);
+    if (identity->firmware_version && identity->firmware_version[0])
+        snprintf(session->firmware_version, sizeof(session->firmware_version), "%s",
+                 identity->firmware_version);
+    if (identity->wake_name && identity->wake_name[0])
+        snprintf(session->wake_name, sizeof(session->wake_name), "%s", identity->wake_name);
 }
 
 int wy_session_set_config(wy_session *session,
@@ -441,20 +486,25 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
         }
     }
     if (!strcmp(frame.type, "describe")) {
-        result = locked_send(session, write_fn, ctx, "info",
-            "{\"satellite\":{\"name\":\"ESP32 control probe\",\"area\":\"\","
+        char info[768];
+        int info_len = snprintf(info, sizeof(info),
+            "{\"satellite\":{\"name\":\"%s\",\"area\":\"%s\","
             "\"installed\":true,\"attribution\":{\"name\":\"Hermes Voice Satellite\","
             "\"url\":\"https://github.com/omgitsgela/hermes-voice-satellite\"},"
             "\"active_wake_words\":[],\"max_active_wake_words\":0,\"supports_trigger\":false}}",
-            NULL, 0);
+            session_name(session), session_area(session));
+        if (info_len <= 0 || (size_t)info_len >= sizeof(info)) { result = WY_LIMIT; goto done; }
+        result = locked_send(session, write_fn, ctx, "info", info, NULL, 0);
         if (result) goto done;
         if (session->state == WY_SESSION_DESCRIBE) {
             char registration[512];
             int length = snprintf(registration, sizeof(registration),
                 "{\"device_id\":\"%s\",\"boot_id\":\"%s\",\"protocol_version\":1,"
-                "\"name\":\"ESP32 control probe\",\"area\":\"\","
-                "\"firmware_version\":\"esp32-audio-1\","
-                "\"capabilities\":[\"microphone\",\"speaker\"]}", session->device_id, session->boot_id);
+                "\"name\":\"%s\",\"area\":\"%s\","
+                "\"firmware_version\":\"%s\","
+                "\"capabilities\":[\"microphone\",\"speaker\"]}",
+                session->device_id, session->boot_id,
+                session_name(session), session_area(session), session_firmware(session));
             if (length <= 0 || (size_t)length >= sizeof(registration)) { result = WY_LIMIT; goto done; }
             result = locked_send(session, write_fn, ctx, "hermes.register", registration, NULL, 0);
             if (!result) session->state = WY_SESSION_ACK;
@@ -544,7 +594,7 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
          * device's wake word name. A wake-now that lands while the stream is already running or
          * the device is paused is dropped (wy_session_wake checks both), and one that arrives
          * before the host is ready fails the same way an out-of-order wake would. */
-        result = wy_session_wake(session, WYAKE_WORD_NAME, write_fn, ctx);
+        result = wy_session_wake(session, session_wake_name(session), write_fn, ctx);
         if (result == WY_INVALID) result = WY_OK;   /* a dropped wake-now is not a fault */
     } else if (!strcmp(frame.type, "hermes.config.desired")) {
         /* The bridge's declarative config dispatch, sent right after registration (and on
