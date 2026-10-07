@@ -188,6 +188,62 @@ class ModelBlobTests(unittest.TestCase):
         rc, _ = self.peek(lib, self.good_blob(data_len=2048)[:HEADER_SIZE - 1])
         self.assertEqual(rc, -1)
 
+    def test_parse_leaves_out_untouched_on_any_failure(self):
+        """wy_model_header_parse documents "-1 (with *out untouched)" on every failure. A caller
+        that parses the next blob into a struct still holding its last good header must not lose
+        that good header to a half-validated one. The whole-blob-length failure is the subtle one:
+        the fixed fields parse fine (peek fills a temp) but the blob does not hold data_len bytes,
+        so the parse must return -1 WITHOUT having written anything to *out. The pass-2 refactor
+        briefly regressed this by letting peek fill *out before the length check; this pins the
+        contract so it cannot regress again."""
+        lib = self.library()
+        H = self.header_struct(lib)
+        out = H()
+        # Sentinel header the caller wants preserved if the parse fails.
+        out.magic = 0xDEAD
+        out.version = 0xBEEF
+        out.reserved = 0xFEED
+        out.data_len = 0xCAFE
+        out.sha256[0] = 0x77
+
+        def assert_sentinels_intact():
+            self.assertEqual(out.magic, 0xDEAD, 'a failed parse wrote magic to *out')
+            self.assertEqual(out.version, 0xBEEF, 'a failed parse wrote version to *out')
+            self.assertEqual(out.reserved, 0xFEED, 'a failed parse wrote reserved to *out')
+            self.assertEqual(out.data_len, 0xCAFE, 'a failed parse wrote data_len to *out')
+            self.assertEqual(out.sha256[0], 0x77, 'a failed parse wrote sha256 to *out')
+
+        # Case 1: whole-blob-length failure (the regression) -- header claims 2048 bytes, blob
+        # holds only 100. Fixed fields are valid, so a naive peek-into-out leaks them into *out.
+        blob = self.good_blob(data_len=2048, model_bytes=bytes(100))
+        buf = C.create_string_buffer(len(blob))
+        C.memmove(buf, blob, len(blob))
+        self.assertEqual(lib.wy_model_header_parse(buf, len(blob), C.byref(out)), -1)
+        assert_sentinels_intact()
+
+        # Case 2: bad magic (fails before any field is worth keeping).
+        blob2 = bytearray(self.good_blob(data_len=16))
+        blob2[0:1] = b'X'
+        buf2 = C.create_string_buffer(len(blob2))
+        C.memmove(buf2, bytes(blob2), len(blob2))
+        self.assertEqual(lib.wy_model_header_parse(buf2, len(blob2), C.byref(out)), -1)
+        assert_sentinels_intact()
+
+        # Case 3: truncated below the header.
+        blob3 = self.good_blob(data_len=16)[:HEADER_SIZE - 1]
+        buf3 = C.create_string_buffer(len(blob3))
+        C.memmove(buf3, blob3, len(blob3))
+        self.assertEqual(lib.wy_model_header_parse(buf3, len(blob3), C.byref(out)), -1)
+        assert_sentinels_intact()
+
+        # Case 4: unterminated name.
+        blob4 = bytearray(self.good_blob(data_len=16))
+        blob4[8:8 + NAME_MAX] = b'x' * NAME_MAX
+        buf4 = C.create_string_buffer(len(blob4))
+        C.memmove(buf4, bytes(blob4), len(blob4))
+        self.assertEqual(lib.wy_model_header_parse(buf4, len(blob4), C.byref(out)), -1)
+        assert_sentinels_intact()
+
     def test_parse_rejects_bad_magic(self):
         lib = self.library()
         blob = bytearray(self.good_blob())

@@ -75,14 +75,19 @@ int wy_model_header_peek(const uint8_t *header, size_t header_len, wy_model_head
 
 int wy_model_header_parse(const uint8_t *blob, size_t blob_len, wy_model_header *out)
 {
+    wy_model_header tmp;
     if (blob == NULL || out == NULL || blob_len < WY_MODEL_HEADER_SIZE)
         return -1;
     /* Fixed fields first (the same checks peek does) ... */
-    if (wy_model_header_peek(blob, blob_len, out) != 0)
+    if (wy_model_header_peek(blob, blob_len, &tmp) != 0)
         return -1;
     /* ... then the whole-blob length check that only a full read can make:
      * the blob must actually hold the data the header claims. */
-    if (blob_len - WY_MODEL_HEADER_SIZE < out->data_len)
+    if (blob_len - WY_MODEL_HEADER_SIZE < tmp.data_len)
         return -1;   /* the blob does not hold what the header claims */
+    /* Commit to *out only once the WHOLE parse succeeded: the documented contract is -1 with
+     * *out untouched, so a caller still holding its last good header never loses it to a
+     * half-validated one. */
+    *out = tmp;
     return 0;
 }
