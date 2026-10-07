@@ -7,10 +7,20 @@
 #
 # nvs and phy_init keep their existing offsets, which means the staged credentials survive this
 # change and the application keeps its address: flashing a new table does not move or erase either.
+# The first four rows are byte-for-byte the table the firmware has always shipped with; the only
+# change in the increment 4 table is the new `model` row below, which fills the flash to its end.
+# A board already flashed with the old (four-row) table must be re-flashed with the table and the
+# firmware together, as one bundle.
 #
-# 8 MB of flash is fitted; this uses 6.1 MB and leaves the rest unallocated on purpose, so a later
-# decision (dual application slots for over-the-air updates, say) has somewhere to go without
-# disturbing anything above.
+# 8 MB of flash is fitted and this table uses all of it. The `model` data partition (0x1F0000,
+# 1.94 MB) is the home of the wake model and any other small assets: openWakeWord-class models run
+# roughly 1-2 MB, so it takes the whole remaining region. It is a raw read-only blob region, read
+# with esp_partition_read (the same discipline as the TLS credential store below) -- NOT a mounted
+# filesystem, so there is no format code, no garbage collection, and no filesystem header at
+# offset 0 to land on top of anything. The blob itself carries a header (magic, version, model
+# name, byte length, SHA-256) and is validated before it is trusted; a bad header or hash leaves
+# the detector in its no-model state rather than running a garbage scorer. scripts/provision-
+# device-model.py writes it.
 #
 # The first 8 KB of `storage` is claimed by the provisioned TLS material (CA, device certificate,
 # device key, and the pinned fingerprint of the bridge's certificate). It is written over the USB
@@ -23,3 +33,4 @@ nvs,        data, nvs,     0x9000,    0x6000,
 phy_init,   data, phy,     0xf000,    0x1000,
 factory,    app,  factory, 0x10000,   0x200000,
 storage,    data, spiffs,  0x210000,  0x400000,
+model,      data, spiffs,  0x610000,  0x1F0000,

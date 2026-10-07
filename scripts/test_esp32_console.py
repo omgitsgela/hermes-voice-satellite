@@ -355,6 +355,32 @@ int audio_bringup_run(char *out, size_t capacity) {
     return 0;
 }
 
+/* The wake detector (increment 4) is device glue (flash/NVS/mbedTLS). The console only records a
+ * force-fire request and formats a status line, so the stub stands in with known state: the
+ * console's WAKE_STATUS/WAKE_FIRE dispatch and framing are what the test checks, while the
+ * detector's own behaviour is proved by the wy_wake host tests, the integration test, and the
+ * firmware build + ELF symbols. */
+static int wake_force_fired;
+void wake_detector_force_fire(void) {
+    wake_force_fired += 1;
+    /* Persisted so a test can read it back through the runner's own env/record hook. */
+    const char *record = getenv("WAKE_FIRE_RECORD");
+    if (record) {
+        FILE *log = fopen(record, "w");
+        if (log) {
+            fprintf(log, "force_fire=%d\n", wake_force_fired);
+            fclose(log);
+        }
+    }
+}
+void wake_detector_status(char *out, size_t cap) {
+    if (out && cap > 0)
+        snprintf(out, cap, "model=%s deaf=%d force=%d threshold_armed=%d",
+                 getenv("WAKE_REAL_MODEL") ? "real" : "placeholder",
+                 getenv("WAKE_DEAF") ? 1 : 0,
+                 wake_force_fired > 0 ? 1 : 0, 1);
+}
+
 /* The socket leg: reports what it was asked to dial, so the console's routing and framing
  * are what the test checks rather than the network. */
 int gateway_tcp_run(const char *host, unsigned port, char *out, size_t capacity) {

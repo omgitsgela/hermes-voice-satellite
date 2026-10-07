@@ -8,10 +8,10 @@
 #include "freertos/semphr.h"
 #endif
 
-/* The wake word name this device reports. The local detector (a later increment) and the
- * bridge's wake-now both report the same name, so the bridge's capture path sees one wake
- * word whether it was heard or requested. */
-#define WY_WAKE_WORD_NAME "hey-hermes"
+/* The wake word name is WYAKE_WORD_NAME (wyoming_session.h): the local detector and the
+ * bridge's wake-now both report it, so the bridge's capture path sees one wake word whether
+ * it was heard or requested. It is the DETECTION name, distinct from the config-plane
+ * wake_word (the model selector) -- see the plan's D5. */
 
 /* Playback conversion scratch, sized for the largest slice wy_session_step reads in one go
  * (the 4096-byte body, 2048 mono samples). 2048 input samples resample to at most ~1483 mono
@@ -111,6 +111,37 @@ int wy_session_set_playback_volume(wy_session *session, int volume) {
     playback_ring_lock_take();
     session->playback_volume = volume;
     playback_ring_lock_give();
+    return WY_OK;
+}
+
+int wy_session_local_play(wy_session *session, const int16_t *mono, size_t n) {
+    if (!session || !mono) return WY_INVALID;
+    if (!session->ring || session->ring_capacity % 4) return WY_INVALID;   /* no ring: nowhere to go */
+    /* The device's own local tone (the wake chime): the same speaker path as a bridge answer,
+     * so the pump task's amplifier policy (armed while the ring is not empty) carries it. The
+     * difference from the inbound audio-chunk path is only the source: this is already at the
+     * board's 16 kHz (the chime is rendered at that rate), so there is no resample step -- but
+     * the volume (the config plane's level, the floor never silences) and the stereo-32 expand
+     * are the SAME wy_apply_volume / wy_expand_mono16_to_stereo32 the answer uses, and the ring
+     * append is under the ring lock, exactly like the inbound path: the append's drop-oldest
+     * touches the same head the pump advances, and the scratch is shared with every
+     * wy_session_step driver, so the conversion+append is one atomic unit. Input longer than
+     * one scratch slice is sliced: the scratch is file-static and shared, and a second driver
+     * between slices must not find a half-converted buffer. */
+    size_t remaining = n;
+    while (remaining) {
+        size_t slice = remaining < WY_PLAYBACK_MONO_MAX ? remaining : WY_PLAYBACK_MONO_MAX;
+        playback_ring_lock_take();
+        size_t mono_n = slice;
+        memcpy(playback_mono_scratch, mono, mono_n * 2);
+        wy_apply_volume(playback_mono_scratch, mono_n, session->playback_volume);
+        size_t frame_n = wy_expand_mono16_to_stereo32(playback_mono_scratch, mono_n,
+                            playback_frame_scratch, WY_PLAYBACK_FRAME_MAX);
+        playback_ring_append_locked(session, playback_frame_scratch, frame_n);
+        playback_ring_lock_give();
+        mono += mono_n;
+        remaining -= slice;
+    }
     return WY_OK;
 }
 
@@ -513,7 +544,7 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
          * device's wake word name. A wake-now that lands while the stream is already running or
          * the device is paused is dropped (wy_session_wake checks both), and one that arrives
          * before the host is ready fails the same way an out-of-order wake would. */
-        result = wy_session_wake(session, WY_WAKE_WORD_NAME, write_fn, ctx);
+        result = wy_session_wake(session, WYAKE_WORD_NAME, write_fn, ctx);
         if (result == WY_INVALID) result = WY_OK;   /* a dropped wake-now is not a fault */
     } else if (!strcmp(frame.type, "hermes.config.desired")) {
         /* The bridge's declarative config dispatch, sent right after registration (and on

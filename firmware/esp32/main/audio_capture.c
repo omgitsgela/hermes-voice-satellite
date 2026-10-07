@@ -1,6 +1,7 @@
 #include "audio_capture.h"
 
 #include "audio_bringup.h"
+#include "wake_detector.h"
 #include "driver/i2c_master.h"
 #include "driver/i2s_std.h"
 #include "esp_heap_caps.h"
@@ -72,9 +73,14 @@ void audio_capture_send_chunk(const int32_t *frames, size_t frame_count) {
     size_t samples = wy_audio_downmix_mono16(frames, frame_count, mono,
                                              sizeof(mono) / sizeof(mono[0]));
     if (!samples) return;
+    /* D1 (increment 4): every downmixed chunk feeds the LOCAL wake detector first, always --
+     * before the wake the chunk goes only to the detector (the reference's "audio goes to the
+     * wake engine, not to the bridge"). The detector is driven from this task alone (its
+     * per-chunk sync keeps the deaf guard current). */
+    wake_detector_feed(mono, samples);
     /* The session decides whether the microphone is open: a frame sent while the stream is
      * closed is dropped there, which is what keeps the pre-wake chime out of the next
-     * utterance. */
+     * utterance. After a wake opens the stream, the same chunks also go to the bridge. */
     wy_session_send_audio(capture.session, mono, samples * 2, capture.write, capture.user);
 }
 
@@ -165,12 +171,19 @@ int audio_capture_start(void *session, void *user,
     }
 
     capture.stopping = 0;
+    /* Start the local wake detector on this exact triple, at the moment its feeder (the capture
+     * task) starts: the detector is only ever driven by that task, so its lifetime and link
+     * pointers are kept identical to the capture's. This is past the `if (capture.task) return`
+     * early-out above, so it runs on a REAL task start, not on a pointer refresh. It reads the
+     * config wake settings and loads the model from flash once. */
+    wake_detector_start(session, user, write);
     if (xTaskCreate(capture_task_fn, "aud_cap", CAPTURE_TASK_STACK, NULL,
                     CAPTURE_TASK_PRIORITY, &capture.task) != pdPASS || !capture.task) {
         capture.task = NULL;
         i2s_channel_disable(capture.rx);
         i2s_del_channel(capture.rx);
         capture.rx = NULL;
+        wake_detector_stop();
         return -1;
     }
     return 0;
@@ -198,6 +211,9 @@ void audio_capture_stop(void) {
         i2s_del_channel(capture.rx);
         capture.rx = NULL;
     }
+    /* The detector is stopped after the capture task is joined and the channel released, so no
+     * feed can be in flight: its link pointers are dropped exactly when its feeder is gone. */
+    wake_detector_stop();
     capture.stopping = 0;
 }
 

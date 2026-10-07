@@ -8,6 +8,13 @@
 enum { WY_SESSION_DESCRIBE = 0, WY_SESSION_ACK = 1, WY_SESSION_REGISTERED = 2,
        WY_SESSION_RUN_REQUESTED = 3, WY_SESSION_REFUSED = 4, WY_SESSION_FAILED = 5 };
 enum { WY_REFUSED = -4 };
+/* The wake word name this device reports in the detection event. The local wake detector
+ * (the device glue) and the bridge's wake-now both report this SAME name, so the bridge's
+ * capture path sees one wake word whether it was heard locally or requested over the link.
+ * It is deliberately DISTINCT from the config-plane wake_word (the model SELECTOR, e.g.
+ * "hey_hermes"): the model is chosen by what it was trained to hear, the detection event is
+ * what the pipeline is told. One each, two different strings (the plan's D5). */
+#define WYAKE_WORD_NAME "hey-hermes"
 typedef struct {
     int state;
     int streaming;        /* 1 while the mic stream is being forwarded to the bridge */
@@ -105,6 +112,13 @@ int wy_session_playback_configure(wy_session *session, int32_t *ring, size_t rin
  * that lock); the value is stored raw and wy_apply_volume clamps it to the no-silence floor at
  * use, so the setter cannot silence the speaker. INVALID on a NULL session. */
 int wy_session_set_playback_volume(wy_session *session, int volume);
+/* The device's own local tone (the wake chime, D4): write n 16 kHz mono S16 samples into the
+ * playback ring, the same speaker path as a bridge answer. No resample (the chime is rendered
+ * at the board's 16 kHz), but the SAME volume (the config plane's level) and stereo-32 expand,
+ * appended under the ring lock like the inbound audio-chunk path. INVALID on a NULL session or
+ * pcm, or when no ring is configured (local audio has nowhere to go). The pump task's
+ * amplifier policy (armed while the ring is not empty) carries it to the speaker. */
+int wy_session_local_play(wy_session *session, const int16_t *mono, size_t n);
 int wy_session_playback_active(const wy_session *session);
 int wy_session_playback_ended(const wy_session *session);
 size_t wy_session_playback_bytes(const wy_session *session);

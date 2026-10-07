@@ -40,6 +40,12 @@ class SessionTests(unittest.TestCase):
         lib.wy_session_init.argtypes = [C.c_void_p, C.c_char_p, C.c_char_p]
         lib.wy_session_state.argtypes = [C.c_void_p]
         lib.wy_session_step.argtypes = [C.c_void_p, IO, IO, C.c_void_p]
+        lib.wy_session_playback_configure.argtypes = [C.c_void_p, C.c_void_p, C.c_size_t, C.c_int]
+        lib.wy_session_playback_bytes.restype = C.c_size_t
+        lib.wy_session_playback_read.argtypes = [C.c_void_p, C.c_void_p, C.c_size_t]
+        lib.wy_session_playback_read.restype = C.c_size_t
+        lib.wy_session_local_play.argtypes = [C.c_void_p, C.c_void_p, C.c_size_t]
+        lib.wy_session_local_play.restype = C.c_int
         return lib
 
     def test_registration_is_not_arming(self):
@@ -396,6 +402,93 @@ class SessionTests(unittest.TestCase):
         got = (C.c_int32 * 16)()
         self.assertTrue(lib.wy_session_playback_read(C.byref(session), got, len(got) * 4) > 0)
         self.assertEqual(ring[0], got[0], 'the ring the test owns holds the first frame')
+
+    def test_local_play_writes_chime_frames_to_the_ring(self):
+        """The detector's chime seam (D4) renders a 16 kHz mono tone and must sound it
+        through the SAME speaker path as a bridge answer: the pump task reads the session
+        ring and owns the amplifier, so the only way a local tone reaches the speaker is by
+        being written into that ring. local_play is the device-local half of the conversion:
+        no resample (the chime is already at the board's 16 kHz), but the SAME volume
+        (the config plane's level, the floor never silences) and the SAME stereo-32 expand
+        as the inbound audio-chunk path, appended under the ring lock. The frames the pump
+        will read must be exactly the I2S-ready stereo-32 the chime samples expand to."""
+        lib = self.library()
+        WY_HEADER_MAX, WY_DATA_MAX = 1024, 4096
+        class WYSession(C.Structure):
+            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
+                        ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
+                        ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
+                        ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
+                        ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
+                        ('writer_lock_user', C.c_void_p),
+                        ('playback_active', C.c_int), ('playback_ended', C.c_int),
+                        ('playback_volume', C.c_int), ('playback_rate', C.c_int),
+                        ('playback_rs', C.c_double * 3),
+                        ('ring', C.c_void_p), ('ring_capacity', C.c_size_t),
+                        ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
+                        ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
+                        ('config_handler', C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_char_p, C.c_size_t)),
+                        ('config_user', C.c_void_p)]
+        self.assertEqual(C.sizeof(WYSession), lib.wy_session_size(), 'host struct must match the production layout')
+        session = WYSession()
+        self.assertEqual(lib.wy_session_init(C.byref(session), b'control-fixture', b'boot-1'), 0)
+        ring = (C.c_int32 * 4096)()
+        self.assertEqual(lib.wy_session_playback_configure(C.byref(session), ring, 4096 * 4, 100), 0)
+        pcm = (C.c_int16 * 8)(*range(8))   # 8 samples of 16 kHz mono S16
+        self.assertEqual(lib.wy_session_local_play(C.byref(session), pcm, 8), 0)
+        # 8 mono samples -> 16 stereo-32 frames -> 64 bytes in the ring.
+        self.assertEqual(lib.wy_session_playback_bytes(C.byref(session)), 64)
+        got = (C.c_int32 * 16)()
+        self.assertEqual(lib.wy_session_playback_read(C.byref(session), got, 16 * 4), 64)
+        # x << 16, L=R: sample 0 is silence, sample 1 is full-scale one step up.
+        self.assertEqual(got[0], 0)
+        self.assertEqual(got[1], 0)
+        self.assertEqual(got[2], 1 << 16)
+        self.assertEqual(got[3], 1 << 16)
+        # The ring the test owns holds those frames (not a phantom count).
+        self.assertEqual(ring[2], 1 << 16)
+        # Bad arguments are INVALID, not a write: NULL session / pcm, or no ring.
+        self.assertEqual(lib.wy_session_local_play(None, pcm, 8), -1)
+        bare = WYSession()
+        self.assertEqual(lib.wy_session_init(C.byref(bare), b'cf', b'b1'), 0)
+        self.assertEqual(lib.wy_session_local_play(C.byref(bare), pcm, 8), -1,
+                         'no ring configured: a local play has nowhere to go')
+
+    def test_local_play_applies_the_config_volume(self):
+        """local_play must honor the config plane's playback volume exactly as the bridge's
+        answer does (wy_apply_volume, floor never silences): the chime is part of the
+        device's own voice and is level-matched to it, not a full-scale tone that could
+        blast at a level the answer would not."""
+        lib = self.library()
+        WY_HEADER_MAX, WY_DATA_MAX = 1024, 4096
+        class WYSession(C.Structure):
+            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
+                        ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
+                        ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
+                        ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
+                        ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
+                        ('writer_lock_user', C.c_void_p),
+                        ('playback_active', C.c_int), ('playback_ended', C.c_int),
+                        ('playback_volume', C.c_int), ('playback_rate', C.c_int),
+                        ('playback_rs', C.c_double * 3),
+                        ('ring', C.c_void_p), ('ring_capacity', C.c_size_t),
+                        ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
+                        ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
+                        ('config_handler', C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_char_p, C.c_size_t)),
+                        ('config_user', C.c_void_p)]
+        session = WYSession()
+        lib.wy_session_init(C.byref(session), b'cf', b'b1')
+        ring = (C.c_int32 * 4096)()
+        self.assertEqual(lib.wy_session_playback_configure(C.byref(session), ring, 4096 * 4, 50), 0)
+        pcm = (C.c_int16 * 4)()
+        for i in range(4):
+            pcm[i] = 1000
+        self.assertEqual(lib.wy_session_local_play(C.byref(session), pcm, 4), 0)
+        got = (C.c_int32 * 8)()
+        self.assertEqual(lib.wy_session_playback_read(C.byref(session), got, 8 * 4), 8 * 4)
+        # 1000 at 50% volume -> ~500 -> 500 << 16 (the exact wy_apply_volume result).
+        expected = (1000 * 50 // 100) << 16
+        self.assertEqual(got[0], expected)
 
     def test_playback_audio_is_accepted_without_tearing_the_link(self):
         """The bridge sends audio-start / audio-chunk / audio-stop for playback, and it sends

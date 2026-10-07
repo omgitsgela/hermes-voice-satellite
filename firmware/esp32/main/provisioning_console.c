@@ -8,6 +8,7 @@
 #include "gateway_tls.h"
 #include "gateway_task.h"
 #include "tls_credentials_store.h"
+#include "wake_detector.h"
 #include "driver/usb_serial_jtag.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -689,6 +690,21 @@ void provisioning_console_run(void) {
                 /* No continue here: like STATUS and the SET_* branches, this one fills the response
                  * buffer and lets the reply at the end of the loop send it. Only the branches that
                  * send several lines of their own reply for themselves. */
+            } else if (!strcmp(line.data, "WAKE_STATUS") || !strcmp(line.data, "WAKE_FIRE")) {
+                /* The wake detector's provisioning-console surface (increment 4). WAKE_STATUS
+                 * reports the detector state (real vs placeholder model, deaf, force-armed) so a
+                 * live test can confirm what the detector will do before speaking. WAKE_FIRE is
+                 * the live-test gate: a one-shot force-fire that drives the whole chime -> wake ->
+                 * run-satellite path with no trained model on the device (the #110 placeholder
+                 * scorer never crosses the threshold on real audio). */
+                if (!strcmp(line.data, "WAKE_FIRE")) {
+                    wake_detector_force_fire();
+                    snprintf(response, sizeof(response), "OK WAKE FORCE ARMED");
+                } else {
+                    char status[128];
+                    wake_detector_status(status, sizeof(status));
+                    snprintf(response, sizeof(response), "OK WAKE %s", status);
+                }
             } else if (!strncmp(line.data, "SET_WIFI", 8) || !strcmp(line.data, "CLEAR_WIFI") ||
                        !strcmp(line.data, "WIFI_STATUS") ||
                        !strcmp(line.data, "WIFI_PROFILE_SAVE") ||
