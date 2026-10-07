@@ -182,6 +182,9 @@ commands and the gateway/audio commands are detailed in their own sections below
 | `GATEWAY_STATUS` | Read-only: what the persistent gateway task is doing right now. |
 | `AUDIO_BRINGUP` | One bounded I2S/I2C bring-up, framed `AUDIO BRINGUP BEGIN` / `END`. |
 | `TLS_STATUS` | What TLS material is provisioned, without dialling anything. |
+| `ENROLL_STATUS` | The honest enrollment state: `OK ENROLL ABSENT authenticated=no detail=out_of_band` (no authenticated flow exists). |
+| `WAKE_STATUS` | The local wake detector's state: model (`real`/`placeholder`), deaf, force-armed. |
+| `WAKE_FIRE` | Arm a one-shot forced detection for the live-test gate (no trained model needed). |
 | `START_WYOMING` | Hand the USB port to the Wyoming control core (latches until reset). |
 
 From the repo root, use a Python environment with `pyserial` installed:
@@ -210,6 +213,43 @@ lines, and embedded NUL were rejected, followed by successful normal commands.
 The command-line client read the final unconfigured state over real USB.
 This is endpoint-staging acceptance only, not network connectivity, TLS,
 audio transport, power-loss-at-commit qualification, or Windows validation.
+
+## Transport and enrollment contracts
+
+Two interfaces are deliberately narrow. This section states each contract exactly, because "not
+implemented yet" and "not part of this transport" are different claims, and a bring-up must not
+have to guess which it is looking at.
+
+### USB audio transport contract
+
+The development USB port carries **control and provisioning only**. There is no USB Audio Class:
+no ALSA card appears for the device, and no microphone or speaker PCM crosses USB. A Wyoming
+control session over USB (`START_WYOMING`) speaks `describe` / `hermes.register` /
+`run-satellite` / `pause-satellite`; a frame that carries an audio payload is drained and is
+**never** played or forwarded to the network. Audio is carried by the onboard path instead: the
+XVF3800's I2S RX is downmixed to 16 kHz mono S16 and sent as Wyoming `audio-chunk` events over
+the network link (microphone), and an inbound `audio-chunk` is resampled, volume-applied,
+expanded to stereo-32 and written to I2S TX (playback). Both directions are bounded by the audio
+component: `WY_AUDIO_CHUNK_SAMPLES` (1024 samples per chunk) and the wire's `WY_PAYLOAD_MAX`
+(16 KiB); the capture path emits 160-sample chunks. Host proof: `test_esp32_usb_link.py` (the USB
+session advertises `CONTROL_ONLY`), `test_esp32_audio.py` (the `audio-chunk` data field and the
+exact 32-bit-stereo -> 16-bit-mono downmix) and `test_esp32_wire.py` (the 16 KiB payload bound).
+What stays unverified until the live-test gate is the real I2S stream on the board, not this
+contract.
+
+### Secure-enrollment contract
+
+There is **no authenticated enrollment flow**. The device's identity is a provisioned client
+certificate plus the pinned server fingerprint, written out of band over USB by
+`scripts/provision-device-tls.py`; the device presents the certificate in the mTLS handshake and
+the bridge resolves its fingerprint to a device id. The device **must never claim an enrollment
+it does not have**: its `hermes.register` reports only its real state (`protocol_version` and its
+actual `capabilities`, e.g. `["microphone"]`) and never a credential or an "enrolled" flag it
+cannot back. The provisioning console's `ENROLL_STATUS` reports the honest state
+(`authenticated=no detail=out_of_band`). An authenticated enrollment exchange -- the device
+proving possession of a factory or one-time secret to receive its certificate over the network --
+is future work; until it exists, provisioning stays out of band and a listener refuses an unknown
+fingerprint unless an explicit trusted-network opt-in is set.
 
 ## Relay it to a gateway from a PC
 

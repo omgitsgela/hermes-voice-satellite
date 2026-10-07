@@ -237,6 +237,65 @@ class RelayTests(unittest.TestCase):
         self.assertGreater(outcome.bytes_from_device, 0)
         self.assertGreater(outcome.bytes_to_device, 0)
 
+    def test_persistent_relay_reconnects_after_an_unreachable_gateway(self):
+        """The persistent relay (the PC-side counterpart of the Pi's outbound satellite) must not
+        end when the gateway is momentarily gone: the first attempt cannot reach it, the relay
+        re-runs, and the second attempt registers. That reconnect is what makes it a service."""
+        sessions = []
+
+        def serial_factory():
+            session = FakeSession()
+            sessions.append(session)
+            return session.port
+
+        def connect(endpoint):
+            if len(sessions) == 1:
+                raise OSError('connection refused')  # the gateway is down on attempt 1
+            return sessions[-1].gateway.connect(endpoint)
+
+        self.addCleanup(lambda: [session.close() for session in sessions])
+        outcome = relay.run_persistent(
+            serial_factory, connect,
+            endpoint=('127.0.0.1', 10701), duration=1.5, stop_when_registered=True,
+            max_attempts=3, sleep=lambda _seconds: None)
+        self.assertEqual(outcome.attempts, 2, 'one failed attempt, then a registering retry')
+        self.assertTrue(outcome.registered)
+        self.assertEqual(outcome.exit_code, relay.EXIT_REGISTERED, outcome.error)
+
+    def test_persistent_relay_stops_on_a_terminal_refusal(self):
+        """A refusal is terminal: retrying cannot help until a human acts, so a persistent relay
+        must not hammer a listener that already said no."""
+        session = FakeSession(reply_ok=False)
+        self.addCleanup(session.close)
+        outcome = relay.run_persistent(
+            lambda: session.port, session.gateway.connect,
+            endpoint=('127.0.0.1', 10701), duration=1.5, stop_when_registered=True,
+            max_attempts=5, sleep=lambda _seconds: None)
+        self.assertTrue(outcome.refused)
+        self.assertEqual(outcome.attempts, 1, 'a refusal is terminal, never retried')
+
+    def test_persistent_relay_gives_up_at_max_attempts(self):
+        """With a bound it stops after that many failed attempts -- a one-shot acceptance check
+        wants this; the unbounded service (max_attempts 0) never gives up."""
+        sessions = []
+
+        def serial_factory():
+            session = FakeSession()
+            sessions.append(session)
+            return session.port
+
+        def connect(endpoint):
+            raise OSError('connection refused')
+
+        self.addCleanup(lambda: [session.close() for session in sessions])
+        outcome = relay.run_persistent(
+            serial_factory, connect,
+            endpoint=('127.0.0.1', 10701), duration=1.0, max_attempts=2,
+            sleep=lambda _seconds: None)
+        self.assertEqual(outcome.attempts, 2)
+        self.assertFalse(outcome.registered)
+        self.assertEqual(outcome.exit_code, relay.EXIT_NOT_REGISTERED)
+
     def test_no_acknowledgment_stops_before_connecting_to_the_gateway(self):
         session = FakeSession(ack=False)
         self.addCleanup(session.close)

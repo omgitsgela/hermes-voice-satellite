@@ -836,6 +836,29 @@ int usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);
             absent = self.console(executable, 'TLS_STATUS\n', TLS_PROBE_ABSENT='1')
             self.assertIn('PROVISION OK TLS ABSENT reason=none provisioned', absent)
 
+    def test_enroll_status_reports_the_honest_state(self):
+        """The enrollment contract (increment 5): there is no authenticated enrollment flow, and the
+        device must never claim one. ENROLL_STATUS reports that real state so a bring-up can confirm
+        the device is not pretending to be enrolled -- and a status query dials nothing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = self.build(tmp)
+            output = self.console(executable, 'ENROLL_STATUS\n')
+            self.assertIn('PROVISION OK ENROLL ABSENT authenticated=no detail=out_of_band', output)
+            self.assertNotIn('GATEWAY BEGIN', output, 'a status query must not dial anything')
+
+    def test_wake_surface_reports_state_and_arms_a_forced_fire(self):
+        """The wake detector's console surface (increment 4): WAKE_STATUS reports the detector state
+        (the live-test confirmation of what the detector will do) and WAKE_FIRE arms the one-shot
+        forced detection the live-test gate uses with no trained model on the device."""
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = self.build(tmp)
+            status = self.console(executable, 'WAKE_STATUS\n')
+            self.assertIn('PROVISION OK WAKE model=placeholder deaf=0 force=0',
+                          status, 'a fresh detector has the placeholder model and is not deaf')
+            self.assertNotIn('GATEWAY BEGIN', status, 'a status query must not dial anything')
+            fired = self.console(executable, 'WAKE_FIRE\n')
+            self.assertIn('PROVISION OK WAKE FORCE ARMED', fired)
+
     def test_a_failed_link_stops_before_the_socket_is_dialled(self):
         with tempfile.TemporaryDirectory() as tmp:
             executable = self.build(tmp)

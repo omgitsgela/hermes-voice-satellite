@@ -690,6 +690,14 @@ void provisioning_console_run(void) {
                 /* No continue here: like STATUS and the SET_* branches, this one fills the response
                  * buffer and lets the reply at the end of the loop send it. Only the branches that
                  * send several lines of their own reply for themselves. */
+            } else if (!strcmp(line.data, "ENROLL_STATUS")) {
+                /* The enrollment contract's honest-reporting surface (increment 5). The device has
+                 * no authenticated enrollment flow -- its identity is a provisioned client
+                 * certificate written out of band over USB -- and it must never claim otherwise.
+                 * This reports that real state, so a bring-up can confirm the device is not
+                 * pretending to be enrolled. */
+                snprintf(response, sizeof(response),
+                         "OK ENROLL ABSENT authenticated=no detail=out_of_band");
             } else if (!strcmp(line.data, "WAKE_STATUS") || !strcmp(line.data, "WAKE_FIRE")) {
                 /* The wake detector's provisioning-console surface (increment 4). WAKE_STATUS
                  * reports the detector state (real vs placeholder model, deaf, force-armed) so a

@@ -99,6 +99,9 @@ class RelayOutcome:
     bytes_to_device: int = 0
     stopped_because: str = ''
     error: str = ''
+    #: The attempt this outcome came from: 1 for a single bounded run, N for the Nth run of a
+    #: persistent relay. Set by run_persistent; a plain run_relay leaves it at 0.
+    attempts: int = 0
 
     @property
     def exit_code(self) -> int:
@@ -349,6 +352,60 @@ def run_relay(
     return outcome
 
 
+#: Outcomes that retrying cannot fix: the gateway refused us (a human must act -- a credential,
+#: a lease, a policy), or our identity did not match (a configuration error). A lost or
+#: unreachable gateway, a device that went away, and a window that elapsed without registering
+#: are all RECOVERABLE, which is what makes the persistent relay a service rather than one run.
+_TERMINAL_EXIT_CODES = frozenset({EXIT_REFUSED, EXIT_IDENTITY_MISMATCH})
+PERSIST_BACKOFF_BASE_SECONDS = 2.0
+PERSIST_BACKOFF_MAX_SECONDS = 30.0
+
+
+def run_persistent(
+    serial_factory: Callable[[], Any],
+    connect: Callable[[Tuple[str, int]], socket.socket],
+    *,
+    max_attempts: int = 0,
+    backoff_base: float = PERSIST_BACKOFF_BASE_SECONDS,
+    backoff_max: float = PERSIST_BACKOFF_MAX_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+    on_outcome: Optional[Callable[['RelayOutcome', int], None]] = None,
+    **relay_options: Any,
+) -> 'RelayOutcome':
+    """Run the relay again and again until a terminal outcome, reconnecting with bounded backoff.
+
+    The PC-side counterpart of the persistent device runner in `pi/outbound_satellite.py`: a
+    gateway restart, or a device that unplugs and comes back, must not end the service. Each
+    attempt is one bounded run_relay; when it ends for a RECOVERABLE reason (gateway lost or
+    unreachable, device link failed, window elapsed without registering) the relay is re-run after
+    a backoff that grows with the consecutive-failure count. It stops only on a TERMINAL outcome:
+    the gateway REFUSED us (a human must act), our identity did not match (a configuration
+    error), or -- when `stop_when_registered` is set -- the run registered. `max_attempts` 0 means
+    never give up; a positive value bounds the attempts (for tests and one-shot acceptance
+    checks). Returns the LAST attempt's outcome with `attempts` set, so a caller still sees the
+    final state and exit code.
+    """
+    attempt = 0
+    delay = backoff_base
+    outcome = RelayOutcome()
+    while True:
+        outcome = run_relay(serial_factory, connect, **relay_options)
+        attempt += 1
+        outcome.attempts = attempt
+        if on_outcome is not None:
+            on_outcome(outcome, attempt)
+        if outcome.exit_code in _TERMINAL_EXIT_CODES:
+            return outcome
+        if relay_options.get('stop_when_registered') and outcome.registered:
+            return outcome
+        if max_attempts and attempt >= max_attempts:
+            return outcome
+        log.info('relay attempt %d ended (%s); reconnecting', attempt,
+                 outcome.stopped_because or 'unknown')
+        sleep(min(delay, backoff_max))
+        delay = min(delay * 2.0, backoff_max)
+
+
 def open_serial(port_path: str, baudrate: int = 115200):
     """Open the device port without asserting DTR or RTS, which would reset some boards."""
     import serial  # imported here so the module stays importable without pyserial
@@ -377,6 +434,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--connect-timeout', type=float, default=10.0)
     parser.add_argument('--stop-after-registration', action='store_true',
                         help='end the run as soon as the gateway answers the registration')
+    parser.add_argument('--persist', action='store_true',
+                        help='keep relaying: reconnect with bounded backoff until a terminal '
+                             'outcome (the persistent PC relay service; no --duration bound)')
+    parser.add_argument('--max-attempts', type=int, default=0,
+                        help='with --persist, stop after this many attempts (0 = never give up)')
     parser.add_argument('--verbose', action='store_true')
     return parser
 
@@ -400,17 +462,25 @@ def main(argv: Optional[list] = None) -> int:
         raise SystemExit(EXIT_USAGE)
     logging.basicConfig(level=logging.DEBUG if arguments.verbose else logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
-    outcome = run_relay(
-        lambda: open_serial(arguments.port),
-        lambda target: socket.create_connection(target, timeout=arguments.connect_timeout),
+    # A persistent relay is not bounded by a clock: it runs each attempt until a link event ends
+    # it (gateway lost, device gone) and then reconnects. A bounded run keeps its duration.
+    duration = float('inf') if arguments.persist else arguments.duration
+    serial_factory = lambda: open_serial(arguments.port)  # noqa: E731
+    connect = lambda target: socket.create_connection(target, timeout=arguments.connect_timeout)  # noqa: E731
+    relay_options: Dict[str, Any] = dict(
         endpoint=endpoint,
-        duration=arguments.duration,
+        duration=duration,
         ready_marker=arguments.ready_marker,
         ready_timeout=arguments.ready_timeout,
         ack_timeout=arguments.ack_timeout,
         expect_device_id=arguments.expect_device_id,
         stop_when_registered=arguments.stop_after_registration,
     )
+    if arguments.persist:
+        outcome = run_persistent(serial_factory, connect, max_attempts=arguments.max_attempts,
+                                 **relay_options)
+    else:
+        outcome = run_relay(serial_factory, connect, **relay_options)
     print(json.dumps({
         'registered': outcome.registered,
         'refused': outcome.refused,
@@ -423,6 +493,7 @@ def main(argv: Optional[list] = None) -> int:
         'bytes_to_device': outcome.bytes_to_device,
         'stopped_because': outcome.stopped_because,
         'error': outcome.error,
+        'attempts': outcome.attempts,
         'exit_code': outcome.exit_code,
     }, indent=2))
     return outcome.exit_code
