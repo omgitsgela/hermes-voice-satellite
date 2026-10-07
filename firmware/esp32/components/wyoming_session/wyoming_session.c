@@ -454,7 +454,7 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
                 "{\"device_id\":\"%s\",\"boot_id\":\"%s\",\"protocol_version\":1,"
                 "\"name\":\"ESP32 control probe\",\"area\":\"\","
                 "\"firmware_version\":\"esp32-audio-1\","
-                "\"capabilities\":[\"microphone\"]}", session->device_id, session->boot_id);
+                "\"capabilities\":[\"microphone\",\"speaker\"]}", session->device_id, session->boot_id);
             if (length <= 0 || (size_t)length >= sizeof(registration)) { result = WY_LIMIT; goto done; }
             result = locked_send(session, write_fn, ctx, "hermes.register", registration, NULL, 0);
             if (!result) session->state = WY_SESSION_ACK;

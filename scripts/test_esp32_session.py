@@ -87,7 +87,7 @@ class SessionTests(unittest.TestCase):
         self.assertFalse(info.data['satellite']['supports_trigger'])
         self.assertEqual(registration.type, 'hermes.register')
         self.assertEqual(registration.data['device_id'], 'control-fixture')
-        self.assertEqual(registration.data['capabilities'], ['microphone'])
+        self.assertEqual(registration.data['capabilities'], ['microphone', 'speaker'])
         self.assertIsNone(read_event(output))
 
     def test_capture_turn_streams_mic_audio_and_stops_on_transcript(self):
@@ -731,7 +731,7 @@ class SessionTests(unittest.TestCase):
             async def registered(slot):
                 self.assertTrue(slot.ready)
                 self.assertEqual(slot.identity.protocol_version, 1)
-                self.assertEqual(slot.identity.capabilities, ('microphone',))
+                self.assertEqual(slot.identity.capabilities, ('microphone', 'speaker'))
                 self.assertEqual(slot.identity.boot_id, 'tcp-boot-1')
                 identities.append(slot.device_id)
                 await slot.connection.send(Event(type='run-satellite'))
