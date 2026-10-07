@@ -296,6 +296,38 @@ class RelayTests(unittest.TestCase):
         self.assertFalse(outcome.registered)
         self.assertEqual(outcome.exit_code, relay.EXIT_NOT_REGISTERED)
 
+    def test_a_terminal_outcome_is_not_masked_by_a_device_error(self):
+        """A refusal (or an identity mismatch) is terminal: retrying cannot help until a human
+        acts. The exit code must report it even when a device transport error happens to follow
+        it (a port that drops right after the refusal) -- otherwise the persistent relay sees a
+        "device link failed" (recoverable) and retries a listener that already said no. This pins
+        both the exit-code precedence and run_persistent's terminal classification."""
+        masked_refusal = relay.RelayOutcome(refused=True, error='device unplugged mid-run')
+        self.assertEqual(masked_refusal.exit_code, relay.EXIT_REFUSED,
+                         'a refusal must win over a device error that follows it')
+        masked_mismatch = relay.RelayOutcome(registered=True, mismatch=True,
+                                             error='device unplugged mid-run')
+        self.assertEqual(masked_mismatch.exit_code, relay.EXIT_IDENTITY_MISMATCH,
+                         'an identity mismatch must win over a device error that follows it')
+
+        # The persistent relay must classify that masked outcome as terminal, not recoverable.
+        calls = []
+        original = relay.run_relay
+
+        def fake_run_relay(*args, **kwargs):
+            calls.append(kwargs)
+            return masked_refusal
+
+        relay.run_relay = fake_run_relay
+        try:
+            outcome = relay.run_persistent(lambda: None, lambda endpoint: None,
+                                           endpoint=('127.0.0.1', 10701), duration=1.0,
+                                           max_attempts=5, sleep=lambda _seconds: None)
+        finally:
+            relay.run_relay = original
+        self.assertEqual(len(calls), 1, 'a masked refusal is terminal, never retried')
+        self.assertEqual(outcome.exit_code, relay.EXIT_REFUSED)
+
     def test_no_acknowledgment_stops_before_connecting_to_the_gateway(self):
         session = FakeSession(ack=False)
         self.addCleanup(session.close)

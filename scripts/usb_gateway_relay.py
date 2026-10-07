@@ -105,14 +105,19 @@ class RelayOutcome:
 
     @property
     def exit_code(self) -> int:
-        if self.error:
-            return EXIT_DEVICE_LINK_FAILED
+        # A refusal or an identity mismatch is the outcome that decides what a human must do, and
+        # it is terminal. It wins over a device transport error that happens to follow it (a port
+        # that drops right after the refusal): reporting the error instead would hand a caller --
+        # and run_persistent's terminal check -- a "device link failed" (recoverable) for a
+        # listener that already said no, and the service would retry it forever.
         if self.refused:
             return EXIT_REFUSED
-        if not self.registered:
-            return EXIT_NOT_REGISTERED
         if self.mismatch:
             return EXIT_IDENTITY_MISMATCH
+        if self.error:
+            return EXIT_DEVICE_LINK_FAILED
+        if not self.registered:
+            return EXIT_NOT_REGISTERED
         return EXIT_REGISTERED
 
 
