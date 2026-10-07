@@ -37,7 +37,7 @@ DRY_RUN=0
 TLS_MANIFEST=""
 MODEL_FILE=""
 MODEL_URL=""
-MODEL_NAME="hey_hermes"
+MODEL_NAME=""   # empty = the model file's stem
 WIFI_SSID=""
 WIFI_PSK_FILE=""
 
@@ -148,10 +148,16 @@ if [ "$DO_PROVISION" = 1 ]; then
             echo "   fetching wake model: $MODEL_URL"
             [ "$DRY_RUN" = 1 ] || curl -fsSL -o "$MODEL_FILE" "$MODEL_URL" || die "model download failed: $MODEL_URL"
             echo "   saved to $MODEL_FILE"
-            # The detection name defaults to the model's file stem (hey_hermes.tflite -> hey_hermes),
-            # which is exactly what the device reports as the wake word, matching the Pi.
-            [ -n "$MODEL_NAME" ] || MODEL_NAME="$(basename "$MODEL_FILE" | sed 's/\.tflite$//')"
+        elif [ -z "$MODEL_FILE" ]; then
+            # No custom model: use the bundled default so a plain install just works. Its
+            # attribution and license are in firmware/esp32/models/NOTICE.md.
+            MODEL_FILE="$REPO_ROOT/firmware/esp32/models/hey_jarvis.tflite"
+            echo "   using the bundled default wake model: $MODEL_FILE"
         fi
+        # The detection name defaults to the model's file stem (hey_jarvis.tflite -> hey_jarvis),
+        # which is exactly what the device reports as the wake word, matching the Pi (which
+        # reports whatever model it loaded). --model-name overrides it.
+        [ -n "$MODEL_NAME" ] || MODEL_NAME="$(basename "$MODEL_FILE" | sed 's/\.tflite$//')"
         [ "$DRY_RUN" = 1 ] || [ -f "$MODEL_FILE" ] || die "model file not found: $MODEL_FILE"
         run python3 "$REPO_ROOT/scripts/provision-device-model.py" --port "$PORT" \
             --model "$MODEL_FILE" --name "$MODEL_NAME"
