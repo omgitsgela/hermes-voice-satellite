@@ -128,7 +128,13 @@ int wy_wake_feed(wy_wake *w, const int16_t *mono, size_t n)
             if (w->chime != NULL)
                 w->chime(w->user); /* the chime always comes first (the
                                       reference order: chime, then wake) */
-            int wake_result = (w->wake != NULL) ? w->wake(w->user) : 0;
+            /* A missing wake seam is the header's documented degradation ("no
+             * wake"), which is exactly the REJECTED case: no wake ran, so no
+             * stream opened and none will ever end -- the core must stay armed,
+             * never self-deafen over a stream that does not exist. Treating a
+             * NULL seam as accepted (0) wedged the core permanently deaf on its
+             * first detection. */
+            int wake_result = (w->wake != NULL) ? w->wake(w->user) : -1;
             /* A detection happened (return DETECTED either way). Self-deaf
              * only when the session ACCEPTED the wake: an accepted wake
              * opens the stream, and the device must not re-fire on its own

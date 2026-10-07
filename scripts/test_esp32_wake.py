@@ -194,6 +194,37 @@ class WakeCoreTests(unittest.TestCase):
                          'the next crossing frame must fire again')
         self.assertTrue(lib.wy_wake_deaf(det), 'the accepted fire deafens')
 
+    def test_a_null_wake_seam_degrades_to_staying_armed(self):
+        """wy_wake.h:45 allows ANY seam to be NULL: "the core degrades -- no model, no chime,
+        no wake -- rather than faulting." With the WAKE seam NULL there is no wake, so nothing
+        opens a stream and wy_wake_stream_ended will never be called. The core must therefore
+        stay ARMED and keep scoring -- NOT self-deafen over a stream that does not exist. The
+        old code substituted 0 (the ACCEPTED value) for a missing wake seam and permanently
+        deafened the core on the first crossing frame, wedging it silent forever with no stream
+        to end. Degraded = the rejected-fire path: keep scoring."""
+        lib = self.library()
+        det = C.create_string_buffer(lib.wy_wake_size())
+        self._keepalive.append(det)
+        scores = (C.c_float * 2)(0.9, 0.9)
+        self._keepalive.append(scores)
+        lib.td_reset(scores, 2)
+        # score + load + chime installed; WAKE seam is NULL (header-sanctioned).
+        lib.wy_wake_set_seams(det, lib.td_addr_score(), lib.td_addr_load(),
+                              lib.td_addr_chime(), None, None)
+        self.assertEqual(lib.wy_wake_init(det, 0.35, 0, b'hey_hermes'), 0)
+        self.assertTrue(lib.wy_wake_has_model(det), 'load seam gave the core a model')
+        # First crossing frame: detects + chimes, but a NULL wake opens no stream, so the core
+        # must NOT be deaf afterwards.
+        self.assertEqual(self.feed(lib, det), 1)   # WY_WAKE_DETECTED
+        self.assertEqual(lib.td_get_chime_calls(), 1)
+        self.assertFalse(lib.wy_wake_deaf(det),
+                         'a NULL wake seam opened no stream: the core must stay armed')
+        # The core is still scoring: the very next crossing frame fires again.
+        self.assertEqual(self.feed(lib, det), 1)   # WY_WAKE_DETECTED
+        self.assertEqual(lib.td_get_score_calls(), 2,
+                         'a degraded core keeps scoring; it must not wedge silent')
+        self.assertEqual(lib.td_get_chime_calls(), 2)
+
     def test_deaf_while_streaming(self):
         """Explicit glue state: while the glue reports the stream running, a
         high score is consumed, and the core reports itself deaf."""
