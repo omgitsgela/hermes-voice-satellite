@@ -116,7 +116,13 @@ The Piper voice `en_US-hfc_male-medium` (61 MB, not committed
 here) comes from the Piper voices release; the custom wake model is a community TFLite file, see
 `docs/switching-wake-words.md`.
 
-## Install: the bridge host
+## Install
+
+The end-to-end guide is [`docs/installation.md`](docs/installation.md): Hermes, then the gateway,
+then a satellite (ESP32 or Pi), and where the prebuilt images fit. It is the order this section
+follows, and the installers it documents.
+
+### The bridge host
 
 On Debian/Ubuntu, install Python 3.11 with venv support, Git, `libsndfile1` and
 `libgomp1`. If your Python release lacks wheels for a dependency, compiling it also
@@ -158,7 +164,7 @@ Verify listeners, registration and actual audio delivery, not just `active`.
 See `docs/portability-acceptance.md` for the fresh-machine proof and its explicit
 synthetic-Gateway and hardware-test boundaries.
 
-## Install: the Hermes side
+### The Hermes side
 
 1. Copy the plugin in: `~/.hermes/plugins/voice_satellite`. It is the only plugin this project needs;
    the rest of the voice surface comes from your own Hermes install and its own plugins.
@@ -175,7 +181,12 @@ synthetic-Gateway and hardware-test boundaries.
 5. Apply the core patch: see `hermes/patches/README.md`.
 6. Restart the gateway and verify the surface resolves as expected (see Verify, below).
 
-## Install: the device side
+### The device side
+
+The device-side installers do all of this: `scripts/install-esp32.sh` (build, bundle, flash, and
+provision a board — see [`docs/installation.md`](docs/installation.md)) and `scripts/install-pi.sh`
+(the satellite venv, units, `satellite.env`, and the registry link). The manual steps below are what
+those scripts do, for reference and for a device you want to wire by hand.
 
 1. Install the satellite per upstream `wyoming-satellite`, with the Seeed 2-mic HAT.
 2. Copy `pi/*.py` into the satellite's `examples/` directory, and install the units from `pi/systemd/`
