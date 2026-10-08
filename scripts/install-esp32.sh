@@ -27,16 +27,31 @@
 #   scripts/install-esp32.sh --build                       # (opt-in) build + bundle from source
 #   scripts/install-esp32.sh --build --flash --port /dev/ttyACM0   # compile and flash in one go
 #   scripts/install-esp32.sh --dry-run ...                 # print every command, touch nothing
+#   scripts/install-esp32.sh                  # GUIDED setup: detect, prompt, confirm, then run
+#   scripts/install-esp32.sh --guided --dry-run   # the guided flow, previewing only
 #
 # Provisioning stages to the board's NVS, so the boot auto-start dials on its own.
 #
 # Passphrases, device keys and certificate material never come through this script's argv into
 # logs: --tls-certs, --model, --wifi-psk-file and the model download all take file PATHS, and the
 # provisioning helpers read them.
+#
+# GUIDED mode: run with NO arguments (or --guided) and the script detects what it can (the USB
+# serial ports /dev/ttyACM* and /dev/ttyUSB*, the prebuilt bundle, ESP-IDF, an existing registry
+# TLS directory, existing Wi-Fi PSK files), prompts for the rest with defaults shown in [brackets]
+# (bare Enter accepts one), validates each answer with the same rules the flags use, prints a
+# summary of exactly what it will do, and asks for an explicit yes/no before writing anything. A
+# non-interactive stdin refuses the guided flow -- pass the flags for automation. --guided
+# --dry-run previews the guided answers without writing.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+GUIDED=0
+GUIDED_EXPLICIT=0
+if [ $# -eq 0 ]; then GUIDED=1; fi
 FIRMWARE_DIR="$REPO_ROOT/firmware/esp32"
 BUNDLE_DIR="${BUNDLE_DIR:-$REPO_ROOT/../xvf3800-flash}"
 PORT=""
@@ -78,7 +93,7 @@ with_idf() {
 }
 
 usage() {
-    sed -n '2,35p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -87,6 +102,7 @@ while [ $# -gt 0 ]; do
         --build)     DO_BUILD=1 ;;
         --flash)     DO_FLASH=1 ;;
         --provision) DO_PROVISION=1 ;;
+        --guided)    GUIDED=1; GUIDED_EXPLICIT=1 ;;
         --dry-run)   DRY_RUN=1 ;;
         --port)      PORT="${2:-}"; shift ;;
         --bundle-dir) BUNDLE_DIR="${2:-}"; shift ;;
@@ -104,6 +120,122 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+# ---------------------------------------------------------------- guided setup (no flags)
+# Detection -> prompts (defaults in [brackets]) -> summary -> explicit yes/no -> the SAME steps
+# the flag path runs (this script re-executes itself with the assembled flags).
+if [ "$GUIDED" = 1 ]; then
+    if [ -f "$SCRIPT_DIR/lib/guided.sh" ]; then
+        # shellcheck source=lib/guided.sh
+        . "$SCRIPT_DIR/lib/guided.sh"
+    fi
+    command -v guided_prompt >/dev/null 2>&1 ||
+        die "guided setup needs $SCRIPT_DIR/lib/guided.sh, which is missing from this checkout"
+    # No arguments at all needs a terminal; --guided may drive the prompts from a pipe.
+    if [ "$GUIDED_EXPLICIT" = 0 ]; then
+        guided_require_interactive install-esp32.sh
+    fi
+
+    echo "install-esp32: guided setup (no flags given)."
+    echo "  This turns a USB-attached ESP32/XVF3800 board into a voice satellite:"
+    echo "    - flash the prebuilt bundle (no ESP-IDF needed), and/or"
+    echo "    - provision it (TLS credential, wake model, endpoint, Wi-Fi), and/or"
+    echo "    - (opt-in) build the firmware from source with ESP-IDF."
+    echo "  Nothing is written until you confirm at the end (--dry-run previews, never writes)."
+    echo
+    echo "Detection:"
+    LAN_IP="$(guided_detect_lan_ip)"
+    if [ -n "$LAN_IP" ]; then
+        echo "  host LAN IP:       $LAN_IP (default endpoint host)"
+    else
+        echo "  host LAN IP:       not detected (type the gateway endpoint by hand)"
+    fi
+    SERIAL_PORTS="$(guided_detect_serial_ports)"
+    if [ -n "$SERIAL_PORTS" ]; then
+        echo "  USB serial ports:  $(printf '%s' "$SERIAL_PORTS" | tr '\n' ' ')"
+    else
+        echo "  USB serial ports:  none found (plug the board in, or type its port)"
+    fi
+    if [ -f "$BUNDLE_DIR/flash.bundle.bin" ]; then
+        echo "  prebuilt bundle:   $BUNDLE_DIR/flash.bundle.bin (ready to flash)"
+    else
+        echo "  prebuilt bundle:   not at $BUNDLE_DIR/flash.bundle.bin (download it, or build from source)"
+    fi
+    if [ -f "$HOME/esp/idf-activate.sh" ]; then
+        echo "  ESP-IDF:           found ($HOME/esp/idf-activate.sh; needed only to build)"
+    else
+        echo "  ESP-IDF:           not found (fine: only --build needs it)"
+    fi
+    REGISTRY_TLS="$(guided_first_dir_with client-ca.crt \
+        "$REPO_ROOT/state/registry-tls" \
+        "$HOME/hermes-voice-bridge/state/registry-tls")"
+    if [ -n "$REGISTRY_TLS" ]; then
+        echo "  registry TLS dir:  $REGISTRY_TLS (has client-ca.crt; default for --tls-certs)"
+    else
+        echo "  registry TLS dir:  none found (enroll the device on the gateway first)"
+    fi
+    WIFI_PSK="$(guided_first_file "$HOME/wifi-psk.txt" "$HOME/.wifi-psk" "$REPO_ROOT/wifi-psk.txt")"
+    if [ -n "$WIFI_PSK" ]; then
+        echo "  Wi-Fi PSK file:    $WIFI_PSK (found; default for --wifi-psk-file)"
+    else
+        echo "  Wi-Fi PSK file:    none found (the passphrase file must exist before provisioning)"
+    fi
+    echo
+
+    # Defaults: flash + provision (what a new board needs); build stays opt-in. Explicit action
+    # flags alongside --guided seed the defaults exactly instead.
+    if [ "$DO_FLASH" = 1 ] || [ "$DO_PROVISION" = 1 ] || [ "$DO_BUILD" = 1 ]; then
+        if [ "$DO_FLASH" = 1 ]; then FLASH_YN='y'; else FLASH_YN='n'; fi
+        if [ "$DO_PROVISION" = 1 ]; then PROV_YN='y'; else PROV_YN='n'; fi
+        if [ "$DO_BUILD" = 1 ]; then BUILD_YN='y'; else BUILD_YN='n'; fi
+    else
+        FLASH_YN='y'
+        PROV_YN='y'
+        BUILD_YN='n'
+    fi
+    guided_prompt_yn FLASH_YN "Flash the prebuilt bundle to the board over USB?" "$FLASH_YN"
+    guided_prompt_yn PROV_YN "Provision the board (TLS credential, wake model, endpoint, Wi-Fi)?" "$PROV_YN"
+    guided_prompt_yn BUILD_YN "Build the firmware from source? (needs ESP-IDF; opt-in)" "$BUILD_YN"
+    if [ "$FLASH_YN" != y ] && [ "$PROV_YN" != y ] && [ "$BUILD_YN" != y ]; then
+        die "nothing selected: pick at least one of flash, provision or build"
+    fi
+
+    if [ "$FLASH_YN" = y ] || [ "$PROV_YN" = y ]; then
+        PORT_DEFAULT="${PORT:-$(printf '%s\n' "$SERIAL_PORTS" | head -n1)}"
+        guided_prompt PORT "Board serial port" "${PORT_DEFAULT:-/dev/ttyACM0}"
+    fi
+    if [ "$PROV_YN" = y ]; then
+        guided_prompt TLS_CERTS_DIR "TLS certificates directory (client-ca.crt + the device's .crt/.key)" "${TLS_CERTS_DIR:-$REGISTRY_TLS}"
+        guided_prompt DEVICE_ID "Device id (the registry identity this board is enrolled as)" "${DEVICE_ID:-esp32-1}"
+        guided_prompt ENDPOINT "Endpoint the board dials, tls://host:port or tcp://host:port" "${ENDPOINT:-${LAN_IP:+tls://$LAN_IP:10702}}" guided_valid_endpoint_strict
+        guided_prompt WIFI_SSID "Wi-Fi network (SSID) the board joins" "${WIFI_SSID}"
+        guided_prompt WIFI_PSK_FILE "Wi-Fi passphrase FILE (the passphrase never goes on the command line)" "${WIFI_PSK_FILE:-$WIFI_PSK}"
+    fi
+
+    echo
+    echo "=== Summary: install-esp32.sh will run exactly these steps ==="
+    if [ "$BUILD_YN" = y ]; then echo "  build:      idf.py build + bundle-esp32-flash.py -> $BUNDLE_DIR (needs ESP-IDF)"; fi
+    if [ "$FLASH_YN" = y ]; then echo "  flash:      verify the bundle, then write_flash 0x0 on $PORT (application region only)"; fi
+    if [ "$PROV_YN" = y ]; then
+        echo "  provision:  TLS credential + wake model + endpoint + Wi-Fi, over $PORT"
+        echo "    device id:  $DEVICE_ID"
+        echo "    endpoint:   $ENDPOINT"
+        echo "    tls certs:  $TLS_CERTS_DIR"
+        echo "    wi-fi:      $WIFI_SSID (passphrase read from $WIFI_PSK_FILE, never printed)"
+        echo "    wake model: the bundled default (hey_hermes.tflite)"
+    fi
+    GUIDED_ARGS=()
+    if [ "$BUILD_YN" = y ]; then GUIDED_ARGS+=(--build); fi
+    if [ "$FLASH_YN" = y ]; then GUIDED_ARGS+=(--flash); fi
+    if [ "$PROV_YN" = y ]; then GUIDED_ARGS+=(--provision); fi
+    if [ "$FLASH_YN" = y ] || [ "$PROV_YN" = y ]; then GUIDED_ARGS+=(--port "$PORT"); fi
+    if [ "$PROV_YN" = y ]; then
+        GUIDED_ARGS+=(--tls-certs "$TLS_CERTS_DIR" --device-id "$DEVICE_ID" --endpoint "$ENDPOINT"
+                      --wifi-ssid "$WIFI_SSID" --wifi-psk-file "$WIFI_PSK_FILE")
+    fi
+    if [ "$DRY_RUN" = 1 ]; then GUIDED_ARGS+=(--dry-run); fi
+    guided_end install-esp32.sh "${GUIDED_ARGS[@]}"
+fi
 
 [ "$DO_BUILD" = 1 ] || [ "$DO_FLASH" = 1 ] || [ "$DO_PROVISION" = 1 ] || usage 1
 

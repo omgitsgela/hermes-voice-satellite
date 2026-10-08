@@ -19,6 +19,8 @@
 #   scripts/install-pi.sh --base /opt/wyoming-satellite --device-name kitchen \
 #       --wake-word hey_hermes --endpoint tls://192.0.2.10:10702 \
 #       --tls-certs /srv/bridge/state/registry-tls [--user pi] [--dry-run]
+#   scripts/install-pi.sh                     # GUIDED setup: detect, prompt, confirm, then run
+#   scripts/install-pi.sh --guided --dry-run  # the guided flow, previewing only
 #
 # --endpoint and --tls-certs configure the registry link that outbound-satellite carries. The
 # endpoint's scheme is the transport (tls:// or tcp://) and its host:port become VOICE_BRIDGE_HOST
@@ -29,10 +31,22 @@
 # satellite.env is written from the committed template with the <...> placeholders filled from
 # these flags. It is the ONE place the device's real values live; the units only reference the
 # variables, so a different layout or user is a change HERE, not an edit to any unit.
+#
+# GUIDED mode: run with NO arguments (or --guided) and the script detects what it can (host LAN
+# IP for the endpoint default, an existing registry TLS directory, an existing satellite.env),
+# prompts for the rest with defaults shown in [brackets] (bare Enter accepts one), validates each
+# answer with the same rules the flags use, prints a summary of exactly what it will do, and asks
+# for an explicit yes/no before writing anything. A non-interactive stdin refuses the guided flow
+# -- pass the flags for automation. --guided --dry-run previews the guided answers without writing.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+GUIDED=0
+GUIDED_EXPLICIT=0
+if [ $# -eq 0 ]; then GUIDED=1; fi
 PI_DIR="$REPO_ROOT/pi"
 UNITS_DIR="$PI_DIR/systemd"
 BASE=""
@@ -61,7 +75,7 @@ run() {
 }
 
 usage() {
-    sed -n '2,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,41p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -75,6 +89,7 @@ while [ $# -gt 0 ]; do
         --endpoint)    ENDPOINT="${2:-}"; shift ;;
         --tls-certs)   TLS_CERTS_DIR="${2:-}"; shift ;;
         --env-path)    ENV_PATH="${2:-}"; shift ;;
+        --guided)      GUIDED=1; GUIDED_EXPLICIT=1 ;;
         --dry-run)     DRY_RUN=1 ;;
         --no-deps)     DO_DEPS=0 ;;
         --no-units)    DO_UNITS=0 ;;
@@ -85,6 +100,91 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+# ---------------------------------------------------------------- guided setup (no flags)
+# Detection -> prompts (defaults in [brackets]) -> summary -> explicit yes/no -> the SAME steps
+# the flag path runs (this script re-executes itself with the assembled flags).
+if [ "$GUIDED" = 1 ]; then
+    if [ -f "$SCRIPT_DIR/lib/guided.sh" ]; then
+        # shellcheck source=lib/guided.sh
+        . "$SCRIPT_DIR/lib/guided.sh"
+    fi
+    command -v guided_prompt >/dev/null 2>&1 ||
+        die "guided setup needs $SCRIPT_DIR/lib/guided.sh, which is missing from this checkout"
+    # No arguments at all needs a terminal; --guided may drive the prompts from a pipe.
+    if [ "$GUIDED_EXPLICIT" = 0 ]; then
+        guided_require_interactive install-pi.sh
+    fi
+
+    echo "install-pi: guided setup (no flags given)."
+    echo "  This installs the Raspberry Pi voice satellite: the service stack, its dependencies,"
+    echo "  satellite.env, and (optionally) the registry link to the gateway."
+    echo "  Nothing is written until you confirm at the end (--dry-run previews, never writes)."
+    echo
+    echo "Detection:"
+    LAN_IP="$(guided_detect_lan_ip)"
+    if [ -n "$LAN_IP" ]; then
+        echo "  host LAN IP:       $LAN_IP (default endpoint host)"
+    else
+        echo "  host LAN IP:       not detected (type the gateway endpoint by hand)"
+    fi
+    REGISTRY_TLS="$(guided_first_dir_with client-ca.crt \
+        "$REPO_ROOT/state/registry-tls" \
+        "$HOME/hermes-voice-bridge/state/registry-tls")"
+    if [ -n "$REGISTRY_TLS" ]; then
+        echo "  registry TLS dir:  $REGISTRY_TLS (has client-ca.crt; default for --tls-certs)"
+    else
+        echo "  registry TLS dir:  none found (enroll the device on the gateway first, or run unlinked)"
+    fi
+    if [ -f "$ENV_PATH" ]; then
+        echo "  satellite.env:     $ENV_PATH exists (a re-run overwrites it from the template)"
+    else
+        echo "  satellite.env:     not written yet ($ENV_PATH)"
+    fi
+    if [ "$(id -u)" = 0 ]; then
+        echo "  privileges:        running as root (a real install can proceed)"
+    else
+        echo "  privileges:        not root (a real install needs sudo; --dry-run does not)"
+    fi
+    echo
+
+    guided_prompt BASE "Where the satellite software is installed" "${BASE:-/opt/wyoming-satellite}"
+    guided_prompt DEVICE_NAME "Device name (the identity the bridge knows)" "${DEVICE_NAME:-$(hostname -s 2>/dev/null || echo satellite)}"
+    guided_prompt WAKE_WORD "Wake word / detection name" "${WAKE_WORD:-hey_hermes}"
+    guided_prompt DEVICE_USER "User the satellite services run as" "${DEVICE_USER:-${SUDO_USER:-pi}}"
+    guided_prompt_optional ENDPOINT "Registry endpoint, tls://host:port or tcp://host:port" "${ENDPOINT:-${LAN_IP:+tls://$LAN_IP:10702}}" guided_valid_endpoint_loose
+    if [ -n "$ENDPOINT" ]; then
+        guided_prompt_optional TLS_CERTS_DIR "TLS certificates directory (client-ca.crt + this device's .crt/.key)" "${TLS_CERTS_DIR:-$REGISTRY_TLS}"
+    fi
+    guided_prompt ENV_PATH "satellite.env path" "${ENV_PATH:-/etc/voice-satellite/satellite.env}"
+    guided_prompt SATELLITE_PORT "Satellite audio stream port" "${SATELLITE_PORT:-10700}" guided_valid_number
+
+    echo
+    echo "=== Summary: install-pi.sh will run exactly these steps ==="
+    echo "  base:          $BASE (venv + the pi/ device modules)"
+    echo "  device name:   $DEVICE_NAME (user $DEVICE_USER, wake word $WAKE_WORD)"
+    echo "  satellite.env: $ENV_PATH"
+    if [ -n "$ENDPOINT" ]; then
+        echo "  registry link: $ENDPOINT (dials the gateway as $DEVICE_NAME)"
+        if [ -n "$TLS_CERTS_DIR" ]; then
+            echo "  TLS material:  $TLS_CERTS_DIR (client-ca + $DEVICE_NAME.crt/.key)"
+        else
+            echo "  TLS material:  none (plain link; fine on a trusted LAN only)"
+        fi
+    else
+        echo "  registry link: none (local test device; the outbound unit is not installed)"
+    fi
+    echo "  steps: dependencies -> systemd units -> configuration -> services"
+    echo "  note: the four audio units are a coupled group and are started together."
+    GUIDED_ARGS=(--base "$BASE" --device-name "$DEVICE_NAME" --wake-word "$WAKE_WORD"
+                 --user "$DEVICE_USER" --satellite-port "$SATELLITE_PORT" --env-path "$ENV_PATH")
+    if [ -n "$ENDPOINT" ]; then
+        GUIDED_ARGS+=(--endpoint "$ENDPOINT")
+        if [ -n "$TLS_CERTS_DIR" ]; then GUIDED_ARGS+=(--tls-certs "$TLS_CERTS_DIR"); fi
+    fi
+    if [ "$DRY_RUN" = 1 ]; then GUIDED_ARGS+=(--dry-run); fi
+    guided_end install-pi.sh "${GUIDED_ARGS[@]}"
+fi
 
 [ -n "$BASE" ] || die "--base is required (where the satellite software is installed)"
 [ -n "$DEVICE_NAME" ] || die "--device-name is required (the identity the bridge knows)"

@@ -25,6 +25,17 @@ strictly idempotent. The installers live in `scripts/`:
 The order matters only at the registry: a device cannot be provisioned until the gateway has minted
 its certificate, so the gateway comes first. Nothing else blocks on anything.
 
+**Guided setup:** running any installer with **no arguments** starts an interactive guided setup
+instead of failing on a missing flag. The script detects what it can (the host LAN IP, attached
+USB serial ports, an existing checkout or registry state directory, existing Wi-Fi PSK files,
+whether `hermes` is on PATH), prompts for every remaining value with a sane default shown in
+`[brackets]` (bare Enter accepts it), validates each answer with the same rules the flags use,
+prints a summary of exactly what it will do, and asks for an explicit yes/no before writing
+anything. `--guided --dry-run` walks the same prompts but previews instead of writing. The guided
+flow is for a person at a terminal: with a non-interactive stdin it refuses and points at the
+flags, so every command in this document remains the automation path and behaves exactly as
+before.
+
 ---
 
 ## 1. Install Hermes

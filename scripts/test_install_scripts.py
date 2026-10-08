@@ -33,6 +33,12 @@ What is pinned:
      user unit, plugin) and refuses a loopback --device-reachable-as
   12 the hermes-voice-config helper applies keys in one pass, is idempotent, and leaves
      an already-correct file byte-for-byte untouched
+  13 the GUIDED flow (no flags / --guided) piped through with --dry-run runs exactly the
+     commands the equivalent flag invocation runs, per installer
+  14 a zero-argument run with a non-TTY stdin refuses with a "pass the flags" message and
+     writes nothing (automation must pass flags, not guess at piped answers)
+  15 answering no at the guided confirmation aborts with nothing written, and a bad answer
+     is re-prompted (the guided validators mirror the flag rules) rather than accepted
 """
 import json
 import shutil
@@ -380,6 +386,154 @@ class GatewayInstallerTests(unittest.TestCase):
                 result = self.gateway(base, '--device-reachable-as', bad, '--dry-run')
                 self.assertNotEqual(result.returncode, 0, f'should have refused {bad}')
                 self.assertIn('--device-reachable-as', result.stderr)
+
+
+class GuidedModeTests(unittest.TestCase):
+    """The GUIDED (no-flags) setup flow of the three installers, driven over a pipe with
+    --guided --dry-run so nothing is ever written. What matters: a guided run must run exactly
+    the commands the equivalent flag invocation runs (it re-executes the flag path with the
+    assembled answers), a non-TTY zero-argument run must refuse instead of guessing, and the
+    confirmation must be an explicit yes -- a no aborts with nothing written."""
+
+    @staticmethod
+    def run_guided(script, answers, *extra):
+        return subprocess.run(['bash', str(script), '--guided', '--dry-run', *extra],
+                              input='\n'.join(answers) + '\n',
+                              capture_output=True, text=True)
+
+    @staticmethod
+    def dry_run_lines(result):
+        return [line for line in result.stdout.splitlines()
+                if line.startswith('DRY-RUN:') or line.startswith('+ ')]
+
+    def assert_same_command_set(self, guided, flags):
+        """The guided run and the flag run must produce the identical command set."""
+        self.assertEqual(guided.returncode, 0, guided.stderr)
+        self.assertEqual(flags.returncode, 0, flags.stderr)
+        guided_cmds = self.dry_run_lines(guided)
+        flag_cmds = self.dry_run_lines(flags)
+        self.assertTrue(flag_cmds, 'flag run produced no commands at all')
+        self.assertEqual(guided_cmds, flag_cmds,
+                         'guided run and equivalent flag run disagree on the commands')
+
+    def test_esp32_guided_matches_the_flag_invocation(self):
+        answers = [
+            'n',                                     # flash the prebuilt bundle?
+            'y',                                     # provision?
+            'n',                                     # build from source?
+            '/dev/ttyACM0',                          # board serial port
+            '/srv/bridge/state/registry-tls',        # TLS certificates directory
+            'esp32-test',                            # device id
+            'tls://192.0.2.10:10702',                # endpoint
+            'TestNet',                               # Wi-Fi SSID
+            '/tmp/psk.txt',                          # Wi-Fi passphrase file
+            'yes',                                   # confirm
+        ]
+        guided = self.run_guided(ESP32, answers)
+        flags = run(ESP32, '--dry-run', '--provision', '--port', '/dev/ttyACM0',
+                    '--tls-certs', '/srv/bridge/state/registry-tls', '--device-id', 'esp32-test',
+                    '--endpoint', 'tls://192.0.2.10:10702',
+                    '--wifi-ssid', 'TestNet', '--wifi-psk-file', '/tmp/psk.txt')
+        self.assert_same_command_set(guided, flags)
+        # The guided answers really provision: the same helpers as the flag path ran.
+        self.assertIn('provision-device-tls.py', flags.stdout)
+        self.assertIn('save-profile TestNet /tmp/psk.txt', flags.stdout)
+
+    def test_pi_guided_matches_the_flag_invocation(self):
+        answers = [
+            '/opt/wyoming-satellite',                # base
+            'kitchen',                               # device name
+            'hey_hermes',                            # wake word
+            'pi',                                    # user
+            'tls://192.0.2.10:10702',                # registry endpoint
+            '/srv/bridge/state/registry-tls',        # TLS certificates directory
+            '/etc/voice-satellite/satellite.env',    # satellite.env path
+            '10700',                                 # satellite port
+            'yes',                                   # confirm
+        ]
+        guided = self.run_guided(PI, answers)
+        flags = run(PI, '--dry-run', '--base', '/opt/wyoming-satellite', '--device-name', 'kitchen',
+                    '--wake-word', 'hey_hermes', '--user', 'pi', '--satellite-port', '10700',
+                    '--env-path', '/etc/voice-satellite/satellite.env',
+                    '--endpoint', 'tls://192.0.2.10:10702',
+                    '--tls-certs', '/srv/bridge/state/registry-tls')
+        self.assert_same_command_set(guided, flags)
+        self.assertRegex(flags.stdout, r'enable --now .*outbound-satellite\.service')
+
+    def test_gateway_guided_matches_the_flag_invocation(self):
+        with tempfile.TemporaryDirectory(prefix='gw-guided-') as tmp:
+            base = Path(tmp) / 'clone'
+            (base / 'bridge').mkdir(parents=True)
+            shutil.copy(ROOT / 'bridge.env.example', base / 'bridge.env.example')
+            shutil.copy(ROOT / 'requirements.txt', base / 'requirements.txt')
+            answers = [
+                str(base),                           # base (the clone the gateway runs from)
+                '192.0.2.10',                        # device-reachable-as
+                '10701',                             # registry port
+                '10702',                             # TLS port
+                '0.0.0.0',                           # registry bind
+                '192.0.2.20:10700',                  # satellite host:port (old shape)
+                'y',                                 # configure the Hermes side?
+                'yes',                               # confirm
+            ]
+            guided = self.run_guided(GATEWAY, answers)
+            flags = run(GATEWAY, '--base', str(base), '--device-reachable-as', '192.0.2.10',
+                        '--registry-port', '10701', '--tls-port', '10702',
+                        '--registry-bind', '0.0.0.0', '--satellite-host', '192.0.2.20:10700',
+                        '--dry-run')
+            self.assert_same_command_set(guided, flags)
+            self.assertIn('--san 192.0.2.10', flags.stdout)
+
+    def test_zero_args_with_a_non_tty_stdin_is_refused(self):
+        """The zero-argument guided flow needs a terminal. A scripted run must pass flags; with
+        stdin closed the installer must refuse, name the flags, and write nothing."""
+        for script in (ESP32, PI, GATEWAY):
+            with self.subTest(script=script.name):
+                result = subprocess.run(['bash', str(script)], capture_output=True, text=True,
+                                        stdin=subprocess.DEVNULL)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('flags', result.stderr)
+                self.assertEqual(result.stdout, '', 'refusal must not run any step')
+                self.assertNotIn('DRY-RUN:', result.stdout)
+
+    def test_answering_no_at_the_confirmation_aborts_with_nothing_written(self):
+        """The confirmation is a real gate: an explicit no must abort before any command runs."""
+        cases = (
+            (ESP32, ['n', 'y', 'n', '/dev/ttyACM0', '/srv/bridge/state/registry-tls',
+                     'esp32-test', 'tls://192.0.2.10:10702', 'TestNet', '/tmp/psk.txt', 'no']),
+            (PI, ['/opt/wyoming-satellite', 'kitchen', 'hey_hermes', 'pi',
+                  'tls://192.0.2.10:10702', '/srv/bridge/state/registry-tls',
+                  '/etc/voice-satellite/satellite.env', '10700', 'no']),
+        )
+        for script, answers in cases:
+            with self.subTest(script=script.name):
+                result = self.run_guided(script, answers)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('aborted', result.stderr)
+                self.assertEqual(self.dry_run_lines(result), [], 'no command may run after a no')
+        with tempfile.TemporaryDirectory(prefix='gw-no-') as tmp:
+            base = Path(tmp) / 'clone'
+            (base / 'bridge').mkdir(parents=True)
+            shutil.copy(ROOT / 'bridge.env.example', base / 'bridge.env.example')
+            shutil.copy(ROOT / 'requirements.txt', base / 'requirements.txt')
+            result = self.run_guided(GATEWAY, [str(base), '192.0.2.10', '10701', '10702',
+                                               '0.0.0.0', '192.0.2.20:10700', 'y', 'no'])
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('aborted', result.stderr)
+            self.assertEqual(self.dry_run_lines(result), [])
+            self.assertFalse((base / 'bridge.env').exists(), 'refusal must not write bridge.env')
+
+    def test_a_bad_answer_is_reprompted_with_the_flag_rules_reason(self):
+        """Guided validation mirrors the flag rules: an ftp:// endpoint is refused with the same
+        reason the flag path would die with, and the flow re-prompts instead of accepting it."""
+        answers = ['n', 'y', 'n', '/dev/ttyACM0', '/srv/bridge/state/registry-tls', 'esp32-test',
+                   'ftp://192.0.2.10:10702',                       # rejected, re-prompt
+                   'tls://192.0.2.10:10702',                       # accepted
+                   'TestNet', '/tmp/psk.txt', 'yes']
+        result = self.run_guided(ESP32, answers)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('must be tls://host:port or tcp://host:port', result.stdout)
+        self.assertIn('set-endpoint tls://192.0.2.10:10702', result.stdout)
 
 
 class VoiceConfigHelperTests(unittest.TestCase):

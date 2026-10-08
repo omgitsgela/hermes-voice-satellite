@@ -19,6 +19,8 @@
 #   scripts/install-gateway.sh --base ~/hermes-voice-bridge --device-reachable-as 192.0.2.10 \
 #       [--registry-port 10701] [--tls-port 10702] [--registry-bind 0.0.0.0] \
 #       [--satellite-host 192.0.2.20:10700] [--skip-hermes] [--dry-run]
+#   scripts/install-gateway.sh            # GUIDED setup: detect, prompt, confirm, then run
+#   scripts/install-gateway.sh --guided --dry-run   # the guided flow, previewing only
 #
 # --device-reachable-as is the address a device reaches THIS bridge on: it becomes the server
 # certificate's SAN and the endpoint a device is provisioned with, so it must be the address the
@@ -29,6 +31,13 @@
 # --satellite-host is the old shape (bridge dials the device) and defaults to loopback: it is set
 # for deployments that still dial out, and the registry link is the standard path.
 #
+# GUIDED mode: run with NO arguments (or --guided) and the script detects what it can (host LAN
+# IP, an existing checkout or registry state dir, whether `hermes` is on PATH), prompts for the
+# rest with defaults shown in [brackets] (bare Enter accepts one), validates each answer with the
+# same rules the flags use, prints a summary of exactly what it will do, and asks for an explicit
+# yes/no before writing anything. A non-interactive stdin refuses the guided flow -- pass the
+# flags for automation. --guided --dry-run previews the guided answers without writing.
+#
 # Idempotence: a re-run reports what it already did and changes nothing. The bridge.env's managed
 # registry/satellite keys move in place to the current flag values (the rest of the file is
 # untouched); the Hermes config is backed up before the one edit; and the registry CA is reused,
@@ -37,6 +46,11 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+GUIDED=0
+GUIDED_EXPLICIT=0
+if [ $# -eq 0 ]; then GUIDED=1; fi
 BASE=""                       # the clone of this repository the gateway runs from
 REACHABLE_AS=""               # the address devices route to on this host
 REGISTRY_PORT="10701"         # the registry listener (plaintext, trusted LAN)
@@ -59,7 +73,7 @@ run() {
 }
 
 usage() {
-    sed -n '2,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -73,12 +87,85 @@ while [ $# -gt 0 ]; do
         --satellite-host)      SATELLITE_HOST="${2:-}"; shift ;;
         --hermes-bin)          HERMES_BIN="${2:-}"; shift ;;
         --skip-hermes)         SKIP_HERMES=1 ;;
+        --guided)              GUIDED=1; GUIDED_EXPLICIT=1 ;;
         --dry-run)             DRY_RUN=1 ;;
         -h|--help)             usage 0 ;;
         *)                     die "unknown argument: $1 (see --help)" ;;
     esac
     shift
 done
+
+# ---------------------------------------------------------------- guided setup (no flags)
+# Detection -> prompts (defaults in [brackets]) -> summary -> explicit yes/no -> the SAME steps
+# the flag path runs (this script re-executes itself with the assembled flags).
+if [ "$GUIDED" = 1 ]; then
+    if [ -f "$SCRIPT_DIR/lib/guided.sh" ]; then
+        # shellcheck source=lib/guided.sh
+        . "$SCRIPT_DIR/lib/guided.sh"
+    fi
+    command -v guided_prompt >/dev/null 2>&1 ||
+        die "guided setup needs $SCRIPT_DIR/lib/guided.sh, which is missing from this checkout"
+    # No arguments at all needs a terminal; --guided may drive the prompts from a pipe.
+    if [ "$GUIDED_EXPLICIT" = 0 ]; then
+        guided_require_interactive install-gateway.sh
+    fi
+
+    echo "install-gateway: guided setup (no flags given)."
+    echo "  This installs the voice GATEWAY on this host: the bridge virtualenv, bridge.env,"
+    echo "  registry TLS material, the systemd user unit, and the Hermes-side plugin + config."
+    echo "  Nothing is written until you confirm at the end (--dry-run previews, never writes)."
+    echo
+    echo "Detection:"
+    LAN_IP="$(guided_detect_lan_ip)"
+    if [ -n "$LAN_IP" ]; then
+        echo "  host LAN IP:      $LAN_IP (default for --device-reachable-as)"
+    else
+        echo "  host LAN IP:      not detected (type the address a device routes to)"
+    fi
+    if [ -d "$REPO_ROOT/bridge" ] && [ -f "$REPO_ROOT/bridge.env.example" ] && [ -f "$REPO_ROOT/requirements.txt" ]; then
+        echo "  checkout:         $REPO_ROOT (looks like this repository)"
+    else
+        echo "  checkout:         $REPO_ROOT (incomplete; the gateway must run from a full clone)"
+    fi
+    if [ -d "$REPO_ROOT/state" ]; then
+        echo "  registry state:   $REPO_ROOT/state exists (the CA is reused, never regenerated)"
+    else
+        echo "  registry state:   not created yet (would become \$BASE/state)"
+    fi
+    if command -v "$HERMES_BIN" >/dev/null 2>&1; then
+        echo "  hermes on PATH:   yes ($(command -v "$HERMES_BIN"))"
+    else
+        echo "  hermes on PATH:   no (the Hermes-side step needs it; see --hermes-bin / --skip-hermes)"
+    fi
+    echo
+
+    guided_prompt BASE "Gateway base directory (the clone this gateway runs from)" "${BASE:-$REPO_ROOT}"
+    guided_prompt REACHABLE_AS "Address a device reaches THIS bridge on (LAN IP or resolvable name)" "${REACHABLE_AS:-$LAN_IP}" guided_valid_reachable_as
+    guided_prompt REGISTRY_PORT "Registry plaintext listener port" "${REGISTRY_PORT:-10701}" guided_valid_number
+    guided_prompt TLS_PORT "Registry TLS listener port (the one devices pin)" "${TLS_PORT:-$((REGISTRY_PORT + 1))}" guided_valid_number
+    guided_prompt REGISTRY_BIND "Address the registry listener BINDS to" "${REGISTRY_BIND:-0.0.0.0}"
+    guided_prompt SATELLITE_HOST "Satellite dial target, host:port (old shape, for compatibility)" "${SATELLITE_HOST:-127.0.0.1:10700}" guided_valid_hostport
+    if [ "$SKIP_HERMES" = 1 ]; then HERMES_YN='n'; else HERMES_YN='y'; fi
+    guided_prompt_yn HERMES_YN "Configure the Hermes side (plugin + config keys)?" "$HERMES_YN"
+
+    echo
+    echo "=== Summary: install-gateway.sh will run exactly these steps ==="
+    echo "  base:           $BASE"
+    echo "  reachable as:   $REACHABLE_AS (server certificate SAN + the endpoint devices get)"
+    echo "  registry:       plaintext :$REGISTRY_PORT, TLS :$TLS_PORT, bind $REGISTRY_BIND"
+    echo "  satellite dial: $SATELLITE_HOST (old shape, for compatibility)"
+    if [ "$HERMES_YN" = y ]; then
+        echo "  hermes side:    plugin install + voice-surface config keys (config backed up first)"
+    else
+        echo "  hermes side:    SKIPPED"
+    fi
+    echo "  1. bridge virtualenv   2. bridge.env   3. registry TLS   4. systemd user unit   5. Hermes side"
+    GUIDED_ARGS=(--base "$BASE" --device-reachable-as "$REACHABLE_AS" --registry-port "$REGISTRY_PORT"
+                 --tls-port "$TLS_PORT" --registry-bind "$REGISTRY_BIND" --satellite-host "$SATELLITE_HOST")
+    if [ "$HERMES_YN" != y ]; then GUIDED_ARGS+=(--skip-hermes); fi
+    if [ "$DRY_RUN" = 1 ]; then GUIDED_ARGS+=(--dry-run); fi
+    guided_end install-gateway.sh "${GUIDED_ARGS[@]}"
+fi
 
 [ -n "$BASE" ] || die "--base is required (the clone of this repository the gateway runs from)"
 [ -n "$REACHABLE_AS" ] || die "--device-reachable-as is required (the address a device reaches this bridge on)"
