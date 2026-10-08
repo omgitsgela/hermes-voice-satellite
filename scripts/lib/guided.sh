@@ -6,7 +6,9 @@
 # them), VALIDATE with the same rules the flag path uses, print a SUMMARY, then require an
 # explicit yes/no before anything is written. The assembled answers are handed to the very same
 # flag path by re-executing the installer with them, so a guided run and the equivalent flag
-# invocation run exactly the same steps.
+# invocation run exactly the same steps. Flags with no prompt of their own (--bundle-dir,
+# --model, --hermes-bin, --no-deps, ...) are forwarded verbatim to that re-execution, so
+# nothing the user typed on the command line is ever dropped.
 #
 # This file only defines functions; sourcing it has no side effects. It is allowed to be missing
 # (a script copied on its own keeps working on the flag path); the guided entry points refuse

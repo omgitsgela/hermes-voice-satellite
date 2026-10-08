@@ -60,6 +60,10 @@ SATELLITE_HOST="127.0.0.1:10700"   # the old shape: where the bridge dials the s
 SKIP_HERMES=0
 DRY_RUN=0
 HERMES_BIN="hermes"
+# Flags with no guided prompt of their own are collected verbatim here and forwarded to the
+# re-executed run (guided_end): guided mode must run exactly what the user asked for, so
+# nothing typed on the command line may be silently dropped.
+PASSTHROUGH=()
 
 die() { echo "install-gateway: $*" >&2; exit 1; }
 
@@ -85,7 +89,7 @@ while [ $# -gt 0 ]; do
         --tls-port)            TLS_PORT="${2:-}"; shift ;;
         --registry-bind)       REGISTRY_BIND="${2:-}"; shift ;;
         --satellite-host)      SATELLITE_HOST="${2:-}"; shift ;;
-        --hermes-bin)          HERMES_BIN="${2:-}"; shift ;;
+        --hermes-bin)          HERMES_BIN="${2:-}"; PASSTHROUGH+=(--hermes-bin "${2:-}"); shift ;;
         --skip-hermes)         SKIP_HERMES=1 ;;
         --guided)              GUIDED=1; GUIDED_EXPLICIT=1 ;;
         --dry-run)             DRY_RUN=1 ;;
@@ -163,6 +167,9 @@ if [ "$GUIDED" = 1 ]; then
     GUIDED_ARGS=(--base "$BASE" --device-reachable-as "$REACHABLE_AS" --registry-port "$REGISTRY_PORT"
                  --tls-port "$TLS_PORT" --registry-bind "$REGISTRY_BIND" --satellite-host "$SATELLITE_HOST")
     if [ "$HERMES_YN" != y ]; then GUIDED_ARGS+=(--skip-hermes); fi
+    # Forward the flags this flow has no prompt for, exactly as given: nothing the user typed
+    # on the command line may be silently dropped.
+    if [ "${#PASSTHROUGH[@]}" -gt 0 ]; then GUIDED_ARGS+=("${PASSTHROUGH[@]}"); fi
     if [ "$DRY_RUN" = 1 ]; then GUIDED_ARGS+=(--dry-run); fi
     guided_end install-gateway.sh "${GUIDED_ARGS[@]}"
 fi

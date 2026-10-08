@@ -39,6 +39,10 @@ What is pinned:
      writes nothing (automation must pass flags, not guess at piped answers)
   15 answering no at the guided confirmation aborts with nothing written, and a bad answer
      is re-prompted (the guided validators mirror the flag rules) rather than accepted
+  16 guided mode FORWARDS every flag the user typed, including the ones it does not prompt
+     for (--bundle-dir/--registry/--model/--download-model/--model-name, --hermes-bin,
+     --no-deps/--no-units/--no-config/--no-services): the run line the guided flow prints
+     must contain the flag and its value, and the run must actually use it
 """
 import json
 import shutil
@@ -406,6 +410,23 @@ class GuidedModeTests(unittest.TestCase):
         return [line for line in result.stdout.splitlines()
                 if line.startswith('DRY-RUN:') or line.startswith('+ ')]
 
+    @staticmethod
+    def run_line(result):
+        """The exact command line the guided flow announces it will run (the line under the
+        "I will now run:" banner), or '' when it never printed one. This is the contract for
+        pass-through: every flag the user typed must appear here."""
+        lines = result.stdout.splitlines()
+        for i, line in enumerate(lines):
+            if line.strip() == 'I will now run:':
+                for follow in lines[i + 1:]:
+                    if follow.strip():
+                        return follow.strip()
+        return ''
+
+    @staticmethod
+    def lines_with(result, needle):
+        return [line for line in result.stdout.splitlines() if needle in line]
+
     def assert_same_command_set(self, guided, flags):
         """The guided run and the flag run must produce the identical command set."""
         self.assertEqual(guided.returncode, 0, guided.stderr)
@@ -534,6 +555,123 @@ class GuidedModeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('must be tls://host:port or tcp://host:port', result.stdout)
         self.assertIn('set-endpoint tls://192.0.2.10:10702', result.stdout)
+
+    # ---- pass-through: flags with no prompt of their own -------------------------
+    # Guided mode must run EXACTLY what the user asked for. A flag the guided flow does not
+    # prompt for is not a flag it may drop: it must be forwarded verbatim to the re-executed
+    # run (visible in the printed run line) and actually take effect there.
+
+    # A provision run driven through the guided prompts (defaults seeded by --provision).
+    PROV_ANSWERS = [
+        '',                                      # flash? (seeded n by --provision)
+        '',                                      # provision? (seeded y)
+        '',                                      # build? (seeded n)
+        '/dev/ttyACM0',                          # board serial port
+        '/srv/bridge/state/registry-tls',        # TLS certificates directory
+        'esp32-test',                            # device id
+        'tls://192.0.2.10:10702',                # endpoint
+        'TestNet',                               # Wi-Fi SSID
+        '/tmp/psk.txt',                          # Wi-Fi passphrase file
+        'yes',                                   # confirm
+    ]
+    # A flash-only run (defaults seeded by --flash): flash, provision, build, port, confirm.
+    FLASH_ANSWERS = ['', '', '', '', 'yes']
+    # A Pi run with no registry link (endpoint answered 'none'): base, device name, wake word,
+    # user, endpoint, env path, satellite port, confirm.
+    PI_SKIP_ANSWERS = ['', '', '', '', 'none', '', '', 'yes']
+
+    def test_esp32_guided_forwards_bundle_dir(self):
+        result = self.run_guided(ESP32, self.FLASH_ANSWERS,
+                                 '--flash', '--bundle-dir', '/mnt/custom-bundle')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--bundle-dir /mnt/custom-bundle', self.run_line(result))
+        # And the board write really targets THAT bundle, not the default bundle dir (the
+        # esptool command line, not the summary's prose).
+        write = [ln for ln in self.lines_with(result, 'write_flash') if 'esptool' in ln]
+        self.assertTrue(write, result.stdout)
+        self.assertIn('/mnt/custom-bundle/flash.bundle.bin', write[0])
+        self.assertNotIn('xvf3800-flash/flash.bundle.bin', write[0])
+
+    def test_esp32_guided_forwards_registry(self):
+        result = self.run_guided(ESP32, self.PROV_ANSWERS, '--provision',
+                                 '--registry', '/mnt/custom/device-credentials.json')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--registry /mnt/custom/device-credentials.json', self.run_line(result))
+        tls = self.lines_with(result, 'provision-device-tls.py')
+        self.assertTrue(tls, result.stdout)
+        self.assertIn('--registry /mnt/custom/device-credentials.json', tls[0])
+
+    def test_esp32_guided_forwards_model(self):
+        result = self.run_guided(ESP32, self.PROV_ANSWERS, '--provision',
+                                 '--model', '/tmp/custom-model.tflite')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--model /tmp/custom-model.tflite', self.run_line(result))
+        model = self.lines_with(result, 'provision-device-model.py')
+        self.assertTrue(model, result.stdout)
+        self.assertIn('--model /tmp/custom-model.tflite', model[0])
+
+    def test_esp32_guided_forwards_download_model(self):
+        result = self.run_guided(ESP32, self.PROV_ANSWERS, '--provision',
+                                 '--download-model', 'https://models.example.com/community.tflite')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--download-model https://models.example.com/community.tflite',
+                      self.run_line(result))
+        self.assertIn('fetching wake model: https://models.example.com/community.tflite',
+                      result.stdout)
+
+    def test_esp32_guided_forwards_model_name(self):
+        result = self.run_guided(ESP32, self.PROV_ANSWERS, '--provision',
+                                 '--model-name', 'wakey_wakey')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--model-name wakey_wakey', self.run_line(result))
+        model = self.lines_with(result, 'provision-device-model.py')
+        self.assertTrue(model, result.stdout)
+        self.assertIn('--name wakey_wakey', model[0])
+
+    def test_gateway_guided_forwards_hermes_bin(self):
+        with tempfile.TemporaryDirectory(prefix='gw-bin-') as tmp:
+            base = Path(tmp) / 'clone'
+            (base / 'bridge').mkdir(parents=True)
+            shutil.copy(ROOT / 'bridge.env.example', base / 'bridge.env.example')
+            shutil.copy(ROOT / 'requirements.txt', base / 'requirements.txt')
+            answers = [str(base), '192.0.2.10', '10701', '10702', '0.0.0.0',
+                       '192.0.2.20:10700', 'y', 'yes']
+            result = self.run_guided(GATEWAY, answers, '--hermes-bin', '/nonexistent-hermes-bin')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('--hermes-bin /nonexistent-hermes-bin', self.run_line(result))
+            # The Hermes-side step must drive the binary the user named, not the default.
+            self.assertIn('/nonexistent-hermes-bin plugins enable voice_satellite', result.stdout)
+            self.assertNotIn('DRY-RUN: hermes plugins enable voice_satellite', result.stdout)
+
+    def test_pi_guided_forwards_no_deps(self):
+        result = self.run_guided(PI, self.PI_SKIP_ANSWERS, '--no-deps')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--no-deps', self.run_line(result))
+        self.assertNotIn('== dependencies ==', result.stdout)
+        self.assertNotIn('python3 -m venv', result.stdout)
+        self.assertIn('== systemd units ==', result.stdout)   # the other steps still run
+
+    def test_pi_guided_forwards_no_units(self):
+        result = self.run_guided(PI, self.PI_SKIP_ANSWERS, '--no-units')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--no-units', self.run_line(result))
+        self.assertNotIn('== systemd units ==', result.stdout)
+        self.assertIn('== dependencies ==', result.stdout)
+
+    def test_pi_guided_forwards_no_config(self):
+        result = self.run_guided(PI, self.PI_SKIP_ANSWERS, '--no-config')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--no-config', self.run_line(result))
+        self.assertNotIn('== configuration (', result.stdout)
+        self.assertIn('== systemd units ==', result.stdout)
+
+    def test_pi_guided_forwards_no_services(self):
+        result = self.run_guided(PI, self.PI_SKIP_ANSWERS, '--no-services')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--no-services', self.run_line(result))
+        self.assertNotIn('== services ==', result.stdout)
+        self.assertNotIn('systemctl enable --now', result.stdout)
+        self.assertIn('== configuration (', result.stdout)
 
 
 class VoiceConfigHelperTests(unittest.TestCase):

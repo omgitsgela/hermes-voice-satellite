@@ -70,6 +70,10 @@ ENDPOINT=""       # what the board dials: tls://host:port (tcp:// for a trusted 
 REGISTRY_FILE=""  # the bridge's state/device-credentials.json; defaults beside the certs dir
 WIFI_SSID=""
 WIFI_PSK_FILE=""
+# Flags with no guided prompt of their own are collected verbatim here and forwarded to the
+# re-executed run (guided_end): guided mode must run exactly what the user asked for, so
+# nothing typed on the command line may be silently dropped.
+PASSTHROUGH=()
 
 die() { echo "install-esp32: $*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -106,14 +110,14 @@ while [ $# -gt 0 ]; do
         --guided)    GUIDED=1; GUIDED_EXPLICIT=1 ;;
         --dry-run)   DRY_RUN=1 ;;
         --port)      PORT="${2:-}"; shift ;;
-        --bundle-dir) BUNDLE_DIR="${2:-}"; shift ;;
+        --bundle-dir) BUNDLE_DIR="${2:-}"; PASSTHROUGH+=(--bundle-dir "${2:-}"); shift ;;
         --tls-certs) TLS_CERTS_DIR="${2:-}"; shift ;;
         --device-id) DEVICE_ID="${2:-}"; shift ;;
         --endpoint) ENDPOINT="${2:-}"; shift ;;
-        --registry)  REGISTRY_FILE="${2:-}"; shift ;;
-        --model)     MODEL_FILE="${2:-}"; shift ;;
-        --download-model) MODEL_URL="${2:-}"; shift ;;
-        --model-name) MODEL_NAME="${2:-}"; shift ;;
+        --registry)  REGISTRY_FILE="${2:-}"; PASSTHROUGH+=(--registry "${2:-}"); shift ;;
+        --model)     MODEL_FILE="${2:-}"; PASSTHROUGH+=(--model "${2:-}"); shift ;;
+        --download-model) MODEL_URL="${2:-}"; PASSTHROUGH+=(--download-model "${2:-}"); shift ;;
+        --model-name) MODEL_NAME="${2:-}"; PASSTHROUGH+=(--model-name "${2:-}"); shift ;;
         --wifi-ssid) WIFI_SSID="${2:-}"; shift ;;
         --wifi-psk-file) WIFI_PSK_FILE="${2:-}"; shift ;;
         -h|--help)   usage 0 ;;
@@ -239,7 +243,14 @@ if [ "$GUIDED" = 1 ]; then
         echo "    endpoint:   $ENDPOINT"
         echo "    tls certs:  $TLS_CERTS_DIR"
         echo "    wi-fi:      $WIFI_SSID (passphrase read from $WIFI_PSK_FILE, never printed)"
-        echo "    wake model: the bundled default (hey_hermes.tflite)"
+        if [ -n "$MODEL_URL" ]; then
+            echo "    wake model: fetched from $MODEL_URL"
+        elif [ -n "$MODEL_FILE" ]; then
+            echo "    wake model: $MODEL_FILE"
+        else
+            echo "    wake model: the bundled default (hey_hermes.tflite)"
+        fi
+        if [ -n "$MODEL_NAME" ]; then echo "    model name: $MODEL_NAME (the name the device reports)"; fi
     fi
     GUIDED_ARGS=()
     if [ "$BUILD_YN" = y ]; then GUIDED_ARGS+=(--build); fi
@@ -250,6 +261,9 @@ if [ "$GUIDED" = 1 ]; then
         GUIDED_ARGS+=(--tls-certs "$TLS_CERTS_DIR" --device-id "$DEVICE_ID" --endpoint "$ENDPOINT"
                       --wifi-ssid "$WIFI_SSID" --wifi-psk-file "$WIFI_PSK_FILE")
     fi
+    # Forward the flags this flow has no prompt for, exactly as given: nothing the user typed
+    # on the command line may be silently dropped.
+    if [ "${#PASSTHROUGH[@]}" -gt 0 ]; then GUIDED_ARGS+=("${PASSTHROUGH[@]}"); fi
     if [ "$DRY_RUN" = 1 ]; then GUIDED_ARGS+=(--dry-run); fi
     guided_end install-esp32.sh "${GUIDED_ARGS[@]}"
 fi

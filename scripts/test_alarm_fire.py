@@ -6,10 +6,17 @@ import json
 import os
 import pathlib
 import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+# The child interpreter: the repo's own venv when there is one (it carries the bridge's deps),
+# otherwise the interpreter running THIS test -- a fresh clone or an isolated worktree has no
+# repo-local .venv, and the suite must still run there (sys.executable is what the other
+# subprocess-based tests here spawn children with).
+VENV_PY = ROOT / ".venv" / "bin" / "python"
+PYTHON = str(VENV_PY) if VENV_PY.is_file() else sys.executable
 received: list[dict] = []
 
 
@@ -40,7 +47,7 @@ def main() -> int:
     env["VOICE_ANNOUNCE_TOKEN"] = "alarm-test-token"
     try:
         result = subprocess.run(
-            [str(ROOT / ".venv" / "bin" / "python"), str(ROOT / "scripts" / "alarm_fire.py"),
+            [PYTHON, str(ROOT / "scripts" / "alarm_fire.py"),
              "--text", "Time to leave", "--host", "127.0.0.1", "--port", str(server.server_port)],
             cwd=ROOT, env=env, text=True, capture_output=True, timeout=10,
         )
