@@ -59,6 +59,33 @@ redistributed, so embedding a community model in a published binary is a licence
 technical one. Where a model has to be inside an image, use one whose licence permits redistribution,
 or have the installer fetch the model separately and keep it out of the distributed image.
 
+## Release readiness: the bundled ESP32 model
+
+The bundled model `firmware/esp32/models/hey_hermes.tflite` (microwakeword.com community
+library) is licensed **personal/non-commercial only**. That is fine for this home satellite in
+a private repository. It is not fine for a **public prebuilt-bundle release**: publishing the
+model file (or any release artifact that carries it) redistributes it, and redistribution is
+what the non-commercial default does not grant. Before such a release ships, one of three
+routes must be taken:
+
+1. **A commercial licence** for that model from microwakeword.com's operator
+   (<https://microwakeword.com/license>), covering the redistribution.
+2. **An Apache-2.0 model swap** — replace the bundled default with a model whose licence
+   permits redistribution, such as the pre-trained models in
+   [esphome/micro-wake-word-models](https://github.com/esphome/micro-wake-word-models)
+   (see the table above and `firmware/esp32/models/NOTICE.md` for the swap mechanics).
+3. **Fetch-at-install** — keep the model out of every distributed artifact and have the
+   installer download it at provisioning time. The plumbing already exists:
+   `install-esp32.sh --download-model <url>` stages a model that way, and the model is written
+   to its own flash partition at provision time (never part of the app bundle), so no rebuild
+   is involved.
+
+**The current gate, plainly:** the repository is private and no prebuilt bundle or model is
+published, so no redistribution is happening today. Until one of the three routes above is
+done, a public release must not include `hey_hermes.tflite` in the tree, in a release asset,
+or inside any image. This is a description of the licence terms and the release decision they
+force, not legal advice.
+
 ## Changing the model
 
 `switching-wake-words.md` covers installing, switching, verifying and rolling back a model. This
