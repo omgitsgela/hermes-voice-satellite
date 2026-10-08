@@ -1,6 +1,7 @@
 #include "provisioning_console.h"
 #include "usb_wyoming.h"
 #include "provisioning.h"
+#include "device_identity.h"
 #include "wifi_station.h"
 #include "audio_bringup.h"
 #include "report_tail.h"
@@ -712,6 +713,18 @@ void provisioning_console_run(void) {
                  * pretending to be enrolled. */
                 snprintf(response, sizeof(response),
                          "OK ENROLL ABSENT authenticated=no detail=out_of_band");
+            } else if (!strcmp(line.data, "DEVICE_ID")) {
+                /* Who this board is, read-only: the identity it derives from its own factory
+                 * MAC -- the same one the gateway and USB registration paths use -- so a host
+                 * tool can read it off the board instead of being told it. Nothing is staged,
+                 * dialed or changed; an unreadable MAC is reported as an error, because the
+                 * identity is then unprovable rather than merely different. */
+                char device_id[32];
+                char boot_id[40];
+                if (device_identity(device_id, sizeof(device_id), boot_id, sizeof(boot_id)) == 0)
+                    snprintf(response, sizeof(response), "OK DEVICE_ID %s", device_id);
+                else
+                    snprintf(response, sizeof(response), "ERR DEVICE_ID UNREADABLE");
             } else if (!strcmp(line.data, "WAKE_STATUS") || !strcmp(line.data, "WAKE_FIRE")) {
                 /* The wake detector's provisioning-console surface (increment 4). WAKE_STATUS
                  * reports the detector state (real vs placeholder model, deaf, force-armed) so a

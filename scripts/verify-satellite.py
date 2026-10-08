@@ -25,8 +25,10 @@ Usage:
     scripts/verify-satellite.py --device-id <device-id> --host <host> --port 10702 \
         --state-dir ~/hermes-voice-bridge/state
 
-Flags: --host, --port, --state-dir, --device-id (each detected where possible: the same
-environment / bridge.env the bridge itself reads, the state directory beside the repo, and --
+Flags: --host, --port, --state-dir, --device-id (each detected where possible: the LIVE
+listener `ss` sees -- because what is actually accepting beats what any config claims, and a
+bridge bound to a LAN address is not reachable on loopback -- then the same environment /
+bridge.env the bridge itself reads, then loopback; the state directory beside the repo, and --
 when the credential file lists exactly one device -- that device id). Plus --credentials,
 --tls-dir and --bridge-log for layouts that keep those files elsewhere.
 
@@ -105,6 +107,91 @@ def detect_setting(name: str, env_file: Path, default: str) -> str:
     if name in os.environ:
         return os.environ[name]
     return read_env_file(env_file).get(name, default)
+
+def detected_port(name: str, env_file: Path, default: str) -> int:
+    """detect_setting, as a port: anything that is not one is a usage error, not a default."""
+    raw = detect_setting(name, env_file, default)
+    try:
+        value = int(raw)
+    except ValueError:
+        raise SystemExit(f"verify-satellite: {name} is not a port: {raw!r}") from None
+    if not 1 <= value <= 65535:
+        raise SystemExit(f"verify-satellite: {name} out of range 1-65535: {value}")
+    return value
+
+#: A bind that answers for every address carries no information about which address to probe.
+WILDCARD_BINDS = ("", "*", "0.0.0.0", "::")
+
+def parse_listeners(text: str) -> dict[int, list[str]]:
+    """`ss -ltnH` output -> {port: [bound addresses]}. Malformed lines are skipped, not guessed."""
+    listeners: dict[int, list[str]] = {}
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) < 4 or fields[0] != "LISTEN":
+            continue
+        local = fields[3]
+        if ":" not in local:
+            continue
+        bound, _, port_text = local.rpartition(":")
+        try:
+            port = int(port_text)
+        except ValueError:
+            continue
+        listeners.setdefault(port, []).append(bound.strip("[]"))
+    return listeners
+
+def live_listeners() -> dict[int, list[str]]:
+    """What the kernel says is listening RIGHT NOW (`ss -ltnH`), or {} when it cannot be told.
+
+    Read-only and best-effort: no ss, a broken ss, or an unreadable table simply means the
+    live source is silent and resolution falls through to configuration.
+    """
+    ss = shutil.which("ss")
+    if ss is None:
+        return {}
+    try:
+        result = subprocess.run([ss, "-ltnH"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    return parse_listeners(result.stdout)
+
+def resolve_probe_target(host_arg: str | None, port_arg: int | None,
+                         listeners: dict[int, list[str]], env_file: Path,
+                         tls_configured: bool) -> tuple[str, int]:
+    """The host:port the listener link probes. Precedence, highest first:
+
+      1. an explicit --host / --port, per field -- the operator's word wins;
+      2. the LIVE listener: a listener bound to a specific address on the chosen port names
+         that address, and a live listener on one of the configured ports picks the port;
+      3. VOICE_REGISTRY_HOST / bridge.env -- the configuration the bridge itself reads;
+      4. loopback.
+
+    Without (2) a bridge that binds a LAN address is probed on loopback and reported as a
+    false `FAIL listener` -- the exact failure this default exists to stop. A wildcard bind
+    (0.0.0.0 / ::) accepts anything and names nothing, so the host falls through to (3)/(4).
+    Read-only: it reads configuration and the kernel's socket table and nothing else.
+    """
+    registry_port = detected_port("VOICE_REGISTRY_PORT", env_file, "10701")
+    tls_port = detected_port("VOICE_REGISTRY_TLS_PORT", env_file, str(registry_port + 1))
+    configured_port = tls_port if tls_configured else registry_port
+
+    if port_arg is not None:
+        port = port_arg
+    else:
+        # What is accepting wins over what is configured (a stale bridge.env, or the plain port
+        # when only the TLS one is up); the configured primary wins ties between candidates.
+        port = configured_port
+        for candidate in dict.fromkeys((configured_port, tls_port, registry_port)):
+            if candidate in listeners:
+                port = candidate
+                break
+
+    if host_arg:
+        return host_arg, port
+    for bound in listeners.get(port, []):
+        if bound not in WILDCARD_BINDS:
+            return bound, port
+    return detect_setting("VOICE_REGISTRY_HOST", env_file, "127.0.0.1"), port
 
 
 # ---------------------------------------------------------------- the four links
@@ -278,10 +365,11 @@ def check_registered(state_dir: Path, device_id: str, bridge_log: Path | None) -
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--host", help="registry host (default: VOICE_REGISTRY_HOST, else 127.0.0.1)")
+    parser.add_argument("--host", help="registry host (default: the live listener's bind address, "
+                                      "then VOICE_REGISTRY_HOST, else 127.0.0.1)")
     parser.add_argument("--port", type=int,
-                        help="registry port (default: the TLS port when TLS is configured, "
-                             "else the plain port)")
+                        help="registry port (default: the live listener's port, then the TLS "
+                             "port when TLS is configured, else the plain port)")
     parser.add_argument("--state-dir", help="the bridge's state/ directory (default: <repo>/state)")
     parser.add_argument("--device-id", help="the enrolled device (default: the only device on file)")
     parser.add_argument("--credentials", help="device-credentials.json path "
@@ -301,21 +389,12 @@ def main() -> int:
     env_file = REPO_ROOT / "bridge.env"
     tls_configured = (tls_dir / "server.crt").is_file() and (tls_dir / "server.key").is_file()
 
-    def detected_port(name: str, default: str) -> int:
-        raw = detect_setting(name, env_file, default)
-        try:
-            value = int(raw)
-        except ValueError:
-            raise SystemExit(f"verify-satellite: {name} is not a port: {raw!r}") from None
-        if not 1 <= value <= 65535:
-            raise SystemExit(f"verify-satellite: {name} out of range 1-65535: {value}")
-        return value
-
-    registry_port = detected_port("VOICE_REGISTRY_PORT", "10701")
-    default_port = (detected_port("VOICE_REGISTRY_TLS_PORT", str(registry_port + 1))
-                    if tls_configured else registry_port)
-    host = args.host or detect_setting("VOICE_REGISTRY_HOST", env_file, "127.0.0.1")
-    port = args.port or default_port
+    # The probe target, resolved once: an explicit --host/--port wins per field, then the LIVE
+    # listener `ss` sees (a bridge bound to a LAN address is not reachable on loopback, and
+    # probing it there produced a false `FAIL listener`), then the configuration the bridge
+    # itself reads, then loopback. Read-only, like everything else here.
+    host, port = resolve_probe_target(args.host, args.port, live_listeners(), env_file,
+                                      tls_configured)
 
     device_id = args.device_id
     if device_id is None:

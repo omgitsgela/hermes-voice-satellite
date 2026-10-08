@@ -54,6 +54,25 @@ class ProvisionToolTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'oversize'):
             module.exchange(Stream(b'x' * 1025), 'STATUS')
 
+    def test_device_id_query_returns_the_board_id_and_nothing_else(self):
+        """The device-id subcommand is a read-only query in the status shape: one command, one
+        acknowledgment, reduced to exactly the id so a caller can use the output verbatim (the
+        guided installer takes it as the device-id default). A refusal or a malformed reply is
+        an error, never a guessed id -- a wrong id enrolls the wrong identity."""
+        module = _module()
+        connection = Stream(b'boot log\nPROVISION READY 1\nPROVISION OK DEVICE_ID esp32-001122334455\n')
+        reply = module.exchange(connection, 'DEVICE_ID')
+        self.assertEqual(reply, 'OK DEVICE_ID esp32-001122334455')
+        self.assertEqual(connection.sent, b'DEVICE_ID\n', 'the query must send exactly one command')
+        self.assertEqual(module.parse_device_id(reply), 'esp32-001122334455')
+        # An older firmware that refuses the command errors out (exchange raises on PROVISION ERR),
+        # and anything else the device could answer is never parsed into an id.
+        with self.assertRaisesRegex(RuntimeError, 'ERR DEVICE_ID UNREADABLE'):
+            module.exchange(Stream(b'PROVISION ERR DEVICE_ID UNREADABLE\n'), 'DEVICE_ID')
+        for bad in ('OK UNCONFIGURED', 'OK DEVICE_ID ', 'OK DEVICE_ID', 'DEVICE_ID esp32-1'):
+            with self.assertRaises(RuntimeError):
+                module.parse_device_id(bad)
+
     def test_psk_shape_accepts_both_wpa2_forms_and_rejects_the_rest(self):
         module = _module()
         self.assertEqual(module.psk_shape(b'12345678'), 'ascii-passphrase')

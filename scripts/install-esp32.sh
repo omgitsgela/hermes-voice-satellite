@@ -38,9 +38,10 @@
 #
 # GUIDED mode: run with NO arguments (or --guided) and the script detects what it can (the USB
 # serial ports /dev/ttyACM* and /dev/ttyUSB*, the prebuilt bundle, ESP-IDF, an existing registry
-# TLS directory, existing Wi-Fi PSK files), prompts for the rest with defaults shown in [brackets]
-# (bare Enter accepts one), validates each answer with the same rules the flags use, prints a
-# summary of exactly what it will do, and asks for an explicit yes/no before writing anything. A
+# TLS directory, existing Wi-Fi PSK files, and -- when a board is attached -- the device id the
+# board itself reports), prompts for the rest with defaults shown in [brackets] (bare Enter
+# accepts one), validates each answer with the same rules the flags use, prints a summary of
+# exactly what it will do, and asks for an explicit yes/no before writing anything. A
 # non-interactive stdin refuses the guided flow -- pass the flags for automation. --guided
 # --dry-run previews the guided answers without writing.
 
@@ -206,7 +207,23 @@ if [ "$GUIDED" = 1 ]; then
     fi
     if [ "$PROV_YN" = y ]; then
         guided_prompt TLS_CERTS_DIR "TLS certificates directory (client-ca.crt + the device's .crt/.key)" "${TLS_CERTS_DIR:-$REGISTRY_TLS}"
-        guided_prompt DEVICE_ID "Device id (the registry identity this board is enrolled as)" "${DEVICE_ID:-esp32-1}"
+        # The board derives its own identity from its factory MAC, so when one is attached, ASK
+        # it: a read-only console query (stages nothing) whose answer becomes the prompt's
+        # default instead of the placeholder. Any failure -- no board, no pyserial, an old
+        # firmware that does not know the query -- is simply "no default" and the prompt runs
+        # as before. The id is only ever a DEFAULT: the prompt still shows it and a typed answer
+        # wins, because the registry identity is the operator's to confirm.
+        DETECTED_DEVICE_ID=""
+        if [ -z "$DEVICE_ID" ] && [ -n "$SERIAL_PORTS" ] && command -v python3 >/dev/null 2>&1; then
+            DETECTED_DEVICE_ID="$(python3 "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" device-id 2>/dev/null | head -n1 | tr -d '\r' || true)"
+            case "$DETECTED_DEVICE_ID" in
+                ''|*[!A-Za-z0-9._-]*) DETECTED_DEVICE_ID="" ;;  # never trust a stray line as an id
+            esac
+            if [ -n "$DETECTED_DEVICE_ID" ]; then
+                echo "  device id read from the board: $DETECTED_DEVICE_ID (default below)"
+            fi
+        fi
+        guided_prompt DEVICE_ID "Device id (the registry identity this board is enrolled as)" "${DEVICE_ID:-${DETECTED_DEVICE_ID:-esp32-1}}"
         guided_prompt ENDPOINT "Endpoint the board dials, tls://host:port or tcp://host:port" "${ENDPOINT:-${LAN_IP:+tls://$LAN_IP:10702}}" guided_valid_endpoint_strict
         guided_prompt WIFI_SSID "Wi-Fi network (SSID) the board joins" "${WIFI_SSID}"
         guided_prompt WIFI_PSK_FILE "Wi-Fi passphrase FILE (the passphrase never goes on the command line)" "${WIFI_PSK_FILE:-$WIFI_PSK}"
