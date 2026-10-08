@@ -167,9 +167,12 @@ The four things staged to the board:
    never its value.
 
 On reboot the board associates, dials the endpoint, registers as its identity, and the registry
-accepts it by certificate fingerprint. The wake *detector* is still a placeholder: the model loads
-and SHA-verifies on the device, but the on-board acoustic path (and the live `WAKE_FIRE` test) is
-the next milestone. Do not treat the wake word as working on the board until that lands.
+accepts it by certificate fingerprint. The wake word is detected **on the device**: the firmware
+runs the MicroWakeWord model through TFLite-Micro (the log-mel microfrontend, a streaming inference
+window, and a sliding-window cutoff), so the board does not need the bridge to notice a wake. The
+`WAKE_FIRE` console command still forces a single detection, to exercise the chime-and-wake path
+without speaking. On-board acoustic behaviour is proven only by actually speaking the wake word in
+a quiet room.
 
 ### The prebuilt image
 
@@ -179,9 +182,9 @@ with a manifest that names every component at its offset with size and hash, pro
 build's own flash map:
 
 ```
-offset=0x0      bootloader/bootloader.bin       21168   sha256=53ecd8...
-offset=0x8000   partition_table/partition-table.bin 3072 sha256=31d35d...
-offset=0x10000  hermes_esp32_diagnostic.bin     987520  sha256=0afa80...
+offset=0x0      bootloader/bootloader.bin       21168   sha256=08a382b3...
+offset=0x8000   partition_table/partition-table.bin 3072 sha256=31d35d02...
+offset=0x10000  hermes_esp32_diagnostic.bin    1204288  sha256=078d0293...
 ```
 
 The manifest carries the bundle's own hash as a `bundle_sha256=` header, so a prebuilt bundle you
@@ -189,7 +192,7 @@ have been given can be verified with no build tree:
 
 ```sh
 .venv/bin/python scripts/bundle-esp32-flash.py --verify flash.bundle.bin --check flash.manifest.txt
-# OK bundle flash.bundle.bin sha256=40fa75...
+# OK bundle flash.bundle.bin sha256=6b1187b6...
 # bundle check: the prebuilt image matches the reviewed manifest
 ```
 
@@ -222,8 +225,8 @@ a different app.
 The wake model is a second, separate write to the `model` partition — that is what
 `install-esp32.sh --provision` does, and it is why the model swap never required an app rebuild.
 
-The current reviewed bundle (the one the manifest above describes) is 1,053,056 bytes,
-`sha256 40fa75a37661b7d7dc18713df22bc99e02963b0a80ba4fa1a2a268f48a3fbdef`. The prebuilt bundle and
+The current reviewed bundle (the one the manifest above describes) is 1,269,824 bytes,
+`sha256 6b1187b64b529fc398e564c08604372e752bcb54451a85085ed69758bfb53d9c`. The prebuilt bundle and
 its manifest ship together as a release asset. `install-esp32.sh --flash` verifies the bundle's own
 hash (`--verify`, no build tree) before writing it — that is the gate between "a file named
 `flash.bundle.bin`" and "the reviewed image". `install-esp32.sh --build` is the opt-in path that

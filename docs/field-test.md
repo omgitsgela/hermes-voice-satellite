@@ -180,14 +180,14 @@ question.
 **Success looks like:** the awake chime plays immediately, and a spoken answer comes back
 within a few seconds. On the Pi that is the whole test: the acoustic wake word is live.
 
-**Honest status on the ESP32:** the on-board acoustic scorer is still the placeholder — the
-provisioned model loads and SHA-verifies, but it does not yet score audio, so the wake word
-will not fire from the microphone (`docs/installation.md`; the console's `WAKE_STATUS` reports
-`model=real` when a validated model is loaded, and the scorer stays sub-threshold by design).
-Until the acoustic path lands, the acceptance gate on the board is the firmware's forced
-detection: send `WAKE_FIRE` on the provisioning console (a single line on `<usb-port>` at
-115200 baud; see `firmware/esp32/README.md`) and watch the same chime → wake → answer path run
-once. Speaking the wake word becomes the real board test when the real scorer lands.
+**Status on the ESP32:** the on-board scorer now runs real inference. The firmware loads the
+provisioned model and scores microphone audio through TFLite-Micro (the log-mel microfrontend plus
+a streaming inference window), so the wake word fires from the microphone without the bridge. The
+console's `WAKE_STATUS` reports `scorer=tflm` when the real scorer is live and `model=real` when a
+validated model is loaded; if either reads as the stub/placeholder, re-run the provision step. The
+`WAKE_FIRE` console command still forces a single detection (one line on `<usb-port>` at 115200
+baud; see `firmware/esp32/README.md`), which is the right tool for exercising the chime → wake →
+answer path without speaking, or when the room is too noisy to test acoustically.
 
 **Top failure:** the chime plays but no answer — that is the mic/endpointing path, not the wake
 detector; follow the turn in `journalctl --user -u hermes-voice-bridge -f`. No chime at all —
@@ -205,4 +205,4 @@ touching anything else.
 - [ ] the board flashed with `bundle check: the prebuilt image matches the reviewed manifest`
 - [ ] provisioning ended `provisioned: TLS credential, wake model, endpoint, Wi-Fi`
 - [ ] `verify-satellite.py --device-id <device-id>` reports `PASS (4/4 links)`
-- [ ] the wake word (or, on the ESP32 today, `WAKE_FIRE`) produces a chime and a spoken answer
+- [ ] speaking the wake word (or, to force one detection, `WAKE_FIRE` on the console) produces a chime and a spoken answer
