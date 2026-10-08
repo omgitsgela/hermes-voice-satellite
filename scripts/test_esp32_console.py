@@ -382,6 +382,19 @@ void wake_detector_status(char *out, size_t cap) {
                  getenv("WAKE_TFLM") ? "tflm" : "stub");
 }
 
+/* The board identity (device_identity.c) is derived from the factory MAC over IDF calls that
+ * do not exist on a host. The console only asks it for the id and frames the answer, so the
+ * stub stands in with a known id; the derivation's own behaviour is proved by the firmware
+ * build and the gateway path's tests. DEVICE_ID_FAIL models an unreadable factory MAC, where
+ * the identity is unprovable and the console must say so instead of inventing one. */
+int device_identity(char *device_id, size_t device_id_capacity,
+                    char *boot_id, size_t boot_id_capacity) {
+    if (getenv("DEVICE_ID_FAIL")) return -1;
+    snprintf(device_id, device_id_capacity, "esp32-001122334455");
+    snprintf(boot_id, boot_id_capacity, "boot-0000");
+    return 0;
+}
+
 /* The socket leg: reports what it was asked to dial, so the console's routing and framing
  * are what the test checks rather than the network. */
 int gateway_tcp_run(const char *host, unsigned port, char *out, size_t capacity) {
@@ -836,6 +849,26 @@ int usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);
             self.assertNotIn('GATEWAY BEGIN', staged, 'a status query must not dial anything')
             absent = self.console(executable, 'TLS_STATUS\n', TLS_PROBE_ABSENT='1')
             self.assertIn('PROVISION OK TLS ABSENT reason=none provisioned', absent)
+
+    def test_device_id_reports_the_board_identity_read_only(self):
+        """DEVICE_ID answers with the identity the board derives from its own factory MAC -- the
+        same one the gateway registers with -- so a host tool can read it instead of being told
+        it. It is a query: nothing is staged, dialed or armed, and an identity that cannot be
+        proven (an unreadable MAC) is an error, never an invented id."""
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = self.build(tmp)
+            output = self.console(executable, 'DEVICE_ID\nSTATUS\n')
+            self.assertIn('PROVISION OK DEVICE_ID esp32-001122334455', output)
+            self.assertEqual(output.count('PROVISION OK DEVICE_ID'), 1,
+                             'exactly one identity line may follow the query')
+            self.assertNotIn('GATEWAY BEGIN', output, 'a query must not dial anything')
+            self.assertNotIn('USB_WYOMING_ENTERED', output)
+            self.assertIn('PROVISION OK UNCONFIGURED', output,
+                          'the query must leave the rest of the console untouched')
+            failed = self.console(executable, 'DEVICE_ID\n', DEVICE_ID_FAIL='1')
+            self.assertIn('PROVISION ERR DEVICE_ID UNREADABLE', failed)
+            self.assertNotIn('PROVISION OK DEVICE_ID', failed,
+                             'an unprovable identity must never be reported as an id')
 
     def test_enroll_status_reports_the_honest_state(self):
         """The enrollment contract (increment 5): there is no authenticated enrollment flow, and the

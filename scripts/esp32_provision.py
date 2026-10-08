@@ -13,6 +13,7 @@ process list, or in the output.
 
 Usage:
     esp32_provision.py --port <usb> status
+    esp32_provision.py --port <usb> device-id
     esp32_provision.py --port <usb> set-endpoint <uri>
     esp32_provision.py --port <usb> clear-endpoint
     esp32_provision.py --port <usb> save-profile <ssid> <psk-file>
@@ -49,6 +50,19 @@ def read_psk(path) -> bytes:
         raise SystemExit(f'{path} is neither an 8-63 character passphrase nor a 64-hex raw key '
                          f'({len(psk)} bytes)')
     return psk
+
+
+def parse_device_id(reply: str) -> str:
+    """The board's id from its `OK DEVICE_ID <id>` reply, and nothing else.
+
+    The device-id query exists so a caller can USE what the board reports (a guided installer
+    takes it as a default), so the reply is reduced to exactly the id. Any other shape -- an
+    older firmware that answered `ERR COMMAND`, a truncated line -- is raised, never guessed
+    around: a wrong id provisioned into the registry is worse than a missing one."""
+    prefix = 'OK DEVICE_ID '
+    if not reply.startswith(prefix) or not reply[len(prefix):].strip():
+        raise RuntimeError(f'unexpected reply to DEVICE_ID: {reply}')
+    return reply[len(prefix):].strip()
 
 
 def block_terminator(action: str):
@@ -186,6 +200,8 @@ def main():
     parser.add_argument('--port', required=True, help='ESP32 USB serial device, not XMOS audio USB')
     sub = parser.add_subparsers(dest='action', required=True)
     sub.add_parser('status')
+    sub.add_parser('device-id', help='read the id the board derives from its own factory MAC '
+                                    '(read-only: stages nothing)')
     endpoint = sub.add_parser('set-endpoint')
     endpoint.add_argument('endpoint',
                           help='tcp://host:port (trusted LAN) or tls://host:port; staging only')
@@ -201,7 +217,7 @@ def main():
     sub.add_parser('scan')
     args = parser.parse_args()
 
-    command = {'status': 'STATUS', 'clear-endpoint': 'CLEAR_ENDPOINT',
+    command = {'status': 'STATUS', 'device-id': 'DEVICE_ID', 'clear-endpoint': 'CLEAR_ENDPOINT',
                'list-profiles': 'WIFI_PROFILES', 'clear-profiles': 'WIFI_PROFILE_CLEAR',
                'connect': 'WIFI_CONNECT', 'scan': 'WIFI_SCAN'}.get(args.action)
     if args.action == 'set-endpoint':
@@ -229,6 +245,13 @@ def main():
             # actions all end with an explicit ... END line, matched whole.
             print(exchange_block(connection, command, terminator=block_terminator(args.action),
                                  timeout=45.0))
+        elif args.action == 'device-id':
+            # A read-only query in the same one-command-one-acknowledgment shape as status. The
+            # whole point is the id as data, so the reply is reduced to it and printed alone:
+            # a caller (the guided installer) takes this output as a default verbatim. An older
+            # firmware that refuses the command surfaces as an error and a non-zero exit, so a
+            # caller always knows the difference between an id and no id.
+            print(parse_device_id(exchange(connection, command)))
         else:
             print(exchange(connection, command))
     finally:
