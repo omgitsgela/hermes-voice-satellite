@@ -80,6 +80,21 @@ def check_key_matches(cert_path: Path, key_path: Path) -> None:
         raise SystemExit(f"{cert_path.name} / {key_path.name} do not form a usable pair: {exc}")
 
 
+def report_pair(cert_path: Path, key_path: Path, problem) -> bool:
+    """check_key_matches routed through the problem collector, so verify reports a mismatch as a
+    counted problem and keeps going instead of dying with a raw SystemExit. A pair whose files do
+    not exist is not checked here (the caller already records the missing files). Returns True
+    when the pair is usable."""
+    if not (cert_path.is_file() and key_path.is_file()):
+        return False
+    try:
+        check_key_matches(cert_path, key_path)
+        return True
+    except SystemExit as exc:
+        problem(str(exc))
+        return False
+
+
 def check_ca_signature(ca_crt: Path, cert: Path, problem) -> None:
     """A device certificate the CA cannot verify will never complete the handshake. We use
     `openssl verify` because it checks exactly what the bridge's listener will check (the chain
@@ -154,8 +169,13 @@ def cmd_init(args: argparse.Namespace) -> int:
             h = h.strip()
             if not h:
                 continue
-            # openssl wants explicit types: a bare address is IP:..., anything else DNS:...
-            san_entries.append((f"IP:{h}" if h.replace(".", "").isdigit() else f"DNS:{h}"))
+            # openssl wants explicit types: an IP (dotted or IPv6) is IP:..., a hostname is DNS:... .
+            # An IPv6 literal contains a ':' (and no dots), so the dotted-IP test alone would mis-type
+            # it as DNS:.
+            if ":" in h or h.replace(".", "").isdigit():
+                san_entries.append(f"IP:{h}")
+            else:
+                san_entries.append(f"DNS:{h}")
         if not san_entries:
             san_entries = ["DNS:localhost", "IP:127.0.0.1"]
         san = ",".join(san_entries)
@@ -202,7 +222,6 @@ def cmd_enroll(args: argparse.Namespace) -> int:
             raise SystemExit(f"{device}.crt already exists at {tls}; pass --force to reissue "
                              f"(the old certificate's credential entry is replaced)")
         if dev_crt.is_file():
-            old_fp = fingerprint_of(dev_crt)
             dev_crt.unlink()
         if dev_key.is_file():
             dev_key.unlink()
@@ -221,9 +240,15 @@ def cmd_enroll(args: argparse.Namespace) -> int:
 
     fp = fingerprint_of(dev_crt)
     creds = load_credentials(cfile)
-    for other_fp, other_id in creds.items():
-        if other_id == device and other_fp != fp:
-            print(f"  note: replacing the old credential for {device} ({other_fp[:12]}...)")
+    # A reissue supersedes every other credential this device already holds: leaving the old
+    # fingerprint in the file would let a stray copy of the retired certificate keep authenticating
+    # as the device. Remove them (this is what "replaced" in the help text means), then register
+    # the new one.
+    superseded = [other_fp for other_fp, other_id in creds.items()
+                  if other_id == device and other_fp != fp]
+    for other_fp in superseded:
+        print(f"  note: replacing the old credential for {device} ({other_fp[:12]}...)")
+        del creds[other_fp]
     creds[fp] = device
     save_credentials(cfile, creds)
 
@@ -265,7 +290,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     for name in ("server.crt", "server.key"):
         if not (tls / name).is_file():
             problem(f"{name} missing (the bridge cannot start the TLS listener without it)")
-    check_key_matches(tls / "server.crt", tls / "server.key")
+    report_pair(tls / "server.crt", tls / "server.key", problem)
 
     creds = load_credentials(cfile)
     if not creds:
@@ -280,7 +305,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         if fingerprint_of(dev_crt) != fp:
             problem(f"{device}: certificate fingerprint does not match the credential on file "
                     f"(the bridge will refuse it)")
-        check_key_matches(dev_crt, dev_key)
+        report_pair(dev_crt, dev_key, problem)
         # The device's certificate must be signed by this CA: a certificate the CA cannot
         # verify is a device that will never complete the handshake, whatever the credentials say.
         check_ca_signature(ca_crt, dev_crt, problem)

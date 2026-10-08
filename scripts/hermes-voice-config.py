@@ -37,6 +37,19 @@ def get_path(data: dict, dotted: str):
     return node
 
 
+def key_present_in_example(example: dict, dotted: str) -> bool:
+    """Whether the example config defines this dotted key. The example is the project's own
+    declaration of which voice-surface keys are real; a key absent from it is almost certainly a
+    typo, and setting it would silently create a key Hermes ignores rather than an error worth
+    trusting."""
+    node = example
+    for part in dotted.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return False
+        node = node[part]
+    return True
+
+
 def set_path(data: dict, dotted: str, value) -> None:
     parts = dotted.split(".")
     node = data
@@ -74,11 +87,24 @@ def main() -> int:
     if not isinstance(data, dict):
         raise SystemExit(f"{config} is not a YAML mapping; refusing to edit it")
 
+    # The example is the project's authoritative list of voice-surface keys. Load it and reject
+    # any key not defined in it: a typo'd dotted key would otherwise be silently created as a key
+    # Hermes ignores, which is worse than an error.
+    example_path = Path(args.example).expanduser()
+    if not example_path.is_file():
+        raise SystemExit(f"no example config at {example_path}; pass the repo's voice-surface.example.yaml")
+    example = yaml.safe_load(example_path.read_text()) or {}
+    if not isinstance(example, dict):
+        raise SystemExit(f"{example_path} is not a YAML mapping")
+
     changed = []
     for pair in args.pairs:
         if "=" not in pair:
             raise SystemExit(f"bad pair {pair!r}; expected dotted.key=value")
         key, raw = pair.split("=", 1)
+        if not key_present_in_example(example, key):
+            raise SystemExit(f"key {key!r} is not in the example {example_path.name}; "
+                             f"refusing to create a key Hermes would ignore")
         try:
             value = json.loads(raw)
         except (ValueError, TypeError):

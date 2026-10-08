@@ -7,8 +7,13 @@ The whole system, end to end, in the order you actually build it:
 3. one or more **satellites**: an ESP32 board (Seeed XVF3800) and/or a Raspberry Pi
 4. **prebuilt images** where a build toolchain would be a tax
 
-Every step is idempotent and every installer has a `--dry-run` that prints exactly what it would do.
-The installers live in `scripts/`:
+Each installer has a `--dry-run` that prints exactly what it would do without writing (the gateway
+dry-run is the one exception: it edits a throwaway copy of `bridge.env` so it can show you the
+file you will end up with). Re-running an installer does not clobber a tuned `bridge.env` or a
+live registry CA — the managed `bridge.env` keys move in place to the current flag values and the
+CA is reused, never regenerated, because a regenerated CA strands every enrolled device. The
+venv/dependencies step rebuilds only when its import check fails, so it is conditional rather than
+strictly idempotent. The installers live in `scripts/`:
 
 | Script | Where it runs | What it does |
 |---|---|---|
@@ -31,7 +36,7 @@ CLI) on the host, at a release within a few of the current one.
 ```sh
 # if you do not have it yet
 curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
-hermes --version          # the gateway installer checks this on the way past
+hermes --version          # the gateway installer checks that the binary is on PATH before step 5
 ```
 
 The gateway installer (below) installs and enables this project's one plugin,
@@ -193,24 +198,42 @@ between "a file named `flash.bundle.bin`" and "the reviewed image".
 
 ### A Raspberry Pi satellite
 
+The Pi's audio stack is the upstream **wyoming-satellite** project (see
+`docs/owning-the-satellite-stack.md`); this repository's `pi/` tree adds the outbound registry
+runner and its sibling modules plus the systemd units. `install-pi.sh` copies those modules into
+the satellite's `examples/` directory (where the audio units' `ExecStart` and the rendered
+`outbound-satellite` unit expect them) and renders the units, so the real sequence is:
+
 ```sh
-# on the Pi, as root
-git clone https://github.com/omgitsgela/hermes-voice-satellite.git /opt/wyoming-satellite
+# 1. On the Pi, install the upstream wyoming-satellite per its own docs: the checkout ($VS_BASE)
+#    with its venv at $VS_BASE/.venv and script/run. This is a prerequisite the audio units assume.
+
+# 2. Bring the enrolled certificate files onto the Pi -- they live on the gateway host, not the Pi:
+scp 192.0.2.10:~/hermes-voice-bridge/state/registry-tls/{client-ca.crt,kitchen-pi.crt,kitchen-pi.key} \
+    /etc/voice-satellite/registry-tls/
+
+# 3. Install, from a checkout of THIS repository. --base is the wyoming-satellite root; --tls-certs
+#    points at the LOCAL cert directory just copied; --endpoint is the registry link the outbound
+#    unit dials.
 sudo scripts/install-pi.sh --base /opt/wyoming-satellite --device-name kitchen-pi \
     --endpoint tls://192.0.2.10:10702 \
-    --tls-certs ~/hermes-voice-bridge/state/registry-tls
+    --tls-certs /etc/voice-satellite/registry-tls
 ```
 
-The installer renders `satellite.env` (paths, identity, wake word), installs the coupled audio
-units **and** `outbound-satellite` (rendered from its `.in` template: the env file, the venv
-python, the runner path), and enables them as one group. `--tls-certs` without `--endpoint` is
-refused: credentials with nowhere to dial is a dead device.
+`install-pi.sh` builds the satellite venv, installs the nine `pi/*.py` device modules into
+`$BASE/examples/`, renders `satellite.env` (identity, wake word, and the `VOICE_BRIDGE_*` registry
+link that `outbound-satellite` reads), installs the coupled audio units **and** `outbound-satellite`
+(rendered from its `.in` template: the env file, the venv python, the runner path), and enables them
+as one group. Two things it refuses: `--tls-certs` without `--endpoint` (credentials with nowhere to
+dial is a dead device), and a `--tls-certs` directory that does not already hold `client-ca.crt`
+plus this device's `.crt`/`.key` **on the Pi** -- it verifies their presence before it writes
+anything.
 
-The Pi image story is different from the ESP32's: the satellite software is small (a venv + the
-`pi/` tree + the units), so there is no large prebuilt artifact to publish. What is prebuilt for
-the Pi is the *state*, not the image: the wake model (`hey_hermes.tflite`), the sounds, and the
-rendered `satellite.env`. A Pi becomes a satellite in minutes, which is why the installer is the
-unit of distribution rather than an SD image.
+The Pi image story is different from the ESP32's: the satellite software is small (the upstream
+wyoming-satellite checkout + the `pi/` tree + the units), so there is no large prebuilt artifact to
+publish. What is prebuilt for the Pi is the *state*, not the image: the wake model
+(`hey_hermes.tflite`), the sounds, and the rendered `satellite.env`. A Pi becomes a satellite in
+minutes, which is why the installer is the unit of distribution rather than an SD image.
 
 ## 4. After the install
 

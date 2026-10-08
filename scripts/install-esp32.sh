@@ -74,7 +74,7 @@ with_idf() {
 }
 
 usage() {
-    sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -119,7 +119,9 @@ fi
 # ---------------------------------------------------------------- bundle
 if [ "$DO_BUILD" = 1 ] || [ "$DO_FLASH" = 1 ]; then
     echo "== bundle (reviewable flash artifact + manifest) =="
-    mkdir -p "$BUNDLE_DIR"
+    # A dry-run must not create directories either (it "touches nothing"), so the mkdir is
+    # gated on the real run; the bundle step below is a no-op echo in dry-run anyway.
+    [ "$DRY_RUN" = 1 ] || mkdir -p "$BUNDLE_DIR"
     run python3 "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
         --build "$FIRMWARE_DIR/build" \
         --out "$BUNDLE_DIR/flash.manifest.txt" \
@@ -156,11 +158,28 @@ if [ "$DO_PROVISION" = 1 ]; then
     [ -n "$ENDPOINT" ]      || die "--endpoint is required (tls://host:port; the board dials exactly this)"
     [ -n "$WIFI_SSID" ]     || die "--wifi-ssid is required (the network the board joins)"
     [ -n "$WIFI_PSK_FILE" ] || die "--wifi-psk-file is required with --wifi-ssid (the passphrase moves as a file)"
+    # Parse the endpoint into scheme / host / port and validate it before anything is written. An
+    # unvalidated split (a host with no port, an IPv6 literal) produces a credential blob the
+    # firmware or the blob parser rejects only later, with a worse message than a die() here.
+    case "$ENDPOINT" in
+        tls://*|tcp://*) ;;
+        *) die "--endpoint must be tls://host:port or tcp://host:port (got: $ENDPOINT)" ;;
+    esac
+    ENDPOINT_BODY="${ENDPOINT#*://}"
+    ENDPOINT_HOST="${ENDPOINT_BODY%%:*}"
+    ENDPOINT_PORT="${ENDPOINT_BODY##*:}"
+    [ "$ENDPOINT_HOST" != "$ENDPOINT_BODY" ] || die "--endpoint has no port: $ENDPOINT (want tls://host:port)"
+    case "$ENDPOINT_HOST" in ''|*[![:alnum:].-]*) die "--endpoint host is not usable: $ENDPOINT_HOST" ;; esac
+    case "$ENDPOINT_PORT" in ''|*[!0-9]*) die "--endpoint port is not a number: $ENDPOINT_PORT" ;; esac
+    if [ "$ENDPOINT_PORT" -lt 1 ] || [ "$ENDPOINT_PORT" -gt 65535 ]; then
+        die "--endpoint port out of range 1-65535: $ENDPOINT_PORT"
+    fi
     # The registry file sits beside the certs directory in the bridge's state/; --registry overrides.
     [ -n "$REGISTRY_FILE" ] || REGISTRY_FILE="$(dirname "$TLS_CERTS_DIR")/device-credentials.json"
     [ "$DRY_RUN" = 1 ] || [ -d "$TLS_CERTS_DIR" ] || die "no TLS cert directory at $TLS_CERTS_DIR"
     [ "$DRY_RUN" = 1 ] || [ -f "$TLS_CERTS_DIR/client-ca.crt" ] || die "no client-ca.crt in $TLS_CERTS_DIR"
     [ "$DRY_RUN" = 1 ] || [ -f "$TLS_CERTS_DIR/$DEVICE_ID.crt" ] || die "no $DEVICE_ID.crt in $TLS_CERTS_DIR (is the device enrolled?)"
+    [ "$DRY_RUN" = 1 ] || [ -f "$TLS_CERTS_DIR/$DEVICE_ID.key" ] || die "no $DEVICE_ID.key in $TLS_CERTS_DIR (is the device enrolled?)"
     [ "$DRY_RUN" = 1 ] || [ -f "$REGISTRY_FILE" ] || die "no registry file at $REGISTRY_FILE (the bridge's state/device-credentials.json)"
     [ "$DRY_RUN" = 1 ] || [ -f "$WIFI_PSK_FILE" ] || die "wifi psk file not found: $WIFI_PSK_FILE"
 
@@ -170,8 +189,8 @@ if [ "$DO_PROVISION" = 1 ]; then
     #    bridge has on file for this identity, so a mix-up is refused before a byte is written.
     run python3 "$REPO_ROOT/scripts/provision-device-tls.py" \
         --certs "$TLS_CERTS_DIR" --device "$DEVICE_ID" \
-        --host "$(printf '%s' "$ENDPOINT" | sed -e 's#^[a-z]*://##' -e 's#:.*$##')" \
-        --port  "$(printf '%s' "$ENDPOINT" | sed -e 's#.*:##')" \
+        --host "$ENDPOINT_HOST" \
+        --port  "$ENDPOINT_PORT" \
         --registry "$REGISTRY_FILE" \
         --partitions "$FIRMWARE_DIR/partitions.csv" \
         --port-device "$PORT" --write
@@ -182,7 +201,13 @@ if [ "$DO_PROVISION" = 1 ]; then
     #    travels through argv. With neither, the bundled default is provisioned so a plain install
     #    just works; its attribution and license are in firmware/esp32/models/NOTICE.md.
     if [ -n "$MODEL_URL" ]; then
-        MODEL_FILE="$(mktemp "${TMPDIR:-/tmp}/wy_model.XXXXXX.tflite")"
+        if [ "$DRY_RUN" = 1 ]; then
+            # A dry-run must not touch the filesystem, so it names the would-be temp path without
+            # creating it; the name the device reports is still derived from the URL below.
+            MODEL_FILE="${TMPDIR:-/tmp}/wy_model.tflite (dry-run: not created)"
+        else
+            MODEL_FILE="$(mktemp "${TMPDIR:-/tmp}/wy_model.XXXXXX.tflite")"
+        fi
         echo "   fetching wake model: $MODEL_URL"
         [ "$DRY_RUN" = 1 ] || curl -fsSL -o "$MODEL_FILE" "$MODEL_URL" || die "model download failed: $MODEL_URL"
         echo "   saved to $MODEL_FILE"
@@ -190,10 +215,18 @@ if [ "$DO_PROVISION" = 1 ]; then
         MODEL_FILE="$REPO_ROOT/firmware/esp32/models/hey_hermes.tflite"
         echo "   using the bundled default wake model: $MODEL_FILE"
     fi
-    # The detection name defaults to the model's file stem (hey_hermes.tflite -> hey_hermes),
-    # which is exactly what the device reports as the wake word, matching the Pi (which
-    # reports whatever model it loaded). --model-name overrides it.
-    [ -n "$MODEL_NAME" ] || MODEL_NAME="$(basename "$MODEL_FILE" | sed 's/\.tflite$//')"
+    # The detection name is what the device reports as the wake word. It defaults to the model's
+    # file stem (hey_hermes.tflite -> hey_hermes), matching the Pi (which reports whatever model it
+    # loaded). For --download-model the bytes land in a random temp file, so the name comes from the
+    # URL's file name instead -- otherwise the device would report "wy_model.xK2pQ" as its wake word.
+    # --model-name always wins.
+    if [ -z "$MODEL_NAME" ]; then
+        if [ -n "$MODEL_URL" ]; then
+            MODEL_NAME="$(basename "${MODEL_URL%%\?*}" | sed 's/\.tflite$//')"
+        else
+            MODEL_NAME="$(basename "$MODEL_FILE" | sed 's/\.tflite$//')"
+        fi
+    fi
     [ "$DRY_RUN" = 1 ] || [ -f "$MODEL_FILE" ] || die "model file not found: $MODEL_FILE"
     run python3 "$REPO_ROOT/scripts/provision-device-model.py" --port "$PORT" \
         --model "$MODEL_FILE" --name "$MODEL_NAME"

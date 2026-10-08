@@ -28,8 +28,7 @@
 #
 # satellite.env is written from the committed template with the <...> placeholders filled from
 # these flags. It is the ONE place the device's real values live; the units only reference the
-# variables, so a different layout or user is a change HERE, not an edit to any unit. A real
-# passphrase is never a flag: --wifi-psk-file / --wake-model-dir take paths.
+# variables, so a different layout or user is a change HERE, not an edit to any unit.
 
 set -euo pipefail
 
@@ -62,7 +61,7 @@ run() {
 }
 
 usage() {
-    sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -128,6 +127,15 @@ if [ "$DO_DEPS" = 1 ]; then
     if [ -f "$REPO_ROOT/requirements.txt" ]; then
         run "$VENV/bin/pip" install -r "$REPO_ROOT/requirements.txt"
     fi
+    # The runner and its siblings live in $BASE/examples/ -- the layout the audio units' ExecStart
+    # lines expect (script/run is the upstream wyoming-satellite entry point; the units point at
+    # $BASE/examples/*.py). install-pi copies them from this repo's pi/ tree so the rendered
+    # outbound-satellite unit (whose ExecStart is $BASE/examples/outbound_satellite.py) can start.
+    run mkdir -p "$BASE/examples"
+    for module in outbound_satellite.py config_agent.py device_apply.py volume_control.py \
+                  mic_gain_control.py wake_shim.py 2mic_service.py inject_wake.py led_cmd.py; do
+        run install -m 644 "$REPO_ROOT/pi/$module" "$BASE/examples/$module"
+    done
     # The wake engine and the satellite are separate installs on the Pi (the satellite resolves
     # its interpreter by absolute path, not by "the system python"). Nothing to do here beyond
     # the venv; the openwakeword service names its own interpreter in its unit.
@@ -139,11 +147,6 @@ if [ "$DO_UNITS" = 1 ]; then
     for unit in "$UNITS_DIR"/*.service; do
         [ -e "$unit" ] || continue
         name="$(basename "$unit")"
-        # A .service.in is a template; the real unit is rendered below, so it is not installed
-        # verbatim.
-        case "$name" in
-            *.in) continue ;;
-        esac
         run install -m 644 "$unit" "/etc/systemd/system/$name"
     done
     # outbound-satellite ships as a template because it carries three device-specific values:
@@ -155,7 +158,7 @@ if [ "$DO_UNITS" = 1 ]; then
         render() {
             sed -e "s|__ENV_FILE__|$ENV_PATH|g" \
                 -e "s|__PYTHON__|$VENV/bin/python|g" \
-                -e "s|__RUNNER__|$BASE/outbound_satellite.py|g" \
+                -e "s|__RUNNER__|$BASE/examples/outbound_satellite.py|g" \
                 "$OUTBOUND_TEMPLATE"
         }
         if [ "$DRY_RUN" = 1 ]; then

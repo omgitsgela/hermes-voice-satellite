@@ -46,6 +46,7 @@ PI = ROOT / 'scripts' / 'install-pi.sh'
 ISSUE = ROOT / 'scripts' / 'issue-registry-tls.py'
 GATEWAY = ROOT / 'scripts' / 'install-gateway.sh'
 VOICECFG = ROOT / 'scripts' / 'hermes-voice-config.py'
+EXAMPLE = ROOT / 'hermes' / 'config' / 'voice-surface.example.yaml'
 
 
 def run(script, *args):
@@ -323,7 +324,6 @@ class GatewayInstallerTests(unittest.TestCase):
             self.assertIn('5. Hermes side', out)
             # The registry link values, derived from the flags and the bridge's config defaults.
             self.assertIn('VOICE_REGISTRY_ENABLED=1', out)
-            self.assertIn('VOICE_REGISTRY_HOST=192.0.2.10', out)
             self.assertIn('VOICE_REGISTRY_PORT=10701', out)
             self.assertIn('VOICE_REGISTRY_TLS_PORT=10702', out)   # REGISTRY_PORT+1
             self.assertIn('VOICE_SATELLITE_HOST=192.0.2.20', out)
@@ -331,10 +331,17 @@ class GatewayInstallerTests(unittest.TestCase):
             # The TLS material comes from the issuer, with the device-reachable address as SAN.
             self.assertIn('issue-registry-tls.py', out)
             self.assertIn('--san 192.0.2.10', out)
-            # The user unit is installed and enabled; the voice plugin is installed and enabled.
-            self.assertIn('hermes-voice-bridge.service', out)
+            # The registry listener binds 0.0.0.0 by default (the dial address is the cert SAN);
+            # the commented template line is not treated as a value.
+            self.assertIn('VOICE_REGISTRY_HOST=0.0.0.0', out)
+            # The credentials path is derived by the bridge from its own repo root, not a key the
+            # installer writes, so it must not appear as a managed VOICE_REGISTRY_* line.
+            self.assertNotIn('VOICE_REGISTRY_CREDENTIALS', out)
+            # The user unit is rendered from its template with the base path; the plugin is a local
+            # tree copied in (hermes plugins install cannot take a path), then enabled by name.
+            self.assertIn('hermes-voice-bridge.service.in', out)
             self.assertIn('enable --now', out)
-            self.assertIn('hermes plugins install', out)
+            self.assertIn('.hermes/plugins/voice_satellite', out)
             self.assertIn('hermes plugins enable voice_satellite', out)
             # The printed next step names the device commands with the real flags.
             self.assertIn('--tls-certs', out)
@@ -366,9 +373,10 @@ class VoiceConfigHelperTests(unittest.TestCase):
     def tearDown(self):
         self.cfg.unlink(missing_ok=True)
 
-    def run_helper(self, *pairs):
+    def run_helper(self, *pairs, example=None):
+        example = str(example) if example else str(EXAMPLE)
         return subprocess.run([str(self.py), str(VOICECFG), '--config', str(self.cfg),
-                               '--example', 'x', *pairs],
+                               '--example', example, *pairs],
                               capture_output=True, text=True)
 
     def yaml_dump(self, path: Path) -> str:
@@ -409,6 +417,15 @@ class VoiceConfigHelperTests(unittest.TestCase):
         import ast
         data = ast.literal_eval(self.yaml_dump(self.cfg))
         self.assertEqual(data['plugins']['enabled'], ['something_else', 'voice_satellite'])
+
+    def test_refuses_a_key_not_defined_in_the_example(self):
+        """A typo'd dotted key would otherwise be silently created as a key Hermes ignores, so
+        the helper must reject any key absent from the example rather than write it."""
+        result = self.run_helper('gateway.api_server.not_a_real_key=1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('not in the example', result.stderr)
+        # The config is left untouched (refusal happens before any write).
+        self.assertIn('test-model', self.cfg.read_text())
 
 
 if __name__ == '__main__':
