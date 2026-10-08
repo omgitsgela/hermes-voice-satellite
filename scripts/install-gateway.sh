@@ -81,15 +81,18 @@ usage() {
     exit "${1:-0}"
 }
 
+# A value-taking flag must be followed by its value. Without the guard, a trailing `--base`
+# (nothing after it) exits 1 with NO message at all: the arm's own shift empties the list and
+# the loop's shift below dies under `set -e`. Say what is missing instead.
 while [ $# -gt 0 ]; do
     case "$1" in
-        --base)                BASE="${2:-}"; shift ;;
-        --device-reachable-as) REACHABLE_AS="${2:-}"; shift ;;
-        --registry-port)       REGISTRY_PORT="${2:-}"; shift ;;
-        --tls-port)            TLS_PORT="${2:-}"; shift ;;
-        --registry-bind)       REGISTRY_BIND="${2:-}"; shift ;;
-        --satellite-host)      SATELLITE_HOST="${2:-}"; shift ;;
-        --hermes-bin)          HERMES_BIN="${2:-}"; PASSTHROUGH+=(--hermes-bin "${2:-}"); shift ;;
+        --base)                [ $# -ge 2 ] || die "$1 needs a value"; BASE="${2:-}"; shift ;;
+        --device-reachable-as) [ $# -ge 2 ] || die "$1 needs a value"; REACHABLE_AS="${2:-}"; shift ;;
+        --registry-port)       [ $# -ge 2 ] || die "$1 needs a value"; REGISTRY_PORT="${2:-}"; shift ;;
+        --tls-port)            [ $# -ge 2 ] || die "$1 needs a value"; TLS_PORT="${2:-}"; shift ;;
+        --registry-bind)       [ $# -ge 2 ] || die "$1 needs a value"; REGISTRY_BIND="${2:-}"; shift ;;
+        --satellite-host)      [ $# -ge 2 ] || die "$1 needs a value"; SATELLITE_HOST="${2:-}"; shift ;;
+        --hermes-bin)          [ $# -ge 2 ] || die "$1 needs a value"; HERMES_BIN="${2:-}"; PASSTHROUGH+=(--hermes-bin "${2:-}"); shift ;;
         --skip-hermes)         SKIP_HERMES=1 ;;
         --guided)              GUIDED=1; GUIDED_EXPLICIT=1 ;;
         --dry-run)             DRY_RUN=1 ;;

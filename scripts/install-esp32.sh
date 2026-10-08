@@ -102,6 +102,9 @@ usage() {
     exit "${1:-0}"
 }
 
+# A value-taking flag must be followed by its value. Without the guard, a trailing `--port`
+# (nothing after it) exits 1 with NO message at all: the arm's own shift empties the list and
+# the loop's shift below dies under `set -e`. Say what is missing instead.
 while [ $# -gt 0 ]; do
     case "$1" in
         --build)     DO_BUILD=1 ;;
@@ -109,17 +112,17 @@ while [ $# -gt 0 ]; do
         --provision) DO_PROVISION=1 ;;
         --guided)    GUIDED=1; GUIDED_EXPLICIT=1 ;;
         --dry-run)   DRY_RUN=1 ;;
-        --port)      PORT="${2:-}"; shift ;;
-        --bundle-dir) BUNDLE_DIR="${2:-}"; PASSTHROUGH+=(--bundle-dir "${2:-}"); shift ;;
-        --tls-certs) TLS_CERTS_DIR="${2:-}"; shift ;;
-        --device-id) DEVICE_ID="${2:-}"; shift ;;
-        --endpoint) ENDPOINT="${2:-}"; shift ;;
-        --registry)  REGISTRY_FILE="${2:-}"; PASSTHROUGH+=(--registry "${2:-}"); shift ;;
-        --model)     MODEL_FILE="${2:-}"; PASSTHROUGH+=(--model "${2:-}"); shift ;;
-        --download-model) MODEL_URL="${2:-}"; PASSTHROUGH+=(--download-model "${2:-}"); shift ;;
-        --model-name) MODEL_NAME="${2:-}"; PASSTHROUGH+=(--model-name "${2:-}"); shift ;;
-        --wifi-ssid) WIFI_SSID="${2:-}"; shift ;;
-        --wifi-psk-file) WIFI_PSK_FILE="${2:-}"; shift ;;
+        --port)      [ $# -ge 2 ] || die "$1 needs a value"; PORT="${2:-}"; shift ;;
+        --bundle-dir) [ $# -ge 2 ] || die "$1 needs a value"; BUNDLE_DIR="${2:-}"; PASSTHROUGH+=(--bundle-dir "${2:-}"); shift ;;
+        --tls-certs) [ $# -ge 2 ] || die "$1 needs a value"; TLS_CERTS_DIR="${2:-}"; shift ;;
+        --device-id) [ $# -ge 2 ] || die "$1 needs a value"; DEVICE_ID="${2:-}"; shift ;;
+        --endpoint)  [ $# -ge 2 ] || die "$1 needs a value"; ENDPOINT="${2:-}"; shift ;;
+        --registry)  [ $# -ge 2 ] || die "$1 needs a value"; REGISTRY_FILE="${2:-}"; PASSTHROUGH+=(--registry "${2:-}"); shift ;;
+        --model)     [ $# -ge 2 ] || die "$1 needs a value"; MODEL_FILE="${2:-}"; PASSTHROUGH+=(--model "${2:-}"); shift ;;
+        --download-model) [ $# -ge 2 ] || die "$1 needs a value"; MODEL_URL="${2:-}"; PASSTHROUGH+=(--download-model "${2:-}"); shift ;;
+        --model-name) [ $# -ge 2 ] || die "$1 needs a value"; MODEL_NAME="${2:-}"; PASSTHROUGH+=(--model-name "${2:-}"); shift ;;
+        --wifi-ssid) [ $# -ge 2 ] || die "$1 needs a value"; WIFI_SSID="${2:-}"; shift ;;
+        --wifi-psk-file) [ $# -ge 2 ] || die "$1 needs a value"; WIFI_PSK_FILE="${2:-}"; shift ;;
         -h|--help)   usage 0 ;;
         *)           die "unknown argument: $1 (see --help)" ;;
     esac
