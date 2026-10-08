@@ -183,7 +183,7 @@ commands and the gateway/audio commands are detailed in their own sections below
 | `AUDIO_BRINGUP` | One bounded I2S/I2C bring-up, framed `AUDIO BRINGUP BEGIN` / `END`. |
 | `TLS_STATUS` | What TLS material is provisioned, without dialling anything. |
 | `ENROLL_STATUS` | The honest enrollment state: `OK ENROLL ABSENT authenticated=no detail=out_of_band` (no authenticated flow exists). |
-| `WAKE_STATUS` | The local wake detector's state: model (`real`/`placeholder`), deaf, force-armed. |
+| `WAKE_STATUS` | The local wake detector's state: model (`real`/`placeholder`), deaf, force-armed, and the scorer (`tflm` = real microWakeWord inference, `stub` = the sub-threshold placeholder). |
 | `WAKE_FIRE` | Arm a one-shot forced detection for the live-test gate (no trained model needed). |
 | `START_WYOMING` | Hand the USB port to the Wyoming control core (latches until reset). |
 

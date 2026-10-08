@@ -375,10 +375,11 @@ void wake_detector_force_fire(void) {
 }
 void wake_detector_status(char *out, size_t cap) {
     if (out && cap > 0)
-        snprintf(out, cap, "model=%s deaf=%d force=%d threshold_armed=%d",
+        snprintf(out, cap, "model=%s deaf=%d force=%d threshold_armed=%d scorer=%s",
                  getenv("WAKE_REAL_MODEL") ? "real" : "placeholder",
                  getenv("WAKE_DEAF") ? 1 : 0,
-                 wake_force_fired > 0 ? 1 : 0, 1);
+                 wake_force_fired > 0 ? 1 : 0, 1,
+                 getenv("WAKE_TFLM") ? "tflm" : "stub");
 }
 
 /* The socket leg: reports what it was asked to dial, so the console's routing and framing

@@ -1,0 +1,21 @@
+version: "1.4.1"
+description: TensorFlow Lite Micro component for ESP-IDF
+url: https://github.com/espressif/esp-tflite-micro
+repository: https://github.com/espressif/esp-tflite-micro.git
+issues: https://github.com/espressif/esp-tflite-micro/issues
+documentation: https://github.com/espressif/esp-tflite-micro#readme
+
+dependencies:
+  idf:
+    version: ">=5.1"
+  espressif/esp-nn:
+    # >=1.3.0: grouped-conv support the conv wrapper now relies on
+    version: ">=1.3.0"
+    # Vendored locally next to this component (see ../VENDORED.md): the build
+    # must not depend on the component registry being reachable.
+    override_path: "../esp-nn"
+files:
+  exclude:
+    - scripts
+    - .gitlab-ci.yml
+    - .github
