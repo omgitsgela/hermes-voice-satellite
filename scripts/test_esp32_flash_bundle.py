@@ -108,6 +108,59 @@ class BundleTest(unittest.TestCase):
             self.assertIn('app.bin', tampered.stdout + tampered.stderr)
 
 
+class BundleVerifyTest(unittest.TestCase):
+    """--verify is the prebuilt-bundle gate: it hashes the one file that goes to 0x0 against the
+    manifest's bundle_sha256 header, with no build tree in sight."""
+
+    def test_bundle_mode_writes_the_bundle_hash_into_the_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            build, _b, _p, _a = make_build(tmp)
+            manifest = Path(tmp) / 'manifest.txt'
+            bundle = Path(tmp) / 'bundle.bin'
+            ran = run_bundle(['--build', str(build), '--out', str(manifest),
+                              '--bundle', str(bundle)], tmp)
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+            text = manifest.read_text()
+            self.assertIn(f'bundle_sha256={sha256(bundle.read_bytes())}', text)
+            # The header is a header, not a component line.
+            self.assertEqual(len([l for l in text.splitlines() if l.startswith('offset=')]), 3)
+
+    def test_verify_accepts_a_matching_prebuilt_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            build, _b, _p, _a = make_build(tmp)
+            manifest = Path(tmp) / 'manifest.txt'
+            bundle = Path(tmp) / 'bundle.bin'
+            run_bundle(['--build', str(build), '--out', str(manifest), '--bundle', str(bundle)], tmp)
+            # Verify with only the bundle + manifest present: the prebuilt path needs no build tree.
+            verify = run_bundle(['--verify', str(bundle), '--check', str(manifest)], tmp)
+            self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
+            self.assertIn('matches the reviewed manifest', verify.stdout)
+
+    def test_verify_refuses_a_tampered_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            build, _b, _p, _a = make_build(tmp)
+            manifest = Path(tmp) / 'manifest.txt'
+            bundle = Path(tmp) / 'bundle.bin'
+            run_bundle(['--build', str(build), '--out', str(manifest), '--bundle', str(bundle)], tmp)
+            data = bytearray(bundle.read_bytes())
+            data[0] ^= 0xFF
+            bundle.write_bytes(bytes(data))
+            verify = run_bundle(['--verify', str(bundle), '--check', str(manifest)], tmp)
+            self.assertNotEqual(verify.returncode, 0,
+                                'a changed bundle must not pass a reviewed manifest')
+            self.assertIn('disagrees', verify.stdout + verify.stderr)
+
+    def test_verify_refuses_a_manifest_without_the_bundle_header(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            build, _b, _p, _a = make_build(tmp)
+            manifest = Path(tmp) / 'manifest.txt'
+            run_bundle(['--build', str(build), '--out', str(manifest)], tmp)   # no --bundle
+            verify = run_bundle(['--verify', str(Path(tmp) / 'whatever.bin'),
+                                 '--check', str(manifest)], tmp)
+            self.assertNotEqual(verify.returncode, 0)
+            self.assertIn('bundle_sha256', verify.stdout + verify.stderr)
+
+
 class ErrorsTest(unittest.TestCase):
     def test_a_missing_flash_map_is_refused_not_guessed(self):
         with tempfile.TemporaryDirectory() as tmp:

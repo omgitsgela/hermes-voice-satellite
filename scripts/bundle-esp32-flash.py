@@ -14,13 +14,16 @@ The gate is then a hash comparison, not a memory.
 
 --bundle writes the components into one image, each placed at its flash offset with
 zero padding between, so a flasher can write the bundle straight to 0x0. The bundle's own
-sha256 is reported so it too can be pinned.
+sha256 is written into the manifest as a 'bundle_sha256=' header line and reported, so a
+published image can be pinned -- and a user who downloaded a prebuilt bundle can verify it
+WITHOUT the source build tree, which is the whole point of shipping a prebuilt image.
 
 Usage:
     bundle-esp32-flash.py --build <build-dir>            # print the manifest
     bundle-esp32-flash.py --build <build-dir> --out manifest.txt
-    bundle-esp32-flash.py --build <build-dir> --bundle bundle.bin
-    bundle-esp32-flash.py --build <build-dir> --check manifest.txt
+    bundle-esp32-flash.py --build <build-dir> --bundle bundle.bin --out manifest.txt
+    bundle-esp32-flash.py --build <build-dir> --check manifest.txt   # re-hash the source build
+    bundle-esp32-flash.py --verify bundle.bin --check manifest.txt   # a prebuilt image, no build
 """
 import argparse
 import hashlib
@@ -74,23 +77,34 @@ def manifest_line(offset, build, name):
             f'sha256={sha256_of(target)}')
 
 
-def emit_manifest(build, out_path=None):
+def emit_manifest(build, out_path=None, bundle_sha256=None):
     mapped = load_flash_map(build)
     lines = [manifest_line(offset, build, name) for offset, name in mapped]
+    # The bundle's own hash rides along as an optional header line. It is what lets a
+    # prebuilt image be verified with no build tree (--verify); absent it, the manifest
+    # still names every component, and --check still re-hashes a source build.
+    if bundle_sha256:
+        lines = [f'bundle_sha256={bundle_sha256}'] + lines
     text = '\n'.join(lines) + '\n'
     if out_path:
         Path(out_path).write_text(text)
-        print(f'manifest={out_path} entries={len(lines)}')
+        print(f'manifest={out_path} entries={len(mapped)}')
     for line in lines:
         print(line)
     return lines
 
 
 def parse_manifest(path):
+    """Return (component entries, bundle_sha256 or None). The 'bundle_sha256=' header, when
+    present, is pulled out rather than parsed as a component line."""
     entries = []
+    bundle_sha256 = None
     for raw in Path(path).read_text().splitlines():
         raw = raw.strip()
         if not raw:
+            continue
+        if raw.startswith('bundle_sha256='):
+            bundle_sha256 = raw.split('=', 1)[1].strip()
             continue
         fields = dict(field.split('=', 1) for field in raw.split())
         for required in ('offset', 'name', 'size', 'sha256'):
@@ -100,7 +114,7 @@ def parse_manifest(path):
                         int(fields['size']), fields['sha256']))
     if not entries:
         raise SystemExit(f'manifest is empty: {path}')
-    return entries
+    return entries, bundle_sha256
 
 
 def write_bundle(build, mapped, bundle_path):
@@ -117,8 +131,9 @@ def check_manifest(build, manifest_path):
     """Re-hash every file a reviewed manifest names and compare. Any mismatch -- size or
     hash -- is a refusal that names the file, because the reviewed bytes and the bytes on
     disk have stopped agreeing."""
+    entries, _bundle_sha256 = parse_manifest(manifest_path)
     mismatches = 0
-    for offset, name, size, expected in parse_manifest(manifest_path):
+    for offset, name, size, expected in entries:
         target = build / name
         if not target.exists():
             print(f'MISMATCH {name}: missing from the build')
@@ -137,25 +152,55 @@ def check_manifest(build, manifest_path):
     print('manifest check: all files match')
 
 
+def verify_bundle(bundle_path, manifest_path):
+    """Verify a standalone (prebuilt) bundle against the manifest's own bundle_sha256 header.
+    This is the gate for a user who flashed a published image and never built the source: the
+    one file that goes to 0x0 is hashed and compared, with no build tree required."""
+    _entries, expected = parse_manifest(manifest_path)
+    if not expected:
+        raise SystemExit(f'manifest has no bundle_sha256 line: {manifest_path} '
+                         '(regenerate it with --bundle, or run --check with the source build)')
+    actual = sha256_of(Path(bundle_path))
+    if actual != expected:
+        raise SystemExit(f'bundle disagrees with the reviewed manifest: '
+                         f'reviewed sha256={expected} now sha256={actual}')
+    print(f'OK bundle {bundle_path} sha256={actual}')
+    print('bundle check: the prebuilt image matches the reviewed manifest')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--build', required=True, help='the build directory (flasher_args.json)')
+    parser.add_argument('--build', help='the build directory (flasher_args.json)')
     parser.add_argument('--out', help='write the manifest to this file')
     parser.add_argument('--bundle', help='write the combined flash image to this file')
     parser.add_argument('--check', metavar='MANIFEST',
                         help='re-hash the build against a reviewed manifest and refuse on mismatch')
+    parser.add_argument('--verify', metavar='BUNDLE',
+                        help='verify a (prebuilt) bundle against the manifest bundle_sha256 header')
     args = parser.parse_args()
+
+    if args.verify:
+        if not args.check:
+            parser.error('--verify needs --check MANIFEST (the manifest carrying bundle_sha256)')
+        verify_bundle(args.verify, Path(args.check))
+        return
+    if args.check:
+        if not args.build:
+            parser.error('--check needs --build (or --verify BUNDLE for a prebuilt image)')
+        check_manifest(Path(args.build), Path(args.check))
+        return
+    if not args.build:
+        parser.error('--build is required (to emit a manifest or a bundle)')
     build = Path(args.build)
 
-    if args.check:
-        check_manifest(build, Path(args.check))
-        return
+    bundle_sha256 = None
     if args.bundle:
         mapped = load_flash_map(build)
         length = write_bundle(build, mapped, Path(args.bundle))
-        print(f'bundle={args.bundle} size={length} sha256={sha256_of(Path(args.bundle))}')
-    emit_manifest(build, args.out)
+        bundle_sha256 = sha256_of(Path(args.bundle))
+        print(f'bundle={args.bundle} size={length} sha256={bundle_sha256}')
+    emit_manifest(build, args.out, bundle_sha256=bundle_sha256)
 
 
 if __name__ == '__main__':

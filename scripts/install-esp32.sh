@@ -1,30 +1,34 @@
 #!/usr/bin/env bash
-# Install the ESP32/XVF3800 voice satellite on a board: build, bundle, flash, provision.
+# Install the ESP32/XVF3800 voice satellite on a board: flash, provision, (optional) build.
 #
-# This is the device-side counterpart of `scripts/install-pi.sh`. It takes the firmware that
-# lives in `firmware/esp32/` and turns a bare board into a working satellite:
+# This is the device-side counterpart of `scripts/install-pi.sh`. It turns a bare board into a
+# working satellite. The default path needs NO ESP-IDF: flash the prebuilt bundle, then provision.
 #
-#   1. build      -- `idf.py build` for IDF_TARGET=esp32s3 (the application region).
-#   2. bundle     -- `bundle-esp32-flash.py` builds the reviewable flash artifact + manifest.
-#   3. flash      -- `esptool` writes the bundle (bootloader, partition table, app) to 0x0.
-#   4. provision  -- TLS material (out of band) + the wake model + Wi-Fi, over USB.
+#   1. flash      -- `esptool` writes the PREBUILT bundle (bootloader, partition table, app) to
+#                    0x0. This is the default: the published bundle is what a new user flashes.
+#   2. provision  -- TLS material (out of band) + the wake model + Wi-Fi, over USB. This is what
+#                    turns a flashed board into a satellite.
+#   3. build      -- (opt-in) `idf.py build` + `bundle-esp32-flash.py`: compile the firmware from
+#                    source and produce the bundle yourself. Needs ESP-IDF v6.1; a user who just
+#                    wants a working board does not need it.
 #
 # Flashing is the one act with teeth, so it is never implied: --flash is required to write the
-# board, and without it this script builds + bundles + prints the exact flash command. The
-# application region only: no chip erase, no eFuse or security change.
+# board. The application region only: no chip erase, no eFuse or security change.
+#
+# Provisioning is a SET, not a menu: TLS credential + wake model + endpoint + Wi-Fi profile are
+# all required, because a board missing any one is a dead board.
 #
 # Usage:
-#   scripts/install-esp32.sh --build                     # build + bundle, print the flash step
-#   scripts/install-esp32.sh --flash --port /dev/ttyACM0 # build + bundle + write the board
+#   scripts/install-esp32.sh --flash --port /dev/ttyACM0   # flash the prebuilt bundle (no ESP-IDF)
 #   scripts/install-esp32.sh --provision --port /dev/ttyACM0 \
 #       --tls-certs ~/hermes-voice-bridge/state/registry-tls --device-id <id> \
 #       --endpoint tls://<host>:10702 \
 #       --wifi-ssid <ssid> --wifi-psk-file <file>
-#   scripts/install-esp32.sh --dry-run ...               # print every command, touch nothing
+#   scripts/install-esp32.sh --build                       # (opt-in) build + bundle from source
+#   scripts/install-esp32.sh --build --flash --port /dev/ttyACM0   # compile and flash in one go
+#   scripts/install-esp32.sh --dry-run ...                 # print every command, touch nothing
 #
-# Provisioning is what makes a flashed board a satellite: the TLS credential region (so it can
-# authenticate to the registry), the wake model, the endpoint it dials, and the Wi-Fi profile it
-# joins. Everything is staged to the board's NVS, so the boot auto-start dials on its own.
+# Provisioning stages to the board's NVS, so the boot auto-start dials on its own.
 #
 # Passphrases, device keys and certificate material never come through this script's argv into
 # logs: --tls-certs, --model, --wifi-psk-file and the model download all take file PATHS, and the
@@ -74,7 +78,7 @@ with_idf() {
 }
 
 usage() {
-    sed -n '2,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,35p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -108,16 +112,14 @@ if [ "$DO_FLASH" = 1 ] || [ "$DO_PROVISION" = 1 ]; then
     [ -n "$PORT" ] || die "--port is required with --flash or --provision"
 fi
 
-# ---------------------------------------------------------------- build
-if [ "$DO_BUILD" = 1 ] || [ "$DO_FLASH" = 1 ]; then
+# ---------------------------------------------------------------- build (opt-in)
+# Compiling is the advanced path: it needs ESP-IDF v6.1 and the firmware source, and produces the
+# bundle you would otherwise download. A user flashing the prebuilt bundle never reaches this block.
+if [ "$DO_BUILD" = 1 ]; then
     [ "$DRY_RUN" = 1 ] || [ -d "$FIRMWARE_DIR" ] || die "no firmware directory at $FIRMWARE_DIR"
-    [ "$DRY_RUN" = 1 ] || [ -f $HOME/esp/idf-activate.sh ] || die "ESP-IDF not found at $HOME/esp/idf-activate.sh"
+    [ "$DRY_RUN" = 1 ] || [ -f $HOME/esp/idf-activate.sh ] || die "ESP-IDF not found at $HOME/esp/idf-activate.sh (only --build needs it; to flash the prebuilt bundle, drop --build)"
     echo "== build (IDF_TARGET=$IDF_TARGET) =="
     run bash -c ". $HOME/esp/idf-activate.sh </dev/null >/dev/null 2>&1; export IDF_TARGET=$IDF_TARGET; cd '$FIRMWARE_DIR' && idf.py build"
-fi
-
-# ---------------------------------------------------------------- bundle
-if [ "$DO_BUILD" = 1 ] || [ "$DO_FLASH" = 1 ]; then
     echo "== bundle (reviewable flash artifact + manifest) =="
     # A dry-run must not create directories either (it "touches nothing"), so the mkdir is
     # gated on the real run; the bundle step below is a no-op echo in dry-run anyway.
@@ -132,12 +134,22 @@ fi
 
 # ---------------------------------------------------------------- flash
 # The bundle carries bootloader + partition table + app and writes straight to 0x0. This is the
-# only place anything is written to the board, and it is gated on --flash: never implied.
+# only place anything is written to the board, and it is gated on --flash: never implied. The
+# bundle is PREBUILT by default (the published image); --build produces one from source instead.
 if [ "$DO_FLASH" = 1 ]; then
     echo "== flash ($PORT) =="
-    [ "$DRY_RUN" = 1 ] || [ -f "$BUNDLE_DIR/flash.bundle.bin" ] || die "no bundle at $BUNDLE_DIR/flash.bundle.bin (run --build first)"
-    run python3 "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
-        --build "$FIRMWARE_DIR/build" --check "$BUNDLE_DIR/flash.manifest.txt"
+    [ "$DRY_RUN" = 1 ] || [ -f "$BUNDLE_DIR/flash.bundle.bin" ] || die "no bundle at $BUNDLE_DIR/flash.bundle.bin (download the prebuilt bundle, or pass --build to compile from source)"
+    # The integrity gate. With a local source build present, re-hash every component against the
+    # reviewed manifest. For a prebuilt bundle with no build tree, the manifest's own bundle_sha256
+    # header is the gate: hash the one file that goes to 0x0.
+    if [ -d "$FIRMWARE_DIR/build" ]; then
+        run python3 "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
+            --build "$FIRMWARE_DIR/build" --check "$BUNDLE_DIR/flash.manifest.txt"
+    else
+        echo "   prebuilt bundle (no local build tree): verifying against the manifest's bundle hash"
+        run python3 "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
+            --verify "$BUNDLE_DIR/flash.bundle.bin" --check "$BUNDLE_DIR/flash.manifest.txt"
+    fi
     run python3 -m esptool --chip esp32s3 --port "$PORT" --baud 460800 \
         --before default-reset --after hard-reset \
         write_flash --flash_mode dio --flash_size 8MB --flash_freq 80m \

@@ -14,8 +14,9 @@ invocation, so the suite is offline and repeatable.
 What is pinned:
 
   1  --help exits 0 and prints usage
-  2  --dry-run --build prints the build + bundle commands and touches nothing
-  3  --dry-run --flash prints the board write (0x0, the bundle) and nothing more
+  2  --dry-run --build prints the opt-in build + bundle commands and touches nothing
+  3  --dry-run --flash prints the board write (0x0, the PREBUILT bundle) and does NOT build
+  3b --flash's integrity gate is --verify with no build tree, --check with one
   4  --flash without --port fails with a clear message (a board write is never implied)
   5  --dry-run --provision passes credential/model/wifi material as FILE PATHS, never inline,
      and names the real provisioning helpers with their real flags
@@ -96,6 +97,29 @@ class InstallScriptTests(unittest.TestCase):
         self.assertIn('0x0', result.stdout)
         self.assertIn('/dev/ttyACM0', result.stdout)
         self.assertIn('flash.bundle.bin', result.stdout)
+
+    def test_esp32_flash_does_not_build(self):
+        """--flash writes the PREBUILT bundle and must not invoke idf.py: a user with no ESP-IDF
+        flashes the published image. Only --build compiles from source."""
+        result = run(ESP32, '--dry-run', '--flash', '--port', '/dev/ttyACM0')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('idf.py', result.stdout, '--flash must not build; --build is opt-in')
+        self.assertIn('bundle-esp32-flash.py', result.stdout)
+        self.assertIn('write_flash', result.stdout)
+
+    def test_esp32_flash_gate_falls_to_verify_without_a_build_tree(self):
+        """A fresh checkout has no firmware/esp32/build, so the flash gate must use --verify (the
+        manifest's bundle hash) rather than --check (which re-hashes the source build)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / 'repo'
+            (repo / 'scripts').mkdir(parents=True)
+            (repo / 'firmware' / 'esp32').mkdir(parents=True)   # deliberately no build/
+            shutil.copy(ESP32, repo / 'scripts' / 'install-esp32.sh')
+            result = run(repo / 'scripts' / 'install-esp32.sh',
+                         '--dry-run', '--flash', '--port', '/dev/ttyACM0')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('--verify', result.stdout)
+            self.assertIn('prebuilt bundle', result.stdout)
 
     def test_esp32_flash_without_a_port_is_refused(self):
         """A board write must be explicit: --flash with no --port fails, it never guesses a port."""

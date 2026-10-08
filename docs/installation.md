@@ -116,14 +116,24 @@ build in place; otherwise the prebuilt image below skips the build entirely.
 ### From source
 
 ```sh
-# on the machine with the board attached (it appears as /dev/ttyACM0 via USB Serial/JTAG)
-scripts/install-esp32.sh --flash --port /dev/ttyACM0          # build + bundle + write the board
+# on the machine with the board attached (it appears as /dev/ttyACM0 via USB Serial/JTAG).
+# No ESP-IDF needed: --flash writes the prebuilt bundle. Add --build only to compile from source.
+scripts/install-esp32.sh --flash --port /dev/ttyACM0          # flash the prebuilt bundle
 scripts/install-esp32.sh --provision --port /dev/ttyACM0 \
-    --tls-certs ~/hermes-voice-bridge/state/registry-tls \
+    --tls-certs ./registry-tls \
     --device-id kitchen-esp32 \
     --endpoint tls://192.0.2.10:10702 \
     --wifi-ssid MyNet --wifi-psk-file ./psk.txt
 ```
+
+`--tls-certs` must point at a directory holding `client-ca.crt`, this device's `<id>.crt` and
+`<id>.key`, with the bridge's `device-credentials.json` beside that directory. On the gateway host
+those live in `~/hermes-voice-bridge/state/`; on a separate flashing machine (the usual case -- the
+gateway stays on, the board is flashed from a laptop), copy them there first, e.g.
+`scp gateway:~/hermes-voice-bridge/state/registry-tls/{client-ca.crt,<id>.crt,<id>.key} ./registry-tls/`
+and `scp gateway:~/hermes-voice-bridge/state/device-credentials.json ./`. The device's `<id>` is
+printed by the board itself (`python3 scripts/esp32_provision.py --port /dev/ttyACM0 status`) and is
+the identity the gateway enrolls it under (`scripts/issue-registry-tls.py enroll --new <id>`).
 
 Provisioning is a **set, not a menu**: TLS credential, wake model, endpoint, and Wi-Fi profile are
 all required, because a board missing any one is a dead board. An incomplete provision is refused
@@ -163,7 +173,17 @@ offset=0x8000   partition_table/partition-table.bin 3072 sha256=31d35d...
 offset=0x10000  hermes_esp32_diagnostic.bin     987520  sha256=0afa80...
 ```
 
-Verify a bundle you have been given, then flash it:
+The manifest carries the bundle's own hash as a `bundle_sha256=` header, so a prebuilt bundle you
+have been given can be verified with no build tree:
+
+```sh
+.venv/bin/python scripts/bundle-esp32-flash.py --verify flash.bundle.bin --check flash.manifest.txt
+# OK bundle flash.bundle.bin sha256=40fa75...
+# bundle check: the prebuilt image matches the reviewed manifest
+```
+
+If you compiled the firmware yourself, `--check` re-hashes every component in the build against the
+manifest instead:
 
 ```sh
 .venv/bin/python scripts/bundle-esp32-flash.py --build firmware/esp32/build --check flash.manifest.txt
@@ -192,9 +212,11 @@ The wake model is a second, separate write to the `model` partition — that is 
 `install-esp32.sh --provision` does, and it is why the model swap never required an app rebuild.
 
 The current reviewed bundle (the one the manifest above describes) is 1,053,056 bytes,
-`sha256 40fa75a37661b7d7dc18713df22bc99e02963b0a80ba4fa1a2a268f48a3fbdef`. A bundle published as a
-release asset must carry its manifest next to it, and the installer's `--check` step is the gate
-between "a file named `flash.bundle.bin`" and "the reviewed image".
+`sha256 40fa75a37661b7d7dc18713df22bc99e02963b0a80ba4fa1a2a268f48a3fbdef`. The prebuilt bundle and
+its manifest ship together as a release asset. `install-esp32.sh --flash` verifies the bundle's own
+hash (`--verify`, no build tree) before writing it — that is the gate between "a file named
+`flash.bundle.bin`" and "the reviewed image". `install-esp32.sh --build` is the opt-in path that
+compiles from source and re-hashes every component instead.
 
 ### A Raspberry Pi satellite
 
