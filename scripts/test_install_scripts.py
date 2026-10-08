@@ -794,7 +794,7 @@ class FlagSurfaceGuardTests(unittest.TestCase):
             # $2 read) on the following line, and the guard must still see that flag. The old
             # pattern required non-empty trailing text, which would silently lose coverage the
             # moment someone reformatted a parser.
-            m = re.match(r'\s+(--[a-z-]+)\)(.*)', line)
+            m = re.match(r'\s+(--[a-z0-9_-]+)\)(.*)', line)
             if not m:
                 continue
             body = m.group(2)
@@ -802,7 +802,10 @@ class FlagSurfaceGuardTests(unittest.TestCase):
             while not body.strip() and i + lookahead + 1 < len(lines) and lookahead < 3:
                 lookahead += 1
                 body += ' ' + lines[i + lookahead]
-            surface[m.group(1)] = '$2' in body
+            # ${2:-}, ${2}, $2 and "$2" all consume a value. A bare-substring test for '$2'
+            # MISSES the braced form ${2...}, which is exactly what these parsers use, and a
+            # detector that sees no value-taking flag makes the guard tests pass vacuously.
+            surface[m.group(1)] = bool(re.search(r'\$\{?2', body))
         return surface
 
     def drive(self, script, flag):
@@ -901,6 +904,30 @@ class FlagSurfaceGuardTests(unittest.TestCase):
                     else:
                         self.assertIn(flag, run_line.split(),
                                       'typed %s did not survive into the run line' % flag)
+
+
+    def test_the_value_detector_actually_sees_value_taking_flags(self):
+        """Guard-the-guard. If the value detector silently stops working, the two tests above
+        iterate ZERO flags and pass while covering nothing (that happened: a substring test for
+        '$2' misses the braced ${2...} form these parsers actually use). Assert the detector
+        still sees both forms, and still treats a plain switch as a switch."""
+        with tempfile.TemporaryDirectory() as d:
+            probe = Path(d) / 'probe.sh'
+            probe.write_text('        --braced)  X="${2:-}"; shift ;;\n'
+                             '        --bare)    X="$2"; shift ;;\n'
+                             '        --braced_nb) X="${2:?}"; shift ;;\n'
+                             '        --switch)  X=1 ;;\n')
+            seen = self.surface(probe)
+        self.assertTrue(seen.get('--braced'), 'the ${2:-} form was not seen as value-taking')
+        self.assertTrue(seen.get('--bare'), 'the $2 form was not seen as value-taking')
+        self.assertTrue(seen.get('--braced_nb'), 'the ${2:?} form was not seen as value-taking')
+        self.assertFalse(seen.get('--switch'), 'a plain switch was misread as value-taking')
+        for script in (ESP32, PI, GATEWAY):
+            with self.subTest(script=script.name):
+                surface = self.surface(script)
+                self.assertTrue(any(surface.values()),
+                                '%s: the detector classified NO flag as value-taking, so the '
+                                'typed-value guard above is vacuous' % script.name)
 
 
 class VoiceConfigHelperTests(unittest.TestCase):
