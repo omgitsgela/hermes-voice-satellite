@@ -25,6 +25,10 @@ default terms are sufficient; **re-check before any commercial or wide redistrib
 repository is private, which keeps the redistribution question hypothetical.
 
 The ESPHome `micro_wake_word` component and the microWakeWord inference engine are Apache-2.0.
+The on-device engine this firmware runs is vendored under `firmware/esp32/components/`
+(`esp-tflite-micro`, `esp-nn`, `esp-micro-speech-features` -- the same pair ESPHome runs; see
+`firmware/esp32/components/VENDORED.md` for versions and commits). Those Apache-2.0 terms cover
+the engine only and do **not** extend to this model.
 
 ## Why this model and why now
 

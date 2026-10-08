@@ -16,6 +16,9 @@ redistributor must preserve those notices.
 | `pi/vendor/seeed-voicecard-0.3/` (53 files) | `respeaker/seeed-voicecard`, the audio driver for the Pi HATs | **GPL-3.0** | the vendored `LICENSE` file is the GNU GPL v3 text; the GitHub API reports `GPL-3.0` |
 | `pi/vendor/native-satellite-13bb024/` (46 files) | `rhasspy/wyoming-satellite` at commit `13bb024`, our vendored copy with the local patch already applied | **MIT** | the GitHub API reports `MIT`; the upstream `LICENSE.md` is the MIT text, copyright 2023 Michael Hansen. The licence text now travels with the vendored copy at `pi/vendor/native-satellite-13bb024/LICENSE.md` |
 | `reference/` | upstream copies of the satellite's own files, kept for protocol truth | **MIT** | same project and licence as above |
+| `firmware/esp32/components/esp-tflite-micro/` | `espressif/esp-tflite-micro` v1.4.1 at commit `dd40859`, the TensorFlow Lite Micro interpreter the ESP32 wake model runs on | **Apache-2.0** | the vendored `LICENSE` is the Apache-2.0 text; see `firmware/esp32/components/VENDORED.md` for the exact commit and the one local edit |
+| `firmware/esp32/components/esp-nn/` | `espressif/esp-nn` v1.4.1 at commit `5578173`, the SIMD kernel library esp-tflite-micro links against | **Apache-2.0** | the vendored `LICENSE` is the Apache-2.0 text |
+| `firmware/esp32/components/esp-micro-speech-features/` | `esphome-libs/esp-micro-speech-features` v1.2.3 at commit `351c4c6`, ESPHome's fork of TFLM's microfrontend (the log-mel feature pipeline microWakeWord models train against) | **Apache-2.0** | the vendored `LICENSE` is the Apache-2.0 text |
 
 **Why this matters for the licence split.** The GPL-3.0 driver is somebody else's copyleft code: it stays
 GPL-3.0, it cannot be made non-commercial, and this project's licence does not reach it. It is kept as

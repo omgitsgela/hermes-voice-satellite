@@ -1,6 +1,7 @@
 #include "wake_detector.h"
 
 #include "wy_model.h"
+#include "wy_mww_scorer.h"
 #include "wy_wake.h"
 #include "wyoming_session.h"
 
@@ -42,6 +43,9 @@ static struct {
     size_t model_len;
     int have_real_model;    /* 1 = a validated real model loaded, 0 = the safe placeholder */
 
+    wy_mww_scorer *scorer;  /* the #110 scorer: real inference over `model`, NULL without one */
+    int scorer_cold;        /* 1 = cold-start the streaming scorer before its next frame */
+
     int16_t *chime;         /* pre-rendered chime samples (mono16), played on a detection */
     size_t chime_samples;
     size_t chime_left;      /* sample-time countdown while the tone sounds (self-trigger guard) */
@@ -78,19 +82,48 @@ static void read_wake_config(double *threshold, char *word, size_t word_cap) {
 
 /* ---- seams --------------------------------------------------------------------- */
 
-/* The #110 scorer's placeholder (D2): deterministic and sub-threshold, so the detector never
- * fires on real audio in normal operation. force_fire makes exactly one frame cross the
- * threshold so the live-test gate can drive the whole chime -> wake path with no trained model.
- * #110 replaces this with the real inference over `model`. */
-static float placeholder_score(void *user, const int16_t *mono, size_t n) {
+/* Tear down the #110 scorer (a re-init rebuilds it over the new model bytes). */
+static void scorer_teardown(void) {
+    if (wd.scorer) {
+        wy_mww_scorer_destroy(wd.scorer);
+        wd.scorer = NULL;
+    }
+}
+
+/* Build the real scorer over the validated model bytes the loader kept (the
+ * WKM1 header is ours; the scorer consumes the tflite bytes that follow). The
+ * inference parameters are the wy_mww defaults, which are exactly the shipped
+ * manifest's values (models/hey_hermes.json: cutoff 0.5, window 5, 10 ms
+ * steps, 32000 arena) -- pinned against that file by
+ * scripts/test_esp32_wake_scorer.py. Returns 0 when real inference is live. */
+static int scorer_setup(void) {
+    if (!wd.model || wd.model_len <= WY_MODEL_HEADER_SIZE) return -1;
+    wd.scorer = wy_mww_scorer_create(wd.model + WY_MODEL_HEADER_SIZE,
+                                     wd.model_len - WY_MODEL_HEADER_SIZE, NULL);
+    wd.scorer_cold = 1;
+    return wd.scorer ? 0 : -1;
+}
+
+/* The #110 scorer seam (D2), now the real thing: streaming microWakeWord
+ * inference over the provisioned model when one is loaded and its interpreter
+ * is up. The score is the model's sliding-window mean probability at the
+ * moment the window crosses the model's own probability_cutoff (one-shot, see
+ * wy_mww.h); the core's threshold is the second gate on it. With no usable
+ * model -- or if the interpreter refused to start -- this is deterministic and
+ * sub-threshold (0.0), so the detector is armed-but-mute on real audio and
+ * never runs a garbage scorer (D3's safety property).
+ * force_fire keeps working in BOTH modes (the provisioning console's
+ * live-test gate depends on it): exactly one frame returns 1.0, crossing any
+ * threshold in [0, 1]. */
+static float score_frame(void *user, const int16_t *mono, size_t n) {
     (void)user;
-    (void)mono;
-    (void)n;
+    float score = 0.0f;
+    if (wd.scorer) score = wy_mww_scorer_feed(wd.scorer, mono, n);
     if (wd.force_fire) {
         wd.force_fire = 0;
-        return 1.0f;   /* crosses any threshold in [0, 1]: a forced detection */
+        return 1.0f;   /* a forced detection */
     }
-    return 0.0f;
+    return score;
 }
 
 /* D3: read the `model` data partition and hand the core its bytes. A validated real model is
@@ -107,6 +140,10 @@ static int model_load(void *user, const char *model_name, void **out_model, size
      * This is the only thing the loader hands back with no real model. */
     static uint8_t placeholder[4] = { 'P', 'L', 'C', 'H' };
     if (!out_model || !out_len) return -1;
+    /* A re-load replaces the model bytes: the scorer that consumes them must
+     * go first (it holds a pointer into the old buffer), and it is rebuilt in
+     * wake_detector_start once init has called this seam. */
+    scorer_teardown();
     *out_model = NULL;
     *out_len = 0;
 
@@ -217,10 +254,17 @@ void wake_detector_start(void *session, void *user,
     read_wake_config(&threshold, word, sizeof(word));
 
     /* Seams first, then init: init loads the model through the load seam. */
-    wy_wake_set_seams(wd.core, placeholder_score, model_load, chime_play, wake_fire, NULL);
+    wy_wake_set_seams(wd.core, score_frame, model_load, chime_play, wake_fire, NULL);
     wd.prev_streaming = 0;
     wd.chime_left = 0;
     wd.core_ready = (wy_wake_init(wd.core, threshold, WAKE_COOLDOWN_MS, word) == 0);
+
+    /* The #110 scorer over the bytes init just validated. A model whose
+     * interpreter will not build (wrong tensor layout, arena exhaustion) is
+     * NOT run: the seam falls back to the deterministic placeholder path, and
+     * WAKE_STATUS reports scorer=stub so a live test sees the difference. */
+    if (wd.core_ready && wd.have_real_model)
+        (void)scorer_setup();
 }
 
 void wake_detector_feed(const int16_t *mono, size_t n) {
@@ -245,18 +289,32 @@ void wake_detector_feed(const int16_t *mono, size_t n) {
     /* Score only while armed: a wake can only succeed when the host has run-satellite'd, so
      * feeding the scorer at any other time would only ever produce a rejected fire. The core
      * itself then self-gates on its deaf guard. */
-    if (wy_session_state(wd.session) == WY_SESSION_RUN_REQUESTED)
+    if (wy_session_state(wd.session) == WY_SESSION_RUN_REQUESTED) {
+        /* Cold-start the streaming scorer on the deaf -> armed edge: the core does not call the
+         * scorer while it is deaf (streaming / playing / cooling down), so the stateful model's
+         * feature state would otherwise freeze mid-utterance and resume hours later scoring new
+         * audio against stale history. A reset on the edge gives the next frame a clean model. */
+        if (wy_wake_deaf(wd.core)) {
+            wd.scorer_cold = 1;
+        } else if (wd.scorer_cold) {
+            wd.scorer_cold = 0;
+            if (wd.scorer) wy_mww_scorer_reset(wd.scorer);
+        }
         wy_wake_feed(wd.core, mono, n);
+    }
 }
 
 void wake_detector_stop(void) {
     if (wd.core) wy_wake_destroy(wd.core);
+    /* The scorer first: it consumes the model bytes below. */
+    scorer_teardown();
     if (wd.model) {
         heap_caps_free(wd.model);
         wd.model = NULL;
         wd.model_len = 0;
     }
     wd.have_real_model = 0;
+    wd.scorer_cold = 1;
     wd.prev_streaming = 0;
     wd.chime_left = 0;
     wd.force_fire = 0;
@@ -273,9 +331,15 @@ void wake_detector_force_fire(void) {
 
 void wake_detector_status(char *out, size_t cap) {
     if (!out || cap == 0) return;
-    snprintf(out, cap, "model=%s deaf=%d force=%d threshold_armed=%d",
+    /* Truthful on both axes: model= is the provisioned model (validated real
+     * vs the safe placeholder) and scorer= is what actually scores frames
+     * (tflm = real microWakeWord inference, stub = the deterministic
+     * sub-threshold placeholder). A real model whose interpreter failed to
+     * start reads model=real scorer=stub -- never a silent downgrade. */
+    snprintf(out, cap, "model=%s deaf=%d force=%d threshold_armed=%d scorer=%s",
              wd.have_real_model ? "real" : "placeholder",
              wd.core_ready && wy_wake_deaf(wd.core) ? 1 : 0,
              wd.force_fire ? 1 : 0,
-             wd.core_ready ? 1 : 0);
+             wd.core_ready ? 1 : 0,
+             wd.scorer ? "tflm" : "stub");
 }

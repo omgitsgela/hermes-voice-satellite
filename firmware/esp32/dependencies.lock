@@ -1,0 +1,19 @@
+dependencies:
+  espressif/esp-nn:
+    dependencies:
+    - name: idf
+      version: '>=5.1'
+    source:
+      path: components/esp-nn
+      type: local
+    version: 1.4.1
+  idf:
+    source:
+      type: idf
+    version: 6.1.0
+direct_dependencies:
+- espressif/esp-nn
+- idf
+manifest_hash: 5fe0bf586659030f84371afacb32b161d8e573dfe40c57dc189f4ab5e51113b9
+target: esp32s3
+version: 3.0.0
