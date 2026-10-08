@@ -17,7 +17,8 @@ What is pinned:
   2  --dry-run --build prints the build + bundle commands and touches nothing
   3  --dry-run --flash prints the board write (0x0, the bundle) and nothing more
   4  --flash without --port fails with a clear message (a board write is never implied)
-  5  --dry-run --provision passes credential/model material as FILE PATHS, never inline
+  5  --dry-run --provision passes credential/model/wifi material as FILE PATHS, never inline,
+     and names the real provisioning helpers with their real flags
   6  the Pi --dry-run renders the config (VS_BASE / device name / wake word) and names the
      coupled-service group
   7  the Pi script refuses to proceed without --base / --device-name
@@ -76,14 +77,47 @@ class InstallScriptTests(unittest.TestCase):
 
     def test_esp32_provision_moves_credentials_as_paths_not_argv(self):
         result = run(ESP32, '--dry-run', '--provision', '--port', '/dev/ttyACM0',
-                     '--tls-manifest', '/tmp/manifest.json',
+                     '--tls-certs', '/srv/bridge/state/registry-tls', '--device-id', 'esp32-test',
+                     '--endpoint', 'tls://192.0.2.10:10702',
+                     '--wifi-ssid', 'TestNet', '--wifi-psk-file', '/tmp/psk.txt',
                      '--model', '/tmp/hey_hermes.tflite', '--model-name', 'hey_hermes')
         self.assertEqual(result.returncode, 0, result.stderr)
         # The provisioning helpers take the FILE PATHS; no key material is inline in argv.
         self.assertIn('provision-device-tls.py', result.stdout)
-        self.assertIn('/tmp/manifest.json', result.stdout)
+        self.assertIn('--certs /srv/bridge/state/registry-tls', result.stdout)
+        self.assertIn('--device esp32-test', result.stdout)
+        self.assertIn('--host 192.0.2.10', result.stdout)
+        self.assertIn('--port 10702', result.stdout)
+        self.assertIn('--registry /srv/bridge/state/device-credentials.json', result.stdout)
+        self.assertIn('--port-device /dev/ttyACM0', result.stdout)
+        self.assertIn('--write', result.stdout)
         self.assertIn('provision-device-model.py', result.stdout)
         self.assertIn('/tmp/hey_hermes.tflite', result.stdout)
+        # The endpoint and the Wi-Fi profile are staged over the console; the passphrase never
+        # appears as an argument, only the file that holds it.
+        self.assertIn('set-endpoint tls://192.0.2.10:10702', result.stdout)
+        self.assertIn('save-profile TestNet /tmp/psk.txt', result.stdout)
+        self.assertNotIn('--tls-manifest', result.stdout)
+        self.assertNotIn('set-wifi-ssid', result.stdout)
+
+    def test_esp32_provision_without_the_full_set_is_refused(self):
+        """Provisioning is a set, not a menu: a board missing any piece is a dead board, so an
+        incomplete provision must be refused before it starts, not half-applied."""
+        full = {
+            '--tls-certs': '/srv/bridge/state/registry-tls',
+            '--device-id': 'esp32-test',
+            '--endpoint': 'tls://192.0.2.10:10702',
+            '--wifi-ssid': 'TestNet',
+            '--wifi-psk-file': '/tmp/psk.txt',
+        }
+        for flag, value in full.items():
+            args = ['--dry-run', '--provision', '--port', '/dev/ttyACM0']
+            for f, v in full.items():
+                if f != flag:
+                    args += [f, v]
+            result = run(ESP32, *args)
+            self.assertNotEqual(result.returncode, 0, f'should have refused without {flag}')
+            self.assertIn(flag, result.stderr)
 
     def test_pi_dry_run_renders_config_and_names_the_coupled_group(self):
         result = run(PI, '--dry-run', '--base', '/opt/wyoming-satellite',
