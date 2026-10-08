@@ -83,16 +83,19 @@ usage() {
     exit "${1:-0}"
 }
 
+# A value-taking flag must be followed by its value. Without the guard, a trailing `--base`
+# (nothing after it) exits 1 with NO message at all: the arm's own shift empties the list and
+# the loop's shift below dies under `set -e`. Say what is missing instead.
 while [ $# -gt 0 ]; do
     case "$1" in
-        --base)        BASE="${2:-}"; shift ;;
-        --device-name) DEVICE_NAME="${2:-}"; shift ;;
-        --wake-word)   WAKE_WORD="${2:-}"; shift ;;
-        --user)        DEVICE_USER="${2:-}"; shift ;;
-        --satellite-port) SATELLITE_PORT="${2:-}"; shift ;;
-        --endpoint)    ENDPOINT="${2:-}"; shift ;;
-        --tls-certs)   TLS_CERTS_DIR="${2:-}"; shift ;;
-        --env-path)    ENV_PATH="${2:-}"; shift ;;
+        --base)        [ $# -ge 2 ] || die "$1 needs a value"; BASE="${2:-}"; shift ;;
+        --device-name) [ $# -ge 2 ] || die "$1 needs a value"; DEVICE_NAME="${2:-}"; shift ;;
+        --wake-word)   [ $# -ge 2 ] || die "$1 needs a value"; WAKE_WORD="${2:-}"; shift ;;
+        --user)        [ $# -ge 2 ] || die "$1 needs a value"; DEVICE_USER="${2:-}"; shift ;;
+        --satellite-port) [ $# -ge 2 ] || die "$1 needs a value"; SATELLITE_PORT="${2:-}"; shift ;;
+        --endpoint)    [ $# -ge 2 ] || die "$1 needs a value"; ENDPOINT="${2:-}"; shift ;;
+        --tls-certs)   [ $# -ge 2 ] || die "$1 needs a value"; TLS_CERTS_DIR="${2:-}"; shift ;;
+        --env-path)    [ $# -ge 2 ] || die "$1 needs a value"; ENV_PATH="${2:-}"; shift ;;
         --guided)      GUIDED=1; GUIDED_EXPLICIT=1 ;;
         --dry-run)     DRY_RUN=1 ;;
         --no-deps)     DO_DEPS=0; PASSTHROUGH+=(--no-deps) ;;
@@ -175,6 +178,11 @@ if [ "$GUIDED" = 1 ]; then
         else
             echo "  TLS material:  none (plain link; fine on a trusted LAN only)"
         fi
+    elif [ -n "$TLS_CERTS_DIR" ]; then
+        # --tls-certs typed but the endpoint resolved empty: the flag path refuses this half
+        # link (--tls-certs needs --endpoint), so say so here instead of advertising a local
+        # test device the run will never be.
+        echo "  registry link: none (the run refuses: --tls-certs $TLS_CERTS_DIR was given, but no endpoint)"
     else
         echo "  registry link: none (local test device; the outbound unit is not installed)"
     fi
@@ -195,6 +203,13 @@ if [ "$GUIDED" = 1 ]; then
     if [ -n "$ENDPOINT" ]; then
         GUIDED_ARGS+=(--endpoint "$ENDPOINT")
         if [ -n "$TLS_CERTS_DIR" ]; then GUIDED_ARGS+=(--tls-certs "$TLS_CERTS_DIR"); fi
+    elif [ -n "$TLS_CERTS_DIR" ]; then
+        # --tls-certs was typed but the endpoint resolved empty. Forward it verbatim anyway:
+        # the re-executed run then hits the flag path's own refusal (--tls-certs needs
+        # --endpoint) instead of guided silently dropping the flag and installing a local
+        # test device. What the flag path refuses, guided refuses too -- nothing typed on the
+        # command line is ever dropped.
+        GUIDED_ARGS+=(--tls-certs "$TLS_CERTS_DIR")
     fi
     # Forward the flags this flow has no prompt for, exactly as given: nothing the user typed
     # on the command line may be silently dropped.

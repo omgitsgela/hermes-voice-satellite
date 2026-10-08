@@ -43,8 +43,18 @@ What is pinned:
      for (--bundle-dir/--registry/--model/--download-model/--model-name, --hermes-bin,
      --no-deps/--no-units/--no-config/--no-services): the run line the guided flow prints
      must contain the flag and its value, and the run must actually use it
+  17 a value-taking flag as the LAST argv token refuses with a clear "needs a value" message
+     in all three parsers -- never a silent exit 1 with no output
+  18 install-pi guided with --tls-certs typed and an empty endpoint never silently diverges
+     from the flag path: the flag survives (and the re-executed run refuses with the flag
+     path's own --tls-certs needs --endpoint message) or the flow refuses with that same
+     message -- never a quiet local-test install
+  19 the whole-class flag-surface guard: every non-control flag of every parser (enumerated
+     from the parse arms, the same list `grep -oE '^\\s+--[a-z-]+\\)' scripts/install-*.sh`
+     prints), typed into guided mode, survives into the announced run line
 """
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -58,6 +68,8 @@ ISSUE = ROOT / 'scripts' / 'issue-registry-tls.py'
 GATEWAY = ROOT / 'scripts' / 'install-gateway.sh'
 VOICECFG = ROOT / 'scripts' / 'hermes-voice-config.py'
 EXAMPLE = ROOT / 'hermes' / 'config' / 'voice-surface.example.yaml'
+# Flow-control flags: they steer the installer itself and take no typed value to preserve.
+CONTROL_FLAGS = {'--guided', '--dry-run'}
 
 
 def run(script, *args):
@@ -672,6 +684,196 @@ class GuidedModeTests(unittest.TestCase):
         self.assertNotIn('== services ==', result.stdout)
         self.assertNotIn('systemctl enable --now', result.stdout)
         self.assertIn('== configuration (', result.stdout)
+
+    def test_pi_guided_tls_certs_with_an_empty_endpoint_never_silently_diverges(self):
+        """--tls-certs typed while the endpoint prompt resolves empty (answered 'none'): the
+        flag path REFUSES (--tls-certs needs --endpoint), so guided must not quietly install a
+        local test device instead. Either the flag is forwarded verbatim (and the re-executed
+        run refuses with the flag path's own message) or the guided flow refuses with that same
+        message -- anything else is guided doing something different from what was asked."""
+        flag_path = run(PI, '--base', '/opt/x', '--device-name', 'd',
+                        '--tls-certs', '/srv/certs', '--dry-run')
+        self.assertNotEqual(flag_path.returncode, 0)
+        self.assertIn('--tls-certs needs --endpoint', flag_path.stderr)
+
+        # base, device name, wake word, user, endpoint ('none' -> empty), env path,
+        # satellite port, confirm.
+        answers = ['', '', '', '', 'none', '', '', 'no']
+        result = self.run_guided(PI, answers, '--tls-certs', '/srv/certs')
+        combined = result.stdout + result.stderr
+        forwarded = '--tls-certs /srv/certs' in self.run_line(result)
+        refused = '--tls-certs needs --endpoint' in combined
+        self.assertTrue(forwarded or refused,
+                        'guided silently dropped --tls-certs; run line %r, output %r'
+                        % (self.run_line(result), combined))
+
+        # And a CONFIRMED run must end exactly where the flag path does: the same refusal
+        # message and no command run -- never a quiet local-test install.
+        result = self.run_guided(PI, answers[:-1] + ['yes'], '--tls-certs', '/srv/certs')
+        combined = result.stdout + result.stderr
+        self.assertIn('--tls-certs needs --endpoint', combined)
+        self.assertEqual(self.dry_run_lines(result), [],
+                         'a refused half link may not run any command')
+
+
+class FlagSurfaceGuardTests(unittest.TestCase):
+    """Guards for the argv/guided contract, and the whole-class guard whose absence let the
+    "--tls-certs silently dropped" bug ship twice.
+
+    (a) A value-taking flag as the LAST argv token must refuse with a clear "needs a value"
+        message in every parser -- never a silent exit 1 with empty output.
+    (b) Every non-control flag of every parser, typed into guided mode, must survive into the
+        run line the guided flow announces. The parser flag surface is enumerated straight
+        from the parse arms -- the same list `grep -oE '^\\s+--[a-z-]+\\)' scripts/install-*.sh`
+        prints -- so a flag added later is covered automatically and must be given a typed
+        test value here before the suite goes green again."""
+
+    # One typed value per value-taking flag. It seeds the prompt default where the flag is
+    # prompted (bare Enter at that prompt accepts it) and must survive VERBATIM into the
+    # announced run line. Values are chosen to pass the prompt validators where those exist.
+    TYPED = {
+        'install-esp32.sh': {
+            '--port': '/dev/ttyACM7',
+            '--bundle-dir': '/srv/typed-bundle',
+            '--tls-certs': '/srv/typed-certs',
+            '--device-id': 'typed-dev-1',
+            '--endpoint': 'tls://192.0.2.10:10702',
+            '--registry': '/srv/typed/device-credentials.json',
+            '--model': '/srv/typed/model.tflite',
+            '--download-model': 'https://models.example.com/typed.tflite',
+            '--model-name': 'typed_model',
+            '--wifi-ssid': 'TypedNet',
+            '--wifi-psk-file': '/srv/typed/psk.txt',
+        },
+        'install-pi.sh': {
+            '--base': '/srv/typed-base',
+            '--device-name': 'typed-dev',
+            '--wake-word': 'typed_wake',
+            '--user': 'typeduser',
+            '--satellite-port': '10799',
+            '--endpoint': 'tls://192.0.2.10:10702',
+            '--tls-certs': '/srv/typed-certs',
+            '--env-path': '/etc/typed/satellite.env',
+        },
+        'install-gateway.sh': {
+            '--base': '/srv/typed-gwbase',
+            '--device-reachable-as': '192.0.2.55',
+            '--registry-port': '11701',
+            '--tls-port': '11702',
+            '--registry-bind': '0.0.0.0',
+            '--satellite-host': '192.0.2.20:10700',
+            '--hermes-bin': '/srv/typed-hermes-bin',
+        },
+    }
+
+    @staticmethod
+    def surface(script):
+        """Every '--flag)' arm of the script's argv parser, mapped to whether the arm consumes
+        a VALUE ($2). This is the parser's full flag surface, derived from the source so new
+        flags are covered without editing the test."""
+        surface = {}
+        for line in Path(script).read_text().splitlines():
+            m = re.match(r'\s+(--[a-z-]+)\)\s+(.*)', line)
+            if m:
+                surface[m.group(1)] = '${2' in m.group(2) or '"$2"' in m.group(2)
+        return surface
+
+    def drive(self, script, flag):
+        """Guided --dry-run with `flag` typed, every prompt answered so the typed value is the
+        one accepted (bare Enter at the flag's own prompt), and a refusal at the confirmation:
+        the run line printed before that refusal is the pass-through contract, and nothing is
+        written or re-executed."""
+        typed = self.TYPED[script.name]
+        extra = [flag, typed[flag]] if flag in typed else [flag]
+        if script.name == 'install-pi.sh':
+            # base, device name, wake word, user, endpoint (optional; 'none' = empty -> no TLS
+            # prompt follows), env path, satellite port, confirm.
+            answers = ['' if flag == '--base' else '/srv/pisat',
+                       '' if flag == '--device-name' else 'pi-test',
+                       '' if flag == '--wake-word' else 'hey_test',
+                       '' if flag == '--user' else 'pitest']
+            if flag == '--endpoint':
+                answers += ['',                            # accept the typed endpoint
+                            '/srv/bridge/state/registry-tls']  # TLS prompt (endpoint non-empty)
+            else:
+                answers += ['none']                        # empty endpoint -> no TLS prompt
+            answers += ['' if flag == '--env-path' else '/etc/voice-satellite/satellite.env',
+                        '' if flag == '--satellite-port' else '10700',
+                        'no']
+        elif script.name == 'install-esp32.sh':
+            yn = ['', '', '']   # flash / provision / build accept their seeded defaults
+            if flag == '--build':                 # seeded n/n/y: nothing else is asked
+                answers = yn + ['no']
+            elif flag == '--provision':           # seeded n/y/n: the full provision prompt set
+                answers = yn + ['/dev/ttyACM0', '/srv/bridge/state/registry-tls', 'esp32-test',
+                                'tls://192.0.2.10:10702', 'TestNet', '/tmp/psk.txt', 'no']
+            elif flag == '--flash':               # seeded y/n/n: only the port
+                answers = yn + ['/dev/ttyACM0', 'no']
+            else:
+                # No action flag typed: seeded flash + provision, so every prompt runs. The
+                # prompt belonging to the flag under test accepts the typed default ('').
+                answers = yn + [
+                    '' if flag == '--port' else '/dev/ttyACM0',
+                    '' if flag == '--tls-certs' else '/srv/bridge/state/registry-tls',
+                    '' if flag == '--device-id' else 'esp32-test',
+                    '' if flag == '--endpoint' else 'tls://192.0.2.10:10702',
+                    '' if flag == '--wifi-ssid' else 'TestNet',
+                    '' if flag == '--wifi-psk-file' else '/tmp/psk.txt',
+                    'no']
+        else:  # install-gateway.sh
+            answers = ['' if flag == '--base' else '/srv/typed-gwbase',
+                       '' if flag == '--device-reachable-as' else '192.0.2.55',
+                       '' if flag == '--registry-port' else '11701',
+                       '' if flag == '--tls-port' else '11702',
+                       '' if flag == '--registry-bind' else '0.0.0.0',
+                       '' if flag == '--satellite-host' else '192.0.2.20:10700',
+                       '',      # Hermes side (seeded by --skip-hermes when typed)
+                       'no']
+        return GuidedModeTests.run_guided(script, answers, *extra)
+
+    def test_a_value_taking_flag_as_the_last_token_says_it_needs_a_value(self):
+        """A value-taking flag with nothing after it used to exit 1 with NO message in all
+        three parsers: the arm's own shift empties the list and the loop's shift dies under
+        `set -e`. The parser must say what is missing instead."""
+        for script in (ESP32, PI, GATEWAY):
+            for flag, takes_value in sorted(self.surface(script).items()):
+                if not takes_value or flag in CONTROL_FLAGS:
+                    continue
+                with self.subTest(script=script.name, flag=flag):
+                    result = run(script, flag)     # the value flag is the LAST argv token
+                    combined = result.stdout + result.stderr
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('needs a value', combined,
+                                  'no message at all for a bare %s' % flag)
+                    self.assertIn(flag, combined)
+
+    def test_every_typed_flag_survives_into_the_guided_run_line(self):
+        """The whole-class guard: enumerate the parser flag surface and drive guided mode with
+        each flag typed. Every non-control flag's typed token (and its value) must appear in
+        the run line the guided flow announces -- a flag silently missing there is the bug
+        class that shipped."""
+        for script in (ESP32, PI, GATEWAY):
+            surface = self.surface(script)
+            self.assertTrue(surface,
+                            '%s: the surface regex matched no parse arms at all' % script.name)
+            for flag, takes_value in sorted(surface.items()):
+                if flag in CONTROL_FLAGS:
+                    continue
+                if takes_value:
+                    self.assertIn(flag, self.TYPED[script.name],
+                                  '%s: add a typed test value for %s (a new value-taking flag '
+                                  'must be covered here)' % (script.name, flag))
+                with self.subTest(script=script.name, flag=flag):
+                    result = self.drive(script, flag)
+                    run_line = GuidedModeTests.run_line(result)
+                    self.assertTrue(run_line, 'guided flow printed no run line: %r'
+                                    % (result.stdout + result.stderr))
+                    if takes_value:
+                        self.assertIn('%s %s' % (flag, self.TYPED[script.name][flag]), run_line,
+                                      'typed %s did not survive into the run line' % flag)
+                    else:
+                        self.assertIn(flag, run_line.split(),
+                                      'typed %s did not survive into the run line' % flag)
 
 
 class VoiceConfigHelperTests(unittest.TestCase):
