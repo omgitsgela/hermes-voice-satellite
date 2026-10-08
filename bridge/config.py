@@ -125,6 +125,29 @@ REGISTRY_CREDENTIALS_FILE = Path(__file__).resolve().parent.parent / "state" / "
 # (review finding, issue #62). Trusted networks only.
 REGISTRY_ALLOW_UNAUTHENTICATED = _cfg("VOICE_REGISTRY_ALLOW_UNAUTHENTICATED", "").strip().lower() in (
     "1", "true", "yes", "on")
+# --- the registry listener's TLS (issue #61, the transport decision) --------
+# TLS terminates here, in the bridge, and each device is authenticated by the fingerprint of its client
+# certificate (see REGISTRY_CREDENTIALS_FILE above). Provisioning a certificate pair IS the opt-in: when
+# both files below exist the listener speaks TLS and requires a peer certificate, with no second flag to
+# forget, because "certificates are installed" and "the traffic is encrypted" have to mean the same
+# thing. With neither file the listener is a plain socket, which stays a first-class choice for a local
+# network rather than a fallback. Half a pair stops the bridge instead of serving plaintext quietly.
+#
+# Overridable so the private key can live in a root-owned directory rather than beside the bridge's other
+# state: a copy of a private key in a directory someone else can read is a needless second copy.
+_STATE = Path(__file__).resolve().parent.parent / "state"
+REGISTRY_TLS_CERT_FILE = Path(_cfg("VOICE_REGISTRY_TLS_CERT", str(_STATE / "registry-tls" / "server.crt")))
+REGISTRY_TLS_KEY_FILE = Path(_cfg("VOICE_REGISTRY_TLS_KEY", str(_STATE / "registry-tls" / "server.key")))
+REGISTRY_TLS_CLIENT_CA_FILE = Path(
+    _cfg("VOICE_REGISTRY_TLS_CLIENT_CA", str(_STATE / "registry-tls" / "client-ca.crt")))
+# The port TLS devices dial. The plain port keeps its number, because a device already in the field
+# must not have to change an address to keep working.
+REGISTRY_TLS_PORT = int(_cfg("VOICE_REGISTRY_TLS_PORT", str(REGISTRY_PORT + 1)))
+# Running the plain listener *alongside* the TLS one is a migration state, not a destination: it exists
+# so a device that cannot present a certificate yet keeps registering while the fleet moves over. Off
+# by default, and it warns on every start whenever it is on.
+REGISTRY_LEGACY_PLAINTEXT = _cfg("VOICE_REGISTRY_LEGACY_PLAINTEXT", "").strip().lower() in (
+    "1", "true", "yes", "on")
 # How often the bridge retries the direct dial to the satellite while it is staying up without one. With
 # the registry enabled, a failed connect no longer exits: the listeners have to outlive the absence of
 # every device, because a device that is away can only get in by dialling us (issue #61). The dial retry
@@ -426,6 +449,12 @@ VOICE_INSTRUCTIONS = (
     "example 'I turned off the porch light.' Never say that you double checked, confirmed, "
     "verified, or validated it, and never read out attributes or status values: the check is "
     "yours to make silently, because a reply reaching her at all already means the action worked. "
+    "A lighting request by an established name, such as 'movie time' or 'living room daytime', "
+    "is a known routine, not a guess: load the home-automation skill and match the name to a "
+    "preset in the lighting presets note it points to, apply it directly, and verify it "
+    "silently. The reply is still one short line naming the action, with no device list and "
+    "no drift report. If the name is not an established preset, treat it as an ordinary "
+    "lighting request. "
     "A volume request is about this device's own playback level, and it is never satisfied by "
     "changing something else in the house: if you cannot set the volume, say so plainly instead "
     "of touching a thermostat, a light, or anything else. Never change a device the person did "

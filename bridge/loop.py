@@ -1361,14 +1361,18 @@ class VoiceLoop:
         # away: a device could not have registered even if it tried.
         from bridge.config import (DIRECT_DIAL_FALLBACK, REGISTRY_ALLOW_UNAUTHENTICATED,
                                    REGISTRY_CREDENTIALS_FILE, REGISTRY_DUPLICATE_POLICY, REGISTRY_ENABLED,
-                                   REGISTRY_HOST, REGISTRY_PORT)
+                                   REGISTRY_HOST, REGISTRY_LEGACY_PLAINTEXT, REGISTRY_PORT,
+                                   REGISTRY_TLS_CERT_FILE, REGISTRY_TLS_CLIENT_CA_FILE,
+                                   REGISTRY_TLS_KEY_FILE, REGISTRY_TLS_PORT)
 
         self.registry = None
         self.registry_server = None
+        self.legacy_registry_server = None
         if REGISTRY_ENABLED:
             try:
                 from bridge.registry import (CredentialConfigError, RegistryServer, SatelliteRegistry,
-                                             load_credential_lookup)
+                                             TlsConfigError, load_credential_lookup,
+                                             load_server_tls_context)
 
                 # A credential file that is present but unusable stops the listener rather than silently
                 # downgrading it to believing whatever a device claims (review finding, issue #62).
@@ -1382,18 +1386,60 @@ class VoiceLoop:
                         "%s: any peer that can reach it may claim any device identity. Trusted networks "
                         "only.", REGISTRY_CREDENTIALS_FILE,
                     )
+                # TLS whenever a certificate is deployed, a plain local socket when none is. A
+                # half-configured pair raises here rather than falling back to plaintext: the one
+                # outcome that must be impossible is certificates installed and traffic in the clear.
+                ssl_context = load_server_tls_context(
+                    REGISTRY_TLS_CERT_FILE, REGISTRY_TLS_KEY_FILE, REGISTRY_TLS_CLIENT_CA_FILE
+                )
                 self.registry = SatelliteRegistry(duplicate_policy=REGISTRY_DUPLICATE_POLICY)
-                self.registry_server = RegistryServer(
-                    self.registry, REGISTRY_HOST, REGISTRY_PORT,
-                    credential_lookup=lookup, on_registered=self._on_device_registered,
-                    on_control_event=self._on_device_control_event,
-                )
-                await self.registry_server.start()
-                _LOGGER.info(
-                    "registry listening on %s:%s (registered devices are leaseable and receive desired state)",
-                    REGISTRY_HOST, REGISTRY_PORT,
-                )
-            except CredentialConfigError as exc:
+
+                if ssl_context is not None:
+                    # Every device that holds a credential dials here, and the certificate is the identity.
+                    self.registry_server = RegistryServer(
+                        self.registry, REGISTRY_HOST, REGISTRY_TLS_PORT,
+                        credential_lookup=lookup, ssl_context=ssl_context,
+                        on_registered=self._on_device_registered,
+                        on_control_event=self._on_device_control_event,
+                    )
+                    await self.registry_server.start()
+                    _LOGGER.info(
+                        "registry listening on %s:%s with TLS (peer certificates required; registered "
+                        "devices are leaseable and receive desired state)",
+                        REGISTRY_HOST, REGISTRY_TLS_PORT,
+                    )
+                else:
+                    _LOGGER.info(
+                        "registry listener has no certificate at %s: plain local socket, for a network "
+                        "the household controls", REGISTRY_TLS_CERT_FILE,
+                    )
+
+                # The plain listener runs when there is no certificate at all, which is the local case, and
+                # also when a device that cannot present one yet still has to register. Over plain TCP
+                # there is nothing to authenticate, so it believes self-claimed identities and warns.
+                self.legacy_registry_server = None
+                plain_also_runs = ssl_context is None or REGISTRY_LEGACY_PLAINTEXT
+                if plain_also_runs:
+                    legacy_lookup = lookup if ssl_context is None else None
+                    self.legacy_registry_server = RegistryServer(
+                        self.registry, REGISTRY_HOST, REGISTRY_PORT,
+                        credential_lookup=legacy_lookup,
+                        on_registered=self._on_device_registered,
+                        on_control_event=self._on_device_control_event,
+                    )
+                    await self.legacy_registry_server.start()
+                    if legacy_lookup is None and ssl_context is not None:
+                        _LOGGER.warning(
+                            "registry is ALSO listening on %s:%s in plain text for devices that have not "
+                            "migrated: any peer that can reach that port may claim any device identity. "
+                            "Turn VOICE_REGISTRY_LEGACY_PLAINTEXT off once every device speaks TLS.",
+                            REGISTRY_HOST, REGISTRY_PORT,
+                        )
+                    else:
+                        _LOGGER.info(
+                            "registry listening on %s:%s without TLS", REGISTRY_HOST, REGISTRY_PORT
+                        )
+            except (CredentialConfigError, TlsConfigError) as exc:
                 _LOGGER.error("registry listener NOT started: %s", exc)
                 self.registry_server = None
                 if not DIRECT_DIAL_FALLBACK:
@@ -1713,11 +1759,14 @@ class VoiceLoop:
         _LOGGER.info("stopping after %d turn(s)", turns)
 
     async def close(self) -> None:
-        if getattr(self, "registry_server", None) is not None:
+        for label, server in (("registry", getattr(self, "registry_server", None)),
+                              ("plain registry", getattr(self, "legacy_registry_server", None))):
+            if server is None:
+                continue
             try:
-                await self.registry_server.stop()
+                await server.stop()
             except Exception as exc:  # noqa: BLE001 - shutdown must not raise
-                _LOGGER.warning("could not stop the registry listener: %s", exc)
+                _LOGGER.warning("could not stop the %s listener: %s", label, exc)
         await self.announcer.stop()
         await self.gateway.close()
         await self.sat.close()
