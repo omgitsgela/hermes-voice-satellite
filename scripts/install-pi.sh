@@ -62,6 +62,10 @@ DO_DEPS=1
 DO_UNITS=1
 DO_CONFIG=1
 DO_SERVICES=1
+# Flags with no guided prompt of their own are collected verbatim here and forwarded to the
+# re-executed run (guided_end): guided mode must run exactly what the user asked for, so
+# nothing typed on the command line may be silently dropped.
+PASSTHROUGH=()
 
 die() { echo "install-pi: $*" >&2; exit 1; }
 
@@ -91,10 +95,10 @@ while [ $# -gt 0 ]; do
         --env-path)    ENV_PATH="${2:-}"; shift ;;
         --guided)      GUIDED=1; GUIDED_EXPLICIT=1 ;;
         --dry-run)     DRY_RUN=1 ;;
-        --no-deps)     DO_DEPS=0 ;;
-        --no-units)    DO_UNITS=0 ;;
-        --no-config)   DO_CONFIG=0 ;;
-        --no-services) DO_SERVICES=0 ;;
+        --no-deps)     DO_DEPS=0; PASSTHROUGH+=(--no-deps) ;;
+        --no-units)    DO_UNITS=0; PASSTHROUGH+=(--no-units) ;;
+        --no-config)   DO_CONFIG=0; PASSTHROUGH+=(--no-config) ;;
+        --no-services) DO_SERVICES=0; PASSTHROUGH+=(--no-services) ;;
         -h|--help)     usage 0 ;;
         *)             die "unknown argument: $1 (see --help)" ;;
     esac
@@ -174,7 +178,17 @@ if [ "$GUIDED" = 1 ]; then
     else
         echo "  registry link: none (local test device; the outbound unit is not installed)"
     fi
-    echo "  steps: dependencies -> systemd units -> configuration -> services"
+    # The steps line lists only what this run will actually do: a skipped step is skipped in
+    # the summary too, never advertised and then not run.
+    STEPS_TEXT=""
+    for step in "DO_DEPS dependencies" "DO_UNITS systemd units" "DO_CONFIG configuration" "DO_SERVICES services"; do
+        var="${step%% *}"; label="${step#* }"
+        if [ "${!var}" = 1 ]; then
+            [ -z "$STEPS_TEXT" ] || STEPS_TEXT="$STEPS_TEXT -> "
+            STEPS_TEXT="$STEPS_TEXT$label"
+        fi
+    done
+    echo "  steps: ${STEPS_TEXT:-none (every step is skipped)}"
     echo "  note: the four audio units are a coupled group and are started together."
     GUIDED_ARGS=(--base "$BASE" --device-name "$DEVICE_NAME" --wake-word "$WAKE_WORD"
                  --user "$DEVICE_USER" --satellite-port "$SATELLITE_PORT" --env-path "$ENV_PATH")
@@ -182,6 +196,9 @@ if [ "$GUIDED" = 1 ]; then
         GUIDED_ARGS+=(--endpoint "$ENDPOINT")
         if [ -n "$TLS_CERTS_DIR" ]; then GUIDED_ARGS+=(--tls-certs "$TLS_CERTS_DIR"); fi
     fi
+    # Forward the flags this flow has no prompt for, exactly as given: nothing the user typed
+    # on the command line may be silently dropped.
+    if [ "${#PASSTHROUGH[@]}" -gt 0 ]; then GUIDED_ARGS+=("${PASSTHROUGH[@]}"); fi
     if [ "$DRY_RUN" = 1 ]; then GUIDED_ARGS+=(--dry-run); fi
     guided_end install-pi.sh "${GUIDED_ARGS[@]}"
 fi
