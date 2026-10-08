@@ -140,9 +140,9 @@ if [ "$DO_PROVISION" = 1 ]; then
     fi
     if [ -n "$MODEL_FILE" ]; then
         # The wake-model choice: --model is a local file the user already has; --download-model
-        # fetches whatever model they can get (a community microwakeword model for testing, our
-        # own hey_hermes later) from its URL. The bytes land in a temp file the provisioning
-        # helper reads -- nothing model-related travels through argv.
+        # fetches whatever model they can get (e.g. another community microwakeword model) from
+        # its URL. The bytes land in a temp file the provisioning helper reads -- nothing
+        # model-related travels through argv.
         if [ -n "$MODEL_URL" ]; then
             MODEL_FILE="$(mktemp "${TMPDIR:-/tmp}/wy_model.XXXXXX.tflite")"
             echo "   fetching wake model: $MODEL_URL"
@@ -151,10 +151,10 @@ if [ "$DO_PROVISION" = 1 ]; then
         elif [ -z "$MODEL_FILE" ]; then
             # No custom model: use the bundled default so a plain install just works. Its
             # attribution and license are in firmware/esp32/models/NOTICE.md.
-            MODEL_FILE="$REPO_ROOT/firmware/esp32/models/hey_jarvis.tflite"
+            MODEL_FILE="$REPO_ROOT/firmware/esp32/models/hey_hermes.tflite"
             echo "   using the bundled default wake model: $MODEL_FILE"
         fi
-        # The detection name defaults to the model's file stem (hey_jarvis.tflite -> hey_jarvis),
+        # The detection name defaults to the model's file stem (hey_hermes.tflite -> hey_hermes),
         # which is exactly what the device reports as the wake word, matching the Pi (which
         # reports whatever model it loaded). --model-name overrides it.
         [ -n "$MODEL_NAME" ] || MODEL_NAME="$(basename "$MODEL_FILE" | sed 's/\.tflite$//')"

@@ -10,6 +10,7 @@ models are the part with restrictions. Everything below was read from the source
 |---|---|---|
 | The openWakeWord project and the pre-trained models it ships (`alexa`, `hey_jarvis`, `hey_mycroft`, `hey_rhasspy`, `okay_nabu` at the time of writing) | Apache-2.0 | Permitted |
 | Trained through the hosted trainer at openwakeword.com, including anything downloaded from its community library | Personal and non-commercial only by default | Needs a commercial licence from the site's operator |
+| Trained through the hosted trainer at microwakeword.com (ESP32 microWakeWord models, community library) | Personal and non-commercial only by default (Terms, section 5, updated March 2026) | Needs a written licence from the service operator |
 | Trained by you with the open-source toolkit | Yours to license, subject to the terms of whatever you train on | Your decision |
 
 ## The hosted trainer's terms
@@ -39,14 +40,19 @@ voice and to any audio it generates.
 
 ## What this project does with models
 
-**No wake model is redistributed in this repository.** The setup instructions point at the source and
-the model is fetched on to the device at install time, which keeps the licence question with the person
-installing it rather than with this repository.
+**The ESP32 firmware bundles a default wake model** at `firmware/esp32/models/`
+(`hey_hermes.tflite`, trained through microwakeword.com, with attribution and terms in that
+directory's `NOTICE.md`). It is personal/non-commercial-licensed, which fits a home satellite in a
+**private** repository; before any public release the bundle needs a licence pass — either a
+commercial licence for that model, a switch to an Apache-2.0 model, or moving the model out of the
+image and fetching it at install time.
 
-**The recommended default is a community-library model**, so it carries the non-commercial default
-above. A commercial deployment has three clean routes: buy a commercial licence from the site's
-operator, switch to one of the pre-trained Apache-2.0 models, or train your own with the open-source
-toolkit.
+**The Pi side fetches its model at install time** rather than shipping one in the image, which keeps
+that licence question with the person installing it.
+
+The bundled default is a community-library model, so it carries the non-commercial default above. A
+commercial deployment has three clean routes: buy a commercial licence from the model's operator,
+switch to one of the pre-trained Apache-2.0 models, or train your own with the open-source toolkit.
 
 **Firmware is the case to handle carefully.** A model compiled into a firmware image is being
 redistributed, so embedding a community model in a published binary is a licence question rather than a
@@ -65,3 +71,6 @@ document is only about which terms apply to which model.
 - openWakeWord software licence: <https://github.com/dscripka/openWakeWord/blob/main/LICENSE>
   (Apache-2.0)
 - The commercial licence page linked from those terms, for a quote or tiers.
+- microwakeword.com terms and conditions: <https://microwakeword.com/terms> (read 2026-10-07, page
+  states "last updated: March 2026"; section 5, non-commercial default) and its commercial licensing
+  page: <https://microwakeword.com/license>

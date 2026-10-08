@@ -9,37 +9,41 @@ plain install works without the user supplying a model. The installer
 
 | | |
 |---|---|
-| File | `hey_jarvis.tflite` (microWakeWord v2, streaming INT8) |
-| Wake word | "Hey Jarvis" |
-| Author | Kevin Ahrendt (author of microWakeWord) |
-| Source | [esphome/micro-wake-word-models](https://github.com/esphome/micro-wake-word-models) |
-| License | [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) |
-| Inference params | `hey_jarvis.json` (`probability_cutoff`, `sliding_window_size`, `feature_step_size`, `tensor_arena_size`) |
+| File | `hey_hermes.tflite` (microWakeWord v2, streaming INT8 TFLite) |
+| Wake word | "Hey Hermes" |
+| Trained by | [microwakeword.com](https://microwakeword.com) hosted trainer (community library) |
+| Inference params | `hey_hermes.json` (`probability_cutoff`, `sliding_window_size`, `feature_step_size`, `tensor_arena_size`) |
+| Delivered as | ZIP with a README (microwakeword.com standard package: `.tflite` + ESPHome manifest + README) |
+| Delivered SHA-256 (tflite) | `377545239b78e0671a92f1ae7a4bbbf9a18c170263edb9aba3db5f23fcb0ed4e` |
 
-## License and provenance
+## License
 
-The model file is distributed by `esphome/micro-wake-word-models` under the **Apache License 2.0**
-and is redistributed here under that license with this attribution. It is a
-[TensorFlow Lite](https://www.tensorflow.org/lite) flatbuffer trained with
-[microWakeWord](https://github.com/OHF-Voice/micro-wake-word) (Apache-2.0).
+Models generated through the microwakeword.com service are licensed for **personal and
+non-commercial use only**, per the service's Terms (section 5, last updated March 2026). Commercial
+use requires a written license from the service operator. This is a home/personal satellite, so the
+default terms are sufficient; **re-check before any commercial or wide redistribution**. The
+repository is private, which keeps the redistribution question hypothetical.
 
-**Provenance caveat:** microWakeWord models are trained on synthetic data drawn from sources with
-mixed licenses; the upstream project notes such models should be regarded as suitable for
-**non-commercial personal use**. The precise training-data provenance of the published `.tflite`
-files is being clarified upstream
-([esphome/micro-wake-word-models#31](https://github.com/esphome/micro-wake-word-models/issues/31)).
-This is a home/personal satellite, not a redistributed commercial product, so that is acceptable
-here — but re-check the upstream position before any commercial or wide redistribution.
+The ESPHome `micro_wake_word` component and the microWakeWord inference engine are Apache-2.0.
 
-## Why "Hey Jarvis" and not "Hey Hermes"
+## Why this model and why now
 
-"Hey Jarvis" is a stand-in: it is a well-tested microWakeWord model whose "Hey \<name\>" phrasing
-matches the intended "Hey Hermes" experience, and its `.tflite` form matches the ESP32's
-microWakeWord inference engine. The project's own **"Hey Hermes"** model is the long-term default;
-it will replace this file once a version exists that runs on both wake-word engines (the Pi's
-openWakeWord and the ESP32's microWakeWord). Until then this is the bundled default, and the
-detection name the device reports is the model it loaded (`hey_jarvis`), exactly as the Pi reports
-whatever model it loaded.
+The previous bundled default was `hey_jarvis` from
+[esphome/micro-wake-word-models](https://github.com/esphome/micro-wake-word-models) (Kevin Ahrendt,
+Apache-2.0), deliberately chosen as a stand-in whose "Hey \<name\>" phrasing matched the intended
+"Hey Hermes" experience while the project's own "Hey Hermes" model was not yet in hand. It is now in
+hand, trained through the same microWakeWord engine the firmware runs, so it is the bundled default:
+the detection name the device reports is the model it loaded (`hey_hermes`), exactly as the Pi
+reports whatever model it loaded.
+
+The two models' inference parameters differ, and the difference is expected, not a bug:
+`hey_hermes` ships `probability_cutoff` 0.5 with `tensor_arena_size` 32000 (the service's published
+spec: ~35–45 kB of tensor arena at 16 kHz), while `hey_jarvis` shipped a stricter 0.97 cutoff with a
+22860 arena. The firmware reads these from the provisioned manifest, so the stricter/larger settings
+are not silently imposed on the new model. Expect the 0.5 cutoff to be more sensitive (more
+accepts, including possible false ones); if the room is noisy, raise `probability_cutoff` in
+`hey_hermes.json` toward the 0.90–0.99 range the service's README recommends before reaching for
+the engine's threshold.
 
 > Replacing the default: drop the new `.tflite` + its `.json` manifest here, update the model file
 > and `--model-name` default in `scripts/install-esp32.sh`, and regenerate the flash bundle. The
