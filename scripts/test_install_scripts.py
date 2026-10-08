@@ -94,6 +94,22 @@ class InstallScriptTests(unittest.TestCase):
             # A shebang that names bash: these use ${BASH_SOURCE} and pipefail.
             self.assertEqual(script.read_text().splitlines()[0], '#!/usr/bin/env bash')
 
+    def test_help_prints_the_whole_header(self):
+        """--help must not truncate the header: the last header comment line has to appear in the
+        output. usage() reads a fixed line range, so a stale range silently cuts the final line
+        (that happened to install-esp32.sh) and no other test would notice."""
+        for script in (ESP32, PI, GATEWAY):
+            with self.subTest(script=script.name):
+                lines = script.read_text().splitlines()
+                cut = next((i for i, l in enumerate(lines) if l.startswith('set -euo')), len(lines))
+                last = next((l for l in reversed(lines[:cut]) if l.startswith('#')), '')
+                self.assertTrue(last, f'{script.name}: no header comments found')
+                needle = last.lstrip('#').strip()
+                result = run(script, '--help')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(needle, result.stdout,
+                              f'{script.name}: --help drops the last header line {needle!r}')
+
     def test_help_exits_cleanly(self):
         for script in (ESP32, PI):
             with self.subTest(script=script.name):
@@ -772,10 +788,21 @@ class FlagSurfaceGuardTests(unittest.TestCase):
         a VALUE ($2). This is the parser's full flag surface, derived from the source so new
         flags are covered without editing the test."""
         surface = {}
-        for line in Path(script).read_text().splitlines():
-            m = re.match(r'\s+(--[a-z-]+)\)\s+(.*)', line)
-            if m:
-                surface[m.group(1)] = '${2' in m.group(2) or '"$2"' in m.group(2)
+        lines = Path(script).read_text().splitlines()
+        for i, line in enumerate(lines):
+            # Allow an empty body on the arm line: a parser arm may put its body (and even its
+            # $2 read) on the following line, and the guard must still see that flag. The old
+            # pattern required non-empty trailing text, which would silently lose coverage the
+            # moment someone reformatted a parser.
+            m = re.match(r'\s+(--[a-z-]+)\)(.*)', line)
+            if not m:
+                continue
+            body = m.group(2)
+            lookahead = 0
+            while not body.strip() and i + lookahead + 1 < len(lines) and lookahead < 3:
+                lookahead += 1
+                body += ' ' + lines[i + lookahead]
+            surface[m.group(1)] = '$2' in body
         return surface
 
     def drive(self, script, flag):
