@@ -494,15 +494,17 @@ class GuidedModeTests(unittest.TestCase):
                          'guided run and equivalent flag run disagree on the commands')
 
     def test_esp32_guided_matches_the_flag_invocation(self):
+        psk = Path(tempfile.mkdtemp(prefix='enrol-psk-')) / 'psk.txt'
+        psk.write_text('a-test-passphrase\n')
         answers = [
-            'n',                                     # write the firmware to the board?
-            'y',                                     # set the board up?
-            '/dev/ttyACM0',                          # board serial port
+            'n',                                     # write the firmware to the satellite?
+            'y',                                     # set the satellite up?
+            '/dev/ttyACM0',                          # satellite serial port
             '/srv/bridge/state/registry-tls',        # certificates folder
-            'esp32-test',                            # name this board is enrolled under
-            'tls://192.0.2.10:10702',                # address it reaches the assistant on
+            'esp32-test',                            # name this satellite is enrolled under
+            'tls://192.0.2.10:10702',                # address it reaches the gateway on
             'TestNet',                               # Wi-Fi network
-            '/tmp/psk.txt',                          # passphrase file
+            str(psk),                                # a file that holds the passphrase
             'n',                                     # compile the firmware yourself? (advanced)
             'yes',                                   # confirm
         ]
@@ -510,11 +512,35 @@ class GuidedModeTests(unittest.TestCase):
         flags = run(ESP32, '--dry-run', '--provision', '--port', '/dev/ttyACM0',
                     '--tls-certs', '/srv/bridge/state/registry-tls', '--device-id', 'esp32-test',
                     '--endpoint', 'tls://192.0.2.10:10702',
-                    '--wifi-ssid', 'TestNet', '--wifi-psk-file', '/tmp/psk.txt')
+                    '--wifi-ssid', 'TestNet', '--wifi-psk-file', str(psk))
         self.assert_same_command_set(guided, flags)
         # The guided answers really provision: the same helpers as the flag path ran.
         self.assertIn('provision-device-tls.py', flags.stdout)
-        self.assertIn('save-profile TestNet /tmp/psk.txt', flags.stdout)
+        self.assertIn(f'save-profile TestNet {psk}', flags.stdout)
+
+    def test_a_typed_passphrase_is_held_in_a_private_file_and_never_printed(self):
+        """You can just type the Wi-Fi passphrase. It must never appear in the output -- not in
+        the summary, not in the run line, not in a log -- because argv is visible in `ps` and in
+        shell history. Instead the run carries a private file path, and the value is gone from
+        every surface a person or a log can see."""
+        secret = 'an-extremely-secret-passphrase'
+        answers = [
+            'n', 'y', '/dev/ttyACM0', '/srv/bridge/state/registry-tls', 'esp32-test',
+            'tls://192.0.2.10:10702', 'TestNet', secret,
+            'n', 'no',
+        ]
+        result = self.run_guided(ESP32, answers)
+        # Answering 'no' at the confirmation aborts (exit 1) and writes nothing: that is the
+        # contract. The secrecy claim below must hold on that path too.
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn('aborted', result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertNotIn(secret, combined, 'the typed passphrase must never be printed')
+        run_line = self.run_line(result)
+        self.assertIn('--wifi-psk-file', run_line)
+        self.assertNotIn(secret, run_line)
+        self.assertIn('hermes-wifi-psk', run_line,
+                      'the passphrase travels as a private file, not as a value')
 
     def test_esp32_guided_enrol_falls_back_to_the_folder_prompt_when_the_gateway_is_unreachable(self):
         """Plug-and-play: a five-word setup code answered at the setup question enrols the board
@@ -569,15 +595,17 @@ class GuidedModeTests(unittest.TestCase):
             repo = self.make_enrol_skeleton(Path(tmp))
             enroll_dir = Path(tmp) / 'home' / '.config' / 'hermes-voice-satellite' / 'certs'
             # flash / set-up / detail prompts / compile / confirm.
+            psk = Path(tmp) / 'psk.txt'
+            psk.write_text('a-test-passphrase\n')
             answers = [
-                'n',                                  # write the firmware to the board?
-                'y',                                  # set the board up?
-                '/dev/ttyACM0',                       # board serial port
+                'n',                                  # write the firmware to the satellite?
+                'y',                                  # set the satellite up?
+                '/dev/ttyACM0',                       # satellite serial port
                 token,                                # setup code (five words)
-                'esp32-enroll-dr',                    # name this board is enrolled under
-                'tls://192.0.2.10:10702',             # address it reaches the assistant on
+                'esp32-enroll-dr',                    # name this satellite is enrolled under
+                'tls://192.0.2.10:10702',             # address it reaches the gateway on
                 'TestNet',                            # Wi-Fi network
-                '/tmp/psk.txt',                       # passphrase file
+                str(psk),                             # a file that holds the passphrase
                 'n',                                  # compile the firmware yourself?
                 'yes',                                # confirm
             ]
@@ -589,7 +617,7 @@ class GuidedModeTests(unittest.TestCase):
                         '--port', '/dev/ttyACM0', '--tls-certs', str(enroll_dir),
                         '--device-id', 'esp32-enroll-dr',
                         '--endpoint', 'tls://192.0.2.10:10702',
-                        '--wifi-ssid', 'TestNet', '--wifi-psk-file', '/tmp/psk.txt',
+                        '--wifi-ssid', 'TestNet', '--wifi-psk-file', str(psk),
                         '--registry', str(enroll_dir / 'device-credentials.json'))
             self.assert_same_command_set(guided, flags)
             self.assertIn('nothing fetched', guided.stdout)

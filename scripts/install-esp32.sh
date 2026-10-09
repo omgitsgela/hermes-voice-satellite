@@ -317,7 +317,34 @@ if [ "$GUIDED" = 1 ]; then
         guided_prompt DEVICE_ID "Name this satellite is enrolled under" "${DEVICE_ID:-${DETECTED_DEVICE_ID:-esp32-1}}"
         guided_prompt ENDPOINT "Address the satellite uses to reach your gateway (tls://host:port)" "${ENDPOINT:-${LAN_IP:+tls://$LAN_IP:10702}}" guided_valid_endpoint_strict
         guided_prompt WIFI_SSID "Wi-Fi network name the satellite joins" "${WIFI_SSID}"
-        guided_prompt WIFI_PSK_FILE "Wi-Fi passphrase file (kept out of the command line)" "${WIFI_PSK_FILE:-$WIFI_PSK}"
+        # The passphrase is TYPED here, never passed on a command line: argv is visible in `ps`,
+        # in shell history and in logs. A typed answer goes into a private file (0600) that is
+        # deleted again once the board holds it. An answer that is already a readable file is
+        # taken as that file, so a pre-staged key keeps working, and --wifi-psk-file on the
+        # command line wins over the prompt entirely.
+        if [ -n "$WIFI_PSK_FILE" ]; then
+            echo "   (using the passphrase file given on the command line: $WIFI_PSK_FILE)"
+        else
+            WIFI_PSK_TYPED=""
+            guided_prompt_secret WIFI_PSK_TYPED "Wi-Fi passphrase (type it, or give the path to a file that holds it)"
+            if [ -f "$WIFI_PSK_TYPED" ]; then
+                WIFI_PSK_FILE="$WIFI_PSK_TYPED"
+            else
+                WIFI_PSK_FILE="${TMPDIR:-/tmp}/hermes-wifi-psk.$$.psk"
+                if [ "$DRY_RUN" = 1 ]; then
+                    echo "   (dry run: nothing is written; the passphrase would be held in a"
+                    echo "    private file and deleted once the board has it)"
+                else
+                    ( umask 077; printf '%s\n' "$WIFI_PSK_TYPED" > "$WIFI_PSK_FILE" )
+                    chmod 600 "$WIFI_PSK_FILE"
+                fi
+                # The guided flow re-execs itself, so a trap here is lost: carry the path through
+                # the environment and let the provision step (or the abort hook) remove it once it
+                # is no longer needed. Set even for a dry run, so the summary describes the run.
+                export HERMES_DISPOSABLE_PSK="$WIFI_PSK_FILE"
+            fi
+            unset WIFI_PSK_TYPED
+        fi
 
         # The exchange: only now are the board's name and the gateway's address known. A dry run
         # never contacts the gateway (and fetches nothing). A real run stages what it fetches and
@@ -390,7 +417,11 @@ if [ "$GUIDED" = 1 ]; then
         else
             echo "    tls certs:  $TLS_CERTS_DIR"
         fi
-        echo "    wi-fi:      $WIFI_SSID (passphrase read from $WIFI_PSK_FILE, never printed)"
+        if [ -n "${HERMES_DISPOSABLE_PSK:-}" ]; then
+            echo "    wi-fi:      $WIFI_SSID (the passphrase you typed; never printed, deleted once the board has it)"
+        else
+            echo "    wi-fi:      $WIFI_SSID (passphrase read from $WIFI_PSK_FILE, never printed)"
+        fi
         if [ -n "$MODEL_URL" ]; then
             echo "    wake model: fetched from $MODEL_URL"
         elif [ -n "$MODEL_FILE" ]; then
@@ -458,6 +489,9 @@ PYMERGE
         ENROLL_STAGING=""
     }
     enrol_discard() {
+        # Anything staged before the confirmation is thrown away on a refusal: the fetched
+        # certificates, and the private file a typed Wi-Fi passphrase was held in.
+        [ -n "${HERMES_DISPOSABLE_PSK:-}" ] && rm -f "$HERMES_DISPOSABLE_PSK"
         [ -n "$ENROLL_STAGING" ] || return 0
         rm -rf "$ENROLL_STAGING"
         ENROLL_STAGING=""
@@ -619,6 +653,13 @@ if [ "$DO_PROVISION" = 1 ]; then
     # 4. The Wi-Fi profile the board joins across reboots. The passphrase moves as a file; the
     #    device reports its presence, never its value.
     run "$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" save-profile "$WIFI_SSID" "$WIFI_PSK_FILE"
+    # The passphrase arrived through a private file this script wrote (see the guided flow). Now
+    # that the board holds it in its own storage, that copy is removed. A file the operator
+    # supplied is never touched.
+    if [ -n "${HERMES_DISPOSABLE_PSK:-}" ] && [ "$HERMES_DISPOSABLE_PSK" = "$WIFI_PSK_FILE" ]; then
+        rm -f "$WIFI_PSK_FILE"
+        unset HERMES_DISPOSABLE_PSK
+    fi
     run "$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" list-profiles
     echo "   provisioned: TLS credential, wake model, endpoint, Wi-Fi. On reboot the satellite"
     echo "   associates, dials $ENDPOINT and registers as $DEVICE_ID."

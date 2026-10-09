@@ -183,6 +183,28 @@ guided_prompt() {
     printf -v "$_var" '%s' "$_a"
 }
 
+# guided_prompt_secret VAR "Question" -- like guided_prompt for anything the person typed that
+# must not sit on screen or in a scrollback: a passphrase. Echo is off for the read only, EOF is
+# still an abort, and an empty answer is still refused. The value is never printed anywhere.
+guided_prompt_secret() {
+    local _var="$1" _q="$2" _a
+    while :; do
+        printf '%s: ' "$_q"
+        # -s: do not echo. The typed newline never reached the terminal, so print one after.
+        if ! IFS= read -rs _a; then
+            printf '\n'
+            echo "guided: end of input before an answer; aborting (nothing was written)." >&2
+            exit 1
+        fi
+        printf '\n'
+        if [ -n "$_a" ]; then
+            break
+        fi
+        echo "   a value is required"
+    done
+    printf -v "$_var" '%s' "$_a"
+}
+
 # guided_prompt_optional VAR "Question" ["default" ["validator"]] -- like guided_prompt, but an
 # empty value is a legal answer for a value the flag path treats as optional. When a default is
 # shown, bare Enter accepts it and 'none' (or '-') means explicitly no value.
