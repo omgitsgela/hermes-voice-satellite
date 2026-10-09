@@ -34,7 +34,8 @@ prints a summary of exactly what it will do, and asks for an explicit yes/no bef
 anything. `--guided --dry-run` walks the same prompts but previews instead of writing. The guided
 flow is for a person at a terminal: with a non-interactive stdin it refuses and points at the
 flags, so every command in this document remains the automation path and behaves exactly as
-before.
+before. A first ESP32 board needs no certificate folder: the guided flow enrols it with the
+gateway's five-word setup code (see *Set up a board (plug and play)* below).
 
 ---
 
@@ -124,6 +125,32 @@ The XVF3800 is an ESP32-S3 module with the ReSpeaker 2-mic HAT wired through. A 
 board attached by USB runs the installer. `autumn`-class hosts with an ESP-IDF v6.1 install can
 build in place; otherwise the prebuilt image below skips the build entirely.
 
+### Set up a board (plug and play)
+
+Plug the board in and run the installer with no answers prepared; the guided setup does the rest:
+
+```sh
+scripts/install-esp32.sh
+```
+
+It offers to write the firmware, reads the board's own name over USB, and asks the few questions
+that are yours alone: the network it joins (and its passphrase file), and how it reaches your
+assistant. The one secret you type is the gateway's **setup code** -- five words printed once when
+the gateway was installed, something like `correct-horse-battery-staple-ferry` -- and the installer
+fetches the board's certificates with it. No folder to find, no files to copy. A brand-new board
+has no secret of its own, so the request that fetches its certificate carries your setup code
+instead -- the five words only you have. Second and later boards are the same.
+
+The code is never placed on a command line, in a log, or in the output. Put it in
+`~/.config/hermes-voice-satellite/enroll-token` (mode 600) and the installer uses it silently, so
+it is typed once per machine; the board's fetched certificates are kept in
+`~/.config/hermes-voice-satellite/certs`. The installer reaches the gateway's enrolment service at
+`http://<gateway-host>:8765`, derived from the endpoint you answer; override the address with
+`VOICE_ENROLL_URL` when the gateway runs elsewhere. If the gateway cannot be reached from the
+machine doing the flashing, the installer says so and falls back to asking for a certificates
+folder by hand (the manual way, below) -- nothing is lost either way. A `--dry-run` never contacts
+the gateway.
+
 ### From source
 
 ```sh
@@ -138,17 +165,22 @@ scripts/install-esp32.sh --provision --port /dev/ttyACM0 \
 ```
 
 `--tls-certs` must point at a directory holding `client-ca.crt`, this device's `<id>.crt` and
-`<id>.key`, with the bridge's `device-credentials.json` beside that directory. On the gateway host
-those live in `~/hermes-voice-bridge/state/`; on a separate flashing machine (the usual case -- the
-gateway stays on, the board is flashed from a laptop), copy them there first, e.g.
+`<id>.key`, with the bridge's `device-credentials.json` beside that directory. This is the manual
+way -- the automation path, and exactly what the guided flow falls back to when the gateway cannot
+be reached. On the gateway host those live in `~/hermes-voice-bridge/state/`; on a separate
+flashing machine (the usual case -- the gateway stays on, the board is flashed from a laptop),
+copy them there first, e.g.
 `scp gateway:~/hermes-voice-bridge/state/registry-tls/{client-ca.crt,<id>.crt,<id>.key} ./registry-tls/`
 and `scp gateway:~/hermes-voice-bridge/state/device-credentials.json ./`. The device's `<id>` is
 printed by the board itself (`python3 scripts/esp32_provision.py --port /dev/ttyACM0 status`) and is
-the identity the gateway enrolls it under (`scripts/issue-registry-tls.py enroll --new <id>`).
+the identity the gateway enrolls it under (`scripts/issue-registry-tls.py enroll --new <id>`, or
+automatically via the setup code above).
 
 The installer runs the provisioning helpers and esptool with the repository's own interpreter
-(`.venv/bin/python` when it exists, otherwise `python3`), so both must be importable there. The repo
-venv is the intended home: `python3 -m venv .venv && .venv/bin/pip install esptool pyserial`. Without
+(`.venv/bin/python` when it exists, otherwise `python3`), so both must be importable there -- and
+`cryptography` too, which the setup-code enrolment uses for the encrypted answer. The repo
+venv is the intended home:
+`python3 -m venv .venv && .venv/bin/pip install esptool pyserial cryptography`. Without
 it the installer stops up front with that exact command, instead of failing part-way through a flash.
 
 Provisioning is a **set, not a menu**: TLS credential, wake model, endpoint, and Wi-Fi profile are
@@ -299,6 +331,8 @@ only real test of the wake word, and see *Verify* in `README.md` for the surface
 | Bridge config | `~/hermes-voice-bridge/bridge.env` |
 | Registry TLS | `~/hermes-voice-bridge/state/registry-tls/` |
 | Credential file | `~/hermes-voice-bridge/state/device-credentials.json` |
+| Enrolment setup code | `~/.config/hermes-voice-satellite/enroll-token` (optional; typed once) |
+| Board certificates (fetched) | `~/.config/hermes-voice-satellite/certs/` |
 | Bridge unit | `~/.config/systemd/user/hermes-voice-bridge.service` |
 | ESP32 flash bundle | the reviewed `flash.bundle.bin` + `flash.manifest.txt` |
 | ESP32 wake model | staged to the board's `model` partition |
