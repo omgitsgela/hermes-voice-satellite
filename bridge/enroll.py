@@ -21,7 +21,7 @@ Wire protocol (the contract; scripts/test_enroll_gateway.py pins it):
 
     ciphertext = AES-256-GCM(key, nonce).encrypt(plaintext) where
         key       = HKDF-SHA256(ikm = token.encode(), salt = b"hermes-enroll-v1", info = b"bundle")
-        plaintext = json({"client_ca": "<PEM>", "cert": "<PEM>", "key": "<PEM>"}).encode()
+        plaintext = json({"client_ca": "<PEM>", "cert": "<PEM>", "key": "<PEM>", "server": "<PEM>"}).encode()
 
     `ciphertext` is the bare ciphertext and `tag` the 16-byte GCM tag, kept apart because the
     contract names them apart; the opener rejoins them (ciphertext + tag) for AESGCM.decrypt.
@@ -87,7 +87,7 @@ GCM_TAG_BYTES = 16
 MAX_DEVICE_ID = 64
 ISSUER_SCRIPT = PROJECT_DIR / "scripts" / "issue-registry-tls.py"
 
-BUNDLE_KEYS = ("client_ca", "cert", "key")
+BUNDLE_KEYS = ("client_ca", "cert", "key", "server")
 RESPONSE_KEYS = ("ciphertext", "tag", "nonce")
 
 
@@ -388,10 +388,15 @@ class EnrollmentService:
             return web.json_response(
                 {"ok": False, "error": "could not issue a device certificate"}, status=503)
 
+        # server.crt travels in the same protected bundle. `provision-device-tls.py` pins it
+        # into the board as the gateway identity, so carrying it here means the client needs a
+        # single connection and no TLS capture to obtain it -- and since the whole bundle is
+        # AEAD-sealed under the token, an impostor still cannot substitute a server certificate.
         bundle = {
             "client_ca": (self.tls_dir / "client-ca.crt").read_text(),
             "cert": (self.tls_dir / f"{device_id}.crt").read_text(),
             "key": (self.tls_dir / f"{device_id}.key").read_text(),
+            "server": (self.tls_dir / "server.crt").read_text(),
         }
         response = seal_bundle(self._token, json.dumps(bundle).encode("utf-8"))
         _LOGGER.info("enrolled %s from %s (certificate issued, credential registered)",

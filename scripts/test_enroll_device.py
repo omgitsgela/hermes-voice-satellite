@@ -110,7 +110,11 @@ DEVICE_CERT_PEM, DEVICE_KEY_PEM = make_cert('esp32-enroll-test')
 SERVER_PEM, SERVER_KEY_PEM = make_cert('test-bridge', CA_CERT, CA_KEY, for_server=True)
 ROGUE_PEM, ROGUE_KEY_PEM = make_cert('rogue-bridge', None, None, for_server=True)
 
-BUNDLE = {'client_ca': CA_PEM, 'cert': DEVICE_CERT_PEM, 'key': DEVICE_KEY_PEM}
+BUNDLE = {'client_ca': CA_PEM, 'cert': DEVICE_CERT_PEM, 'key': DEVICE_KEY_PEM,
+          'server': SERVER_PEM}
+#: An older gateway's payload, which carried no server certificate: exercises the capture
+#: fallback that reads it from the endpoint the board will dial.
+BUNDLE_WITHOUT_SERVER = {k: v for k, v in BUNDLE.items() if k != 'server'}
 
 
 class StubGatewayHandler(BaseHTTPRequestHandler):
@@ -119,6 +123,7 @@ class StubGatewayHandler(BaseHTTPRequestHandler):
 
     token = TOKEN
     nonce = NONCE
+    bundle = BUNDLE         # the sealed payload; a test can send a smaller one (older gateway)
     wrong_key = False       # seal the bundle under a DIFFERENT code (the AEAD must refuse it)
     get_status = 200
     post_status = 200
@@ -162,7 +167,7 @@ class StubGatewayHandler(BaseHTTPRequestHandler):
         sealing_token = 'tampered-tampered-tampered' if self.wrong_key else self.token
         nonce_bytes = os.urandom(24)
         sealed = AESGCM(MOD.bundle_key(sealing_token)).encrypt(
-            nonce_bytes, json.dumps(BUNDLE).encode('utf-8'), None)
+            nonce_bytes, json.dumps(self.bundle).encode('utf-8'), None)
         return self._send(200, {
             'ciphertext': base64.b64encode(sealed[:-16]).decode('ascii'),
             'tag': base64.b64encode(sealed[-16:]).decode('ascii'),
@@ -175,6 +180,7 @@ class StubGateway:
     def __init__(self, **knobs):
         StubGatewayHandler.token = TOKEN
         StubGatewayHandler.nonce = NONCE
+        StubGatewayHandler.bundle = BUNDLE
         StubGatewayHandler.wrong_key = False
         StubGatewayHandler.get_status = 200
         StubGatewayHandler.post_status = 200
@@ -465,7 +471,9 @@ class ServerCertCaptureTests(unittest.TestCase):
             capture_output=True, text=True)
 
     def test_the_bridge_certificate_is_captured_and_verified(self):
-        gateway = StubGateway()
+        # An OLDER gateway sends no server certificate in the sealed bundle, so the client must
+        # fall back to reading it from the endpoint the board will dial.
+        gateway = StubGateway(bundle=BUNDLE_WITHOUT_SERVER)
         tls = StubTLSServer(SERVER_PEM, SERVER_KEY_PEM)
         try:
             result = self.run_cli(gateway.url, f'tls://127.0.0.1:{tls.port}')
@@ -477,7 +485,7 @@ class ServerCertCaptureTests(unittest.TestCase):
         self.assertIn('verified against the client CA', result.stdout)
 
     def test_a_certificate_the_ca_did_not_sign_is_refused(self):
-        gateway = StubGateway()
+        gateway = StubGateway(bundle=BUNDLE_WITHOUT_SERVER)
         tls = StubTLSServer(ROGUE_PEM, ROGUE_KEY_PEM)
         try:
             result = self.run_cli(gateway.url, f'tls://127.0.0.1:{tls.port}')

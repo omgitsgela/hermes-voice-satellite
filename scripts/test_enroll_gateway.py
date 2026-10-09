@@ -470,8 +470,8 @@ def t_real_round_trip() -> None:
                 assert len(base64.b64decode(body["tag"])) == 16
 
                 bundle = client_open(h.token, body)           # the client's own HKDF + GCM
-                assert set(bundle) == {"client_ca", "cert", "key"}, set(bundle)
-                for name in ("client_ca", "cert", "key"):
+                assert set(bundle) == {"client_ca", "cert", "key", "server"}, set(bundle)
+                for name in ("client_ca", "cert", "key", "server"):
                     assert bundle[name].startswith("-----BEGIN "), bundle[name][:30]
 
                 # The bundle is the very material minted on disk by the existing issuer.

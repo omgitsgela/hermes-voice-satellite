@@ -135,7 +135,9 @@ def open_bundle(token: str, response: dict) -> dict:
         raise RejectedResponse("the opened answer is not the expected JSON bundle") from None
     if not isinstance(bundle, dict):
         raise RejectedResponse("the opened answer is not the expected JSON bundle")
-    for name in ('client_ca', 'cert', 'key'):
+    for name in ('client_ca', 'cert', 'key', 'server'):
+        if name == 'server' and name not in bundle:
+            continue   # an older gateway omits it; the caller captures it from --endpoint
         value = bundle.get(name)
         if not isinstance(value, str) or not value.startswith('-----BEGIN ') or \
                 '-----END ' not in value:
@@ -359,11 +361,22 @@ def main() -> int:
         response = post_enroll(gateway, proof, arguments.device_id)
         bundle = open_bundle(token, response)
         print('enrol: opened the encrypted answer (the setup code matched)')
-        server_cert_pem = None
-        if arguments.endpoint:
+        # The gateway now ships its own server certificate inside the sealed bundle, so one
+        # connection is enough and nothing has to be read from a second TLS socket. Because the
+        # whole bundle is AEAD-sealed under the setup code, an impostor cannot substitute a
+        # server certificate either. Capture from --endpoint only against an older gateway that
+        # does not send one.
+        server_cert_pem = bundle.get('server')
+        if server_cert_pem:
+            print('enrol: the gateway sent its own server certificate in the sealed bundle')
+        elif arguments.endpoint:
             server_cert_pem = capture_server_cert(arguments.endpoint, bundle['client_ca'])
             print(f'enrol: read the bridge certificate from {arguments.endpoint} '
                   '(verified against the client CA)')
+        else:
+            raise EnrolError('the gateway sent no server certificate, so the board would have '
+                             'nothing to pin; pass --endpoint so it can be read from the '
+                             'address the board will dial')
     finally:
         # The proof lives exactly as long as the exchange.
         del token
