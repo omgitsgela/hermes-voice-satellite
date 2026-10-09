@@ -487,15 +487,15 @@ class GuidedModeTests(unittest.TestCase):
 
     def test_esp32_guided_matches_the_flag_invocation(self):
         answers = [
-            'n',                                     # flash the prebuilt bundle?
-            'y',                                     # provision?
-            'n',                                     # build from source?
+            'n',                                     # write the firmware to the board?
+            'y',                                     # set the board up?
             '/dev/ttyACM0',                          # board serial port
-            '/srv/bridge/state/registry-tls',        # TLS certificates directory
-            'esp32-test',                            # device id
-            'tls://192.0.2.10:10702',                # endpoint
-            'TestNet',                               # Wi-Fi SSID
-            '/tmp/psk.txt',                          # Wi-Fi passphrase file
+            '/srv/bridge/state/registry-tls',        # certificates folder
+            'esp32-test',                            # name this board is enrolled under
+            'tls://192.0.2.10:10702',                # address it reaches the assistant on
+            'TestNet',                               # Wi-Fi network
+            '/tmp/psk.txt',                          # passphrase file
+            'n',                                     # compile the firmware yourself? (advanced)
             'yes',                                   # confirm
         ]
         guided = self.run_guided(ESP32, answers)
@@ -568,8 +568,9 @@ class GuidedModeTests(unittest.TestCase):
     def test_answering_no_at_the_confirmation_aborts_with_nothing_written(self):
         """The confirmation is a real gate: an explicit no must abort before any command runs."""
         cases = (
-            (ESP32, ['n', 'y', 'n', '/dev/ttyACM0', '/srv/bridge/state/registry-tls',
-                     'esp32-test', 'tls://192.0.2.10:10702', 'TestNet', '/tmp/psk.txt', 'no']),
+            (ESP32, ['n', 'y', '/dev/ttyACM0', '/srv/bridge/state/registry-tls',
+                     'esp32-test', 'tls://192.0.2.10:10702', 'TestNet', '/tmp/psk.txt',
+                     'n', 'no']),
             (PI, ['/opt/wyoming-satellite', 'kitchen', 'hey_hermes', 'pi',
                   'tls://192.0.2.10:10702', '/srv/bridge/state/registry-tls',
                   '/etc/voice-satellite/satellite.env', '10700', 'no']),
@@ -595,10 +596,10 @@ class GuidedModeTests(unittest.TestCase):
     def test_a_bad_answer_is_reprompted_with_the_flag_rules_reason(self):
         """Guided validation mirrors the flag rules: an ftp:// endpoint is refused with the same
         reason the flag path would die with, and the flow re-prompts instead of accepting it."""
-        answers = ['n', 'y', 'n', '/dev/ttyACM0', '/srv/bridge/state/registry-tls', 'esp32-test',
+        answers = ['n', 'y', '/dev/ttyACM0', '/srv/bridge/state/registry-tls', 'esp32-test',
                    'ftp://192.0.2.10:10702',                       # rejected, re-prompt
                    'tls://192.0.2.10:10702',                       # accepted
-                   'TestNet', '/tmp/psk.txt', 'yes']
+                   'TestNet', '/tmp/psk.txt', 'n', 'yes']
         result = self.run_guided(ESP32, answers)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('must be tls://host:port or tcp://host:port', result.stdout)
@@ -609,20 +610,22 @@ class GuidedModeTests(unittest.TestCase):
     # prompt for is not a flag it may drop: it must be forwarded verbatim to the re-executed
     # run (visible in the printed run line) and actually take effect there.
 
-    # A provision run driven through the guided prompts (defaults seeded by --provision).
+    # A provision run driven through the guided prompts (defaults seeded by --provision). The
+    # compile-yourself question is asked LAST, after the detail prompts, so its answer sits just
+    # before the confirmation.
     PROV_ANSWERS = [
-        '',                                      # flash? (seeded n by --provision)
-        '',                                      # provision? (seeded y)
-        '',                                      # build? (seeded n)
+        '',                                      # write the firmware? (seeded n by --provision)
+        '',                                      # set the board up? (seeded y)
         '/dev/ttyACM0',                          # board serial port
-        '/srv/bridge/state/registry-tls',        # TLS certificates directory
-        'esp32-test',                            # device id
-        'tls://192.0.2.10:10702',                # endpoint
-        'TestNet',                               # Wi-Fi SSID
-        '/tmp/psk.txt',                          # Wi-Fi passphrase file
+        '/srv/bridge/state/registry-tls',        # certificates folder
+        'esp32-test',                            # name this board is enrolled under
+        'tls://192.0.2.10:10702',                # address it reaches the assistant on
+        'TestNet',                               # Wi-Fi network
+        '/tmp/psk.txt',                          # passphrase file
+        '',                                      # compile yourself? (advanced; seeded n)
         'yes',                                   # confirm
     ]
-    # A flash-only run (defaults seeded by --flash): flash, provision, build, port, confirm.
+    # A flash-only run (defaults seeded by --flash): write, set up, port, compile, confirm.
     FLASH_ANSWERS = ['', '', '', '', 'yes']
     # A Pi run with no registry link (endpoint answered 'none'): base, device name, wake word,
     # user, endpoint, env path, satellite port, confirm.
@@ -851,25 +854,27 @@ class FlagSurfaceGuardTests(unittest.TestCase):
                         '' if flag == '--satellite-port' else '10700',
                         'no']
         elif script.name == 'install-esp32.sh':
-            yn = ['', '', '']   # flash / provision / build accept their seeded defaults
-            if flag == '--build':                 # seeded n/n/y: nothing else is asked
-                answers = yn + ['no']
+            # flash / provision accept their seeded defaults; the compile-yourself question is
+            # asked LAST, after the detail prompts, so its answer sits just before the confirm.
+            fp = ['', '']
+            if flag == '--build':                 # seeded n/n/y: no detail prompts run
+                answers = fp + ['', 'no']
             elif flag == '--provision':           # seeded n/y/n: the full provision prompt set
-                answers = yn + ['/dev/ttyACM0', '/srv/bridge/state/registry-tls', 'esp32-test',
-                                'tls://192.0.2.10:10702', 'TestNet', '/tmp/psk.txt', 'no']
+                answers = fp + ['/dev/ttyACM0', '/srv/bridge/state/registry-tls', 'esp32-test',
+                                'tls://192.0.2.10:10702', 'TestNet', '/tmp/psk.txt', '', 'no']
             elif flag == '--flash':               # seeded y/n/n: only the port
-                answers = yn + ['/dev/ttyACM0', 'no']
+                answers = fp + ['/dev/ttyACM0', '', 'no']
             else:
                 # No action flag typed: seeded flash + provision, so every prompt runs. The
                 # prompt belonging to the flag under test accepts the typed default ('').
-                answers = yn + [
+                answers = fp + [
                     '' if flag == '--port' else '/dev/ttyACM0',
                     '' if flag == '--tls-certs' else '/srv/bridge/state/registry-tls',
                     '' if flag == '--device-id' else 'esp32-test',
                     '' if flag == '--endpoint' else 'tls://192.0.2.10:10702',
                     '' if flag == '--wifi-ssid' else 'TestNet',
                     '' if flag == '--wifi-psk-file' else '/tmp/psk.txt',
-                    'no']
+                    '', 'no']
         else:  # install-gateway.sh
             answers = ['' if flag == '--base' else '/srv/typed-gwbase',
                        '' if flag == '--device-reachable-as' else '192.0.2.55',

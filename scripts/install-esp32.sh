@@ -149,49 +149,41 @@ if [ "$GUIDED" = 1 ]; then
         guided_require_interactive install-esp32.sh
     fi
 
-    echo "install-esp32: guided setup (no flags given)."
-    echo "  This turns a USB-attached ESP32/XVF3800 board into a voice satellite:"
-    echo "    - flash the prebuilt bundle (no ESP-IDF needed), and/or"
-    echo "    - provision it (TLS credential, wake model, endpoint, Wi-Fi), and/or"
-    echo "    - (opt-in) build the firmware from source with ESP-IDF."
-    echo "  Nothing is written until you confirm at the end (--dry-run previews, never writes)."
+    echo "Setting up your voice satellite."
     echo
-    echo "Detection:"
+    echo "Two steps:"
+    echo "   1. write the firmware to the board over USB"
+    echo "   2. set it up: its name, the wake word, the network it joins, and how it reaches"
+    echo "      your assistant"
+    echo
+    echo "Nothing is changed until you say yes at the end."
+    echo
     LAN_IP="$(guided_detect_lan_ip)"
-    if [ -n "$LAN_IP" ]; then
-        echo "  host LAN IP:       $LAN_IP (default endpoint host)"
-    else
-        echo "  host LAN IP:       not detected (type the gateway endpoint by hand)"
-    fi
     SERIAL_PORTS="$(guided_detect_serial_ports)"
+    echo "What I found:"
     if [ -n "$SERIAL_PORTS" ]; then
-        echo "  USB serial ports:  $(printf '%s' "$SERIAL_PORTS" | tr '\n' ' ')"
+        echo "   board:        $(printf '%s' "$SERIAL_PORTS" | tr '\n' ' ')"
     else
-        echo "  USB serial ports:  none found (plug the board in, or type its port)"
+        echo "   board:        not seen yet (plug it in, or type its port when asked)"
     fi
     if [ -f "$BUNDLE_DIR/flash.bundle.bin" ]; then
-        echo "  prebuilt bundle:   $BUNDLE_DIR/flash.bundle.bin (ready to flash)"
+        echo "   firmware:     ready to write"
     else
-        echo "  prebuilt bundle:   not at $BUNDLE_DIR/flash.bundle.bin (download it, or build from source)"
-    fi
-    if [ -f "$HOME/esp/idf-activate.sh" ]; then
-        echo "  ESP-IDF:           found ($HOME/esp/idf-activate.sh; needed only to build)"
-    else
-        echo "  ESP-IDF:           not found (fine: only --build needs it)"
+        echo "   firmware:     not at $BUNDLE_DIR/flash.bundle.bin (download it first)"
     fi
     REGISTRY_TLS="$(guided_first_dir_with client-ca.crt \
         "$REPO_ROOT/state/registry-tls" \
         "$HOME/hermes-voice-bridge/state/registry-tls")"
     if [ -n "$REGISTRY_TLS" ]; then
-        echo "  registry TLS dir:  $REGISTRY_TLS (has client-ca.crt; default for --tls-certs)"
+        echo "   certificates: found at $REGISTRY_TLS"
     else
-        echo "  registry TLS dir:  none found (enroll the device on the gateway first)"
+        echo "   certificates: not found (the device is enrolled on the gateway first)"
     fi
     WIFI_PSK="$(guided_first_file "$HOME/wifi-psk.txt" "$HOME/.wifi-psk" "$REPO_ROOT/wifi-psk.txt")"
     if [ -n "$WIFI_PSK" ]; then
-        echo "  Wi-Fi PSK file:    $WIFI_PSK (found; default for --wifi-psk-file)"
+        echo "   network:      a saved passphrase is on this machine"
     else
-        echo "  Wi-Fi PSK file:    none found (the passphrase file must exist before provisioning)"
+        echo "   network:      no saved passphrase yet (you can type one when asked)"
     fi
     echo
 
@@ -206,19 +198,15 @@ if [ "$GUIDED" = 1 ]; then
         PROV_YN='y'
         BUILD_YN='n'
     fi
-    guided_prompt_yn FLASH_YN "Flash the prebuilt bundle to the board over USB?" "$FLASH_YN"
-    guided_prompt_yn PROV_YN "Provision the board (TLS credential, wake model, endpoint, Wi-Fi)?" "$PROV_YN"
-    guided_prompt_yn BUILD_YN "Build the firmware from source? (needs ESP-IDF; opt-in)" "$BUILD_YN"
-    if [ "$FLASH_YN" != y ] && [ "$PROV_YN" != y ] && [ "$BUILD_YN" != y ]; then
-        die "nothing selected: pick at least one of flash, provision or build"
-    fi
+    guided_prompt_yn FLASH_YN "Write the firmware to the board over USB?" "$FLASH_YN"
+    guided_prompt_yn PROV_YN "Set the board up (its name, the wake word, the network, and how it reaches your assistant)?" "$PROV_YN"
 
     if [ "$FLASH_YN" = y ] || [ "$PROV_YN" = y ]; then
         PORT_DEFAULT="${PORT:-$(printf '%s\n' "$SERIAL_PORTS" | head -n1)}"
         guided_prompt PORT "Board serial port" "${PORT_DEFAULT:-/dev/ttyACM0}"
     fi
     if [ "$PROV_YN" = y ]; then
-        guided_prompt TLS_CERTS_DIR "TLS certificates directory (client-ca.crt + the device's .crt/.key)" "${TLS_CERTS_DIR:-$REGISTRY_TLS}"
+        guided_prompt TLS_CERTS_DIR "Folder holding this board's certificates (client-ca.crt and the device's .crt/.key)" "${TLS_CERTS_DIR:-$REGISTRY_TLS}"
         # The board derives its own identity from its factory MAC, so when one is attached, ASK
         # it: a read-only console query (stages nothing) whose answer becomes the prompt's
         # default instead of the placeholder. Any failure -- no board, no pyserial, an old
@@ -232,21 +220,28 @@ if [ "$GUIDED" = 1 ]; then
                 ''|*[!A-Za-z0-9._-]*) DETECTED_DEVICE_ID="" ;;  # never trust a stray line as an id
             esac
             if [ -n "$DETECTED_DEVICE_ID" ]; then
-                echo "  device id read from the board: $DETECTED_DEVICE_ID (default below)"
+                echo "   (read the board's own name: $DETECTED_DEVICE_ID)"
             fi
         fi
-        guided_prompt DEVICE_ID "Device id (the registry identity this board is enrolled as)" "${DEVICE_ID:-${DETECTED_DEVICE_ID:-esp32-1}}"
-        guided_prompt ENDPOINT "Endpoint the board dials, tls://host:port or tcp://host:port" "${ENDPOINT:-${LAN_IP:+tls://$LAN_IP:10702}}" guided_valid_endpoint_strict
-        guided_prompt WIFI_SSID "Wi-Fi network (SSID) the board joins" "${WIFI_SSID}"
-        guided_prompt WIFI_PSK_FILE "Wi-Fi passphrase FILE (the passphrase never goes on the command line)" "${WIFI_PSK_FILE:-$WIFI_PSK}"
+        guided_prompt DEVICE_ID "Name this board is enrolled under" "${DEVICE_ID:-${DETECTED_DEVICE_ID:-esp32-1}}"
+        guided_prompt ENDPOINT "Address the board uses to reach your assistant (tls://host:port)" "${ENDPOINT:-${LAN_IP:+tls://$LAN_IP:10702}}" guided_valid_endpoint_strict
+        guided_prompt WIFI_SSID "Wi-Fi network name the board joins" "${WIFI_SSID}"
+        guided_prompt WIFI_PSK_FILE "Wi-Fi passphrase file (kept out of the command line)" "${WIFI_PSK_FILE:-$WIFI_PSK}"
+    fi
+
+    # The one question that is not about the board. It is asked last and labelled as such, so a
+    # normal setup never has to think about compiling anything.
+    guided_prompt_yn BUILD_YN "Compile the firmware yourself instead? (advanced; not needed)" "$BUILD_YN"
+    if [ "$FLASH_YN" != y ] && [ "$PROV_YN" != y ] && [ "$BUILD_YN" != y ]; then
+        die "nothing selected: write the firmware, set the board up, or both"
     fi
 
     echo
-    echo "=== Summary: install-esp32.sh will run exactly these steps ==="
-    if [ "$BUILD_YN" = y ]; then echo "  build:      idf.py build + bundle-esp32-flash.py -> $BUNDLE_DIR (needs ESP-IDF)"; fi
-    if [ "$FLASH_YN" = y ]; then echo "  flash:      verify the bundle, then write_flash 0x0 on $PORT (application region only)"; fi
+    echo "=== What I'll do ==="
+    if [ "$BUILD_YN" = y ]; then echo "   build:   compile the firmware from source, then write it"; fi
+    if [ "$FLASH_YN" = y ]; then echo "   write:   the firmware onto the board on $PORT"; fi
     if [ "$PROV_YN" = y ]; then
-        echo "  provision:  TLS credential + wake model + endpoint + Wi-Fi, over $PORT"
+        echo "   set up:  its name, wake word, network, and link to your assistant (over $PORT)"
         echo "    device id:  $DEVICE_ID"
         echo "    endpoint:   $ENDPOINT"
         echo "    tls certs:  $TLS_CERTS_DIR"

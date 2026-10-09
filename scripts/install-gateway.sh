@@ -117,12 +117,14 @@ if [ "$GUIDED" = 1 ]; then
         guided_require_interactive install-gateway.sh
     fi
 
-    echo "install-gateway: guided setup (no flags given)."
-    echo "  This installs the voice GATEWAY on this host: the bridge virtualenv, bridge.env,"
-    echo "  registry TLS material, the systemd user unit, and the Hermes-side plugin + config."
-    echo "  Nothing is written until you confirm at the end (--dry-run previews, never writes)."
+    echo "Setting up the voice gateway on this machine."
     echo
-    echo "Detection:"
+    echo "This is the part that listens to your satellites, talks to your assistant, and"
+    echo "speaks the answers back. I'll set it up and connect it to Hermes."
+    echo
+    echo "Nothing is changed until you say yes at the end."
+    echo
+    echo "What I found:"
     LAN_IP="$(guided_detect_lan_ip)"
     if [ -n "$LAN_IP" ]; then
         echo "  host LAN IP:      $LAN_IP (default for --device-reachable-as)"

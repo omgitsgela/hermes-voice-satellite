@@ -123,12 +123,13 @@ if [ "$GUIDED" = 1 ]; then
         guided_require_interactive install-pi.sh
     fi
 
-    echo "install-pi: guided setup (no flags given)."
-    echo "  This installs the Raspberry Pi voice satellite: the service stack, its dependencies,"
-    echo "  satellite.env, and (optionally) the registry link to the gateway."
-    echo "  Nothing is written until you confirm at the end (--dry-run previews, never writes)."
+    echo "Setting up your Raspberry Pi voice satellite."
     echo
-    echo "Detection:"
+    echo "I'll install what it needs to work, and connect it to your assistant."
+    echo
+    echo "Nothing is changed until you say yes at the end."
+    echo
+    echo "What I found:"
     LAN_IP="$(guided_detect_lan_ip)"
     if [ -n "$LAN_IP" ]; then
         echo "  host LAN IP:       $LAN_IP (default endpoint host)"
