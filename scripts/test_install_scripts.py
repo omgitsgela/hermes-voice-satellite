@@ -52,11 +52,19 @@ What is pinned:
   19 the whole-class flag-surface guard: every non-control flag of every parser (enumerated
      from the parse arms, the same list `grep -oE '^\\s+--[a-z-]+\\)' scripts/install-*.sh`
      prints), typed into guided mode, survives into the announced run line
+  20 a typed five-word setup code enrols the board with the gateway, and when the gateway is
+     unreachable the guided flow falls back to the manual certificate-folder prompt (the
+     pre-plug-and-play path) -- nothing written, and the code never echoed
+  21 the setup-code path's assembled run (--tls-certs, with --registry beside the fetched
+     certificates) is exactly the equivalent flag invocation, even in --dry-run (which fetches
+     nothing and never contacts the gateway)
 """
 import json
+import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -507,6 +515,110 @@ class GuidedModeTests(unittest.TestCase):
         # The guided answers really provision: the same helpers as the flag path ran.
         self.assertIn('provision-device-tls.py', flags.stdout)
         self.assertIn('save-profile TestNet /tmp/psk.txt', flags.stdout)
+
+    def test_esp32_guided_enrol_falls_back_to_the_folder_prompt_when_the_gateway_is_unreachable(self):
+        """Plug-and-play: a five-word setup code answered at the setup question enrols the board
+        with the gateway (scripts/enroll_device.py). When the gateway cannot be reached, the guided
+        flow falls back to the manual certificate-folder prompt -- the pre-plug-and-play path --
+        so nothing regresses. Driven from a throwaway repo skeleton with a scratch HOME and an
+        unreachable enrol address, and stopped at the confirmation: nothing is written and the
+        setup code appears nowhere in the output."""
+        token = 'zebra-mango-tulip-quartz-ivory'   # a test sentinel, not a real setup code
+        with tempfile.TemporaryDirectory(prefix='enroll-guided-') as tmp:
+            repo = self.make_enrol_skeleton(Path(tmp))
+            # flash / set-up / detail prompts (setup code, name, address, network, passphrase,
+            # then the FALLBACK folder) / compile / confirm.
+            answers = [
+                'n',                                  # write the firmware to the board?
+                'y',                                  # set the board up?
+                '/dev/ttyACM0',                       # board serial port
+                token,                                # setup code (five words)
+                'esp32-enroll-fb',                    # name this board is enrolled under
+                'tls://192.0.2.10:10702',             # address it reaches the assistant on
+                'TestNet',                            # Wi-Fi network
+                '/tmp/psk.txt',                       # passphrase file
+                '/srv/bridge/state/registry-tls',     # FALLBACK: the certificates folder
+                'n',                                  # compile the firmware yourself?
+                'no',                                 # confirm -> abort
+            ]
+            result = subprocess.run(
+                ['bash', str(repo / 'scripts' / 'install-esp32.sh'), '--guided'],
+                input='\n'.join(answers) + '\n', capture_output=True, text=True,
+                env=self.enrol_env(repo))
+            combined = result.stdout + result.stderr
+            # The exchange was attempted, its failure was explained, and the old folder prompt
+            # appeared as the fallback.
+            self.assertIn('fetching this board', result.stdout)
+            self.assertIn('could not reach the gateway', combined)
+            self.assertIn("Folder holding this board's certificates", result.stdout)
+            # The fallback answer becomes the run's --tls-certs (no --registry: this is the
+            # manual path's own layout), and a refused confirmation runs nothing.
+            self.assertIn('--tls-certs /srv/bridge/state/registry-tls', self.run_line(result))
+            self.assertNotIn('--registry', self.run_line(result))
+            self.assertIn('aborted', result.stderr)
+            self.assertEqual(self.dry_run_lines(result), [], 'no command may run after a no')
+            # The setup code is never an argument and never echoed.
+            self.assertNotIn(token, combined)
+
+    def test_esp32_guided_dry_run_enrol_matches_the_flag_invocation(self):
+        """The setup-code path in --dry-run: nothing is fetched (a dry run never contacts the
+        gateway) but the assembled run names the folder the fetch would use and the registry file
+        beside it -- and that run is exactly the equivalent flag invocation."""
+        token = 'zebra-mango-tulip-quartz-ivory'
+        with tempfile.TemporaryDirectory(prefix='enroll-dry-') as tmp:
+            repo = self.make_enrol_skeleton(Path(tmp))
+            enroll_dir = Path(tmp) / 'home' / '.config' / 'hermes-voice-satellite' / 'certs'
+            # flash / set-up / detail prompts / compile / confirm.
+            answers = [
+                'n',                                  # write the firmware to the board?
+                'y',                                  # set the board up?
+                '/dev/ttyACM0',                       # board serial port
+                token,                                # setup code (five words)
+                'esp32-enroll-dr',                    # name this board is enrolled under
+                'tls://192.0.2.10:10702',             # address it reaches the assistant on
+                'TestNet',                            # Wi-Fi network
+                '/tmp/psk.txt',                       # passphrase file
+                'n',                                  # compile the firmware yourself?
+                'yes',                                # confirm
+            ]
+            guided = subprocess.run(
+                ['bash', str(repo / 'scripts' / 'install-esp32.sh'), '--guided', '--dry-run'],
+                input='\n'.join(answers) + '\n', capture_output=True, text=True,
+                env=self.enrol_env(repo))
+            flags = run(repo / 'scripts' / 'install-esp32.sh', '--dry-run', '--provision',
+                        '--port', '/dev/ttyACM0', '--tls-certs', str(enroll_dir),
+                        '--device-id', 'esp32-enroll-dr',
+                        '--endpoint', 'tls://192.0.2.10:10702',
+                        '--wifi-ssid', 'TestNet', '--wifi-psk-file', '/tmp/psk.txt',
+                        '--registry', str(enroll_dir / 'device-credentials.json'))
+            self.assert_same_command_set(guided, flags)
+            self.assertIn('nothing fetched', guided.stdout)
+            self.assertIn('--tls-certs %s' % enroll_dir, self.run_line(guided))
+            self.assertIn('--registry %s' % (enroll_dir / 'device-credentials.json'),
+                          self.run_line(guided))
+            self.assertNotIn(token, guided.stdout + guided.stderr)
+
+    @staticmethod
+    def make_enrol_skeleton(tmp: Path) -> Path:
+        """A throwaway checkout: the scripts, a repo venv whose python is this test's own
+        interpreter (so enroll_device.py runs for real), and nothing else that could hold
+        certificates or a saved setup code (HOME is scratch too, see enrol_env)."""
+        repo = tmp / 'repo'
+        shutil.copytree(ROOT / 'scripts', repo / 'scripts')
+        (repo / 'firmware' / 'esp32').mkdir(parents=True)
+        (repo / '.venv' / 'bin').mkdir(parents=True)
+        venv_python = repo / '.venv' / 'bin' / 'python'
+        venv_python.write_text('#!/bin/sh\nexec %s "$@"\n' % sys.executable)
+        venv_python.chmod(0o755)
+        (tmp / 'home').mkdir()
+        return repo
+
+    @staticmethod
+    def enrol_env(repo: Path):
+        """A scratch HOME (no saved setup code, no certificates to find) and an enrol address
+        that refuses instantly, so the fallback path is exercised without any real gateway."""
+        return {**os.environ, 'HOME': str(repo.parent / 'home'),
+                'VOICE_ENROLL_URL': 'http://127.0.0.1:1'}
 
     def test_pi_guided_matches_the_flag_invocation(self):
         answers = [

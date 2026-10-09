@@ -256,7 +256,10 @@ guided_require_interactive() {
 
 # guided_end NAME ARGS... -- the shared ending: print the summary's command line, require the
 # explicit confirmation, then re-exec THIS installer with the assembled flags so the guided run
-# runs exactly the flag path's steps. Never returns.
+# runs exactly the flag path's steps. Never returns. An installer that staged anything before the
+# confirmation (install-esp32.sh's enrolment fetch) sets GUIDED_ON_APPROVE (move the staged files
+# into place once the run is confirmed) and GUIDED_ON_ABORT (throw them away, so "nothing was
+# written" stays true); with neither set, nothing about this function changes.
 guided_end() {
     local _name="$1"; shift
     echo
@@ -264,8 +267,10 @@ guided_end() {
     echo "  $_name $*"
     echo
     if guided_confirm "Proceed?"; then
+        if [ -n "${GUIDED_ON_APPROVE:-}" ]; then "$GUIDED_ON_APPROVE"; fi
         exec bash "$SCRIPT_PATH" "$@"
     fi
+    if [ -n "${GUIDED_ON_ABORT:-}" ]; then "$GUIDED_ON_ABORT"; fi
     echo "$_name: aborted at confirmation; nothing was written." >&2
     exit 1
 }

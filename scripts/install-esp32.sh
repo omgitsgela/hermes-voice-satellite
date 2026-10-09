@@ -44,6 +44,13 @@
 # exactly what it will do, and asks for an explicit yes/no before writing anything. A
 # non-interactive stdin refuses the guided flow -- pass the flags for automation. --guided
 # --dry-run previews the guided answers without writing.
+#
+# Plug-and-play enrolment: when the board has no certificates yet, the guided flow enrols it with
+# the gateway using the five-word setup code the gateway printed at install (read from the saved
+# file ~/.config/hermes-voice-satellite/enroll-token or typed at the prompt -- never in argv,
+# never printed). The fetched certificates are kept under
+# ~/.config/hermes-voice-satellite/certs. If the gateway cannot be reached, the flow falls back to
+# asking for a certificate folder by hand. --dry-run never contacts the gateway.
 
 set -euo pipefail
 
@@ -70,6 +77,14 @@ ENDPOINT=""       # what the board dials: tls://host:port (tcp:// for a trusted 
 REGISTRY_FILE=""  # the bridge's state/device-credentials.json; defaults beside the certs dir
 WIFI_SSID=""
 WIFI_PSK_FILE=""
+# Plug-and-play enrolment state (the guided flow only). The gateway's five-word setup code and the
+# certificates it fetches live under the user's config dir; the code moves as a file path or a
+# no-echo answer, never through argv and never into output.
+ENROLL_DIR="$HOME/.config/hermes-voice-satellite/certs"
+ENROLL_TOKEN_FILE="$HOME/.config/hermes-voice-satellite/enroll-token"
+ENROL_MODE="folder"   # 'token' once a setup code is in play; 'folder' is the manual path
+ENROL_TOKEN=""        # the typed setup code, held only until the exchange runs
+ENROLL_STAGING=""     # fetched certificates, staged until the explicit yes moves them into place
 # The interpreter that runs the provisioning helpers and esptool. Prefer the repository's own
 # venv, which is where the docs say to work and where esptool + pyserial live; fall back to
 # python3 so a machine that already has both is unchanged. Resolved once, used by every call.
@@ -103,8 +118,25 @@ with_idf() {
 }
 
 usage() {
-    sed -n '2,46p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,53p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
+}
+
+# The gateway's setup code is five words joined by '-' (e.g. correct-horse-battery-staple-ferry):
+# the operator's authority a brand-new board enrols with. Anything else -- a path, a sentence --
+# is not a code, and the caller then treats the answer as a certificate folder instead.
+guided_is_enroll_token() {
+    local value="$1" rest="$1" segment count=0
+    case "$value" in
+        ''|*[!A-Za-z-]*) return 1 ;;
+    esac
+    while [ -n "$rest" ]; do
+        segment="${rest%%-*}"
+        case "$segment" in ''|*[!A-Za-z]*) return 1 ;; esac
+        count=$((count + 1))
+        case "$rest" in *-*) rest="${rest#*-}" ;; *) rest='' ;; esac
+    done
+    [ "$count" -eq 5 ]
 }
 
 # A value-taking flag must be followed by its value. Without the guard, a trailing `--port`
@@ -206,7 +238,6 @@ if [ "$GUIDED" = 1 ]; then
         guided_prompt PORT "Board serial port" "${PORT_DEFAULT:-/dev/ttyACM0}"
     fi
     if [ "$PROV_YN" = y ]; then
-        guided_prompt TLS_CERTS_DIR "Folder holding this board's certificates (client-ca.crt and the device's .crt/.key)" "${TLS_CERTS_DIR:-$REGISTRY_TLS}"
         # The board derives its own identity from its factory MAC, so when one is attached, ASK
         # it: a read-only console query (stages nothing) whose answer becomes the prompt's
         # default instead of the placeholder. Any failure -- no board, no pyserial, an old
@@ -223,10 +254,116 @@ if [ "$GUIDED" = 1 ]; then
                 echo "   (read the board's own name: $DETECTED_DEVICE_ID)"
             fi
         fi
+        # Certificates for the board's own id already on this machine: use them unchanged. This is
+        # the second-run path -- nothing to type and nothing to fetch.
+        KNOWN_CERTS=""
+        if [ -n "$DETECTED_DEVICE_ID" ]; then
+            KNOWN_CERTS="$(guided_first_dir_with "$DETECTED_DEVICE_ID.crt" \
+                "$TLS_CERTS_DIR" "$ENROLL_DIR" \
+                "$REPO_ROOT/state/registry-tls" \
+                "$HOME/hermes-voice-bridge/state/registry-tls")"
+            if [ -n "$KNOWN_CERTS" ] && { [ ! -f "$KNOWN_CERTS/client-ca.crt" ] || \
+                    [ ! -f "$KNOWN_CERTS/$DETECTED_DEVICE_ID.key" ]; }; then
+                KNOWN_CERTS=""   # a half set is not "certificates already here"
+            fi
+        fi
+        if [ -n "$TLS_CERTS_DIR" ]; then
+            # --tls-certs was given on the command line: the manual folder question, exactly as it
+            # always was (a flag the user typed is never dropped).
+            guided_prompt TLS_CERTS_DIR "Folder holding this board's certificates (client-ca.crt and the device's .crt/.key)" "$TLS_CERTS_DIR"
+        elif [ -n "$KNOWN_CERTS" ]; then
+            TLS_CERTS_DIR="$KNOWN_CERTS"
+            echo "   (this board already has its certificates in $TLS_CERTS_DIR; reusing them)"
+        else
+            # First time for this board. Plain words, because "TLS directory" means nothing here:
+            # the board needs its own certificate -- its personal pass to talk to your assistant --
+            # and the five-word setup code the gateway printed at install is what fetches one.
+            echo "   Before your assistant will talk to the board, the board needs its own"
+            echo "   certificate -- think of it as the board's personal pass, made just for"
+            echo "   this board. A new board does not have one yet."
+            echo
+            echo "   The easy way: when your assistant was set up it printed a secret setup"
+            echo "   code made of five words (something like correct-horse-battery-staple-ferry)."
+            echo "   Type those five words here and I will fetch the board's pass for you --"
+            echo "   nothing to find, nothing to copy."
+            TOKEN_SAVED=""
+            if [ -f "$ENROLL_TOKEN_FILE" ]; then
+                TOKEN_SAVED=1
+                echo
+                echo "   (found your saved setup code in $ENROLL_TOKEN_FILE; Enter uses it)"
+            fi
+            SETUP_QUESTION="Setup code (five words), or the folder that already holds this board's certificates"
+            while :; do
+                printf '%s: ' "$SETUP_QUESTION"
+                guided_read_line SETUP_ANSWER
+                if [ -n "$SETUP_ANSWER" ] || [ -n "$TOKEN_SAVED" ]; then
+                    break
+                fi
+                echo "   please type the five words (or the folder that already holds them)"
+            done
+        fi
+        # Classify the answer above: five words is the gateway's setup code (fetch this board's
+        # certificate), anything else is the manual certificate folder -- the pre-plug-and-play
+        # path, unchanged. An empty answer uses the saved setup code when there is one.
+        if [ -z "$KNOWN_CERTS" ]; then
+            if [ -n "${SETUP_ANSWER:-}" ] && guided_is_enroll_token "$SETUP_ANSWER"; then
+                ENROL_MODE="token"; ENROL_TOKEN="$SETUP_ANSWER"; TLS_CERTS_DIR="$ENROLL_DIR"
+            elif [ -z "${SETUP_ANSWER:-}" ] && [ -n "${TOKEN_SAVED:-}" ]; then
+                ENROL_MODE="token"; TLS_CERTS_DIR="$ENROLL_DIR"
+            elif [ -z "$TLS_CERTS_DIR" ]; then
+                ENROL_MODE="folder"; TLS_CERTS_DIR="${SETUP_ANSWER:-}"
+            fi
+        fi
         guided_prompt DEVICE_ID "Name this board is enrolled under" "${DEVICE_ID:-${DETECTED_DEVICE_ID:-esp32-1}}"
         guided_prompt ENDPOINT "Address the board uses to reach your assistant (tls://host:port)" "${ENDPOINT:-${LAN_IP:+tls://$LAN_IP:10702}}" guided_valid_endpoint_strict
         guided_prompt WIFI_SSID "Wi-Fi network name the board joins" "${WIFI_SSID}"
         guided_prompt WIFI_PSK_FILE "Wi-Fi passphrase file (kept out of the command line)" "${WIFI_PSK_FILE:-$WIFI_PSK}"
+
+        # The exchange: only now are the board's name and the gateway's address known. A dry run
+        # never contacts the gateway (and fetches nothing). A real run stages what it fetches and
+        # moves it into place only after the explicit yes, so "nothing is written until then"
+        # still holds even here.
+        if [ "$ENROL_MODE" = token ]; then
+            ENROLL_BODY="${ENDPOINT#*://}"
+            ENROLL_GATEWAY="${VOICE_ENROLL_URL:-http://${ENROLL_BODY%%:*}:8765}"
+            if [ "$DRY_RUN" = 1 ]; then
+                echo "   (dry run: nothing fetched -- a real run would enrol $DEVICE_ID at"
+                echo "    $ENROLL_GATEWAY and keep the board's certificates in $ENROLL_DIR)"
+                TLS_CERTS_DIR="$ENROLL_DIR"
+            else
+                echo "   fetching this board's certificate from your assistant at $ENROLL_GATEWAY ..."
+                ENROLL_STAGING="$(mktemp -d "${TMPDIR:-/tmp}/hermes-enrol.XXXXXX")"
+                if [ -n "$ENROL_TOKEN" ]; then
+                    # The typed setup code moves as a file path into the helper, never as an
+                    # argument and never into output.
+                    ENROLL_TOKEN_TMP="$(mktemp "${TMPDIR:-/tmp}/hermes-enrol-token.XXXXXX")"
+                    (umask 077; printf '%s\n' "$ENROL_TOKEN" > "$ENROLL_TOKEN_TMP")
+                else
+                    ENROLL_TOKEN_TMP="$ENROLL_TOKEN_FILE"
+                fi
+                ENROL_OK=0
+                if "$PY" "$REPO_ROOT/scripts/enroll_device.py" \
+                        --device-id "$DEVICE_ID" --gateway "$ENROLL_GATEWAY" \
+                        --endpoint "$ENDPOINT" --out "$ENROLL_STAGING" \
+                        --token-file "$ENROLL_TOKEN_TMP"; then
+                    ENROL_OK=1
+                fi
+                if [ -n "$ENROL_TOKEN" ]; then rm -f "$ENROLL_TOKEN_TMP"; fi
+                ENROL_TOKEN=""
+                if [ "$ENROL_OK" = 1 ]; then
+                    TLS_CERTS_DIR="$ENROLL_DIR"
+                    echo "   your assistant issued this board's certificate."
+                else
+                    rm -rf "$ENROLL_STAGING"
+                    ENROLL_STAGING=""
+                    echo "   That did not work -- the reason is just above. The old way still"
+                    echo "   works: if this machine already has the gateway's certificate files"
+                    echo "   for this board, tell me which folder they are in."
+                    guided_prompt TLS_CERTS_DIR "Folder holding this board's certificates (client-ca.crt and the device's .crt/.key)" "$REGISTRY_TLS"
+                    ENROL_MODE="folder"
+                fi
+            fi
+        fi
     fi
 
     # The one question that is not about the board. It is asked last and labelled as such, so a
@@ -244,7 +381,15 @@ if [ "$GUIDED" = 1 ]; then
         echo "   set up:  its name, wake word, network, and link to your assistant (over $PORT)"
         echo "    device id:  $DEVICE_ID"
         echo "    endpoint:   $ENDPOINT"
-        echo "    tls certs:  $TLS_CERTS_DIR"
+        if [ "$ENROL_MODE" = token ]; then
+            if [ "$DRY_RUN" = 1 ]; then
+                echo "    tls certs:  $TLS_CERTS_DIR (a dry run: fetched with your setup code in a real run)"
+            else
+                echo "    tls certs:  $TLS_CERTS_DIR (fetched with your setup code)"
+            fi
+        else
+            echo "    tls certs:  $TLS_CERTS_DIR"
+        fi
         echo "    wi-fi:      $WIFI_SSID (passphrase read from $WIFI_PSK_FILE, never printed)"
         if [ -n "$MODEL_URL" ]; then
             echo "    wake model: fetched from $MODEL_URL"
@@ -263,11 +408,62 @@ if [ "$GUIDED" = 1 ]; then
     if [ "$PROV_YN" = y ]; then
         GUIDED_ARGS+=(--tls-certs "$TLS_CERTS_DIR" --device-id "$DEVICE_ID" --endpoint "$ENDPOINT"
                       --wifi-ssid "$WIFI_SSID" --wifi-psk-file "$WIFI_PSK_FILE")
+        if [ "$ENROL_MODE" = token ]; then
+            # The fetch wrote the registry record beside the certificates; the flag path would
+            # otherwise look for it one directory up (the bridge's own layout).
+            GUIDED_ARGS+=(--registry "$ENROLL_DIR/device-credentials.json")
+        fi
     fi
     # Forward the flags this flow has no prompt for, exactly as given: nothing the user typed
     # on the command line may be silently dropped.
     if [ "${#PASSTHROUGH[@]}" -gt 0 ]; then GUIDED_ARGS+=("${PASSTHROUGH[@]}"); fi
     if [ "$DRY_RUN" = 1 ]; then GUIDED_ARGS+=(--dry-run); fi
+    # The fetch (if any) staged its files; the explicit yes is what moves them into their kept
+    # place, and a refusal throws them away, so "nothing was written" is literally true either
+    # way. Both hooks are no-ops without a staged fetch.
+    enrol_commit() {
+        [ -n "$ENROLL_STAGING" ] || return 0
+        mkdir -p "$ENROLL_DIR"
+        local staged
+        for staged in "$ENROLL_STAGING"/*; do
+            case "$staged" in
+                */device-credentials.json) continue ;;   # merged below, never clobbered
+            esac
+            cp -f "$staged" "$ENROLL_DIR/"
+        done
+        if [ -f "$ENROLL_STAGING/device-credentials.json" ]; then
+            # The registry file grows across boards: merge this board's entry into whatever is
+            # already there instead of replacing it.
+            "$PY" - "$ENROLL_STAGING/device-credentials.json" \
+                "$ENROLL_DIR/device-credentials.json" <<'PYMERGE'
+import json
+import sys
+
+new = json.load(open(sys.argv[1]))
+record = {}
+try:
+    existing = json.load(open(sys.argv[2]))
+    if isinstance(existing, dict):
+        record = existing
+except (OSError, ValueError):
+    pass
+record.update(new)
+with open(sys.argv[2], 'w') as handle:
+    json.dump(record, handle, indent=2)
+    handle.write('\n')
+PYMERGE
+            chmod 600 "$ENROLL_DIR/device-credentials.json"
+        fi
+        rm -rf "$ENROLL_STAGING"
+        ENROLL_STAGING=""
+    }
+    enrol_discard() {
+        [ -n "$ENROLL_STAGING" ] || return 0
+        rm -rf "$ENROLL_STAGING"
+        ENROLL_STAGING=""
+    }
+    GUIDED_ON_APPROVE=enrol_commit
+    GUIDED_ON_ABORT=enrol_discard
     guided_end install-esp32.sh "${GUIDED_ARGS[@]}"
 fi
 

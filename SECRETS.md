@@ -6,6 +6,7 @@ what it is for, and how to make a new one. Values are never written down here.
 | Secret | Lives at | Used by | Purpose | Mode |
 |---|---|---|---|---|
 | Announcement token | `state/announce-token.txt` | the bridge, the `voice_satellite` plugin | Bearer token for the announcement endpoint and the follow-up control endpoint | 600 |
+| Enrolment setup code (five words) | `~/.config/hermes-voice-satellite/enroll-token` (optional; otherwise typed at the installer's prompt) | `scripts/enroll_device.py`, via `install-esp32.sh` | The operator's authority to enrol a fresh board: the code itself is never sent -- an HMAC proof and the answer's AEAD key are derived from it | 600 |
 | Hermes API server key | `~/.hermes/.env` as `API_SERVER_KEY` | the bridge | Authenticates the bridge's calls to Hermes on loopback 8642 | 600 |
 | Anything your own plugins need | wherever that plugin reads it | that plugin | Optional: this project needs none of them | as required |
 
