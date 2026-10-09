@@ -159,6 +159,26 @@ class InstallScriptTests(unittest.TestCase):
             self.assertIn('--verify', result.stdout)
             self.assertIn('prebuilt bundle', result.stdout)
 
+    def test_esp32_uses_the_repo_venv_interpreter_when_present(self):
+        """The provisioning helpers and esptool must run under the repository's own venv when it
+        exists, because that is where esptool and pyserial live; a bare python3 may have neither
+        (a real machine did not, and the flash would have failed after the point of no return)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / 'repo'
+            (repo / 'scripts').mkdir(parents=True)
+            (repo / 'firmware' / 'esp32').mkdir(parents=True)
+            (repo / '.venv' / 'bin').mkdir(parents=True)
+            venv_python = repo / '.venv' / 'bin' / 'python'
+            venv_python.write_text('#!/bin/sh\nexit 0\n')
+            venv_python.chmod(0o755)
+            shutil.copy(ESP32, repo / 'scripts' / 'install-esp32.sh')
+            result = run(repo / 'scripts' / 'install-esp32.sh',
+                         '--dry-run', '--flash', '--port', '/dev/ttyACM0')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(str(venv_python), result.stdout,
+                          'the repo venv interpreter was not used for the flash commands')
+            self.assertIn('-m esptool', result.stdout)
+
     def test_esp32_flash_without_a_port_is_refused(self):
         """A board write must be explicit: --flash with no --port fails, it never guesses a port."""
         result = run(ESP32, '--flash')

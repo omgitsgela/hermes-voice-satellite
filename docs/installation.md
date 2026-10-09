@@ -146,6 +146,11 @@ and `scp gateway:~/hermes-voice-bridge/state/device-credentials.json ./`. The de
 printed by the board itself (`python3 scripts/esp32_provision.py --port /dev/ttyACM0 status`) and is
 the identity the gateway enrolls it under (`scripts/issue-registry-tls.py enroll --new <id>`).
 
+The installer runs the provisioning helpers and esptool with the repository's own interpreter
+(`.venv/bin/python` when it exists, otherwise `python3`), so both must be importable there. The repo
+venv is the intended home: `python3 -m venv .venv && .venv/bin/pip install esptool pyserial`. Without
+it the installer stops up front with that exact command, instead of failing part-way through a flash.
+
 Provisioning is a **set, not a menu**: TLS credential, wake model, endpoint, and Wi-Fi profile are
 all required, because a board missing any one is a dead board. An incomplete provision is refused
 before a byte is written. Everything secret moves as a file path — the certificate directory, the

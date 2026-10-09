@@ -70,6 +70,11 @@ ENDPOINT=""       # what the board dials: tls://host:port (tcp:// for a trusted 
 REGISTRY_FILE=""  # the bridge's state/device-credentials.json; defaults beside the certs dir
 WIFI_SSID=""
 WIFI_PSK_FILE=""
+# The interpreter that runs the provisioning helpers and esptool. Prefer the repository's own
+# venv, which is where the docs say to work and where esptool + pyserial live; fall back to
+# python3 so a machine that already has both is unchanged. Resolved once, used by every call.
+PY="$REPO_ROOT/.venv/bin/python"
+[ -x "$PY" ] || PY="python3"
 # Flags with no guided prompt of their own are collected verbatim here and forwarded to the
 # re-executed run (guided_end): guided mode must run exactly what the user asked for, so
 # nothing typed on the command line may be silently dropped.
@@ -221,8 +226,8 @@ if [ "$GUIDED" = 1 ]; then
         # as before. The id is only ever a DEFAULT: the prompt still shows it and a typed answer
         # wins, because the registry identity is the operator's to confirm.
         DETECTED_DEVICE_ID=""
-        if [ -z "$DEVICE_ID" ] && [ -n "$SERIAL_PORTS" ] && command -v python3 >/dev/null 2>&1; then
-            DETECTED_DEVICE_ID="$(python3 "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" device-id 2>/dev/null | head -n1 | tr -d '\r' || true)"
+        if [ -z "$DEVICE_ID" ] && [ -n "$SERIAL_PORTS" ] && command -v "$PY" >/dev/null 2>&1; then
+            DETECTED_DEVICE_ID="$("$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" device-id 2>/dev/null | head -n1 | tr -d '\r' || true)"
             case "$DETECTED_DEVICE_ID" in
                 ''|*[!A-Za-z0-9._-]*) DETECTED_DEVICE_ID="" ;;  # never trust a stray line as an id
             esac
@@ -276,6 +281,13 @@ fi
 # A board write or a provisioning step needs a port; --build alone does not.
 if [ "$DO_FLASH" = 1 ] || [ "$DO_PROVISION" = 1 ]; then
     [ -n "$PORT" ] || die "--port is required with --flash or --provision"
+    # A board write or a provisioning step drives esptool (and pyserial for the console). Check
+    # the interpreter up front, so a missing dependency is one actionable line rather than a
+    # ModuleNotFoundError in the middle of a flash.
+    if [ "$DRY_RUN" = 0 ] && ! "$PY" -c 'import esptool, serial' 2>/dev/null; then
+        die "'$PY' cannot import esptool and pyserial. Set up the repository venv first:
+   python3 -m venv .venv && .venv/bin/pip install esptool pyserial"
+    fi
 fi
 
 # ---------------------------------------------------------------- build (opt-in)
@@ -290,7 +302,7 @@ if [ "$DO_BUILD" = 1 ]; then
     # A dry-run must not create directories either (it "touches nothing"), so the mkdir is
     # gated on the real run; the bundle step below is a no-op echo in dry-run anyway.
     [ "$DRY_RUN" = 1 ] || mkdir -p "$BUNDLE_DIR"
-    run python3 "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
+    run "$PY" "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
         --build "$FIRMWARE_DIR/build" \
         --out "$BUNDLE_DIR/flash.manifest.txt" \
         --bundle "$BUNDLE_DIR/flash.bundle.bin"
@@ -309,14 +321,14 @@ if [ "$DO_FLASH" = 1 ]; then
     # reviewed manifest. For a prebuilt bundle with no build tree, the manifest's own bundle_sha256
     # header is the gate: hash the one file that goes to 0x0.
     if [ -d "$FIRMWARE_DIR/build" ]; then
-        run python3 "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
+        run "$PY" "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
             --build "$FIRMWARE_DIR/build" --check "$BUNDLE_DIR/flash.manifest.txt"
     else
         echo "   prebuilt bundle (no local build tree): verifying against the manifest's bundle hash"
-        run python3 "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
+        run "$PY" "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
             --verify "$BUNDLE_DIR/flash.bundle.bin" --check "$BUNDLE_DIR/flash.manifest.txt"
     fi
-    run python3 -m esptool --chip esp32s3 --port "$PORT" --baud 460800 \
+    run "$PY" -m esptool --chip esp32s3 --port "$PORT" --baud 460800 \
         --before default-reset --after hard-reset \
         write_flash --flash_mode dio --flash_size 8MB --flash_freq 80m \
         0x0 "$BUNDLE_DIR/flash.bundle.bin"
@@ -365,7 +377,7 @@ if [ "$DO_PROVISION" = 1 ]; then
     #    key, the pinned fingerprint of the bridge's certificate, and the host:port to dial.
     #    The bridge's registry file cross-checks that the certificate being written is the one the
     #    bridge has on file for this identity, so a mix-up is refused before a byte is written.
-    run python3 "$REPO_ROOT/scripts/provision-device-tls.py" \
+    run "$PY" "$REPO_ROOT/scripts/provision-device-tls.py" \
         --certs "$TLS_CERTS_DIR" --device "$DEVICE_ID" \
         --host "$ENDPOINT_HOST" \
         --port  "$ENDPOINT_PORT" \
@@ -406,17 +418,17 @@ if [ "$DO_PROVISION" = 1 ]; then
         fi
     fi
     [ "$DRY_RUN" = 1 ] || [ -f "$MODEL_FILE" ] || die "model file not found: $MODEL_FILE"
-    run python3 "$REPO_ROOT/scripts/provision-device-model.py" --port "$PORT" \
+    run "$PY" "$REPO_ROOT/scripts/provision-device-model.py" --port "$PORT" \
         --model "$MODEL_FILE" --name "$MODEL_NAME"
 
     # 3. The endpoint the board dials. The scheme is the transport: tls:// is the registry
     #    standard and tcp:// a trusted-LAN rollback. A passphrase is never an argument.
-    run python3 "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" set-endpoint "$ENDPOINT"
+    run "$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" set-endpoint "$ENDPOINT"
 
     # 4. The Wi-Fi profile the board joins across reboots. The passphrase moves as a file; the
     #    device reports its presence, never its value.
-    run python3 "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" save-profile "$WIFI_SSID" "$WIFI_PSK_FILE"
-    run python3 "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" list-profiles
+    run "$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" save-profile "$WIFI_SSID" "$WIFI_PSK_FILE"
+    run "$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" list-profiles
     echo "   provisioned: TLS credential, wake model, endpoint, Wi-Fi. On reboot the board"
     echo "   associates, dials $ENDPOINT and registers as $DEVICE_ID."
 fi
