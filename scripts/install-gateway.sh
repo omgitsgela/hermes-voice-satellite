@@ -11,6 +11,7 @@
 #                  in so the bridge listens the moment the unit starts.
 #   3. tls      -- the registry's CA + server certificate and the credential file, minted by
 #                  scripts/issue-registry-tls.py (idempotent; an existing CA is never regenerated).
+#                  This step also generates the five-word satellite enrolment token (printed ONCE).
 #   4. unit     -- the systemd USER unit + the registry drop-in, enabled and started.
 #   5. hermes   -- the voice_satellite plugin installed + enabled and the voice-surface keys
 #                  applied to the Hermes config, one pass, with a backup.
@@ -77,7 +78,7 @@ run() {
 }
 
 usage() {
-    sed -n '2,44p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -168,7 +169,7 @@ if [ "$GUIDED" = 1 ]; then
     else
         echo "  hermes side:    SKIPPED"
     fi
-    echo "  1. bridge virtualenv   2. bridge.env   3. registry TLS   4. systemd user unit   5. Hermes side"
+    echo "  1. bridge virtualenv   2. bridge.env   3. registry TLS   3b. enrolment token   4. systemd user unit   5. Hermes side"
     GUIDED_ARGS=(--base "$BASE" --device-reachable-as "$REACHABLE_AS" --registry-port "$REGISTRY_PORT"
                  --tls-port "$TLS_PORT" --registry-bind "$REGISTRY_BIND" --satellite-host "$SATELLITE_HOST")
     if [ "$HERMES_YN" != y ]; then GUIDED_ARGS+=(--skip-hermes); fi
@@ -280,6 +281,34 @@ else
     echo "   enroll each satellite with:"
     echo "     $PY $REPO_ROOT/scripts/issue-registry-tls.py --state $STATE_DIR enroll --new <device-id> \\"
     echo "         --endpoint-host $REACHABLE_AS --endpoint-port $TLS_PORT"
+fi
+
+# ---------------------------------------------------------------- 3b. enrolment token
+# The five-word token a new satellite is set up with: generated once here, printed ONCE, and
+# stored 0600 at state/enroll-token.txt (the bridge regenerates it lazily if this step never
+# ran, but then nobody has seen it). Never re-printed on a re-run and never overwritten: a new
+# token would strand every satellite already enrolled under the old one.
+echo "== 3b. satellite enrolment token ($STATE_DIR/enroll-token.txt) =="
+ENROLL_TOKEN_FILE="$STATE_DIR/enroll-token.txt"
+if [ "$DRY_RUN" = 1 ]; then
+    echo "DRY-RUN: $PY $REPO_ROOT/scripts/generate-enroll-token.py --words $REPO_ROOT/scripts/data/enroll-words.txt --out $ENROLL_TOKEN_FILE"
+    if [ -f "$ENROLL_TOKEN_FILE" ]; then
+        echo "   an enrolment token already exists at $ENROLL_TOKEN_FILE (never re-printed)"
+    fi
+elif [ -f "$ENROLL_TOKEN_FILE" ] && [ -s "$ENROLL_TOKEN_FILE" ]; then
+    echo "   an enrolment token already exists at $ENROLL_TOKEN_FILE (never re-printed)"
+else
+    ENROLL_TOKEN="$("$PY" "$REPO_ROOT/scripts/generate-enroll-token.py" \
+        --words "$REPO_ROOT/scripts/data/enroll-words.txt" --out "$ENROLL_TOKEN_FILE")"
+    echo
+    echo "=================================================================="
+    echo "  SATELLITE ENROLMENT TOKEN -- shown ONCE, kept only at"
+    echo "  $ENROLL_TOKEN_FILE (mode 600):"
+    echo
+    echo "      $ENROLL_TOKEN"
+    echo
+    echo "  You will need this when you set up a satellite."
+    echo "=================================================================="
 fi
 
 # ---------------------------------------------------------------- 4. systemd user unit
