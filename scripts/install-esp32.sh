@@ -184,9 +184,9 @@ if [ "$GUIDED" = 1 ]; then
     echo "Setting up your voice satellite."
     echo
     echo "Two steps:"
-    echo "   1. write the firmware to the board over USB"
+    echo "   1. write the firmware to the satellite over USB"
     echo "   2. set it up: its name, the wake word, the network it joins, and how it reaches"
-    echo "      your assistant"
+    echo "      your gateway"
     echo
     echo "Nothing is changed until you say yes at the end."
     echo
@@ -194,9 +194,9 @@ if [ "$GUIDED" = 1 ]; then
     SERIAL_PORTS="$(guided_detect_serial_ports)"
     echo "What I found:"
     if [ -n "$SERIAL_PORTS" ]; then
-        echo "   board:        $(printf '%s' "$SERIAL_PORTS" | tr '\n' ' ')"
+        echo "   satellite:    $(printf '%s' "$SERIAL_PORTS" | tr '\n' ' ')"
     else
-        echo "   board:        not seen yet (plug it in, or type its port when asked)"
+        echo "   satellite:    not seen yet (plug it in, or type its port when asked)"
     fi
     if [ -f "$BUNDLE_DIR/flash.bundle.bin" ]; then
         echo "   firmware:     ready to write"
@@ -230,12 +230,12 @@ if [ "$GUIDED" = 1 ]; then
         PROV_YN='y'
         BUILD_YN='n'
     fi
-    guided_prompt_yn FLASH_YN "Write the firmware to the board over USB?" "$FLASH_YN"
-    guided_prompt_yn PROV_YN "Set the board up (its name, the wake word, the network, and how it reaches your assistant)?" "$PROV_YN"
+    guided_prompt_yn FLASH_YN "Write the firmware to the satellite over USB?" "$FLASH_YN"
+    guided_prompt_yn PROV_YN "Set the satellite up (its name, the wake word, the network, and how it reaches your gateway)?" "$PROV_YN"
 
     if [ "$FLASH_YN" = y ] || [ "$PROV_YN" = y ]; then
         PORT_DEFAULT="${PORT:-$(printf '%s\n' "$SERIAL_PORTS" | head -n1)}"
-        guided_prompt PORT "Board serial port" "${PORT_DEFAULT:-/dev/ttyACM0}"
+        guided_prompt PORT "Satellite serial port" "${PORT_DEFAULT:-/dev/ttyACM0}"
     fi
     if [ "$PROV_YN" = y ]; then
         # The board derives its own identity from its factory MAC, so when one is attached, ASK
@@ -251,7 +251,7 @@ if [ "$GUIDED" = 1 ]; then
                 ''|*[!A-Za-z0-9._-]*) DETECTED_DEVICE_ID="" ;;  # never trust a stray line as an id
             esac
             if [ -n "$DETECTED_DEVICE_ID" ]; then
-                echo "   (read the board's own name: $DETECTED_DEVICE_ID)"
+                echo "   (read the satellite's own name: $DETECTED_DEVICE_ID)"
             fi
         fi
         # Certificates for the board's own id already on this machine: use them unchanged. This is
@@ -270,21 +270,21 @@ if [ "$GUIDED" = 1 ]; then
         if [ -n "$TLS_CERTS_DIR" ]; then
             # --tls-certs was given on the command line: the manual folder question, exactly as it
             # always was (a flag the user typed is never dropped).
-            guided_prompt TLS_CERTS_DIR "Folder holding this board's certificates (client-ca.crt and the device's .crt/.key)" "$TLS_CERTS_DIR"
+            guided_prompt TLS_CERTS_DIR "Folder holding this satellite's certificates (client-ca.crt and the satellite's .crt/.key)" "$TLS_CERTS_DIR"
         elif [ -n "$KNOWN_CERTS" ]; then
             TLS_CERTS_DIR="$KNOWN_CERTS"
-            echo "   (this board already has its certificates in $TLS_CERTS_DIR; reusing them)"
+            echo "   (this satellite already has its certificates in $TLS_CERTS_DIR; reusing them)"
         else
             # First time for this board. Plain words, because "TLS directory" means nothing here:
-            # the board needs its own certificate -- its personal pass to talk to your assistant --
+            # the satellite needs its own certificate -- its personal pass to talk to your gateway --
             # and the five-word setup code the gateway printed at install is what fetches one.
-            echo "   Before your assistant will talk to the board, the board needs its own"
-            echo "   certificate -- think of it as the board's personal pass, made just for"
-            echo "   this board. A new board does not have one yet."
+            echo "   Before this satellite can talk to your gateway, it needs its own"
+            echo "   certificate -- think of it as the satellite's personal pass, made just for"
+            echo "   this satellite. A new satellite does not have one yet."
             echo
-            echo "   The easy way: when your assistant was set up it printed a secret setup"
+            echo "   The easy way: when your gateway was set up it printed a secret setup"
             echo "   code made of five words (something like correct-horse-battery-staple-ferry)."
-            echo "   Type those five words here and I will fetch the board's pass for you --"
+            echo "   Type those five words here and I will fetch the satellite's pass for you --"
             echo "   nothing to find, nothing to copy."
             TOKEN_SAVED=""
             if [ -f "$ENROLL_TOKEN_FILE" ]; then
@@ -292,7 +292,7 @@ if [ "$GUIDED" = 1 ]; then
                 echo
                 echo "   (found your saved setup code in $ENROLL_TOKEN_FILE; Enter uses it)"
             fi
-            SETUP_QUESTION="Setup code (five words), or the folder that already holds this board's certificates"
+            SETUP_QUESTION="Setup code (five words), or the folder that already holds this satellite's certificates"
             while :; do
                 printf '%s: ' "$SETUP_QUESTION"
                 guided_read_line SETUP_ANSWER
@@ -314,9 +314,9 @@ if [ "$GUIDED" = 1 ]; then
                 ENROL_MODE="folder"; TLS_CERTS_DIR="${SETUP_ANSWER:-}"
             fi
         fi
-        guided_prompt DEVICE_ID "Name this board is enrolled under" "${DEVICE_ID:-${DETECTED_DEVICE_ID:-esp32-1}}"
-        guided_prompt ENDPOINT "Address the board uses to reach your assistant (tls://host:port)" "${ENDPOINT:-${LAN_IP:+tls://$LAN_IP:10702}}" guided_valid_endpoint_strict
-        guided_prompt WIFI_SSID "Wi-Fi network name the board joins" "${WIFI_SSID}"
+        guided_prompt DEVICE_ID "Name this satellite is enrolled under" "${DEVICE_ID:-${DETECTED_DEVICE_ID:-esp32-1}}"
+        guided_prompt ENDPOINT "Address the satellite uses to reach your gateway (tls://host:port)" "${ENDPOINT:-${LAN_IP:+tls://$LAN_IP:10702}}" guided_valid_endpoint_strict
+        guided_prompt WIFI_SSID "Wi-Fi network name the satellite joins" "${WIFI_SSID}"
         guided_prompt WIFI_PSK_FILE "Wi-Fi passphrase file (kept out of the command line)" "${WIFI_PSK_FILE:-$WIFI_PSK}"
 
         # The exchange: only now are the board's name and the gateway's address known. A dry run
@@ -328,10 +328,10 @@ if [ "$GUIDED" = 1 ]; then
             ENROLL_GATEWAY="${VOICE_ENROLL_URL:-http://${ENROLL_BODY%%:*}:8765}"
             if [ "$DRY_RUN" = 1 ]; then
                 echo "   (dry run: nothing fetched -- a real run would enrol $DEVICE_ID at"
-                echo "    $ENROLL_GATEWAY and keep the board's certificates in $ENROLL_DIR)"
+                echo "    $ENROLL_GATEWAY and keep the satellite's certificates in $ENROLL_DIR)"
                 TLS_CERTS_DIR="$ENROLL_DIR"
             else
-                echo "   fetching this board's certificate from your assistant at $ENROLL_GATEWAY ..."
+                echo "   fetching this satellite's certificate from your gateway at $ENROLL_GATEWAY ..."
                 ENROLL_STAGING="$(mktemp -d "${TMPDIR:-/tmp}/hermes-enrol.XXXXXX")"
                 if [ -n "$ENROL_TOKEN" ]; then
                     # The typed setup code moves as a file path into the helper, never as an
@@ -352,14 +352,14 @@ if [ "$GUIDED" = 1 ]; then
                 ENROL_TOKEN=""
                 if [ "$ENROL_OK" = 1 ]; then
                     TLS_CERTS_DIR="$ENROLL_DIR"
-                    echo "   your assistant issued this board's certificate."
+                    echo "   your gateway issued this satellite's certificate."
                 else
                     rm -rf "$ENROLL_STAGING"
                     ENROLL_STAGING=""
                     echo "   That did not work -- the reason is just above. The old way still"
                     echo "   works: if this machine already has the gateway's certificate files"
-                    echo "   for this board, tell me which folder they are in."
-                    guided_prompt TLS_CERTS_DIR "Folder holding this board's certificates (client-ca.crt and the device's .crt/.key)" "$REGISTRY_TLS"
+                    echo "   for this satellite, tell me which folder they are in."
+                    guided_prompt TLS_CERTS_DIR "Folder holding this satellite's certificates (client-ca.crt and the satellite's .crt/.key)" "$REGISTRY_TLS"
                     ENROL_MODE="folder"
                 fi
             fi
@@ -370,15 +370,15 @@ if [ "$GUIDED" = 1 ]; then
     # normal setup never has to think about compiling anything.
     guided_prompt_yn BUILD_YN "Compile the firmware yourself instead? (advanced; not needed)" "$BUILD_YN"
     if [ "$FLASH_YN" != y ] && [ "$PROV_YN" != y ] && [ "$BUILD_YN" != y ]; then
-        die "nothing selected: write the firmware, set the board up, or both"
+        die "nothing selected: write the firmware, set the satellite up, or both"
     fi
 
     echo
     echo "=== What I'll do ==="
     if [ "$BUILD_YN" = y ]; then echo "   build:   compile the firmware from source, then write it"; fi
-    if [ "$FLASH_YN" = y ]; then echo "   write:   the firmware onto the board on $PORT"; fi
+    if [ "$FLASH_YN" = y ]; then echo "   write:   the firmware onto the satellite on $PORT"; fi
     if [ "$PROV_YN" = y ]; then
-        echo "   set up:  its name, wake word, network, and link to your assistant (over $PORT)"
+        echo "   set up:  its name, wake word, network, and link to your gateway (over $PORT)"
         echo "    device id:  $DEVICE_ID"
         echo "    endpoint:   $ENDPOINT"
         if [ "$ENROL_MODE" = token ]; then
@@ -620,7 +620,7 @@ if [ "$DO_PROVISION" = 1 ]; then
     #    device reports its presence, never its value.
     run "$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" save-profile "$WIFI_SSID" "$WIFI_PSK_FILE"
     run "$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" list-profiles
-    echo "   provisioned: TLS credential, wake model, endpoint, Wi-Fi. On reboot the board"
+    echo "   provisioned: TLS credential, wake model, endpoint, Wi-Fi. On reboot the satellite"
     echo "   associates, dials $ENDPOINT and registers as $DEVICE_ID."
 fi
 

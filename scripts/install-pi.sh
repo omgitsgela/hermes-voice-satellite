@@ -125,7 +125,7 @@ if [ "$GUIDED" = 1 ]; then
 
     echo "Setting up your Raspberry Pi voice satellite."
     echo
-    echo "I'll install what it needs to work, and connect it to your assistant."
+    echo "I'll install what it needs to work, and connect it to your gateway."
     echo
     echo "Nothing is changed until you say yes at the end."
     echo

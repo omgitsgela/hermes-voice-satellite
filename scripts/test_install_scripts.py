@@ -548,9 +548,9 @@ class GuidedModeTests(unittest.TestCase):
             combined = result.stdout + result.stderr
             # The exchange was attempted, its failure was explained, and the old folder prompt
             # appeared as the fallback.
-            self.assertIn('fetching this board', result.stdout)
+            self.assertIn('fetching this satellite', result.stdout)
             self.assertIn('could not reach the gateway', combined)
-            self.assertIn("Folder holding this board's certificates", result.stdout)
+            self.assertIn("Folder holding this satellite's certificates", result.stdout)
             # The fallback answer becomes the run's --tls-certs (no --registry: this is the
             # manual path's own layout), and a refused confirmation runs nothing.
             self.assertIn('--tls-certs /srv/bridge/state/registry-tls', self.run_line(result))
