@@ -70,6 +70,7 @@ from bridge.config import (
     FLEET_DISPATCH_TIMEOUT_SECONDS,
 )
 from bridge.satellite import SatelliteClient
+from bridge.enroll import EnrollmentService
 from bridge.timers import DEFAULT_STATE_PATH, TimerLimitError, TimerManager, parse_duration
 from bridge.config_plane import (
     ConfigConflict, ConfigPlane, ConfigValidationError, setting_requires_restart,
@@ -106,6 +107,7 @@ class Announcer:
                  ] = None,
                  volume_get: Optional[Callable[[], int]] = None,
                  volume_set: Optional[Callable[[int], Any]] = None,
+                 enrollment: Optional[EnrollmentService] = None,
                  host: str = ANNOUNCE_HOST, port: int = ANNOUNCE_PORT) -> None:
         self._sat = sat          # the conversation loop's connection; see the module docstring
         self._turn_started_at = turn_started_at
@@ -136,6 +138,9 @@ class Announcer:
         # Announcer built without a volume path still announces.
         self._volume_get: Optional[Callable[[], int]] = volume_get
         self._volume_set: Optional[Callable[[int], Any]] = volume_set
+        # Plug-and-play satellite enrolment (2026-10-08) shares this LAN port with announcements:
+        # same server, same trusted-network story. Its token is loaded lazily at start().
+        self.enrollment = enrollment if enrollment is not None else EnrollmentService()
         # Pacing for fleet writes that touch a restart-class setting (wake word, threshold):
         # one device per interval, so the rooms go quiet one at a time instead of all at once.
         # The write itself is durable; pacing only shapes *when* each connected device is told.
@@ -203,6 +208,8 @@ class Announcer:
         app.router.add_put("/config/devices/{device_id}/desired", self._handle_config_desired)
         app.router.add_put("/config/fleet/desired", self._handle_config_fleet)
         app.router.add_post("/config/devices/{device_id}/reported", self._handle_config_reported)
+        # Satellite enrolment, beside /announce on this same LAN port (bridge/enroll.py).
+        self.enrollment.register(app)
         self._runner = web.AppRunner(app, access_log=None)
         await self._runner.setup()
         site = web.TCPSite(self._runner, self.host, self.port)
