@@ -86,18 +86,21 @@ guided_valid_reachable_as() {
 guided_valid_endpoint_strict() {
     local body host port
     case "$1" in
-        tls://*|tcp://*) ;;
-        *) echo "   must be tls://host:port or tcp://host:port (got: $1)"; return 1 ;;
+        tls://*|tcp://*) : ;;
+        *://*) echo "   must be tls://host:port or tcp://host:port (got: $1)"; return 1 ;;
+        *:*:*) echo "   must be tls://host:port or tcp://host:port (got: $1)"; return 1 ;;
+        *:*)   : ;;   # a bare host:port is what people type; the caller adds tls://
+        *)     echo "   must be tls://host:port or tcp://host:port (got: $1)"; return 1 ;;
     esac
     body="${1#*://}"
     host="${body%%:*}"
     port="${body##*:}"
-    if [ "$host" = "$body" ]; then
+    if [ "$host" = "$body" ] || [ -z "$host" ]; then
         echo "   no port: $1 (want tls://host:port)"
         return 1
     fi
     case "$host" in
-        ''|*[![:alnum:].-]*) echo "   host is not usable: $host"; return 1 ;;
+        *[![:alnum:].-]*) echo "   host is not usable: $host"; return 1 ;;
     esac
     case "$port" in
         ''|*[!0-9]*) echo "   port is not a number: $port"; return 1 ;;
@@ -149,7 +152,9 @@ guided_valid_number() {
 guided_read_line() {
     # guided_read_line VAR -- one line of stdin into VAR; aborts on EOF.
     local _answer
-    if ! IFS= read -r _answer; then
+    # -e gives real line editing: arrow keys move the cursor instead of dropping escape
+    # bytes into the answer.
+    if ! IFS= read -er _answer; then
         printf '\n'
         echo "guided: end of input before an answer; aborting (nothing was written)." >&2
         exit 1

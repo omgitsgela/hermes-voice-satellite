@@ -69,6 +69,12 @@ TOKEN_ARG_FLAGS = ('--token', '--token-value', '--enroll-token', '--setup-code',
 
 
 class EnrolError(Exception):
+    """A refusal the person running this can understand and act on."""
+
+
+class AlreadyEnrolled(EnrolError):
+    """HTTP 409: the name already has a certificate. Exit code 3, so a wrapper can offer to
+    reissue instead of guessing at the cause of a generic failure."""
     """A failure that can be shown to the operator verbatim. No message here (or anywhere in this
     module) ever carries the setup code or the proof."""
 
@@ -176,9 +182,10 @@ def fetch_challenge(gateway: str, timeout: float = 10.0) -> str:
     return nonce
 
 
-def post_enroll(gateway: str, proof: str, device_id: str, timeout: float = 10.0) -> dict:
+def post_enroll(gateway: str, proof: str, device_id: str, force: bool = False,
+                timeout: float = 10.0) -> dict:
     """POST /enroll with the Bearer proof -> the encrypted bundle, or a clear refusal."""
-    payload = json.dumps({'device_id': device_id}).encode('utf-8')
+    payload = json.dumps({'device_id': device_id, 'force': bool(force)}).encode('utf-8')
     status, body = _http(gateway + '/enroll', data=payload,
                          headers={'Authorization': 'Bearer ' + proof,
                                   'Content-Type': 'application/json'}, timeout=timeout)
@@ -198,8 +205,11 @@ def post_enroll(gateway: str, proof: str, device_id: str, timeout: float = 10.0)
     if status == 400:
         raise EnrolError(f'the gateway refused the device name {device_id!r}')
     if status == 409:
-        raise EnrolError('this board is already enrolled at the gateway; ask the gateway to '
-                         'issue a new code if it needs re-enrolling')
+        # A distinct exception: this is the one refusal a person can act on by choosing,
+        # so callers (install-esp32.sh) can tell it apart from a broken exchange.
+        raise AlreadyEnrolled('this name is already enrolled at the gateway -- an '
+                              'earlier attempt used it. Re-run with --force to issue '
+                              'it a new certificate')
     raise EnrolError(f'the gateway answered HTTP {status}')
 
 
@@ -329,6 +339,9 @@ def main() -> int:
         reconfigure(line_buffering=True)
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--force', action='store_true',
+                        help='reissue the certificate when this name is already enrolled '
+                             '(the gateway keeps the name and replaces its certificate)')
     parser.add_argument('--device-id', required=True,
                         help='the identity this board is enrolled under (the board reports it)')
     parser.add_argument('--gateway', required=True,
@@ -358,7 +371,8 @@ def main() -> int:
         nonce = fetch_challenge(gateway)
         proof = enrollment_proof(token, nonce)
         print(f'enrol: asking for the certificate of {arguments.device_id}')
-        response = post_enroll(gateway, proof, arguments.device_id)
+        response = post_enroll(gateway, proof, arguments.device_id,
+                               force=arguments.force)
         bundle = open_bundle(token, response)
         print('enrol: opened the encrypted answer (the setup code matched)')
         # The gateway now ships its own server certificate inside the sealed bundle, so one
@@ -389,6 +403,9 @@ def main() -> int:
 if __name__ == '__main__':
     try:
         raise SystemExit(main())
+    except AlreadyEnrolled as error:
+        print(f'enrol: {error}', file=sys.stderr)
+        raise SystemExit(3)
     except EnrolError as error:
         print(f'enrol: {error}', file=sys.stderr)
         raise SystemExit(1)

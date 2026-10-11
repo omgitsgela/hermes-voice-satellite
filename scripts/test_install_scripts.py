@@ -626,6 +626,48 @@ class GuidedModeTests(unittest.TestCase):
                           self.run_line(guided))
             self.assertNotIn(token, guided.stdout + guided.stderr)
 
+    def test_a_reused_name_offers_to_reissue_instead_of_stopping(self):
+        """A previous attempt already enrolled this name, so the gateway answers 409 and the
+        client exits 3. The guided flow must offer to issue a new certificate and retry with
+        --force -- not drop into the certificate-folder prompt with no way forward."""
+        token = 'zebra-mango-tulip-quartz-ivory'
+        with tempfile.TemporaryDirectory(prefix='enrol-reissue-') as tmp:
+            repo = self.make_enrol_skeleton(Path(tmp))
+            # Stub the enrolment client: refuse with exit 3 unless --force is given, and record
+            # every invocation so the retry can be checked.
+            calls = Path(tmp) / 'calls.txt'
+            stub = repo / 'scripts' / 'enroll_device.py'
+            stub.write_text(
+                'import sys\n'
+                f'open({str(calls)!r}, "a").write(" ".join(sys.argv[1:]) + "\\n")\n'
+                'raise SystemExit(0 if "--force" in sys.argv else 3)\n')
+            psk = Path(tmp) / 'psk.txt'
+            psk.write_text('a-test-passphrase\n')
+            answers = [
+                'n', 'y', '/dev/ttyACM0', token, 'esp32-reissue',
+                'tls://192.0.2.10:10702', 'TestNet', str(psk),
+                'y',                                     # issue a new certificate?
+                # NOTE the order: the reissue question is asked inside the enrol step, which
+                # comes BEFORE the compile question. Getting this wrong sends 'y' to the wrong
+                # prompt and shows up as a bogus --tls-certs value.
+                'n',                                     # compile? (advanced)
+                'no',                                    # confirm (abort: nothing is written)
+            ]
+            result = subprocess.run(
+                ['bash', str(repo / 'scripts' / 'install-esp32.sh'), '--guided'],
+                input='\n'.join(answers) + '\n', capture_output=True, text=True,
+                env=self.enrol_env(repo))
+            out = result.stdout + result.stderr
+            self.assertIn('already has a certificate', out,
+                          'the person must be told why the name was refused')
+            self.assertIn('Issue a new certificate', out, 'a reissue must be offered')
+            ran = calls.read_text().splitlines() if calls.exists() else []
+            self.assertEqual(len(ran), 2, f'expected a refusal then a forced retry: {ran}')
+            self.assertNotIn('--force', ran[0], 'the first attempt must not force')
+            self.assertIn('--force', ran[1], 'the retry must reissue with --force')
+            self.assertNotIn('Folder holding', out,
+                             'the certificate-folder dead end must not appear')
+
     @staticmethod
     def make_enrol_skeleton(tmp: Path) -> Path:
         """A throwaway checkout: the scripts, a repo venv whose python is this test's own

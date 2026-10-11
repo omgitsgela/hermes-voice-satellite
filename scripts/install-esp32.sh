@@ -316,6 +316,10 @@ if [ "$GUIDED" = 1 ]; then
         fi
         guided_prompt DEVICE_ID "Name this satellite is enrolled under" "${DEVICE_ID:-${DETECTED_DEVICE_ID:-esp32-1}}"
         guided_prompt ENDPOINT "Address the satellite uses to reach your gateway (tls://host:port)" "${ENDPOINT:-${LAN_IP:+tls://$LAN_IP:10702}}" guided_valid_endpoint_strict
+        case "$ENDPOINT" in
+            *://*) : ;;
+            *)     echo "   (I'll use tls://$ENDPOINT)"; ENDPOINT="tls://$ENDPOINT" ;;
+        esac
         guided_prompt WIFI_SSID "Wi-Fi network name the satellite joins" "${WIFI_SSID}"
         # The passphrase is TYPED here, never passed on a command line: argv is visible in `ps`,
         # in shell history and in logs. A typed answer goes into a private file (0600) that is
@@ -369,12 +373,33 @@ if [ "$GUIDED" = 1 ]; then
                     ENROLL_TOKEN_TMP="$ENROLL_TOKEN_FILE"
                 fi
                 ENROL_OK=0
-                if "$PY" "$REPO_ROOT/scripts/enroll_device.py" \
+                ENROL_FORCE_ARGS=()
+                ENROL_ATTEMPT=0
+                while :; do
+                    ENROL_ATTEMPT=$((ENROL_ATTEMPT + 1))
+                    # Capture the status explicitly: a failed command inside `if` leaves $?
+                    # pointing at the `if`, not at the command.
+                    ENROL_STATUS=0
+                    "$PY" "$REPO_ROOT/scripts/enroll_device.py" \
                         --device-id "$DEVICE_ID" --gateway "$ENROLL_GATEWAY" \
                         --endpoint "$ENDPOINT" --out "$ENROLL_STAGING" \
-                        --token-file "$ENROLL_TOKEN_TMP"; then
-                    ENROL_OK=1
-                fi
+                        --token-file "$ENROLL_TOKEN_TMP" "${ENROL_FORCE_ARGS[@]}" || ENROL_STATUS=$?
+                    [ "$ENROL_STATUS" = 0 ] && { ENROL_OK=1; break; }
+                    # Exit 3 is the one refusal with a choice attached: this name already has a
+                    # certificate, because an earlier attempt used it. Offer to reissue it rather
+                    # than dropping into a certificate folder nobody has heard of.
+                    if [ "$ENROL_STATUS" = 3 ] && [ "$ENROL_ATTEMPT" = 1 ]; then
+                        echo
+                        echo "   That name already has a certificate at the gateway -- an earlier"
+                        echo "   attempt used it. I can issue a new one; the old one stops working."
+                        guided_prompt_yn REISSUE_YN "Issue a new certificate for $DEVICE_ID" "Y"
+                        if [ "$REISSUE_YN" = y ]; then
+                            ENROL_FORCE_ARGS=(--force)
+                            continue
+                        fi
+                    fi
+                    break
+                done
                 if [ -n "$ENROL_TOKEN" ]; then rm -f "$ENROLL_TOKEN_TMP"; fi
                 ENROL_TOKEN=""
                 if [ "$ENROL_OK" = 1 ]; then
@@ -386,7 +411,16 @@ if [ "$GUIDED" = 1 ]; then
                     echo "   That did not work -- the reason is just above. The old way still"
                     echo "   works: if this machine already has the gateway's certificate files"
                     echo "   for this satellite, tell me which folder they are in."
-                    guided_prompt TLS_CERTS_DIR "Folder holding this satellite's certificates (client-ca.crt and the satellite's .crt/.key)" "$REGISTRY_TLS"
+                    # Optional, not required: pressing Enter here means "I do not have a folder",
+                    # which is a real answer and must end the run cleanly rather than re-asking.
+                    guided_prompt_optional TLS_CERTS_DIR "Folder holding this satellite's certificates (press Enter to stop here)" "$REGISTRY_TLS"
+                    if [ -z "$TLS_CERTS_DIR" ]; then
+                        echo
+                        echo "   Stopping here. Nothing was written to the satellite."
+                        echo "   To retry the certificate fetch, run this again and answer the setup-code"
+                        echo "   question with the five words your gateway printed."
+                        exit 1
+                    fi
                     ENROL_MODE="folder"
                 fi
             fi
