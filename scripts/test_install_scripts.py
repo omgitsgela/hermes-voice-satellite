@@ -538,6 +538,12 @@ class GuidedModeTests(unittest.TestCase):
                       'a bare IP must be completed to scheme://host:port')
         self.assertIn('tls://192.0.2.10:10702', result.stdout,
                       'the resolved address must be shown, not applied silently')
+        # No default may be offered for the gateway: this machine's own LAN IP answers "what is
+        # my address?", not "where is the gateway?", and is wrong whenever the gateway is another
+        # machine. A wrong default is worse than no default.
+        self.assertNotRegex(result.stdout,
+                            r'Your gateway \(its IP address or host name\) \[',
+                            'the gateway prompt must not suggest this machine\'s own IP')
 
         # a host with an explicit port keeps that port
         result = self.run_guided(ESP32, base + ['192.0.2.20:9000'] + tail)

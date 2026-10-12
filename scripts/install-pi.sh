@@ -143,7 +143,7 @@ if [ "$GUIDED" = 1 ]; then
     echo "What I found:"
     LAN_IP="$(guided_detect_lan_ip)"
     if [ -n "$LAN_IP" ]; then
-        echo "  host LAN IP:       $LAN_IP (default endpoint host)"
+        echo "  host LAN IP:       $LAN_IP (this machine's own address, not the gateway)"
     else
         echo "  host LAN IP:       not detected (type the gateway endpoint by hand)"
     fi
@@ -173,7 +173,10 @@ if [ "$GUIDED" = 1 ]; then
     guided_prompt DEVICE_USER "User the satellite services run as" "${DEVICE_USER:-${SUDO_USER:-pi}}"
     # Just the IP address or host name is enough: the scheme and port are filled in and the
     # resolved address is echoed back.
-    guided_prompt_optional ENDPOINT "Your gateway (its IP address or host name)" "${ENDPOINT:-${LAN_IP:-}}" guided_valid_endpoint_loose
+    # No default on purpose: this machine's own LAN IP answers "what is my address?", not
+    # "where is the gateway?", and is wrong whenever the gateway is another machine. The
+    # scheme is the extension point for usb:// and bt:// later.
+    guided_prompt_optional ENDPOINT "Your gateway (its IP address or host name)" "${ENDPOINT:-}" guided_valid_endpoint_loose
     if [ -n "$ENDPOINT" ]; then
         ENDPOINT_BEFORE="$ENDPOINT"
         ENDPOINT="$(guided_normalise_endpoint "$ENDPOINT")"

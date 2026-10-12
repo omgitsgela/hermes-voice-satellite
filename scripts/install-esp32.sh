@@ -328,7 +328,16 @@ if [ "$GUIDED" = 1 ]; then
         guided_prompt DEVICE_ID "Name this satellite is enrolled under" "${DEVICE_ID:-${DETECTED_DEVICE_ID:-esp32-1}}"
         # Just the IP address or host name is enough: the scheme and the port are filled in,
         # and what was resolved is said out loud rather than happening silently.
-        guided_prompt ENDPOINT "Your gateway (its IP address or host name)" "${ENDPOINT:-${LAN_IP:-}}" guided_valid_endpoint_strict
+        #
+        # There is deliberately NO default. The obvious guess -- this machine's own LAN IP --
+        # is the answer to a different question ("what is MY address?") and it is simply wrong
+        # whenever the gateway is another machine, which is the usual case. A wrong default is
+        # worse than no default, so this asks.
+        #
+        # The scheme is the extension point for other transports: tls:// and tcp:// work today,
+        # and usb:// (a satellite wired straight into the gateway computer) or bt:// can be
+        # added by widening the validator and the provisioning step, not by reshaping this.
+        guided_prompt ENDPOINT "Your gateway (its IP address or host name)" "${ENDPOINT:-}" guided_valid_endpoint_strict
         ENDPOINT_BEFORE="$ENDPOINT"
         ENDPOINT="$(guided_normalise_endpoint "$ENDPOINT")"
         [ "$ENDPOINT" = "$ENDPOINT_BEFORE" ] || echo "   (using $ENDPOINT)"
