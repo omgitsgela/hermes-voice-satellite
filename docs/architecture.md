@@ -90,6 +90,8 @@ Typing only an IP address or host name is enough for the network case: the insta
 that is the primary setup path: certificates, wake model, Wi-Fi and the endpoint all go over the
 cable. The transport above is what the satellite uses *afterwards* to reach the gateway.
 
+The full topology -- including the decisions to make on purpose when USB and Bluetooth land -- is in `transport-topology.md`.
+
 Status: the network link is carried today. `usb://` and `bt://` are part of the vocabulary and the
 installers understand them, but nothing carries them yet, so an installer asked for one says so
 plainly rather than producing a satellite that cannot connect. Each becomes real by adding that
@@ -180,6 +182,7 @@ That is exactly how the 2026-09-25 office failure was caught.
 |---|---|
 | the device half, pinning and rebuilding | `owning-the-satellite-stack.md` |
 | the transport, and why the device dials out | `outbound-link.md` |
+| which transports the link can use (usb, bluetooth, network), and why setup is separate | `transport-topology.md` |
 | voice detection and the energy gate | `voice-detection.md` |
 | endpointing profiles (pauses, timeouts) | `endpointing-profiles.md` |
 | which model the voice surface uses | `agent-and-model-routing.md` |
