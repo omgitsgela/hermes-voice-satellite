@@ -337,7 +337,7 @@ if [ "$GUIDED" = 1 ]; then
                 WIFI_PSK_FILE="${TMPDIR:-/tmp}/hermes-wifi-psk.$$.psk"
                 if [ "$DRY_RUN" = 1 ]; then
                     echo "   (dry run: nothing is written; the passphrase would be held in a"
-                    echo "    private file and deleted once the board has it)"
+                    echo "    private file and deleted once the satellite has it)"
                 else
                     ( umask 077; printf '%s\n' "$WIFI_PSK_TYPED" > "$WIFI_PSK_FILE" )
                     chmod 600 "$WIFI_PSK_FILE"
@@ -452,7 +452,7 @@ if [ "$GUIDED" = 1 ]; then
             echo "    tls certs:  $TLS_CERTS_DIR"
         fi
         if [ -n "${HERMES_DISPOSABLE_PSK:-}" ]; then
-            echo "    wi-fi:      $WIFI_SSID (the passphrase you typed; never printed, deleted once the board has it)"
+            echo "    wi-fi:      $WIFI_SSID (the passphrase you typed; never printed, deleted once the satellite has it)"
         else
             echo "    wi-fi:      $WIFI_SSID (passphrase read from $WIFI_PSK_FILE, never printed)"
         fi
