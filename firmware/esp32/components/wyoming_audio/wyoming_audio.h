@@ -21,11 +21,18 @@
  * is chunked: whether a second of speech arrives as one frame or many, the same input yields
  * the same 16 kHz output, with no step at a seam. Feed chunks in order, one stream per
  * playback session. */
+/* Taps of the anti-aliasing FIR applied to the input before interpolation. See the coefficient
+ * table in wyoming_audio.c for why it exists (down-sampling without a low-pass aliases every
+ * input component above the output's Nyquist limit back into the audible band). */
+#define WY_FIR_TAPS 32
+
 typedef struct wy_resampler {
     double position;    /* absolute input offset (22050 Hz samples) of the next output sample */
     double consumed;    /* absolute input offset of the start of the NEXT chunk (samples fed) */
-    int32_t prev_value; /* the last sample fed (absolute position consumed-1): it is the lower
-                           sample for a seam interpolation, so the resample is continuous */
+    int32_t prev_value; /* the last FILTERED sample emitted (absolute position consumed-1): it is
+                           the lower sample for a seam interpolation, so the resample is continuous */
+    int16_t hist[WY_FIR_TAPS - 1];   /* the last TAPS-1 raw input samples, so the FIR is continuous
+                                        across chunks and chunking cannot change the output */
 } wy_resampler;
 
 /* Feed the next chunk of `n` 22050 Hz mono S16 samples (in[0] is the first new sample of the
@@ -50,7 +57,8 @@ void wy_resampler_reset(wy_resampler *r);   /* fresh stream: cursor and base bac
 size_t wy_apply_volume(int16_t *pcm, size_t n, int percent);
 
 /* Convert n mono 16 kHz S16 samples to the I2S TX's 32-bit stereo FULL-SCALE frames (two
- * int32 per sample, L=R, the S16 value scaled to 32-bit full-scale: x << 16). This is the
+ * int32 per sample, L=R, the S16 value scaled to 32-bit full-scale: x * 65536 -- a multiply, since a left
+ * shift of a negative signed value is undefined). This is the
  * exact inverse of the capture downmix, which is the XVF's own 32-bit full-scale convention.
  * Atomic: returns 2*n when cap >= 2*n (writing all frames), else 0 and writes nothing -- a
  * half-expanded frame would be a corrupted write. */
@@ -70,6 +78,20 @@ size_t wy_expand_mono16_to_stereo32(const int16_t *mono, size_t n, int32_t *out,
  * [20, 1, 2, 31, level], where level = 0 when `enabled` (LOW = amp on, active-low) and
  * 1 when disabled (HIGH = amp off). Pure byte encoder; the device glue transmits it. */
 void wy_amp_gpo_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int enabled);
+
+/* Audio Manager (ResID 35) output-mux routing: AUDIO_MGR_OP_L / AUDIO_MGR_OP_R each take a
+ * (category, source) pair choosing what the DAC plays. The board's default routes the beamformed
+ * MICROPHONE signal to the speaker, not what the host sends; the host's own playback is
+ * "far end (reference) data" = category 4, source 0. Framing matches the GPO write above. */
+#define XVF_I2C_RESID_AUDIO_MGR 35   /* Audio Manager */
+#define XVF_I2C_CMD_OP_L        15   /* AUDIO_MGR_OP_L: left channel category + source */
+#define XVF_I2C_CMD_OP_R        19   /* AUDIO_MGR_OP_R: right channel category + source */
+#define XVF_I2C_CAT_FAR_END     4    /* far end (reference) data received over I2S */
+#define XVF_I2C_CAT_USER_CH     8    /* user chosen channels (the beamformed output) */
+
+/* Fill out[XVF_I2C_GPO_CMD_LEN] with an AUDIO_MGR_OP_L/R write. right selects OP_R instead of
+ * OP_L. The DAC plays the left channel on both outputs, so OP_L is usually all that is needed. */
+void wy_output_route_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int right, int category, int source);
 
 /* Serialize the audio-chunk data field for the given format into buffer (capacity bytes,
  * NUL-terminated on success). Returns the number of bytes written (excluding the NUL), or a

@@ -4,6 +4,13 @@
 #include "device_identity.h"
 #include "wifi_station.h"
 #include "audio_bringup.h"
+#include "audio_playback.h"
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#ifndef M_PI
+#define M_PI 3.14159265358979323846   /* not in strict C11 */
+#endif
 #include "report_tail.h"
 #include "gateway_tcp.h"
 #include "gateway_tls.h"
@@ -725,6 +732,162 @@ void provisioning_console_run(void) {
                     snprintf(response, sizeof(response), "OK DEVICE_ID %s", device_id);
                 else
                     snprintf(response, sizeof(response), "ERR DEVICE_ID UNREADABLE");
+            } else if (!strncmp(line.data, "XVF_WRITE ", 10)) {
+                /* "XVF_WRITE <resid> <cmd> <p0> [p1 ...]" -- probe any XVF3800 control.
+                 * ResID 35 (Audio Manager) cmd 27 is I2S_DAC_DSP_ENABLE, the switch that
+                 * gates whether far-end audio is forwarded to the DAC at all. */
+                unsigned r = 0, cm = 0;
+                int p[8], np = 0;
+                int got = sscanf(line.data, "XVF_WRITE %u %u %d %d %d %d",
+                                 &r, &cm, &p[0], &p[1], &p[2], &p[3]);
+                if (got < 3) {
+                    snprintf(response, sizeof(response),
+                             "ERR XVF_WRITE usage: XVF_WRITE <resid> <cmd> <p0> [p1 ...]");
+                } else {
+                    np = got - 2;
+                    uint8_t params[8];
+                    for (int i = 0; i < np; ++i) params[i] = (uint8_t)p[i];
+                    int rc = audio_xvf_write((uint8_t)r, (uint8_t)cm, params, (size_t)np);
+                    snprintf(response, sizeof(response), "%s XVF_WRITE %u %u (%d params)",
+                             rc == 0 ? "OK" : "ERR", r, cm, np);
+                }
+            } else if (!strncmp(line.data, "AIC_WRITE ", 10)) {
+                /* "AIC_WRITE <reg> <val>" -- set any AIC3104 register live. Register 7 is the
+                 * interesting one: 0x00 disconnects both DAC data paths (the DACs stay powered,
+                 * the output drivers stay live), 0x0A connects left->left and right->right.
+                 * Comparing those two isolates whether noise enters through the digital data
+                 * path or from the analog side. */
+                unsigned reg = 0, val = 0;
+                if (sscanf(line.data, "AIC_WRITE %u %u", &reg, &val) != 2 || reg > 255 || val > 255) {
+                    snprintf(response, sizeof(response), "ERR AIC_WRITE usage: AIC_WRITE <reg 0-255> <val 0-255>");
+                } else {
+                    int wc = audio_dac_write((uint8_t)reg, (uint8_t)val);
+                    uint8_t v = 0;
+                    int rd = audio_dac_read((uint8_t)reg, &v);
+                    snprintf(response, sizeof(response), "%s AIC_WRITE %u=%u (read back %u)",
+                             (wc == 0 && rd == 0) ? "OK" : "ERR", reg, val, (unsigned)v);
+                }
+            } else if (!strncmp(line.data, "AIC_READ", 8)) {
+                /* "AIC_READ" with no argument dumps the registers that decide whether the
+                 * codec is actually running: clocking, format, DAC power and output routing.
+                 * A write that was ACKed can still have been ignored; this is the check. */
+                static const uint8_t regs[] = { 0x66, 0x65, 0x03, 0x04, 0x0B, 0x02,
+                                                0x09, 0x07, 0x25, 0x29, 0x2B, 0x52, 0x56 };
+                char out[128];
+                size_t used = 0;
+                for (size_t i = 0; i < sizeof(regs); ++i) {
+                    uint8_t v = 0xEE;
+                    int rc = audio_dac_read(regs[i], &v);
+                    used += (size_t)snprintf(out + used, sizeof(out) - used, "%s%02x=%02x",
+                                             i ? " " : "", (unsigned)regs[i],
+                                             rc == 0 ? (unsigned)v : 0xFF);
+                    if (used >= sizeof(out) - 1) break;
+                }
+                snprintf(response, sizeof(response), "OK AIC %s", out);
+            } else if (!strcmp(line.data, "DAC_INIT")) {
+                /* Re-run the AIC3104 codec init (power up + unmute) on demand. */
+                int rc = audio_dac_init();
+                snprintf(response, sizeof(response), "%s DAC_INIT", rc == 0 ? "OK" : "ERR");
+            } else if (!strncmp(line.data, "TONE ", 5)) {
+                /* "TONE <count> <ms>" -- play <count> sustained tones of <ms> milliseconds each,
+                 * separated by short silences. A chime is ~160 ms, far too short to exercise a
+                 * sustained stream; this holds real audio on the wire for seconds at a time so
+                 * DMA starvation or stale-buffer replay shows up as clipping mid-tone rather than
+                 * at a burst boundary. Count the tones you hear and note WHERE any are cut. */
+                int count = 0, ms = 0;
+                if (sscanf(line.data, "TONE %d %d", &count, &ms) != 2 || count < 1 || count > 12
+                    || ms < 50 || ms > 4000) {
+                    snprintf(response, sizeof(response),
+                             "ERR TONE usage: TONE <count 1-12> <ms 50-4000>");
+                } else {
+                    const int rate = 16000, gap_ms = 300;
+                    size_t tone_n = (size_t)ms * rate / 1000u;
+                    size_t gap_n = (size_t)gap_ms * rate / 1000u;
+                    size_t total = (size_t)count * tone_n + (size_t)(count - 1) * gap_n;
+                    int16_t *pcm = (int16_t *)malloc(total * sizeof(int16_t));
+                    if (!pcm) {
+                        snprintf(response, sizeof(response), "ERR TONE out of memory (%u samples)",
+                                 (unsigned)total);
+                    } else {
+                        memset(pcm, 0, total * sizeof(int16_t));
+                        for (int i = 0; i < count; i++) {
+                            /* alternate 440 / 660 Hz so consecutive tones are distinguishable */
+                            double hz = (i % 2) ? 660.0 : 440.0;
+                            size_t off = (size_t)i * (tone_n + gap_n);
+                            for (size_t s = 0; s < tone_n; s++) {
+                                double env = 1.0;
+                                if (s < 400) env = (double)s / 400.0;                 /* fade in  */
+                                else if (s + 400 >= tone_n) env = (double)(tone_n - s) / 400.0;
+                                pcm[off + s] = (int16_t)(12000.0 * env *
+                                                         sin(2.0 * M_PI * hz * (double)s / rate));
+                            }
+                        }
+                        int pr = audio_playback_play_mono(pcm, total);
+                        snprintf(response, sizeof(response),
+                                 "%s TONE %d x %dms queued (%u samples, %u KB)",
+                                 pr == 0 ? "OK" : "ERR", count, ms,
+                                 (unsigned)total, (unsigned)(total * sizeof(int16_t) / 1024u));
+                        free(pcm);
+                    }
+                }
+            } else if (!strncmp(line.data, "CHIME", 5) && (line.data[5] == '\0' || line.data[5] == ' ')) {
+                /* Play the chime directly, with no detector, no detection and no streaming
+                 * session as a precondition. This is the test that separates an audio fault from
+                 * a wake-trigger fault: the wake path silently skips most triggers when the mic
+                 * is not streaming, which is indistinguishable from a broken speaker. */
+                int rc = wake_detector_play_chime();
+                snprintf(response, sizeof(response), "%s CHIME (bypasses the detector entirely)",
+                         rc == 0 ? "OK" : "ERR");
+            } else if (!strncmp(line.data, "I2S_FLOAT ", 10)) {
+                /* "I2S_FLOAT 1" tri-states the I2S data-out line (GPIO44) so it floats;
+                 * "I2S_FLOAT 0" drives it again. This is a CONTROL experiment: if floating the
+                 * line reproduces the intermittent clicking exactly, then that clicking is what
+                 * an undriven data line sounds like -- and the real fault is that our line is
+                 * intermittently not being driven, not the codec or its clock. */
+                int on = 0;
+                if (sscanf(line.data, "I2S_FLOAT %d", &on) != 1 || (on != 0 && on != 1)) {
+                    snprintf(response, sizeof(response), "ERR I2S_FLOAT usage: I2S_FLOAT 0|1");
+                } else {
+                    audio_playback_i2s_float(on);
+                    snprintf(response, sizeof(response), "OK I2S_FLOAT %d (%s)",
+                             on, on ? "GPIO44 now floating" : "GPIO44 driven again");
+                }
+            } else if (!strncmp(line.data, "AMP_LOCK ", 9)) {
+                /* Freeze/unfreeze the amp so a diagnostic can hold the speaker open while the
+                 * ring is empty -- otherwise the pump releases it within milliseconds. */
+                int on = 0;
+                if (sscanf(line.data, "AMP_LOCK %d", &on) != 1 || (on != 0 && on != 1)) {
+                    snprintf(response, sizeof(response), "ERR AMP_LOCK usage: AMP_LOCK 0|1");
+                } else {
+                    audio_playback_amp_lock(on);
+                    snprintf(response, sizeof(response), "OK AMP_LOCK %d", on);
+                }
+            } else if (!strncmp(line.data, "AMP ", 4)) {
+                /* Force the amplifier on or off for diagnostics: "AMP 1" / "AMP 0". Normally the
+                 * pump arms it only while the playback ring has frames, so a routing change alone
+                 * is silent -- you cannot hear what a mux setting delivers unless the amp is held
+                 * open. This is that override. */
+                int on = 0;
+                if (sscanf(line.data, "AMP %d", &on) != 1 || (on != 0 && on != 1)) {
+                    snprintf(response, sizeof(response), "ERR AMP usage: AMP 0|1");
+                } else {
+                    audio_playback_amp(on);
+                    snprintf(response, sizeof(response), "OK AMP %d", on);
+                }
+            } else if (!strncmp(line.data, "XVF_OP ", 7)) {
+                /* Set the XVF3800's output mux: "XVF_OP <category> <source> [R]" chooses which
+                 * signal the DAC plays. Category 4 source 0 is the host's own playback over I2S;
+                 * the board defaults to the beamformed microphone output instead. */
+                int cat = 0, src = 0, right = 0;
+                int got = sscanf(line.data, "XVF_OP %d %d", &cat, &src);
+                if (strstr(line.data, " R")) right = 1;
+                if (got != 2 || cat < 0 || cat > 12 || src < 0 || src > 5) {
+                    snprintf(response, sizeof(response), "ERR XVF_OP usage: XVF_OP <category 0-12> <source 0-5> [R]");
+                } else {
+                    int rc = audio_xvf_route_output(right, cat, src);
+                    snprintf(response, sizeof(response), "%s XVF_OP %d %d%s",
+                             rc == 0 ? "OK" : "ERR", cat, src, right ? " R" : "");
+                }
             } else if (!strcmp(line.data, "WAKE_STATUS") || !strcmp(line.data, "WAKE_FIRE")) {
                 /* The wake detector's provisioning-console surface (increment 4). WAKE_STATUS
                  * reports the detector state (real vs placeholder model, deaf, force-armed) so a

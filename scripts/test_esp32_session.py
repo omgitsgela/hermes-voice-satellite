@@ -26,6 +26,24 @@ class Identity(C.Structure):
                 ('firmware_version', C.c_char_p), ('wake_name', C.c_char_p)]
 
 
+
+class WYResampler(C.Structure):
+    """A ctypes mirror of `wy_resampler` in wyoming_audio.h.
+
+    Five WYSession mirrors below embed this by value. They used to declare it as
+    `C.c_double * 3`, which happened to match the old layout (two doubles and an int32 pad to
+    24 bytes) but was never actually correct. When the anti-aliasing FIR added its history the
+    real struct grew to 84 bytes and the mirrors stayed at 24 -- so every test that allocated a
+    session through the mirror wrote 60 bytes past the end of it. That is a heap corruption that
+    glibc reported as a malloc assertion, nowhere near its true cause. Keep this struct in step
+    with the header; test_session_size_matches_the_mirror proves it.
+    """
+    _fields_ = [('position', C.c_double),
+                ('consumed', C.c_double),
+                ('prev_value', C.c_int32),
+                ('hist', C.c_int16 * 31)]
+
+
 class SessionTests(unittest.TestCase):
     def library(self):
         self.assertTrue((COMP / 'wyoming_session/wyoming_session.c').exists(), 'session core missing')
@@ -383,7 +401,7 @@ class SessionTests(unittest.TestCase):
                         ('writer_lock_user', C.c_void_p),
                         ('playback_active', C.c_int), ('playback_ended', C.c_int),
                         ('playback_volume', C.c_int), ('playback_rate', C.c_int),
-                        ('playback_rs', C.c_double * 3),
+                        ('playback_rs', WYResampler),
                         ('ring', C.c_void_p), ('ring_capacity', C.c_size_t),
                         ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
                         ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
@@ -435,7 +453,7 @@ class SessionTests(unittest.TestCase):
                         ('writer_lock_user', C.c_void_p),
                         ('playback_active', C.c_int), ('playback_ended', C.c_int),
                         ('playback_volume', C.c_int), ('playback_rate', C.c_int),
-                        ('playback_rs', C.c_double * 3),
+                        ('playback_rs', WYResampler),
                         ('ring', C.c_void_p), ('ring_capacity', C.c_size_t),
                         ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
                         ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
@@ -517,7 +535,7 @@ class SessionTests(unittest.TestCase):
                         ('writer_lock_user', C.c_void_p),
                         ('playback_active', C.c_int), ('playback_ended', C.c_int),
                         ('playback_volume', C.c_int), ('playback_rate', C.c_int),
-                        ('playback_rs', C.c_double * 3),
+                        ('playback_rs', WYResampler),
                         ('ring', C.c_void_p), ('ring_capacity', C.c_size_t),
                         ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
                         ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
@@ -568,7 +586,7 @@ class SessionTests(unittest.TestCase):
                         ('writer_lock_user', C.c_void_p),
                         ('playback_active', C.c_int), ('playback_ended', C.c_int),
                         ('playback_volume', C.c_int), ('playback_rate', C.c_int),
-                        ('playback_rs', C.c_double * 3),
+                        ('playback_rs', WYResampler),
                         ('ring', C.c_void_p), ('ring_capacity', C.c_size_t),
                         ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
                         ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
@@ -941,6 +959,25 @@ class SessionTests(unittest.TestCase):
         Returns the flat list of int32 (L,R interleaved). This is the interop oracle: the device
         must produce byte-identical frames to what a correct implementation would."""
         import math
+        # The anti-aliasing FIR, exactly as the device applies it before interpolating: the
+        # same windowed-sinc coefficients, the same zero-filled history at stream start. The
+        # FIR's correctness (chunk invariance, stopband, passband, DC gain) is proven
+        # independently by scripts/test_resampler.py; this oracle only mirrors it so the
+        # conversion plumbing is still checked end to end.
+        FIR = [0, -5, -6, 70, -109, -35, 332, -416, -78, 912, -1126, -120, 2332, -3314,
+               -145, 18092, 18091, -145, -3314, 2332, -120, -1126, 912, -78,
+               -416, 332, -35, -109, 70, -6, -5, 0]
+        hist = [0] * (len(FIR) - 1)
+        filt = []
+        for x in pcm:
+            stage = hist + [x]
+            acc = sum(FIR[i] * stage[i] for i in range(len(FIR)))
+            hist = hist[1:] + [x]
+            v = (acc + 16384) >> 15
+            if v > 32767: v = 32767
+            if v < -32768: v = -32768
+            filt.append(v)
+        pcm = filt
         R = 22050.0 / 16000.0
         mono = []
         k = 0
@@ -1179,7 +1216,7 @@ class SessionTests(unittest.TestCase):
                         ('writer_lock_user', C.c_void_p),
                         ('playback_active', C.c_int), ('playback_ended', C.c_int),
                         ('playback_volume', C.c_int), ('playback_rate', C.c_int),
-                        ('playback_rs', C.c_double * 3),
+                        ('playback_rs', WYResampler),
                         ('ring', C.c_void_p), ('ring_capacity', C.c_size_t),
                         ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
                         ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
@@ -1306,6 +1343,39 @@ class SessionTests(unittest.TestCase):
                          'the config handler did not survive the re-init')
         self.assertEqual(events[2].data['generation'], 1)
         self.assertEqual(events[2].data['actual'], expected_actual)
+
+
+    def test_the_ctypes_mirror_matches_the_c_struct(self):
+        """Every WYSession mirror below is hand-written ctypes, and the C code writes through
+        whichever one the test allocated. If a mirror is SMALLER than the real struct the writes
+        land past the end of the allocation and the failure surfaces as a glibc malloc assertion
+        in an unrelated test -- which is exactly what happened when wy_resampler grew by the FIR
+        history: the mirrors said 24 bytes, reality said 84, and the heap was corrupted by 60
+        bytes per session. This check makes that drift a named, immediate failure instead."""
+        lib = self.library()
+        # Mirrors are declared per test method; rebuild the smallest complete one here so this
+        # guard does not depend on another test having run.
+        class WYSession(C.Structure):
+            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
+                        ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
+                        ('name', C.c_char * 65),
+                        ('area', C.c_char * 65), ('firmware_version', C.c_char * 33),
+                        ('wake_name', C.c_char * 65),
+                        ('header', C.c_char * 1024), ('body', C.c_char * 4097),
+                        ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
+                        ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
+                        ('writer_lock_user', C.c_void_p),
+                        ('playback_active', C.c_int), ('playback_ended', C.c_int),
+                        ('playback_volume', C.c_int), ('playback_rate', C.c_int),
+                        ('playback_rs', WYResampler),
+                        ('ring', C.c_void_p), ('ring_capacity', C.c_size_t),
+                        ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
+                        ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
+                        ('config_handler', C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_char_p, C.c_size_t)),
+                        ('config_user', C.c_void_p)]
+        self.assertEqual(C.sizeof(WYSession), lib.wy_session_size(),
+                         'the ctypes WYSession mirror no longer matches the C struct size. '
+                         'Update the mirrors and WYResampler to the current wyoming_session.h.')
 
 
 if __name__ == '__main__':

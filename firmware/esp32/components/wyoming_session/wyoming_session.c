@@ -4,8 +4,19 @@
 #include <stdio.h>
 #include <string.h>
 #ifdef ESP_PLATFORM
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#else
+/* Host builds (the offline test harnesses) have no ESP-IDF. This file is deliberately portable
+ * so the session can be exercised away from the device; the logging was the one thing that
+ * silently broke every host suite that compiled it. */
+#ifndef ESP_LOGE
+#define ESP_LOGE(tag, ...) ((void)0)
+#define ESP_LOGW(tag, ...) ((void)0)
+#define ESP_LOGI(tag, ...) ((void)0)
+#define ESP_LOGD(tag, ...) ((void)0)
+#endif
 #endif
 
 /* The wake word name is WYAKE_WORD_NAME (wyoming_session.h): the local detector and the
@@ -90,10 +101,21 @@ static void playback_ring_lock_give(void) {
 static void playback_ring_append_locked(wy_session *session, const int32_t *frames, size_t n) {
     size_t cap = session->ring_capacity / 4;
     if (!session->ring || cap == 0 || n == 0) return;
-    for (size_t i = 0; i < n; ++i) {
-        if ((session->ring_tail + 1) % cap == session->ring_head)
-            session->ring_head = (session->ring_head + 1) % cap;   /* full: drop the oldest */
+    /* Stereo frames are TWO int32 words (L then R). Dropping ONE word on overflow desynchronises
+     * the pairing: the retained stream then starts mid-frame and every subsequent sample is read
+     * as the wrong channel -- an effect no amount of volume or codec tuning can fix. The usable
+     * capacity is also intentionally one word short of the allocation (the ring keeps one slot to
+     * tell full from empty), so it is ODD while the data is in pairs. Drop whole frames. */
+    size_t pairs = n & ~(size_t)1;          /* never write a half frame */
+    for (size_t i = 0; i + 1 < pairs; i += 2) {
+        /* Make room for both words before writing either, so a frame is never split. */
+        while ((session->ring_tail + 2) % cap == session->ring_head
+               || (session->ring_tail + 1) % cap == session->ring_head) {
+            session->ring_head = (session->ring_head + 2) % cap;   /* full: drop the oldest FRAME */
+        }
         session->ring[session->ring_tail] = frames[i];
+        session->ring_tail = (session->ring_tail + 1) % cap;
+        session->ring[session->ring_tail] = frames[i + 1];
         session->ring_tail = (session->ring_tail + 1) % cap;
     }
 }
@@ -133,8 +155,19 @@ int wy_session_set_playback_volume(wy_session *session, int volume) {
 }
 
 int wy_session_local_play(wy_session *session, const int16_t *mono, size_t n) {
-    if (!session || !mono) return WY_INVALID;
-    if (!session->ring || session->ring_capacity % 4) return WY_INVALID;   /* no ring: nowhere to go */
+    /* Every drop point is reported: a chime that vanishes here is exactly a "no ding" symptom,
+     * and "no ring" is the one that looks identical to a broken speaker from outside. */
+    if (!session || !mono) {
+        ESP_LOGW("plb_local", "local_play dropped: session=%p mono=%p", (void *)session, (const void *)mono);
+        return WY_INVALID;
+    }
+    if (!session->ring || session->ring_capacity % 4) {
+        ESP_LOGW("plb_local", "local_play dropped: ring=%p capacity=%u (no ring is nowhere to go)",
+                 (void *)session->ring, (unsigned)session->ring_capacity);
+        return WY_INVALID;
+    }
+    ESP_LOGI("plb_local", "local_play %u samples, ring %u bytes, volume %u",
+             (unsigned)n, (unsigned)session->ring_capacity, (unsigned)session->playback_volume);
     /* The device's own local tone (the wake chime): the same speaker path as a bridge answer,
      * so the pump task's amplifier policy (armed while the ring is not empty) carries it. The
      * difference from the inbound audio-chunk path is only the source: this is already at the
@@ -563,12 +596,22 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
             cJSON_IsNumber(width) && width->valuedouble == 2 &&
             cJSON_IsNumber(channels) && channels->valuedouble == 1) {
             wy_resampler_reset(&session->playback_rs);
-            /* Reset the ring under the lock: the playback task may be mid-read (draining the
-             * last answer) while the bridge starts the next one, so an unlocked reset would
-             * race the reader's head advance. */
+            /* Flush the ring ONLY when the new stream is an INTERRUPTION, i.e. the previous one
+             * never sent audio-stop and is still open. Flushing on every start threw away audio
+             * that was legitimately queued and not yet played -- the tail of a chime or of the
+             * previous announcement -- because the bridge releases its playback lock on
+             * audio-stop rather than on the device's actual playout, so consecutive streams
+             * overlap at the tail. A well-formed stream boundary therefore PRESERVES what is
+             * still queued; only a genuine cut-over discards it.
+             *
+             * The reset is under the lock: the playback task may be mid-read while the bridge
+             * starts the next stream, so an unlocked reset would race the reader's head advance. */
+            int interrupted = session->playback_active;
             playback_ring_lock_take();
-            session->ring_head = 0;
-            session->ring_tail = 0;
+            if (interrupted) {
+                session->ring_head = 0;
+                session->ring_tail = 0;
+            }
             playback_ring_lock_give();
             session->playback_active = 1;
             session->playback_ended = 0;

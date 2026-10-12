@@ -7,4 +7,4 @@ idf_component_register(SRCS "main.c" "provisioning_console.c" "usb_wyoming.c" "w
     REQUIRES wyoming_diagnostic memory_probe provisioning wyoming_session wyoming_audio wifi_report gateway_supervisor
              wyoming_config audio_report report_tail esp_psram heap freertos log
              nvs_flash esp_driver_usb_serial_jtag esp_hw_support esp_timer esp_wifi esp_netif esp_event lwip
-             mbedtls esp_partition esp_driver_i2s esp_driver_i2c wy_wake wy_mww)
+             mbedtls esp_partition esp_driver_i2s esp_driver_i2c esp_driver_gpio wy_wake wy_mww)

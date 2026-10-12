@@ -1,5 +1,7 @@
 #ifndef AUDIO_PLAYBACK_H
 #define AUDIO_PLAYBACK_H
+
+#include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -28,9 +30,36 @@ bool audio_playback_running(void);
 /* Tell the pump task which session (ring) to read. Set once at startup, before the first start. */
 void audio_playback_set_session(void *session);
 
+/* Read back the live session pointer. */
+void *audio_playback_session(void);
+
 /* Arm (enabled) or rest (disabled) the amplifier over the XVF's I2C GPO Servicer. A thin
  * transmit of wy_amp_gpo_command's byte-exact command (the amp pin is active-low). A failure
  * leaves the link alone: a silent speaker is not a link fault. */
-void audio_playback_amp(int enabled);
+int audio_playback_amp(int enabled);
 
 #endif
+
+/* Set the XVF3800 output mux (which signal the DAC plays). Returns 0 on success. */
+int audio_xvf_route_output(int right, int category, int source);
+
+/* Power up and unmute the AIC3104 codec driving the 3.5 mm jack. */
+int audio_dac_init(void);
+
+/* Read an AIC3104 register back (verification). */
+int audio_dac_read(uint8_t reg, uint8_t *value);
+
+/* Write an arbitrary XVF3800 control register. */
+int audio_xvf_write(uint8_t resid, uint8_t cmd, const uint8_t *params, size_t nparams);
+
+/* Write one AIC3104 register. */
+int audio_dac_write(uint8_t reg, uint8_t value);
+
+/* Freeze the amplifier state so the pump cannot release it (diagnostics). */
+void audio_playback_amp_lock(int locked);
+
+/* Queue mono16 audio for playback now. Returns 0 when queued. */
+int audio_playback_play_mono(const int16_t *mono, size_t n);
+
+/* Tri-state (1) or drive (0) the I2S data-out line. Diagnostics only. */
+void audio_playback_i2s_float(int enable);

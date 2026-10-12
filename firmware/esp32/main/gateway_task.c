@@ -17,6 +17,7 @@
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
 #include <string.h>
+#include "esp_log.h"
 
 /* The device half of "register on boot": a persistent gateway task that runs the supervisor
  * (item 1) for the life of the session, re-dialing -- and re-associating Wi-Fi -- whenever the
@@ -506,7 +507,9 @@ int gateway_task_start(const char *host, unsigned port, int transport,
                                       GATEWAY_PLAYBACK_RING_FRAMES * sizeof(int32_t),
                                       WY_VOLUME_DEFAULT_PERCENT);
         playback_ring = ring;
+        ESP_LOGI("plb_ring", "playback ring ready: %u frames", (unsigned)GATEWAY_PLAYBACK_RING_FRAMES);
     } else {
+        ESP_LOGW("plb_ring", "playback ring allocation FAILED (%u frames)", (unsigned)GATEWAY_PLAYBACK_RING_FRAMES);
         gateway_report_append(state.report, sizeof(state.report), "playback=unavailable reason=psram");
     }
     /* Point the pump at THIS session unconditionally, not only when the ring allocated: on a

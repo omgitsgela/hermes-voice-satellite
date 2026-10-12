@@ -20,6 +20,9 @@
 #define CAPTURE_I2S_WS_PIN     GPIO_NUM_7
 #define CAPTURE_I2S_RX_PIN     GPIO_NUM_43
 #define CAPTURE_I2S_RATE_HZ    16000
+/* Same MCLK as the playback side: capture and playback share one I2S port in
+ * full-duplex, so there is one master clock for both. */
+#define CAPTURE_I2S_MCLK_PIN   GPIO_NUM_9
 
 #define CAPTURE_TASK_STACK     6144
 #define CAPTURE_TASK_PRIORITY  4

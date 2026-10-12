@@ -56,3 +56,7 @@ void wake_detector_force_fire(void);
 void wake_detector_status(char *out, size_t cap);
 
 #endif
+
+/* Play the chime directly, bypassing the wake detector. Diagnostics: separates an audio-path
+ * fault from a trigger-state-machine fault. Returns 0 when queued, -1 otherwise. */
+int wake_detector_play_chime(void);

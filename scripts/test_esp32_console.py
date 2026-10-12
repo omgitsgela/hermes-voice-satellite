@@ -360,6 +360,27 @@ int audio_bringup_run(char *out, size_t capacity) {
  * console's WAKE_STATUS/WAKE_FIRE dispatch and framing are what the test checks, while the
  * detector's own behaviour is proved by the wy_wake host tests, the integration test, and the
  * firmware build + ELF symbols. */
+/* Diagnostic playback/codec entry points the console drives (chime, tone, AIC3104 access,
+   the I2S tri-state). They live in audio_playback/wake_detector, which are device glue; the
+   console's dispatch and framing are what this harness checks, while the real behaviour is
+   proved by the resampler tests, the audio host tests, and the firmware build + ELF symbols. */
+int audio_playback_play_mono(const int16_t *mono, size_t n) {
+    (void)mono; (void)n; return 0;
+}
+void audio_playback_i2s_float(int enable) { (void)enable; }
+int audio_dac_init(void) { return 0; }
+int audio_dac_read(uint8_t reg, uint8_t *value) { (void)reg; if (value) *value = 0; return 0; }
+int audio_dac_write(uint8_t reg, uint8_t value) { (void)reg; (void)value; return 0; }
+int audio_xvf_write(uint8_t resid, uint8_t cmd, const uint8_t *params, size_t nparams) {
+    (void)resid; (void)cmd; (void)params; (void)nparams; return 0;
+}
+int wake_detector_play_chime(void) { return 0; }
+int audio_playback_amp(int enabled) { (void)enabled; return 0; }
+void audio_playback_amp_lock(int locked) { (void)locked; }
+int audio_xvf_route_output(int right, int category, int source) {
+    (void)right; (void)category; (void)source; return 0;
+}
+
 static int wake_force_fired;
 void wake_detector_force_fire(void) {
     wake_force_fired += 1;
@@ -494,7 +515,7 @@ int usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);
                                    '-I' + str(ROOT / 'firmware/esp32/components/report_tail'),
                                    str(tmp / 'runner.c'), str(MAIN / 'provisioning_console.c'),
                                    str(CORE / 'provisioning.c'), str(TAIL / 'report_tail.c'),
-                                   '-o', str(executable)],
+                                   '-lm', '-o', str(executable)],
                                   capture_output=True, text=True)
         if compiled.returncode != 0:
             # The compiler's own words: a harness that only says "returned non-zero exit

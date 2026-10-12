@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "esp_log.h"
 
 /* The config-plane wake settings, staged to NVS by inc3's cfg_apply (cfg_stage_wake). The keys
  * live in the hermes_cfg namespace next to the agent's state blob. When a key is absent (first
@@ -210,10 +211,38 @@ static int model_load(void *user, const char *model_name, void **out_model, size
  * counted down in the feed so the detector stays deaf while its own tone is sounding. */
 static int chime_play(void *user) {
     (void)user;
-    if (!wd.session || !wd.chime || !wd.chime_samples) return -1;
-    if (wy_session_local_play(wd.session, wd.chime, wd.chime_samples) != WY_OK) return -1;
+    /* This early return used to be silent, and it is exactly the "no ding" symptom: if the
+     * chime buffer was never rendered, the wake still fires but nothing sounds. */
+    if (!wd.session || !wd.chime || !wd.chime_samples) {
+        ESP_LOGW("plb_chime", "chime_play: nothing to play (session=%p chime=%p samples=%u)",
+                 wd.session, (void *)wd.chime, (unsigned)wd.chime_samples);
+        return -1;
+    }
+    int pr = wy_session_local_play(wd.session, wd.chime, wd.chime_samples);
+    if (pr != WY_OK) {
+        ESP_LOGW("plb_chime", "chime_play: local_play failed %d (chime=%p samples=%u session=%p)",
+                 pr, (void *)wd.chime, (unsigned)wd.chime_samples, wd.session);
+        return -1;
+    }
+    ESP_LOGI("plb_chime", "chime_play: %u samples queued", (unsigned)wd.chime_samples);
     wd.chime_left = wd.chime_samples;
     return 0;
+}
+
+/* Play the chime directly, bypassing the wake detector entirely.
+ *
+ * This exists because "the chime only played once out of five triggers" is impossible to
+ * interpret through the wake path: a force-fire only takes effect on the next detector frame,
+ * which only arrives while the mic is streaming, so identical triggers are NOT identical --
+ * most of them never reach playback at all. Routing the chime through the detector conflates
+ * two independent faults (trigger state machine vs. audio output). This call takes neither a
+ * detection nor a streaming session as a precondition, so if THIS is unreliable the fault is in
+ * the audio path; if this is reliable and the wake path is not, the fault is the trigger state
+ * machine. The two must be tested separately.
+ *
+ * Returns 0 on a queued chime, -1 otherwise. */
+int wake_detector_play_chime(void) {
+    return chime_play(NULL);
 }
 
 /* The run-satellite flow: fire wy_session_wake through the live link. A 0 return tells the core
@@ -241,11 +270,14 @@ void wake_detector_start(void *session, void *user,
      * never synthesizes it mid-callback. */
     if (!wd.chime) {
         size_t need = wy_chime_render(NULL, 0);
+        ESP_LOGI("plb_chime", "chime render: %u samples wanted", (unsigned)need);
         if (need > 0) {
             wd.chime = heap_caps_malloc(need * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
             if (wd.chime) {
                 wd.chime_samples = wy_chime_render(wd.chime, need);
             }
+            ESP_LOGI("plb_chime", "chime render: buffer=%p samples=%u", (void *)wd.chime,
+                     (unsigned)wd.chime_samples);
         }
     }
 
