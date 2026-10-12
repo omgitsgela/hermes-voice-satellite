@@ -160,7 +160,10 @@ class InstallScriptTests(unittest.TestCase):
             repo = Path(tmp) / 'repo'
             (repo / 'scripts').mkdir(parents=True)
             (repo / 'firmware' / 'esp32').mkdir(parents=True)   # deliberately no build/
+            (repo / 'scripts' / 'lib').mkdir(parents=True)
             shutil.copy(ESP32, repo / 'scripts' / 'install-esp32.sh')
+            shutil.copy(ROOT / 'scripts' / 'lib' / 'guided.sh',
+                        repo / 'scripts' / 'lib' / 'guided.sh')
             result = run(repo / 'scripts' / 'install-esp32.sh',
                          '--dry-run', '--flash', '--port', '/dev/ttyACM0')
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -179,7 +182,10 @@ class InstallScriptTests(unittest.TestCase):
             venv_python = repo / '.venv' / 'bin' / 'python'
             venv_python.write_text('#!/bin/sh\nexit 0\n')
             venv_python.chmod(0o755)
+            (repo / 'scripts' / 'lib').mkdir(parents=True)
             shutil.copy(ESP32, repo / 'scripts' / 'install-esp32.sh')
+            shutil.copy(ROOT / 'scripts' / 'lib' / 'guided.sh',
+                        repo / 'scripts' / 'lib' / 'guided.sh')
             result = run(repo / 'scripts' / 'install-esp32.sh',
                          '--dry-run', '--flash', '--port', '/dev/ttyACM0')
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -518,6 +524,34 @@ class GuidedModeTests(unittest.TestCase):
         self.assertIn('provision-device-tls.py', flags.stdout)
         self.assertIn(f'save-profile TestNet {psk}', flags.stdout)
 
+    def test_a_bare_ip_is_completed_with_the_scheme_and_the_port(self):
+        """Typing just the gateway's IP address is what people actually do, and they should not
+        have to know the scheme or the port. Both are filled in, and the resolved address is said
+        out loud so nothing happens silently. A port that IS given is respected, so a gateway on a
+        non-standard port still works."""
+        base = ['n', 'y', '/dev/ttyACM0', '/srv/bridge/state/registry-tls', 'esp32-test']
+        tail = ['TestNet', '/tmp/psk.txt', 'n', 'no']
+
+        result = self.run_guided(ESP32, base + ['192.0.2.10'] + tail)
+        run_line = self.run_line(result)
+        self.assertIn('--endpoint tls://192.0.2.10:10702', run_line,
+                      'a bare IP must be completed to scheme://host:port')
+        self.assertIn('tls://192.0.2.10:10702', result.stdout,
+                      'the resolved address must be shown, not applied silently')
+
+        # a host with an explicit port keeps that port
+        result = self.run_guided(ESP32, base + ['192.0.2.20:9000'] + tail)
+        self.assertIn('--endpoint tls://192.0.2.20:9000', self.run_line(result),
+                      'a port the person gave must never be overwritten by the default')
+
+        # and the flag path agrees with the prompt path
+        flags = run(ESP32, '--dry-run', '--provision', '--port', '/dev/ttyACM0',
+                    '--tls-certs', '/srv/bridge/state/registry-tls', '--device-id', 'esp32-test',
+                    '--endpoint', '192.0.2.10', '--wifi-ssid', 'TestNet',
+                    '--wifi-psk-file', '/tmp/psk.txt')
+        self.assertIn('set-endpoint tls://192.0.2.10:10702', flags.stdout,
+                      'the --endpoint flag must accept a bare IP too')
+
     def test_a_typed_passphrase_is_held_in_a_private_file_and_never_printed(self):
         """You can just type the Wi-Fi passphrase. It must never appear in the output -- not in
         the summary, not in the run line, not in a log -- because argv is visible in `ps` and in
@@ -784,7 +818,9 @@ class GuidedModeTests(unittest.TestCase):
                    'TestNet', '/tmp/psk.txt', 'n', 'yes']
         result = self.run_guided(ESP32, answers)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('must be tls://host:port or tcp://host:port', result.stdout)
+        # The point is that guided and the flag path refuse with the SAME reason, so assert
+        # the phrase both of them use.
+        self.assertIn('use tls:// or tcp://', result.stdout)
         self.assertIn('set-endpoint tls://192.0.2.10:10702', result.stdout)
 
     # ---- pass-through: flags with no prompt of their own -------------------------

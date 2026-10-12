@@ -96,6 +96,17 @@ PY="$REPO_ROOT/.venv/bin/python"
 PASSTHROUGH=()
 
 die() { echo "install-esp32: $*" >&2; exit 1; }
+
+# The shared helpers in lib/guided.sh are a plain function library and the NON-guided path uses
+# them too (guided_normalise_endpoint fills in the scheme and port for --endpoint). Source them
+# unconditionally so both paths behave the same; guided mode's own check below stays as the
+# clearer error when the file is absent from a checkout.
+if [ -f "$SCRIPT_DIR/lib/guided.sh" ]; then
+    # shellcheck source=lib/guided.sh
+    . "$SCRIPT_DIR/lib/guided.sh"
+fi
+command -v guided_normalise_endpoint >/dev/null 2>&1 ||
+    die "this checkout is missing $SCRIPT_DIR/lib/guided.sh"
 have() { command -v "$1" >/dev/null 2>&1; }
 
 run() {
@@ -315,11 +326,13 @@ if [ "$GUIDED" = 1 ]; then
             fi
         fi
         guided_prompt DEVICE_ID "Name this satellite is enrolled under" "${DEVICE_ID:-${DETECTED_DEVICE_ID:-esp32-1}}"
-        guided_prompt ENDPOINT "Address the satellite uses to reach your gateway (tls://host:port)" "${ENDPOINT:-${LAN_IP:+tls://$LAN_IP:10702}}" guided_valid_endpoint_strict
-        case "$ENDPOINT" in
-            *://*) : ;;
-            *)     echo "   (I'll use tls://$ENDPOINT)"; ENDPOINT="tls://$ENDPOINT" ;;
-        esac
+        # Just the IP address or host name is enough: the scheme and the port are filled in,
+        # and what was resolved is said out loud rather than happening silently.
+        guided_prompt ENDPOINT "Your gateway (its IP address or host name)" "${ENDPOINT:-${LAN_IP:-}}" guided_valid_endpoint_strict
+        ENDPOINT_BEFORE="$ENDPOINT"
+        ENDPOINT="$(guided_normalise_endpoint "$ENDPOINT")"
+        [ "$ENDPOINT" = "$ENDPOINT_BEFORE" ] || echo "   (using $ENDPOINT)"
+        echo "    the satellite will reach your gateway at $ENDPOINT"
         guided_prompt WIFI_SSID "Wi-Fi network name the satellite joins" "${WIFI_SSID}"
         # The passphrase is TYPED here, never passed on a command line: argv is visible in `ps`,
         # in shell history and in logs. A typed answer goes into a private file (0600) that is
@@ -612,8 +625,11 @@ if [ "$DO_PROVISION" = 1 ]; then
     # firmware or the blob parser rejects only later, with a worse message than a die() here.
     case "$ENDPOINT" in
         tls://*|tcp://*) ;;
-        *) die "--endpoint must be tls://host:port or tcp://host:port (got: $ENDPOINT)" ;;
+        *://*) die "--endpoint must use tls:// or tcp:// (got: $ENDPOINT)" ;;
+        *)     : ;;   # a bare IP, host name, or host:port; filled in just below
     esac
+    ENDPOINT="$(guided_normalise_endpoint "$ENDPOINT")"
+    guided_valid_endpoint_strict "$ENDPOINT" || die "--endpoint is not usable: $ENDPOINT"
     ENDPOINT_BODY="${ENDPOINT#*://}"
     ENDPOINT_HOST="${ENDPOINT_BODY%%:*}"
     ENDPOINT_PORT="${ENDPOINT_BODY##*:}"

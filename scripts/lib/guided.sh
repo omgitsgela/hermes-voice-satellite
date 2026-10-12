@@ -86,36 +86,64 @@ guided_valid_reachable_as() {
 guided_valid_endpoint_strict() {
     local body host port
     case "$1" in
-        tls://*|tcp://*) : ;;
-        *://*) echo "   must be tls://host:port or tcp://host:port (got: $1)"; return 1 ;;
-        *:*:*) echo "   must be tls://host:port or tcp://host:port (got: $1)"; return 1 ;;
-        *:*)   : ;;   # a bare host:port is what people type; the caller adds tls://
-        *)     echo "   must be tls://host:port or tcp://host:port (got: $1)"; return 1 ;;
+        tls://*|tcp://*) body="${1#*://}" ;;
+        *://*) echo "   use tls:// or tcp:// (got: $1)"; return 1 ;;
+        *)     body="$1" ;;   # a bare host or host:port; the scheme and port get filled in
     esac
-    body="${1#*://}"
-    host="${body%%:*}"
-    port="${body##*:}"
-    if [ "$host" = "$body" ] || [ -z "$host" ]; then
-        echo "   no port: $1 (want tls://host:port)"
+    case "$body" in
+        *:*:*) echo "   that is not a usable address (got: $1)"; return 1 ;;
+        *:*)   host="${body%%:*}"; port="${body##*:}" ;;
+        *)     host="$body";       port="" ;;
+    esac
+    if [ -z "$host" ]; then
+        echo "   no host given (want an IP address or a host name)"
         return 1
     fi
     case "$host" in
         *[![:alnum:].-]*) echo "   host is not usable: $host"; return 1 ;;
     esac
-    case "$port" in
-        ''|*[!0-9]*) echo "   port is not a number: $port"; return 1 ;;
-    esac
-    if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
-        echo "   port out of range 1-65535: $port"
-        return 1
+    if [ -n "$port" ]; then
+        case "$port" in
+            *[!0-9]*) echo "   port is not a number: $port"; return 1 ;;
+        esac
+        if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+            echo "   port out of range 1-65535: $port"
+            return 1
+        fi
     fi
     return 0
 }
 
+# guided_normalise_endpoint VALUE [DEFAULT_PORT] -- fill in what nobody should have to type: the
+# scheme (tls) and the port (the gateway's registry port). Anything already given is kept, so a
+# bare IP, a host:port, or the full form all work. Prints the resolved address.
+# GATEWAY_REGISTRY_PORT -- the port a satellite dials to reach the gateway's registry. It is the
+# one place this number lives: the prompt defaults and the auto-filled port both read it, so it
+# can be changed once. When a person gives only an IP address, this is the port that is used and
+# the resolved address is echoed back to them.
+GATEWAY_REGISTRY_PORT=10702
+
+guided_normalise_endpoint() {
+    local value="$1" default_port="${2:-$GATEWAY_REGISTRY_PORT}" scheme body host port
+    case "$value" in
+        *://*) scheme="${value%%://*}"; body="${value#*://}" ;;
+        *)     scheme="tls";           body="$value" ;;
+    esac
+    case "$body" in
+        *:*) host="${body%%:*}"; port="${body##*:}" ;;
+        *)   host="$body";       port="$default_port" ;;
+    esac
+    printf '%s://%s:%s' "$scheme" "$host" "$port"
+}
+
 # guided_valid_endpoint_loose -- install-pi.sh's --endpoint rule (the port must be numeric).
 guided_valid_endpoint_loose() {
-    local port
-    port="$(printf '%s' "$1" | sed 's#.*:##')"
+    local body port
+    body="${1#*://}"
+    case "$body" in
+        *:*) port="${body##*:}" ;;
+        *)   return 0 ;;   # a bare host: the default port is filled in for it
+    esac
     case "$port" in
         ''|*[!0-9]*) echo "   endpoint port is not a number: $1"; return 1 ;;
     esac

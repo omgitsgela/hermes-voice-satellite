@@ -69,6 +69,17 @@ PASSTHROUGH=()
 
 die() { echo "install-pi: $*" >&2; exit 1; }
 
+# The shared helpers in lib/guided.sh are a plain function library and the NON-guided path uses
+# them too (guided_normalise_endpoint fills in the scheme and port for --endpoint). Source them
+# unconditionally so both paths behave the same; guided mode's own check below stays as the
+# clearer error when the file is absent from a checkout.
+if [ -f "$SCRIPT_DIR/lib/guided.sh" ]; then
+    # shellcheck source=lib/guided.sh
+    . "$SCRIPT_DIR/lib/guided.sh"
+fi
+command -v guided_normalise_endpoint >/dev/null 2>&1 ||
+    die "this checkout is missing $SCRIPT_DIR/lib/guided.sh"
+
 run() {
     if [ "$DRY_RUN" = 1 ]; then
         echo "DRY-RUN: $*"
@@ -160,7 +171,14 @@ if [ "$GUIDED" = 1 ]; then
     guided_prompt DEVICE_NAME "Device name (the identity the bridge knows)" "${DEVICE_NAME:-$(hostname -s 2>/dev/null || echo satellite)}"
     guided_prompt WAKE_WORD "Wake word / detection name" "${WAKE_WORD:-hey_hermes}"
     guided_prompt DEVICE_USER "User the satellite services run as" "${DEVICE_USER:-${SUDO_USER:-pi}}"
-    guided_prompt_optional ENDPOINT "Registry endpoint, tls://host:port or tcp://host:port" "${ENDPOINT:-${LAN_IP:+tls://$LAN_IP:10702}}" guided_valid_endpoint_loose
+    # Just the IP address or host name is enough: the scheme and port are filled in and the
+    # resolved address is echoed back.
+    guided_prompt_optional ENDPOINT "Your gateway (its IP address or host name)" "${ENDPOINT:-${LAN_IP:-}}" guided_valid_endpoint_loose
+    if [ -n "$ENDPOINT" ]; then
+        ENDPOINT_BEFORE="$ENDPOINT"
+        ENDPOINT="$(guided_normalise_endpoint "$ENDPOINT")"
+        [ "$ENDPOINT" = "$ENDPOINT_BEFORE" ] || echo "   (using $ENDPOINT)"
+    fi
     if [ -n "$ENDPOINT" ]; then
         guided_prompt_optional TLS_CERTS_DIR "TLS certificates directory (client-ca.crt + this device's .crt/.key)" "${TLS_CERTS_DIR:-$REGISTRY_TLS}"
     fi
