@@ -482,6 +482,43 @@ async def t_validation_contract() -> None:
         await h.stop()
 
 
+@check("15", "a credential minted after startup is recognised without a restart")
+async def t_credential_reload() -> None:
+    """The enrolment endpoint mints a certificate into device-credentials.json while the listener
+    is already running. The registry must SEE it.
+
+    It did not: load_credential_lookup froze its map at startup, while the enrol side re-reads the
+    same file. So a satellite enrolled against a running bridge connected, presented the certificate
+    the bridge had just issued, and was refused "no recognised credential" until someone restarted
+    the service -- which breaks plug-and-play at exactly the moment a new satellite first appears."""
+    import json
+    import tempfile
+    from bridge.registry import load_credential_lookup
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = pathlib.Path(tmp) / "device-credentials.json"
+        path.write_text(json.dumps({"sha256:aaaa": "device-one"}))
+
+        lookup = load_credential_lookup(path)
+        assert lookup("sha256:aaaa") == "device-one"
+        assert lookup("sha256:bbbb") is None
+
+        # The enrolment endpoint mints a second device into the SAME file while the listener runs.
+        path.write_text(json.dumps({"sha256:aaaa": "device-one", "sha256:bbbb": "device-two"}))
+        assert lookup("sha256:bbbb") == "device-two", (
+            "a credential written after startup is invisible until the service restarts")
+
+        # Revocation must take effect too: an entry removed from the file must stop being accepted.
+        path.write_text(json.dumps({"sha256:aaaa": "device-one"}))
+        assert lookup("sha256:bbbb") is None, (
+            "a removed credential must be refused, not served from a stale cache")
+
+        # A torn or unreadable file must not lock everybody out mid-write.
+        path.write_text("{ this is not json")
+        assert lookup("sha256:aaaa") == "device-one", (
+            "an unreadable file must fall back to the last good map, not refuse everyone")
+
+
 @check("14", "configuration reports are handled out of band and never leak into audio")
 async def t_configuration_report_control_event() -> None:
     seen: list[tuple[str, dict]] = []

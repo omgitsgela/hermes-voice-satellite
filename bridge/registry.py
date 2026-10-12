@@ -121,10 +121,30 @@ def load_credential_lookup(
     if not mapping:
         raise CredentialConfigError(f"credential file {path} contains no usable entries")
 
-    def lookup(fingerprint: str) -> Optional[str]:
-        return mapping.get(fingerprint)
-
     log.info("registry credentials loaded from %s: %d device(s)", path, len(mapping))
+
+    # The map is deliberately NOT frozen here. The enrolment endpoint mints certificates into this
+    # same file while the listener is already running, so a map captured at startup refuses a device
+    # the bridge itself has just enrolled -- "no recognised credential" -- until the service is
+    # restarted, which is precisely the moment a new satellite first appears. That broke
+    # plug-and-play at the last step. Registrations are rare and the file is tiny, so re-reading per
+    # lookup is cheap, and it also means a REMOVED entry is genuinely revoked instead of surviving
+    # in a cache. An unreadable or half-written file falls back to the last good map: a torn write
+    # must not lock every already-known device out.
+    state = {"mapping": mapping}
+
+    def lookup(fingerprint: str) -> Optional[str]:
+        try:
+            raw_now = json.loads(path.read_text())
+            if isinstance(raw_now, dict):
+                current = {str(k): str(v) for k, v in raw_now.items()
+                           if str(k).strip() and str(v).strip()}
+                if current:
+                    state["mapping"] = current
+        except (OSError, ValueError):
+            pass
+        return state["mapping"].get(fingerprint)
+
     return lookup
 
 
