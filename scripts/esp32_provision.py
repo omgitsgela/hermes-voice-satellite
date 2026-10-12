@@ -200,6 +200,12 @@ def main():
     parser.add_argument('--port', required=True, help='ESP32 USB serial device, not XMOS audio USB')
     sub = parser.add_subparsers(dest='action', required=True)
     sub.add_parser('status')
+    setname = sub.add_parser(
+        'set-name',
+        help='the FRIENDLY name the house knows it by (device_name in NVS). This is NOT the '
+             'registry identity: that is always the id the board derives from its own factory '
+             'MAC, and no console command can change it.')
+    setname.add_argument('value')
     sub.add_parser('device-id', help='read the id the board derives from its own factory MAC '
                                     '(read-only: stages nothing)')
     endpoint = sub.add_parser('set-endpoint')
@@ -217,11 +223,14 @@ def main():
     sub.add_parser('scan')
     args = parser.parse_args()
 
-    command = {'status': 'STATUS', 'device-id': 'DEVICE_ID', 'clear-endpoint': 'CLEAR_ENDPOINT',
+    command = {'status': 'STATUS', 'device-id': 'DEVICE_ID', 'set-name': 'SET_NAME',
+               'clear-endpoint': 'CLEAR_ENDPOINT',
                'list-profiles': 'WIFI_PROFILES', 'clear-profiles': 'WIFI_PROFILE_CLEAR',
                'connect': 'WIFI_CONNECT', 'scan': 'WIFI_SCAN'}.get(args.action)
     if args.action == 'set-endpoint':
         command = 'SET_ENDPOINT ' + args.endpoint
+    elif args.action == 'set-name':
+        command = 'SET_NAME ' + args.value
     elif args.action == 'remove-profile':
         command = f'WIFI_PROFILE_REMOVE {args.ssid}'
 

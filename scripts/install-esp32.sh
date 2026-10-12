@@ -72,7 +72,8 @@ MODEL_FILE=""
 MODEL_URL=""
 MODEL_NAME=""   # empty = the model file's stem
 TLS_CERTS_DIR=""  # the bridge's state/registry-tls: client-ca.crt, <device>.crt/.key, server.crt
-DEVICE_ID=""      # the registry identity this board is enrolled as
+DEVICE_ID=""      # the registry identity this board is enrolled as (its own MAC id)
+DEVICE_NAME=""    # the friendly name the house knows it by (device_name in NVS)
 ENDPOINT=""       # what the board dials: tls://host:port (tcp:// for a trusted LAN)
 REGISTRY_FILE=""  # the bridge's state/device-credentials.json; defaults beside the certs dir
 WIFI_SSID=""
@@ -164,6 +165,7 @@ while [ $# -gt 0 ]; do
         --bundle-dir) [ $# -ge 2 ] || die "$1 needs a value"; BUNDLE_DIR="${2:-}"; PASSTHROUGH+=(--bundle-dir "${2:-}"); shift ;;
         --tls-certs) [ $# -ge 2 ] || die "$1 needs a value"; TLS_CERTS_DIR="${2:-}"; shift ;;
         --device-id) [ $# -ge 2 ] || die "$1 needs a value"; DEVICE_ID="${2:-}"; shift ;;
+        --device-name) [ $# -ge 2 ] || die "$1 needs a value"; DEVICE_NAME="${2:-}"; shift ;;
         --endpoint)  [ $# -ge 2 ] || die "$1 needs a value"; ENDPOINT="${2:-}"; shift ;;
         --registry)  [ $# -ge 2 ] || die "$1 needs a value"; REGISTRY_FILE="${2:-}"; PASSTHROUGH+=(--registry "${2:-}"); shift ;;
         --model)     [ $# -ge 2 ] || die "$1 needs a value"; MODEL_FILE="${2:-}"; PASSTHROUGH+=(--model "${2:-}"); shift ;;
@@ -325,7 +327,26 @@ if [ "$GUIDED" = 1 ]; then
                 ENROL_MODE="folder"; TLS_CERTS_DIR="${SETUP_ANSWER:-}"
             fi
         fi
-        guided_prompt DEVICE_ID "Name this satellite is enrolled under" "${DEVICE_ID:-${DETECTED_DEVICE_ID:-esp32-1}}"
+        # Two different names, and conflating them is what broke a first install. The
+        # REGISTRY IDENTITY is what the firmware claims at registration, and it is always the
+        # id the board derives from its own factory MAC -- no console command overrides it.
+        # The FRIENDLY NAME is what the house knows it by (device_name in NVS). So the typed
+        # name is the friendly name, and the identity stays the board's own.
+        if [ -n "$DETECTED_DEVICE_ID" ]; then
+            DEVICE_ID="$DETECTED_DEVICE_ID"
+            guided_prompt DEVICE_NAME "Name this satellite is known as" "${DEVICE_NAME:-}"
+            if [ -n "$DEVICE_NAME" ] && [ "$DEVICE_NAME" != "$DEVICE_ID" ]; then
+                echo "   (registered as $DEVICE_ID, known in the house as $DEVICE_NAME)"
+            fi
+        else
+            # Nothing to read, so the typed name IS the identity and must match what the
+            # board will claim. Say so rather than letting it fail at registration.
+            guided_prompt DEVICE_ID "Name this satellite is enrolled under" "${DEVICE_ID:-esp32-1}"
+            # A typed --device-name still wins: only fall back to the identity when no friendly
+            # name was given at all.
+            DEVICE_NAME="${DEVICE_NAME:-$DEVICE_ID}"
+            echo "   (no board attached: this must match the id the board reports)"
+        fi
         # Just the IP address or host name is enough: the scheme and the port are filled in,
         # and what was resolved is said out loud rather than happening silently.
         #
@@ -462,7 +483,11 @@ if [ "$GUIDED" = 1 ]; then
     if [ "$FLASH_YN" = y ]; then echo "   write:   the firmware onto the satellite on $PORT"; fi
     if [ "$PROV_YN" = y ]; then
         echo "   set up:  its name, wake word, network, and link to your gateway (over $PORT)"
-        echo "    device id:  $DEVICE_ID"
+        if [ -n "$DEVICE_NAME" ] && [ "$DEVICE_NAME" != "$DEVICE_ID" ]; then
+            echo "    device id:  $DEVICE_ID (known in the house as $DEVICE_NAME)"
+        else
+            echo "    device id:  $DEVICE_ID"
+        fi
         echo "    endpoint:   $ENDPOINT"
         if [ "$ENROL_MODE" = token ]; then
             if [ "$DRY_RUN" = 1 ]; then
@@ -493,7 +518,8 @@ if [ "$GUIDED" = 1 ]; then
     if [ "$PROV_YN" = y ]; then GUIDED_ARGS+=(--provision); fi
     if [ "$FLASH_YN" = y ] || [ "$PROV_YN" = y ]; then GUIDED_ARGS+=(--port "$PORT"); fi
     if [ "$PROV_YN" = y ]; then
-        GUIDED_ARGS+=(--tls-certs "$TLS_CERTS_DIR" --device-id "$DEVICE_ID" --endpoint "$ENDPOINT"
+        GUIDED_ARGS+=(--tls-certs "$TLS_CERTS_DIR" --device-id "$DEVICE_ID"
+                      --device-name "${DEVICE_NAME:-$DEVICE_ID}" --endpoint "$ENDPOINT"
                       --wifi-ssid "$WIFI_SSID" --wifi-psk-file "$WIFI_PSK_FILE")
         if [ "$ENROL_MODE" = token ]; then
             # The fetch wrote the registry record beside the certificates; the flag path would
@@ -710,6 +736,12 @@ if [ "$DO_PROVISION" = 1 ]; then
     # 3. The endpoint the board dials. The scheme is the transport: tls:// is the registry
     #    standard and tcp:// a trusted-LAN rollback. A passphrase is never an argument.
     run "$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" set-endpoint "$ENDPOINT"
+    # The friendly name is separate from the registry identity (which is the board's own MAC id
+    # and cannot be changed). Set it when the house name differs, so describe/info show the name
+    # the person chose instead of a MAC-derived id.
+    if [ -n "$DEVICE_NAME" ] && [ "$DEVICE_NAME" != "$DEVICE_ID" ]; then
+        run "$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" set-name "$DEVICE_NAME"
+    fi
 
     # 4. The Wi-Fi profile the board joins across reboots. The passphrase moves as a file; the
     #    device reports its presence, never its value.

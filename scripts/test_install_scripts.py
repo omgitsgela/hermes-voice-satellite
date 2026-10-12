@@ -1027,6 +1027,7 @@ class FlagSurfaceGuardTests(unittest.TestCase):
             '--bundle-dir': '/srv/typed-bundle',
             '--tls-certs': '/srv/typed-certs',
             '--device-id': 'typed-dev-1',
+            '--device-name': 'Typed Friendly Name',
             '--endpoint': 'tls://192.0.2.10:10702',
             '--registry': '/srv/typed/device-credentials.json',
             '--model': '/srv/typed/model.tflite',
