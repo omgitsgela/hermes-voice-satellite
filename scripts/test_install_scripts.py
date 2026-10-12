@@ -558,6 +558,33 @@ class GuidedModeTests(unittest.TestCase):
         self.assertIn('set-endpoint tls://192.0.2.10:10702', flags.stdout,
                       'the --endpoint flag must accept a bare IP too')
 
+    def test_usb_and_bluetooth_are_named_but_refused_until_they_are_carried(self):
+        """The gateway link is a TRANSPORT: usb://localhost (cabled into the gateway computer),
+        bt:// (radio), tls:// or tcp:// (network). The vocabulary and the normaliser understand all
+        three so the design is not closed off, but only the network link is carried today -- so
+        asking for usb must be EXPLAINED, not accepted, or the person is handed a satellite that
+        cannot connect. The refusal must also offer the way that does work."""
+        base = ['n', 'y', '/dev/ttyACM0', '/srv/bridge/state/registry-tls', 'esp32-test']
+        tail = ['TestNet', '/tmp/psk.txt', 'n', 'no']
+
+        # 'usb' is refused with a reason; the re-prompt then takes a real address
+        result = self.run_guided(ESP32, base + ['usb', '192.0.2.10'] + tail)
+        out = result.stdout
+        self.assertIn('firmware cannot carry it yet', out, 'usb must be explained, not accepted')
+        self.assertIn('IP address or host name', out,
+                      'the refusal must name the way that does work')
+        self.assertIn('--endpoint tls://192.0.2.10:10702', self.run_line(result),
+                      'the person must be able to recover at the re-prompt')
+
+        # the normaliser already speaks all three, so landing a transport needs no rework
+        got = subprocess.run(['bash', '-c',
+                              'source scripts/lib/guided.sh; '
+                              'for v in usb bluetooth 192.0.2.10; do '
+                              'printf "%s\\n" "$(guided_normalise_endpoint "$v")"; done'],
+                             capture_output=True, text=True, cwd=str(ROOT))
+        self.assertEqual(got.stdout.split(), ['usb://localhost', 'bt://', 'tls://192.0.2.10:10702'],
+                         got.stdout)
+
     def test_a_typed_passphrase_is_held_in_a_private_file_and_never_printed(self):
         """You can just type the Wi-Fi passphrase. It must never appear in the output -- not in
         the summary, not in the run line, not in a log -- because argv is visible in `ps` and in

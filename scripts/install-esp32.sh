@@ -638,6 +638,8 @@ if [ "$DO_PROVISION" = 1 ]; then
         *)     : ;;   # a bare IP, host name, or host:port; filled in just below
     esac
     ENDPOINT="$(guided_normalise_endpoint "$ENDPOINT")"
+    guided_endpoint_is_implemented "$ENDPOINT" ||
+        die "--endpoint $ENDPOINT is a transport the firmware cannot carry yet; use tls://host:port or tcp://host:port"
     guided_valid_endpoint_strict "$ENDPOINT" || die "--endpoint is not usable: $ENDPOINT"
     ENDPOINT_BODY="${ENDPOINT#*://}"
     ENDPOINT_HOST="${ENDPOINT_BODY%%:*}"

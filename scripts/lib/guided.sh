@@ -86,8 +86,16 @@ guided_valid_reachable_as() {
 guided_valid_endpoint_strict() {
     local body host port
     case "$1" in
+        usb|usb://*|bt|bluetooth|bt://*|bluetooth://*)
+            # A transport, not an address. The design supports these, and the normaliser already
+            # understands them, but nothing CARRIES them yet -- so say so instead of accepting it
+            # and handing the person a satellite that cannot connect. Drop this arm when the
+            # transport lands; the vocabulary needs no other change.
+            echo "   A $1 link is part of this design, but the firmware cannot carry it yet."
+            echo "   For now, give your gateway's IP address or host name."
+            return 1 ;;
         tls://*|tcp://*) body="${1#*://}" ;;
-        *://*) echo "   use tls:// or tcp:// (got: $1)"; return 1 ;;
+        *://*) echo "   use tls:// or tcp:// for a network link, or usb / bluetooth (got: $1)"; return 1 ;;
         *)     body="$1" ;;   # a bare host or host:port; the scheme and port get filled in
     esac
     case "$body" in
@@ -123,8 +131,33 @@ guided_valid_endpoint_strict() {
 # the resolved address is echoed back to them.
 GATEWAY_REGISTRY_PORT=10702
 
+# The gateway link is a TRANSPORT, not a host:port. Three modes are supported:
+#
+#   usb://localhost      the satellite is cabled into the machine running the gateway, so the
+#                        link is local; "usb" alone means exactly this
+#   bt://<address>       over Bluetooth, once that transport lands
+#   tls://host:port      over the network (tls for real links, tcp for a trusted LAN)
+#
+# Typing just an IP address or host name gives tls:// plus the default port, because that is the
+# common case. A port the person gives is never overwritten.
 guided_normalise_endpoint() {
     local value="$1" default_port="${2:-$GATEWAY_REGISTRY_PORT}" scheme body host port
+    case "$value" in
+        usb|USB)
+            # A satellite cabled into the gateway computer is on that computer, so the link is
+            # local by definition.
+            printf 'usb://localhost'
+            return 0 ;;
+        usb://*)
+            printf 'usb://%s' "${value#usb://}"
+            return 0 ;;
+        bt|bluetooth|BT|Bluetooth)
+            printf 'bt://'
+            return 0 ;;
+        bt://*|bluetooth://*)
+            printf 'bt://%s' "${value#*://}"
+            return 0 ;;
+    esac
     case "$value" in
         *://*) scheme="${value%%://*}"; body="${value#*://}" ;;
         *)     scheme="tls";           body="$value" ;;
@@ -134,6 +167,18 @@ guided_normalise_endpoint() {
         *)   host="$body";       port="$default_port" ;;
     esac
     printf '%s://%s:%s' "$scheme" "$host" "$port"
+}
+
+# guided_endpoint_is_implemented TRANSPORT -- 0 when the firmware and bridge can actually carry
+# this link today. Expressing a transport and carrying it are different things: the vocabulary
+# accepts usb and bt so the design is not closed off, but a link that cannot yet be carried must
+# be refused with a clear reason instead of silently producing a satellite that cannot connect.
+guided_endpoint_is_implemented() {
+    case "$1" in
+        tls://*|tcp://*) return 0 ;;
+        usb://*|bt://*)  return 1 ;;
+        *)               return 1 ;;
+    esac
 }
 
 # guided_valid_endpoint_loose -- install-pi.sh's --endpoint rule (the port must be numeric).

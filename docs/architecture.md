@@ -72,6 +72,29 @@ by default so it cannot compete with the device's relay. Set `VOICE_DIRECT_DIAL_
 even then the bridge waits through the lease grace period before dialling. The code is not dead, and a reader
 who finds both shapes should not delete one without reading `docs/outbound-link.md` first.
 
+## The link to the gateway is a transport
+
+A satellite reaches the gateway over whatever the installation can actually do, so the endpoint
+names a **transport** rather than assuming a host and a port:
+
+| Mode | Endpoint | When it is the right choice |
+|---|---|---|
+| Wi-Fi / IP | `tls://host:port` (or `tcp://host:port` on a trusted LAN) | the usual case: the satellite is wireless and the gateway is on the network |
+| USB | `usb://localhost` | the satellite is cabled straight into the machine running the gateway, so the link is local by definition |
+| Bluetooth | `bt://<address>` | there is no usable network path, but the radio is there |
+
+Typing only an IP address or host name is enough for the network case: the installer fills in
+`tls://` and the registry port and says what it resolved to. A port you give is always kept.
+
+**Setup is a different thing from the link.** Every satellite is provisioned over USB first, and
+that is the primary setup path: certificates, wake model, Wi-Fi and the endpoint all go over the
+cable. The transport above is what the satellite uses *afterwards* to reach the gateway.
+
+Status: the network link is carried today. `usb://` and `bt://` are part of the vocabulary and the
+installers understand them, but nothing carries them yet, so an installer asked for one says so
+plainly rather than producing a satellite that cannot connect. Each becomes real by adding that
+transport to the firmware and to the bridge; the endpoint shape needs no further change.
+
 ## Every component, and who owns it
 
 | Stage | Component | Runs on | Origin | Ours? |
