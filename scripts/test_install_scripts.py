@@ -154,8 +154,8 @@ class InstallScriptTests(unittest.TestCase):
         self.assertIn('write_flash', result.stdout)
 
     def test_esp32_flash_gate_falls_to_verify_without_a_build_tree(self):
-        """A fresh checkout has no firmware/esp32/build, so the flash gate must use --verify (the
-        manifest's bundle hash) rather than --check (which re-hashes the source build)."""
+        """A fresh checkout has no firmware/esp32/build: the flash gate must still verify the
+        bundle it is about to write, using the manifest's own bundle hash (--verify)."""
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / 'repo'
             (repo / 'scripts').mkdir(parents=True)
@@ -168,7 +168,25 @@ class InstallScriptTests(unittest.TestCase):
                          '--dry-run', '--flash', '--port', '/dev/ttyACM0')
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('--verify', result.stdout)
-            self.assertIn('prebuilt bundle', result.stdout)
+            # and it must happen BEFORE the write, or it verifies nothing that matters
+            self.assertLess(result.stdout.index('--verify'), result.stdout.index('write_flash'))
+            # no source build exists, so the source-tree check (--build) must not be attempted
+            self.assertNotIn('--build ', result.stdout)
+
+    def test_esp32_flash_verifies_written_bundle_even_with_a_build_tree(self):
+        """Checking source components is not verification of the file actually flashed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / 'repo'
+            (repo / 'scripts' / 'lib').mkdir(parents=True)
+            (repo / 'firmware' / 'esp32' / 'build').mkdir(parents=True)
+            shutil.copy(ESP32, repo / 'scripts' / 'install-esp32.sh')
+            shutil.copy(ROOT / 'scripts' / 'lib' / 'guided.sh',
+                        repo / 'scripts' / 'lib' / 'guided.sh')
+            result = run(repo / 'scripts' / 'install-esp32.sh',
+                         '--dry-run', '--flash', '--port', '/dev/ttyACM0')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('--verify', result.stdout)
+            self.assertLess(result.stdout.index('--verify'), result.stdout.index('write_flash'))
 
     def test_esp32_uses_the_repo_venv_interpreter_when_present(self):
         """The provisioning helpers and esptool must run under the repository's own venv when it

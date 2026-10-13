@@ -355,6 +355,11 @@ int audio_playback_amp(int enabled) {
 
 static int pump_logged;
 
+/* Bounded retry for a stalled I2S write. Each idle attempt costs PLAYBACK_WRITE_MS plus a 1 ms
+ * yield; this many in a row means the channel is genuinely not taking data, and the batch must be
+ * abandoned rather than spun on until the task watchdog reboots the device. */
+#define PLAYBACK_WRITE_MAX_IDLE 50
+
 static void playback_task_fn(void *argument) {
     (void)argument;
     int32_t frame[PLAYBACK_FRAME_BATCH];   /* one I2S write's worth of stereo-32 frames */
@@ -441,19 +446,39 @@ static void playback_task_fn(void *argument) {
              * and show up as exactly the choppiness we were chasing, so push the unwritten tail
              * rather than losing it. */
             size_t off = 0;
-            while (off < n) {
+            int idle_tries = 0;
+            while (off < n && !stopping) {
                 written = 0;
-                i2s_channel_write(tx, (const uint8_t *)frame + off, n - off, &written,
-                                  PLAYBACK_WRITE_MS);
-                /* A zero-progress write means "the DMA is full", NOT "discard the rest".
-                 * Breaking here silently deleted the tail of every batch that timed out -- a
-                 * reproduced loss of half a batch -- and each deletion is a waveform
-                 * discontinuity heard as choppiness. Keep the unwritten tail pending and retry;
-                 * only a hard channel fault abandons it. */
+                esp_err_t wrc = i2s_channel_write(tx, (const uint8_t *)frame + off, n - off,
+                                                 &written, PLAYBACK_WRITE_MS);
                 off += written;
+                /* A zero-progress write means "the DMA is full", NOT "discard the rest".
+                 * Breaking there silently deleted the tail of every batch that timed out -- a
+                 * reproduced loss of half a batch -- and each deletion is a waveform
+                 * discontinuity heard as choppiness. So the unwritten tail is retried.
+                 *
+                 * BUT the retry must be BOUNDED and must honour shutdown. An unbounded loop
+                 * spins forever when the channel stops accepting data (DMA wedged, or the
+                 * channel torn down during link close), the task watchdog fires, and the whole
+                 * device reboots -- which is what was observed: a wake, a transcript and a
+                 * started turn, then "Connection reset by peer" as the board came back up.
+                 * Retrying is correct; retrying without a limit is a crash. */
                 if (written == 0) {
+                    if (++idle_tries >= PLAYBACK_WRITE_MAX_IDLE) {
+                        ESP_LOGW("plb", "pump: abandoning %u unwritten bytes after %d idle "
+                                 "writes (rc=%d); the channel is not accepting data",
+                                 (unsigned)(n - off), idle_tries, (int)wrc);
+                        break;
+                    }
                     vTaskDelay(plb_delay_ms(1));   /* let the DMA drain, then retry the tail */
                     continue;
+                }
+                idle_tries = 0;
+                if (wrc != ESP_OK && wrc != ESP_ERR_TIMEOUT) {
+                    /* A real channel fault: stop retrying this batch rather than spinning. */
+                    ESP_LOGW("plb", "pump: i2s write failed %d after %u of %u bytes",
+                             (int)wrc, (unsigned)off, (unsigned)n);
+                    break;
                 }
             }
         }

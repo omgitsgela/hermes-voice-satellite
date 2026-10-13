@@ -624,16 +624,22 @@ fi
 if [ "$DO_FLASH" = 1 ]; then
     echo "== flash ($PORT) =="
     [ "$DRY_RUN" = 1 ] || [ -f "$BUNDLE_DIR/flash.bundle.bin" ] || die "no bundle at $BUNDLE_DIR/flash.bundle.bin (download the prebuilt bundle, or pass --build to compile from source)"
-    # The integrity gate. With a local source build present, re-hash every component against the
-    # reviewed manifest. For a prebuilt bundle with no build tree, the manifest's own bundle_sha256
-    # header is the gate: hash the one file that goes to 0x0.
+    # The integrity gate. TWO checks, and both are needed.
+    #
+    # 1. The bundle that is about to be written to 0x0 is hashed against the reviewed manifest's
+    #    own bundle_sha256. This is the check that catches "the artifact I am flashing is not the
+    #    artifact that was reviewed" -- the exact failure that cost a whole debugging session: the
+    #    laptop kept an older bundle while the source kept moving, so several "the fix changed
+    #    nothing" conclusions were drawn about code that had never been flashed. It runs on EVERY
+    #    flash, build tree or not, because a source build being current says nothing about which
+    #    file is in the flash directory.
+    # 2. When a local build tree exists, re-hash the source components too, so a bundle that
+    #    disagrees with the tree it was allegedly built from is also refused.
+    run "$PY" "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
+        --verify "$BUNDLE_DIR/flash.bundle.bin" --check "$BUNDLE_DIR/flash.manifest.txt"
     if [ -d "$FIRMWARE_DIR/build" ]; then
         run "$PY" "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
             --build "$FIRMWARE_DIR/build" --check "$BUNDLE_DIR/flash.manifest.txt"
-    else
-        echo "   prebuilt bundle (no local build tree): verifying against the manifest's bundle hash"
-        run "$PY" "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
-            --verify "$BUNDLE_DIR/flash.bundle.bin" --check "$BUNDLE_DIR/flash.manifest.txt"
     fi
     run "$PY" -m esptool --chip esp32s3 --port "$PORT" --baud 460800 \
         --before default-reset --after hard-reset \

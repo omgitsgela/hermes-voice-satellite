@@ -13,7 +13,8 @@
  * silently broke every host suite that compiled it. */
 #ifndef ESP_LOGE
 #define ESP_LOGE(tag, ...) ((void)0)
-#define ESP_LOGW(tag, ...) ((void)0)
+#define ESP_LOGW(tag, ...) do { fprintf(stderr, "%s: ", tag); \
+    fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } while (0)
 #define ESP_LOGI(tag, ...) ((void)0)
 #define ESP_LOGD(tag, ...) ((void)0)
 #endif
@@ -291,6 +292,7 @@ static int stop_streaming(wy_session *session, wy_write_fn write_fn, void *ctx) 
      * a wake that started the stream between the pre-check and the lock. If the send fails the
      * flag stays set: the stream is not actually over. */
     if (!session->streaming) return WY_OK;
+    ESP_LOGI("gwstop", "stop-streaming: acquiring writer lock");
     int result = writer_lock(session);
     if (result != WY_OK) return result;
     if (session->streaming) {
@@ -298,6 +300,7 @@ static int stop_streaming(wy_session *session, wy_write_fn write_fn, void *ctx) 
         if (!result) session->streaming = 0;
     }
     writer_unlock(session);
+    ESP_LOGI("gwstop", "stop-streaming: result=%d streaming=%d", result, session->streaming);
     return result;
 }
 
@@ -439,10 +442,12 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
     if (!read_fn || !write_fn) { session->state = WY_SESSION_FAILED; return WY_INVALID; }
     if (session->state == WY_SESSION_FAILED) return WY_INVALID;
     if (session->state == WY_SESSION_REFUSED) return WY_REFUSED;
-    wy_frame frame;
+    wy_frame frame = {0};
+    const char *phase = "header-read";
     cJSON *data = NULL;
     int result = wy_read_header(read_fn, ctx, session->header, sizeof(session->header));
     if (result) goto done;
+    phase = "header-parse";
     result = wy_parse_header(session->header, strlen(session->header), &frame);
     if (result) goto done;
     /* Wire order is data then payload (the canonical writer emits them in that order), and
@@ -453,15 +458,21 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
      * drained but not decoded, because wy_decode_control is, by design, for control frames
      * only and refuses any frame that carries a payload. Decoding it is what made the first
      * inbound audio-chunk fail the whole session. */
+    if (strcmp(frame.type, "audio-chunk"))
+        ESP_LOGI("gwframe", "received type=%s data=%u payload=%u", frame.type,
+                 (unsigned)frame.data_length, (unsigned)frame.payload_length);
+    phase = "body-read";
     if (frame.data_length) {
         result = wy_read_exact(read_fn, ctx, session->body, frame.data_length);
         if (result) goto done;
         if (!frame.payload_length) {
+            phase = "body-decode";
             result = wy_decode_control(session->header, strlen(session->header),
                                        session->body, frame.data_length, &data);
             if (result) goto done;
         }
     }
+    phase = "payload-read";
     if (frame.payload_length) {
         if (session->playback_active && !strcmp(frame.type, "audio-chunk")) {
             /* Inbound playback for the speaker: convert the PCM as it is drained. The payload
@@ -518,6 +529,7 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
             }
         }
     }
+    phase = "dispatch";
     if (!strcmp(frame.type, "describe")) {
         char info[768];
         int info_len = snprintf(info, sizeof(info),
@@ -596,24 +608,17 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
             cJSON_IsNumber(width) && width->valuedouble == 2 &&
             cJSON_IsNumber(channels) && channels->valuedouble == 1) {
             wy_resampler_reset(&session->playback_rs);
-            /* Flush the ring ONLY when the new stream is an INTERRUPTION, i.e. the previous one
-             * never sent audio-stop and is still open. Flushing on every start threw away audio
-             * that was legitimately queued and not yet played -- the tail of a chime or of the
-             * previous announcement -- because the bridge releases its playback lock on
-             * audio-stop rather than on the device's actual playout, so consecutive streams
-             * overlap at the tail. A well-formed stream boundary therefore PRESERVES what is
-             * still queued; only a genuine cut-over discards it.
-             *
-             * The reset is under the lock: the playback task may be mid-read while the bridge
-             * starts the next stream, so an unlocked reset would race the reader's head advance. */
-            int interrupted = session->playback_active;
+            /* Reset the ring under the lock: the playback task may be mid-read (draining the
+             * last answer) while the bridge starts the next one, so an unlocked reset would
+             * race the reader's head advance. */
+            ESP_LOGW("audstart", "audio-start: before ring reset");
             playback_ring_lock_take();
-            if (interrupted) {
-                session->ring_head = 0;
-                session->ring_tail = 0;
-            }
+            session->ring_head = 0;
+            session->ring_tail = 0;
             playback_ring_lock_give();
+            ESP_LOGW("audstart", "audio-start: ring reset done, arming playback");
             session->playback_active = 1;
+            ESP_LOGW("audstart", "audio-start: playback armed, returning to the link loop");
             session->playback_ended = 0;
         }
     } else if (!strcmp(frame.type, "audio-chunk")) {
@@ -686,6 +691,10 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
         if (frame.payload_length) result = WY_INVALID;
     }
 done:
+    if (result)
+        ESP_LOGW("gwframe", "failed phase=%s type=%s data=%u payload=%u result=%d",
+                 phase, frame.type[0] ? frame.type : "unknown",
+                 (unsigned)frame.data_length, (unsigned)frame.payload_length, result);
     cJSON_Delete(data);
     if (result && session->state != WY_SESSION_REFUSED) session->state = WY_SESSION_FAILED;
     return result;

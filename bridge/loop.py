@@ -86,6 +86,10 @@ from bridge.satellite import SatelliteClient
 
 _LOGGER = logging.getLogger("bridge.loop")
 
+# How long after our own playback a wake word may still be dismissed as our own echo. Beyond
+# this a wake is a genuine one no matter what any flag says.
+SELF_TRIGGER_WINDOW_S = 3.0
+
 # Phrases that rotate the session on demand, checked on the normalised transcript.
 NEW_CONVERSATION_PHRASES = (
     "new conversation", "start a new conversation", "start over", "forget that",
@@ -208,6 +212,7 @@ class VoiceLoop:
         self._whisper = None
         self._last_turn_at: Optional[float] = None
         self._speaking = False
+        self._speaking_at = 0.0   # monotonic time of the last playback activity
         self.self_trigger_count = 0
         self.turns: list[TurnStats] = []
 
@@ -664,12 +669,29 @@ class VoiceLoop:
                 continue
             if Detection.is_type(event.type):
                 name = Detection.from_event(event).name
-                if self._speaking:
-                    # No echo cancellation, so our own answer can trigger the wake word.
+                # No acoustic echo cancellation, so our own answer can trigger the wake word.
+                # But the suppression must be TIME-BOUNDED, never a bare flag: _speaking is
+                # cleared only at the end of a turn, so if it ever latches true the device goes
+                # permanently deaf -- every wake is discarded as a self-trigger, no turn can
+                # start, and therefore nothing ever clears the flag. That deadlock was observed:
+                # wakes were still being rejected as "during playback" many minutes after the
+                # last audio played. The device also independently suppresses its own chime
+                # before reporting a detection, so this is a second line of defence, not the
+                # primary one, and it must never be able to suppress indefinitely.
+                recently_spoke = (time.monotonic() - self._speaking_at) < SELF_TRIGGER_WINDOW_S
+                if self._speaking and recently_spoke:
                     self.self_trigger_count += 1
-                    _LOGGER.warning("wake word %r during playback: treating as a "
-                                    "self-trigger, ignoring", name)
+                    _LOGGER.warning("wake word %r within %.0fs of playback: treating as a "
+                                    "self-trigger, ignoring", name, SELF_TRIGGER_WINDOW_S)
                     continue
+                if self._speaking and not recently_spoke:
+                    # The flag is latched but playback is long over. Recover rather than stay
+                    # deaf, and say so loudly: a latch means a turn never completed.
+                    _LOGGER.warning("wake word %r arrived with _speaking still set %.0fs after "
+                                    "the last playback (a turn never completed); accepting it "
+                                    "and clearing the flag", name,
+                                    time.monotonic() - self._speaking_at)
+                    self._speaking = False
                 _LOGGER.info("wake word: %s", name)
                 return name
 
@@ -1230,6 +1252,7 @@ class VoiceLoop:
 
         t_gateway = time.perf_counter()
         self._speaking = True
+        self._speaking_at = time.monotonic()
         spoken_any = False
 
         async def fill_silence(_event) -> None:
@@ -1259,6 +1282,7 @@ class VoiceLoop:
                                       name="interruption-watcher")
         try:
             async with self.sat.tts_stream() as stream:
+                _LOGGER.info("turn: audio-start sent; awaiting first reply text")
                 buffer = SentenceBuffer()
                 async for delta in self.gateway.ask(transcript,
                                                     on_tool_started=fill_silence):
@@ -1291,6 +1315,7 @@ class VoiceLoop:
             else:
                 await self.wait_for_played()
         except VoiceGatewayError as exc:
+            _LOGGER.error("turn: VoiceGatewayError while producing the reply: %s", exc)
             if state.stop_playback or "cancel" in str(exc).lower():
                 # We asked for this. Do not apologise for a stop the person requested.
                 stats.note = "interrupted: run cancelled"
@@ -1299,6 +1324,11 @@ class VoiceLoop:
                 stats.note = f"gateway error: {exc}"
                 _LOGGER.error("gateway failed: %s", exc)
                 await self.say("I can't reach my brain right now.")
+        except Exception:
+            _LOGGER.exception("turn: reply failed (device=%s generation=%s)",
+                              getattr(self.sat, "device_id", "direct"),
+                              getattr(self.sat, "generation", None))
+            raise
         finally:
             state.done = True
             watcher.cancel()

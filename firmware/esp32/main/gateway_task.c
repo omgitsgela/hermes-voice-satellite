@@ -18,6 +18,7 @@
 #include "esp_heap_caps.h"
 #include <string.h>
 #include "esp_log.h"
+#include "esp_app_desc.h"
 
 /* The device half of "register on boot": a persistent gateway task that runs the supervisor
  * (item 1) for the life of the session, re-dialing -- and re-associating Wi-Fi -- whenever the
@@ -296,6 +297,11 @@ static int cfg_apply(void *user, const char *settings_json,
  * mic loses its clock for the rest of the link. Reordering these two calls is a live-mic
  * regression, not a refactor. */
 static void gateway_task_on_link_down(void *user) {
+    /* WHY the link went down is the single most useful line in a field log: a reader error, a
+     * write error and a deliberate close all look identical from the bridge ("Connection reset
+     * by peer"). This path is reached at the exact moment a voice reply should arrive, and until
+     * now it has been silent. */
+    ESP_LOGW("gwlink", "on_link_down: the gateway link is going away (user=%p)", user);
     (void)user;
     audio_capture_stop();
     audio_playback_stop();
@@ -310,7 +316,17 @@ static void gateway_task_on_link_down(void *user) {
 static void gateway_task_maybe_start_capture(void) {
     void *session = gateway_supervisor_session(&supervisor);
     if (!session) return;
-    if (wy_session_state((wy_session *)session) == WY_SESSION_RUN_REQUESTED &&
+    /* Listen from REGISTRATION, not only from run-satellite.
+     *
+     * The capture task feeds wake_detector_feed on every frame and lets the session decide
+     * whether a frame is sent onward (wy_session_send_audio drops it while the stream is
+     * closed), so running capture continuously is exactly what a voice satellite needs and
+     * costs the bridge nothing while idle. Arming only in RUN_REQUESTED left the microphone
+     * OFF whenever no conversation was in progress -- so "hey hermes" could never be heard
+     * except mid-session, which is precisely why the wake word did nothing when spoken cold.
+     * The DMA also stays primed, so the first utterance starts clean. */
+    int state_now = wy_session_state((wy_session *)session);
+    if ((state_now == WY_SESSION_RUN_REQUESTED || state_now == WY_SESSION_REGISTERED) &&
         !audio_capture_running()) {
         gw_link link = gateway_supervisor_link(&supervisor);
         if (link.user && link.write_fn)
@@ -323,8 +339,9 @@ static void gateway_task_maybe_stop_capture(void) {
     void *session = gateway_supervisor_session(&supervisor);
     if (!session) return;
     int state_now = wy_session_state((wy_session *)session);
-    if (state_now == WY_SESSION_REGISTERED || state_now == WY_SESSION_REFUSED ||
-        state_now == WY_SESSION_FAILED)
+    /* Registered is NOT a reason to stop: that is the idle listening state now. Only a
+     * refused or failed session releases the microphone. */
+    if (state_now == WY_SESSION_REFUSED || state_now == WY_SESSION_FAILED)
         audio_capture_stop();
 }
 
@@ -437,7 +454,14 @@ static void gateway_task_set_identity(wy_session *session) {
     char name[65], area[65], firmware_version[33], wake_word[65];
     nvs_read_str("device_name", name, sizeof(name));
     nvs_read_str("device_area", area, sizeof(area));
-    nvs_read_str("firmware_version", firmware_version, sizeof(firmware_version));
+    /* Identify the executing image, not a saved user label or a copied bundle. The
+     * descriptor hash is populated by the image builder from the linked ELF. */
+    const esp_app_desc_t *app = esp_app_get_description();
+    char elf_hash[65];
+    for (size_t i = 0; i < sizeof(app->app_elf_sha256); ++i)
+        snprintf(elf_hash + i * 2, 3, "%02x", app->app_elf_sha256[i]);
+    ESP_LOGI("fwbuild", "running ELF sha256=%s", elf_hash);
+    snprintf(firmware_version, sizeof(firmware_version), "esp32-%.24s", elf_hash);
     /* The detection name IS the model name: wake_word is the model selector (the model file's
      * stem, e.g. hey_hermes), and the detection event reports that same name. */
     nvs_read_str("wake_word", wake_word, sizeof(wake_word));

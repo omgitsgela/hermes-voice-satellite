@@ -1,4 +1,5 @@
 #include "audio_capture.h"
+#include "esp_log.h"
 
 #include "audio_bringup.h"
 #include "wake_detector.h"
@@ -46,11 +47,27 @@ static struct {
     volatile int stopping;
 } capture;
 
+/* Preserve the original wait bound while diagnosing contention. A timeout is a
+ * candidate cause of link loss, not an established diagnosis; log it before tuning. */
+#define CAPTURE_WRITER_LOCK_WAIT_MS 100
+
 static int writer_lock_acquire(void *user) {
     (void)user;
     SemaphoreHandle_t lock = capture.writer_lock;
     if (!lock) return WY_INVALID;
-    return xSemaphoreTake(lock, pdMS_TO_TICKS(100)) == pdPASS ? WY_OK : WY_IO;
+    TickType_t started = xTaskGetTickCount();
+    int ok = xSemaphoreTake(lock, pdMS_TO_TICKS(CAPTURE_WRITER_LOCK_WAIT_MS)) == pdPASS;
+    if (!ok) {
+        ESP_LOGW("caplock", "writer lock NOT acquired after %d ms; a link write is stalled",
+                 CAPTURE_WRITER_LOCK_WAIT_MS);
+        return WY_IO;
+    }
+    TickType_t waited = xTaskGetTickCount() - started;
+    if (waited > pdMS_TO_TICKS(100)) {
+        ESP_LOGW("caplock", "writer lock took %u ms (a link write was in flight)",
+                 (unsigned)(waited * portTICK_PERIOD_MS));
+    }
+    return WY_OK;
 }
 static int writer_lock_release(void *user) {
     (void)user;

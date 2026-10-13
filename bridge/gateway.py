@@ -198,19 +198,22 @@ class VoiceGateway:
                 if resp.status != 200:
                     raise VoiceGatewayError(
                         f"event stream returned HTTP {resp.status}")
+                # aiohttp StreamReader iteration is line-oriented. Decode data lines;
+                # do not infer transport segmentation from how the socket delivered bytes.
                 async for raw in resp.content:
-                    line = raw.decode("utf-8", "replace").rstrip("\r\n")
-                    if not line or line.startswith(":"):
-                        continue  # SSE keepalive comment
-                    if not line.startswith("data:"):
-                        continue
-                    payload = line[len("data:"):].strip()
-                    if not payload or payload == "[DONE]":
-                        continue
-                    try:
-                        yield json.loads(payload)
-                    except json.JSONDecodeError:
-                        _LOGGER.debug("skipping unparseable SSE frame: %s", payload[:120])
+                    for line in raw.decode("utf-8", "replace").splitlines():
+                        line = line.rstrip("\r\n")
+                        if not line or line.startswith(":"):
+                            continue  # SSE keepalive comment
+                        if not line.startswith("data:"):
+                            continue
+                        payload = line[len("data:"):].strip()
+                        if not payload or payload == "[DONE]":
+                            continue
+                        try:
+                            yield json.loads(payload)
+                        except json.JSONDecodeError:
+                            _LOGGER.debug("skipping unparseable SSE frame: %s", payload[:120])
         except aiohttp.ClientError as exc:
             raise VoiceGatewayError(
                 f"event stream failed: {type(exc).__name__}: {exc}") from exc
