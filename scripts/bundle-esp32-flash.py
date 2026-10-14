@@ -185,6 +185,34 @@ def verify_bundle(bundle_path, manifest_path, expected_sha256=None):
     print('bundle check: the prebuilt image matches the reviewed manifest')
 
 
+def extract_regions(bundle_path, manifest_path, out_dir):
+    """Write each manifest component back out of the merged bundle.
+
+    The merged bundle exists so a prebuilt image is ONE verifiable file. Flashing
+    it as one contiguous write is a different thing: the gaps between components
+    are zero-padded, and on this board those gaps hold the settings store (nvs)
+    and the PHY calibration. Extracting the components and flashing each at its
+    own offset keeps every other partition exactly as it was -- which is why a
+    firmware update here can stop costing a full re-provision."""
+    entries, _bundle_sha = parse_manifest(manifest_path)
+    data = Path(bundle_path).read_bytes()
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    for offset, name, size, expected in entries:
+        region = data[offset:offset + size]
+        if len(region) != size:
+            raise SystemExit(f'bundle is too small for {name} at 0x{offset:x}: '
+                             f'need {size} bytes, found {len(region)}')
+        actual = hashlib.sha256(region).hexdigest()
+        if actual != expected:
+            raise SystemExit(f'{name}: region at 0x{offset:x} does not match the manifest: '
+                             f'expected sha256={expected} got {actual}')
+        target = out / Path(name).name
+        target.write_bytes(region)
+        print(f'extracted {target} offset=0x{offset:x} size={size}')
+    print(f'region extraction: {len(entries)} component(s) -> {out}')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -195,6 +223,10 @@ def main():
                         help='re-hash the build against a reviewed manifest and refuse on mismatch')
     parser.add_argument('--verify', metavar='BUNDLE',
                         help='verify a (prebuilt) bundle against the manifest bundle_sha256 header')
+    parser.add_argument('--extract', metavar='DIR',
+                        help='write each manifest component out of the bundle into DIR, so a '
+                             'flash can write only its own regions and leave other partitions '
+                             'untouched')
     parser.add_argument('--expected-sha256', metavar='HEX',
                         help='independent pin: the bundle sha256 the caller selected and reviewed; '
                              'refuses a bundle that merely agrees with its own manifest')
@@ -204,6 +236,8 @@ def main():
         if not args.check:
             parser.error('--verify needs --check MANIFEST (the manifest carrying bundle_sha256)')
         verify_bundle(args.verify, Path(args.check), args.expected_sha256)
+        if args.extract:
+            extract_regions(args.verify, Path(args.check), args.extract)
         return
     if args.check:
         if not args.build:

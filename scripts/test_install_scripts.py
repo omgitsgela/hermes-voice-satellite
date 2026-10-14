@@ -188,6 +188,44 @@ class InstallScriptTests(unittest.TestCase):
             self.assertIn('--verify', result.stdout)
             self.assertLess(result.stdout.index('--verify'), result.stdout.index('write_flash'))
 
+    def test_the_flash_writes_regions_not_one_contiguous_blob(self):
+        """Flashing must write components at their own offsets, not one merged blob.
+
+        The merged image is contiguous with zero padding between components, so a
+        whole-blob write zeroes every partition living in those gaps -- here `nvs`
+        (the device settings) and `phy_init`. That is why a firmware update cost a
+        full re-provision every time."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / 'repo'
+            (repo / 'scripts' / 'lib').mkdir(parents=True)
+            (repo / 'firmware' / 'esp32').mkdir(parents=True)
+            bundle_dir = repo / 'flash'
+            bundle_dir.mkdir()
+            # A real manifest, so the region parsing under test has something to read.
+            (bundle_dir / 'flash.manifest.txt').write_text(
+                'bundle_sha256=' + 'a' * 64 + '\n'
+                'offset=0x0 name=bootloader.bin size=21168 sha256=' + 'b' * 64 + '\n'
+                'offset=0x8000 name=partition-table.bin size=3072 sha256=' + 'c' * 64 + '\n'
+                'offset=0x10000 name=app.bin size=1281440 sha256=' + 'd' * 64 + '\n')
+            shutil.copy(ESP32, repo / 'scripts' / 'install-esp32.sh')
+            shutil.copy(ROOT / 'scripts' / 'lib' / 'guided.sh',
+                        repo / 'scripts' / 'lib' / 'guided.sh')
+            result = run(repo / 'scripts' / 'install-esp32.sh',
+                         '--dry-run', '--flash', '--port', '/dev/ttyACM0',
+                         '--bundle-dir', str(bundle_dir))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            write = [line for line in result.stdout.splitlines()
+                     if 'write_flash' in line]
+            self.assertTrue(write, result.stdout)
+            line = write[0]
+            offsets = [token for token in line.split()
+                       if token.startswith('0x') and
+                       all(c in '0123456789abcdefxABCDEF' for c in token)]
+            self.assertGreaterEqual(len(offsets), 2,
+                                    'flash must write components separately: ' + line)
+            self.assertNotIn('flash.bundle.bin', line,
+                             'the merged bundle must not be written contiguously')
+
     def test_esp32_flash_carries_the_independent_pin(self):
         """The pin must reach the verifier, or it is decoration."""
         result = run(ESP32, '--dry-run', '--flash', '--port', '/dev/ttyACM0',
@@ -917,12 +955,14 @@ class GuidedModeTests(unittest.TestCase):
                                  '--flash', '--bundle-dir', '/mnt/custom-bundle')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('--bundle-dir /mnt/custom-bundle', self.run_line(result))
-        # And the board write really targets THAT bundle, not the default bundle dir (the
-        # esptool command line, not the summary's prose).
+        # And the board write really uses THAT bundle dir, not the default one (the
+        # esptool command line, not the summary's prose). The regions are written from
+        # that manifest rather than the merged blob, so the path to assert is the
+        # manifest/region source.
         write = [ln for ln in self.lines_with(result, 'write_flash') if 'esptool' in ln]
         self.assertTrue(write, result.stdout)
-        self.assertIn('/mnt/custom-bundle/flash.bundle.bin', write[0])
-        self.assertNotIn('xvf3800-flash/flash.bundle.bin', write[0])
+        self.assertIn('/mnt/custom-bundle', write[0])
+        self.assertNotIn('xvf3800-flash', write[0])
 
     def test_esp32_guided_forwards_registry(self):
         result = self.run_guided(ESP32, self.PROV_ANSWERS, '--provision',

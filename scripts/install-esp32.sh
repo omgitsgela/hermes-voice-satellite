@@ -640,17 +640,53 @@ if [ "$DO_FLASH" = 1 ]; then
     #    file is in the flash directory.
     # 2. When a local build tree exists, re-hash the source components too, so a bundle that
     #    disagrees with the tree it was allegedly built from is also refused.
+    FLASH_REGIONS_DIR="$BUNDLE_DIR/regions"
+    [ "$DRY_RUN" = 1 ] || rm -rf "$FLASH_REGIONS_DIR"
     run "$PY" "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
         --verify "$BUNDLE_DIR/flash.bundle.bin" --check "$BUNDLE_DIR/flash.manifest.txt" \
-        ${EXPECTED_BUNDLE_SHA256:+--expected-sha256 "$EXPECTED_BUNDLE_SHA256"}
+        ${EXPECTED_BUNDLE_SHA256:+--expected-sha256 "$EXPECTED_BUNDLE_SHA256"} \
+        --extract "$FLASH_REGIONS_DIR"
     if [ -d "$FIRMWARE_DIR/build" ]; then
         run "$PY" "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
             --build "$FIRMWARE_DIR/build" --check "$BUNDLE_DIR/flash.manifest.txt"
     fi
-    run "$PY" -m esptool --chip esp32s3 --port "$PORT" --baud 460800 \
-        --before default-reset --after hard-reset \
-        write_flash --flash_mode dio --flash_size 8MB --flash_freq 80m \
-        0x0 "$BUNDLE_DIR/flash.bundle.bin"
+    # Write ONLY the regions the manifest names, each at its own offset.
+    #
+    # The merged bundle is one contiguous image with zero padding between its
+    # components, so writing it whole from 0x0 ERASES every partition living in
+    # those gaps -- on this board `nvs` (the device's settings) and `phy_init`
+    # sit between the partition table and the app. That is why a firmware update
+    # used to cost a full re-provision: the flash was wiping the settings itself.
+    # This is not an ESP32 constraint; images that write only their own regions
+    # keep the settings across updates. The bundle remains the published,
+    # hash-verifiable artifact -- it is simply not written as one blob.
+    FLASH_ARGS=()
+    if [ -f "$BUNDLE_DIR/flash.manifest.txt" ]; then
+        while read -r off name; do
+            FLASH_ARGS+=("$off" "$FLASH_REGIONS_DIR/$(basename "$name")")
+        done < <("$PY" -c '
+import pathlib, sys
+for raw in pathlib.Path(sys.argv[1]).read_text().splitlines():
+    if raw.startswith("offset="):
+        fields = dict(item.split("=", 1) for item in raw.split())
+        print(fields["offset"], fields["name"])
+' "$BUNDLE_DIR/flash.manifest.txt")
+    fi
+    if [ "${#FLASH_ARGS[@]}" -eq 0 ]; then
+        # No manifest yet: a dry run may simply be previewing the flow before the
+        # bundle has been downloaded. Say what the regions come from rather than
+        # inventing offsets -- a guessed flash map is how a board gets bricked.
+        [ "$DRY_RUN" = 1 ] || die "no flash regions in $BUNDLE_DIR/flash.manifest.txt"
+        run "$PY" -m esptool --chip esp32s3 --port "$PORT" --baud 460800 \
+            --before default-reset --after hard-reset \
+            write_flash --flash_mode dio --flash_size 8MB --flash_freq 80m \
+            "<offset and region taken from $BUNDLE_DIR/flash.manifest.txt>"
+    else
+        run "$PY" -m esptool --chip esp32s3 --port "$PORT" --baud 460800 \
+            --before default-reset --after hard-reset \
+            write_flash --flash_mode dio --flash_size 8MB --flash_freq 80m \
+            "${FLASH_ARGS[@]}"
+    fi
 fi
 
 # ---------------------------------------------------------------- provision

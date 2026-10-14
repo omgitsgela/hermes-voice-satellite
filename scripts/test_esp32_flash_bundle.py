@@ -188,6 +188,82 @@ class BundleVerifyTest(unittest.TestCase):
             self.assertIn('bundle_sha256', verify.stdout + verify.stderr)
 
 
+class PreserveOtherPartitionsTest(unittest.TestCase):
+    """Flashing must write ONLY the regions the manifest names.
+
+    The bundled image is contiguous from 0x0 to the end of the app, with zero
+    padding between components. Writing it as one blob therefore zeroes every
+    partition that lives in those gaps -- and on this board the settings store
+    (nvs at 0x9000) and the PHY calibration (phy_init at 0xF000) both sit between
+    the partition table and the app. That is why every firmware update cost a full
+    re-provision: the flash was erasing the settings itself. This is not an
+    ESP32 constraint -- images that write only their own regions keep NVS intact.
+    """
+
+    def test_extract_recovers_each_component_from_the_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            build, bootloader, ptable, app = make_build(tmp)
+            manifest = Path(tmp) / 'manifest.txt'
+            bundle = Path(tmp) / 'bundle.bin'
+            run_bundle(['--build', str(build), '--out', str(manifest),
+                        '--bundle', str(bundle)], tmp)
+            out = Path(tmp) / 'extracted'
+            ran = run_bundle(['--verify', str(bundle), '--check', str(manifest),
+                              '--extract', str(out)], tmp)
+            self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+            self.assertEqual((out / 'bootloader.bin').read_bytes(), bootloader)
+            self.assertEqual((out / 'partition-table.bin').read_bytes(), ptable)
+            self.assertEqual((out / 'app.bin').read_bytes(), app)
+
+    def test_written_regions_never_overlap_a_partition_outside_the_manifest(self):
+        """The real guard: given this board's actual partition table, the ranges a
+        flash writes must not touch any partition the manifest does not name.
+
+        The negative control matters as much as the assertion: if the contiguous
+        blob write did NOT overlap a protected partition, this test would pass
+        while proving nothing. It asserts both halves."""
+        import struct
+        table = ROOT / 'firmware/esp32/build/partition_table/partition-table.bin'
+        if not table.exists():
+            self.skipTest('no built partition table; run --build first')
+        data = table.read_bytes()
+        partitions = []
+        for i in range(0, len(data), 32):
+            ent = data[i:i + 32]
+            if len(ent) < 32 or ent[0] != 0xAA or ent[1] != 0x50:
+                continue
+            # ESP-IDF partition entry: magic u16, type u8, subtype u8,
+            # offset u32, size u32, name[16], flags u32. Read them where they are.
+            offset, size = struct.unpack('<II', ent[4:12])
+            name = ent[12:28].split(b'\x00')[0].decode('utf-8', 'replace')
+            partitions.append((offset, size, name))
+
+        # What the bundle contains: the three regions the flash map names.
+        written = [(0x0, 21168, 'bootloader'),
+                   (0x8000, 3072, 'partition-table'),
+                   (0x10000, 1281440, 'app')]
+
+        def overlaps(a, b):
+            return a[0] < b[0] + b[1] and b[0] < a[0] + a[1]
+
+        protected = [(o, s, n) for o, s, n in partitions
+                     if n not in ('factory',)]
+        self.assertTrue(protected, 'the partition table has nothing to protect')
+
+        # Negative control: the merged blob MUST overlap the protected partitions,
+        # or the guard below is vacuous and proves nothing.
+        blob = (0x0, max(o + s for o, s, _ in written))
+        self.assertTrue([n for o, s, n in protected if overlaps(blob, (o, s, n))],
+                        'expected the contiguous write to hit a protected partition')
+
+        # The assertion: region-wise writes leave every protected partition alone.
+        for region in written:
+            hit = [n for o, s, n in protected if overlaps(region, (o, s, n))]
+            self.assertEqual(hit, [],
+                             f'{region[2]} would overwrite {hit}: '
+                             'flash regions must stay inside the manifest components')
+
+
 class ErrorsTest(unittest.TestCase):
     def test_a_missing_flash_map_is_refused_not_guessed(self):
         with tempfile.TemporaryDirectory() as tmp:
