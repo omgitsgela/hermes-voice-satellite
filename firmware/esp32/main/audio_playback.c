@@ -501,7 +501,13 @@ int audio_playback_start(void) {
      * silence -- so any momentary underrun becomes an audible glitch rather than a quiet gap.
      * Underrun protection costs one memset per completed buffer. */
     channel.auto_clear_after_cb = true;
-    if (i2s_new_channel(&channel, &tx, NULL) != ESP_OK) { tx = NULL; return -1; }
+    if (i2s_new_channel(&channel, &tx, NULL) != ESP_OK) {
+        /* The usual cause is the capture RX already owning I2S_NUM_0 in a state the driver will
+         * not pair with. Silent failure here means an answer is produced, sent, and never played,
+         * with nothing in the log -- indistinguishable from the device ignoring the reply. */
+        ESP_LOGW("plb", "playback: i2s_new_channel failed; no reply can be played");
+        tx = NULL; return -1;
+    }
     /* Same clock/slot/WS/BCLK as the capture RX, so the driver constitutes the full-duplex pair
      * and the two share the port clock. The data pin is the TX's (GPIO44); the RX keeps 43. */
     i2s_std_config_t std = {
@@ -525,11 +531,13 @@ int audio_playback_start(void) {
         },
     };
     if (i2s_channel_init_std_mode(tx, &std) != ESP_OK) {
+        ESP_LOGW("plb", "playback: i2s init failed; no reply can be played");
         i2s_del_channel(tx);
         tx = NULL;
         return -1;
     }
     if (i2s_channel_enable(tx) != ESP_OK) {
+        ESP_LOGW("plb", "playback: i2s enable failed; no reply can be played");
         i2s_del_channel(tx);
         tx = NULL;
         return -1;
@@ -557,6 +565,8 @@ int audio_playback_start(void) {
         tx = NULL;
         return -1;
     }
+    ESP_LOGI("plb", "playback ready (amp drain %ld ms; the TX is armed and the DMA is primed)",
+             (long)playback_drain_ms);
     return 0;
 }
 

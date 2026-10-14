@@ -115,7 +115,16 @@ static void capture_task_fn(void *argument) {
                                                 &bytes_read, CAPTURE_READ_TIMEOUT_MS);
             if (result != ESP_OK && result != ESP_ERR_TIMEOUT) {
                 /* A real I2S error: stop reading. The task exits; the next armed hook will
-                 * start it again with a fresh channel. */
+                 * start it again with a fresh channel.
+                 *
+                 * This exit used to be SILENT, and that is the worst possible place for silence:
+                 * the I2S port is shared with playback (the TX joins the same controller as a
+                 * full-duplex pair when a reply is armed), so a capture read failure at exactly
+                 * that moment is a live candidate for the link dying during a reply -- and from
+                 * the bridge all such failures look identical to a device that reset. Report the
+                 * driver error so the two can be told apart. */
+                ESP_LOGW("capio", "capture read failed: %s (0x%x); capture task exiting",
+                         esp_err_to_name(result), (unsigned)result);
                 break;
             }
         }
@@ -168,6 +177,10 @@ int audio_capture_start(void *session, void *user,
 
     i2s_chan_config_t channel = I2S_CHANNEL_DEFAULT_CONFIG(CAPTURE_I2S_PORT, I2S_ROLE_MASTER);
     if (i2s_new_channel(&channel, NULL, &capture.rx) != ESP_OK) {
+        /* The usual cause is the other half of the full-duplex pair still owning the controller
+         * (a playback channel that has not finished tearing down). Without this line the
+         * microphone simply never comes back and nothing in the log says why. */
+        ESP_LOGW("capio", "capture: i2s_new_channel failed; the microphone did not start");
         capture.rx = NULL;   /* nothing was allocated; the stale one was already released above */
         return -1;
     }
