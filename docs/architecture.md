@@ -192,6 +192,7 @@ That is exactly how the 2026-09-25 office failure was caught.
 | the wire protocol itself | `wyoming-protocol.md` |
 | the device's config surface | `configuration-plane.md`, `satellite-http-config.md` |
 | the wake word: switching, licensing | `switching-wake-words.md`, `wake-word-licensing.md` |
+| the tones it speaks in | `prompt-tones.md` |
 
 ## The rule that holds all of it together
 

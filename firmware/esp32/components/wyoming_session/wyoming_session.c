@@ -292,6 +292,7 @@ static int stop_streaming(wy_session *session, wy_write_fn write_fn, void *ctx) 
      * a wake that started the stream between the pre-check and the lock. If the send fails the
      * flag stays set: the stream is not actually over. */
     if (!session->streaming) return WY_OK;
+    session->stream_frames = 0;   /* the next wake starts a fresh, bounded stream */
     ESP_LOGI("gwstop", "stop-streaming: acquiring writer lock");
     int result = writer_lock(session);
     if (result != WY_OK) return result;
@@ -406,7 +407,10 @@ int __attribute__((used)) wy_session_wake(wy_session *session, const char *wake_
                          NULL, 0);
     if (!result)
         result = wy_send(write_fn, ctx, "streaming-started", NULL, NULL, 0);
-    if (!result) session->streaming = 1;
+    if (!result) {
+        session->streaming = 1;
+        session->stream_frames = 0;
+    }
     writer_unlock(session);
     if (result != WY_OK) { session->state = WY_SESSION_FAILED; return result; }
     return WY_OK;
@@ -434,6 +438,18 @@ int wy_session_send_audio(wy_session *session, const void *pcm, size_t length,
      * of the last one. */
     if (!session || !pcm || !write_fn) return WY_INVALID;
     if (!session->streaming) return WY_INVALID;
+    /* An open microphone stream is a promise to someone in the room, and it must not be
+     * open-ended. The bridge ends it with `transcript`; if that never arrives -- a wake the
+     * bridge loses track of, a crash mid-turn -- the device would keep streaming a room
+     * nobody is listening to. The reference satellite closes its stream at the end of the
+     * utterance; this is the same guarantee, enforced from the device side. */
+    if (++session->stream_frames >= WY_STREAM_MAX_FRAMES) {
+        ESP_LOGW("gwstop", "streaming: closing after %u frames with no transcript "
+                 "(the host stopped driving this utterance)",
+                 (unsigned)session->stream_frames);
+        (void)stop_streaming(session, write_fn, ctx);
+        return WY_INVALID;
+    }
     if (length == 0 || length > WY_AUDIO_CHUNK_SAMPLES * 2 || length % 2) return WY_INVALID;
     int lock_result = writer_lock(session);
     if (lock_result != WY_OK) return lock_result;

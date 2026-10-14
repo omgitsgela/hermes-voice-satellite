@@ -33,6 +33,7 @@ typedef struct {
 typedef struct {
     int state;
     int streaming;        /* 1 while the mic stream is being forwarded to the bridge */
+    uint32_t stream_frames;   /* chunks forwarded on this stream; bounds it (WY_STREAM_MAX_FRAMES) */
     int paused;           /* 1 after pause-satellite; run-satellite clears it */
     char device_id[65];
     char boot_id[129];
@@ -119,6 +120,11 @@ int wy_session_wake(wy_session *session, const char *wake_word,
  * the stream is not running (the mic is closed and the audio is dropped, exactly like the
  * reference satellite's event_from_mute path). */
 /* Report that playback finished, so the bridge stops waiting on `played`. */
+/* One microphone chunk is 10 ms of audio, so this bounds an open stream at 30 s: far longer
+ * than any utterance, short enough that a lost `transcript` cannot leave the room miked up
+ * indefinitely. The bridge closes the stream normally; this is the device-side backstop. */
+#define WY_STREAM_MAX_FRAMES 3000u
+
 int wy_session_send_played(wy_session *session,
                            int (*write_fn)(void *, const void *, size_t), void *ctx);
 
