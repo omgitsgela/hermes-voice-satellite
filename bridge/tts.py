@@ -135,6 +135,13 @@ class TtsStream:
             await self._send(self._AudioStop().event())
             _LOGGER.info("tts stream closed: %d chars, %.2f s of audio", self._chars_sent,
                          self._seconds_sent)
+        except (Exception, asyncio.CancelledError):
+            # Cleanup must not replace the failure (or cancellation) that led here.
+            # A stop error on an otherwise successful stream must still propagate.
+            if exc[1] is None:
+                raise
+            _LOGGER.warning("tts: audio-stop failed while handling %s; preserving original error",
+                            type(exc[1]).__name__, exc_info=True)
         finally:
             if self._holds_lock:
                 self._holds_lock = False
@@ -170,11 +177,11 @@ class TtsStream:
                 await self._send(chunk.event())
                 chunks_sent += 1
                 sent += chunk.seconds
+                self._seconds_sent += chunk.seconds
                 if self._pace:
                     await asyncio.sleep(chunk.seconds / self._pace)
         _LOGGER.info("tts: transmitted %d chunks, %.2fs of audio (not playback confirmation)",
                      chunks_sent, sent)
-        self._seconds_sent += sent
         self._chars_sent += len(text)
         return sent
 

@@ -152,10 +152,21 @@ def check_manifest(build, manifest_path):
     print('manifest check: all files match')
 
 
-def verify_bundle(bundle_path, manifest_path):
+def verify_bundle(bundle_path, manifest_path, expected_sha256=None):
     """Verify a standalone (prebuilt) bundle against the manifest's own bundle_sha256 header.
     This is the gate for a user who flashed a published image and never built the source: the
-    one file that goes to 0x0 is hashed and compared, with no build tree required."""
+    one file that goes to 0x0 is hashed and compared, with no build tree required.
+
+    `expected_sha256` is a SECOND pin, supplied by whoever selected the build. The manifest
+    header alone cannot prove the artifact is the one that was chosen: a stale bundle and its
+    stale manifest agree with each other perfectly, which is exactly how an old firmware image
+    came to be flashed while the source moved on. The independent pin is compared as given --
+    no trimming, no case folding -- because a value that does not match the documented format
+    is a mistake to report, never one to repair silently."""
+    if expected_sha256 is not None:
+        if len(expected_sha256) != 64 or any(c not in '0123456789abcdef' for c in expected_sha256):
+            raise SystemExit(f'--expected-sha256 must be exactly 64 lowercase hexadecimal '
+                             f'characters; got {expected_sha256!r}')
     _entries, expected = parse_manifest(manifest_path)
     if not expected:
         raise SystemExit(f'manifest has no bundle_sha256 line: {manifest_path} '
@@ -164,7 +175,13 @@ def verify_bundle(bundle_path, manifest_path):
     if actual != expected:
         raise SystemExit(f'bundle disagrees with the reviewed manifest: '
                          f'reviewed sha256={expected} now sha256={actual}')
+    if expected_sha256 is not None and actual != expected_sha256:
+        raise SystemExit(f'bundle is not the selected build: expected sha256={expected_sha256} '
+                         f'but the artifact is sha256={actual} (the bundle and this manifest may '
+                         f'both be stale)')
     print(f'OK bundle {bundle_path} sha256={actual}')
+    if expected_sha256 is not None:
+        print('bundle check: the prebuilt image matches the independent pin')
     print('bundle check: the prebuilt image matches the reviewed manifest')
 
 
@@ -178,12 +195,15 @@ def main():
                         help='re-hash the build against a reviewed manifest and refuse on mismatch')
     parser.add_argument('--verify', metavar='BUNDLE',
                         help='verify a (prebuilt) bundle against the manifest bundle_sha256 header')
+    parser.add_argument('--expected-sha256', metavar='HEX',
+                        help='independent pin: the bundle sha256 the caller selected and reviewed; '
+                             'refuses a bundle that merely agrees with its own manifest')
     args = parser.parse_args()
 
     if args.verify:
         if not args.check:
             parser.error('--verify needs --check MANIFEST (the manifest carrying bundle_sha256)')
-        verify_bundle(args.verify, Path(args.check))
+        verify_bundle(args.verify, Path(args.check), args.expected_sha256)
         return
     if args.check:
         if not args.build:

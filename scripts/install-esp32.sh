@@ -78,6 +78,10 @@ ENDPOINT=""       # what the board dials: tls://host:port (tcp:// for a trusted 
 REGISTRY_FILE=""  # the bridge's state/device-credentials.json; defaults beside the certs dir
 WIFI_SSID=""
 WIFI_PSK_FILE=""
+# The bundle sha256 the operator selected and reviewed. When set, the flash refuses any artifact
+# that does not match it -- including a stale bundle that agrees with its own stale manifest, which
+# is how an old image once got flashed while the source moved on.
+EXPECTED_BUNDLE_SHA256=""
 # Plug-and-play enrolment state (the guided flow only). The gateway's five-word setup code and the
 # certificates it fetches live under the user's config dir; the code moves as a file path or a
 # no-echo answer, never through argv and never into output.
@@ -163,6 +167,7 @@ while [ $# -gt 0 ]; do
         --dry-run)   DRY_RUN=1 ;;
         --port)      [ $# -ge 2 ] || die "$1 needs a value"; PORT="${2:-}"; shift ;;
         --bundle-dir) [ $# -ge 2 ] || die "$1 needs a value"; BUNDLE_DIR="${2:-}"; PASSTHROUGH+=(--bundle-dir "${2:-}"); shift ;;
+        --expected-bundle-sha256) [ $# -ge 2 ] || die "$1 needs a value"; EXPECTED_BUNDLE_SHA256="${2:-}"; PASSTHROUGH+=(--expected-bundle-sha256 "${2:-}"); shift ;;
         --tls-certs) [ $# -ge 2 ] || die "$1 needs a value"; TLS_CERTS_DIR="${2:-}"; shift ;;
         --device-id) [ $# -ge 2 ] || die "$1 needs a value"; DEVICE_ID="${2:-}"; shift ;;
         --device-name) [ $# -ge 2 ] || die "$1 needs a value"; DEVICE_NAME="${2:-}"; shift ;;
@@ -636,7 +641,8 @@ if [ "$DO_FLASH" = 1 ]; then
     # 2. When a local build tree exists, re-hash the source components too, so a bundle that
     #    disagrees with the tree it was allegedly built from is also refused.
     run "$PY" "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
-        --verify "$BUNDLE_DIR/flash.bundle.bin" --check "$BUNDLE_DIR/flash.manifest.txt"
+        --verify "$BUNDLE_DIR/flash.bundle.bin" --check "$BUNDLE_DIR/flash.manifest.txt" \
+        ${EXPECTED_BUNDLE_SHA256:+--expected-sha256 "$EXPECTED_BUNDLE_SHA256"}
     if [ -d "$FIRMWARE_DIR/build" ]; then
         run "$PY" "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
             --build "$FIRMWARE_DIR/build" --check "$BUNDLE_DIR/flash.manifest.txt"

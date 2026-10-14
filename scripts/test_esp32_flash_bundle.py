@@ -136,6 +136,33 @@ class BundleVerifyTest(unittest.TestCase):
             self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
             self.assertIn('matches the reviewed manifest', verify.stdout)
 
+    def test_independent_pin_refuses_an_old_matching_bundle_and_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            build, _b, _p, _a = make_build(tmp)
+            manifest = Path(tmp) / 'manifest.txt'
+            bundle = Path(tmp) / 'bundle.bin'
+            run_bundle(['--build', str(build), '--out', str(manifest), '--bundle', str(bundle)], tmp)
+            result = run_bundle(['--verify', str(bundle), '--check', str(manifest),
+                                 '--expected-sha256', '0' * 64], tmp)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('selected build', result.stdout + result.stderr)
+
+    def test_independent_pin_accepts_selected_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            build, _b, _p, _a = make_build(tmp)
+            manifest = Path(tmp) / 'manifest.txt'
+            bundle = Path(tmp) / 'bundle.bin'
+            run_bundle(['--build', str(build), '--out', str(manifest), '--bundle', str(bundle)], tmp)
+            result = run_bundle(['--verify', str(bundle), '--check', str(manifest),
+                                 '--expected-sha256', sha256(bundle.read_bytes())], tmp)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_malformed_pin_is_refused_without_normalization(self):
+        result = run_bundle(['--verify', 'unused.bin', '--check', 'unused.txt',
+                             '--expected-sha256', ' ' + '0' * 64], ROOT)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('64 lowercase hexadecimal', result.stdout + result.stderr)
+
     def test_verify_refuses_a_tampered_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
             build, _b, _p, _a = make_build(tmp)

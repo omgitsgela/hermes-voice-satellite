@@ -188,6 +188,18 @@ class InstallScriptTests(unittest.TestCase):
             self.assertIn('--verify', result.stdout)
             self.assertLess(result.stdout.index('--verify'), result.stdout.index('write_flash'))
 
+    def test_esp32_flash_carries_the_independent_pin(self):
+        """The pin must reach the verifier, or it is decoration."""
+        result = run(ESP32, '--dry-run', '--flash', '--port', '/dev/ttyACM0',
+                     '--expected-bundle-sha256', 'a' * 64)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--expected-sha256 ' + 'a' * 64, result.stdout)
+
+    def test_esp32_flash_without_a_pin_still_verifies_the_manifest(self):
+        result = run(ESP32, '--dry-run', '--flash', '--port', '/dev/ttyACM0')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('--expected-sha256', result.stdout)
+
     def test_esp32_uses_the_repo_venv_interpreter_when_present(self):
         """The provisioning helpers and esptool must run under the repository's own venv when it
         exists, because that is where esptool and pyserial live; a bare python3 may have neither
@@ -1053,6 +1065,7 @@ class FlagSurfaceGuardTests(unittest.TestCase):
             '--model-name': 'typed_model',
             '--wifi-ssid': 'TypedNet',
             '--wifi-psk-file': '/srv/typed/psk.txt',
+            '--expected-bundle-sha256': 'b' * 64,
         },
         'install-pi.sh': {
             '--base': '/srv/typed-base',
