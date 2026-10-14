@@ -1018,9 +1018,9 @@ class VoiceLoop:
                 return None, "capture returned nothing"
             if endpoint.ended_by == "no_speech":
                 # Silence for the whole window is an empty room, not a blip: close the
-                # activation rather than listening again.
-                _LOGGER.info("capture: only %d microphone frames arrived in the whole window",
-                             audio_frames_seen)
+                # activation rather than listening again. (The endpointing line above
+                # already reports how many bytes arrived; that count is the one to
+                # compare against the device's `capacct`.)
                 return None, "nothing said after the wake word"
             if not endpoint.rejected:
                 return endpoint, ""
