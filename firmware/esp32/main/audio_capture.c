@@ -87,6 +87,17 @@ void audio_capture_install_writer_lock(void *session) {
     s->writer_lock_user = NULL;
 }
 
+/* Accounting for where the microphone audio actually goes.
+ *
+ * "The device is streaming but the bridge hears nothing" cannot be diagnosed by
+ * looking at either end alone: the chunk can be dropped here (stream closed, a
+ * writer-lock timeout, a link error) or lost after it leaves. These counters make
+ * the boundary visible, so one wake says which side to look at instead of both. */
+static uint32_t chunks_sent;
+static uint32_t chunks_dropped;
+static uint32_t samples_sent;
+static uint32_t samples_dropped;
+
 void audio_capture_send_chunk(const int32_t *frames, size_t frame_count) {
     if (!frames || !capture.session) return;
     int16_t mono[AUDIO_CAPTURE_FRAMES];
@@ -101,7 +112,21 @@ void audio_capture_send_chunk(const int32_t *frames, size_t frame_count) {
     /* The session decides whether the microphone is open: a frame sent while the stream is
      * closed is dropped there, which is what keeps the pre-wake chime out of the next
      * utterance. After a wake opens the stream, the same chunks also go to the bridge. */
-    wy_session_send_audio(capture.session, mono, samples * 2, capture.write, capture.user);
+    int sent = wy_session_send_audio(capture.session, mono, samples * 2,
+                                     capture.write, capture.user);
+    if (sent == WY_OK) {
+        chunks_sent++;
+        samples_sent += (uint32_t)samples;
+    } else {
+        chunks_dropped++;
+        samples_dropped += (uint32_t)samples;
+    }
+    if (chunks_sent + chunks_dropped >= 100) {
+        ESP_LOGI("capacct", "mic audio: sent %u chunks / %u samples, dropped %u / %u "
+                 "(dropped means the session refused the frame)",
+                 chunks_sent, samples_sent, chunks_dropped, samples_dropped);
+        chunks_sent = chunks_dropped = samples_sent = samples_dropped = 0;
+    }
 }
 
 static void capture_task_fn(void *argument) {

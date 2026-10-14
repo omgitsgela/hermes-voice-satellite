@@ -706,8 +706,12 @@ class VoiceLoop:
                 _LOGGER.info("wake word: %s", name)
                 return name
 
-    async def wait_for_played(self, timeout: float = 180.0) -> bool:
-        """Wait for the satellite's `played`, absorbing stray detections meanwhile."""
+    async def wait_for_played(self, timeout: float = 20.0) -> bool:
+        """Wait for the satellite's `played`, absorbing stray detections meanwhile.
+
+        The bound is short on purpose. `played` is the device saying its speaker
+        finished, and firmware that does not emit it would otherwise park the whole
+        conversation here -- for the full timeout -- after every single reply."""
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
@@ -723,8 +727,18 @@ class VoiceLoop:
             if Played.is_type(event.type):
                 return True
             if Detection.is_type(event.type):
-                self.self_trigger_count += 1
-                _LOGGER.warning("wake word during playback: treating as a self-trigger")
+                # A wake here is NOT self-trigger suppression material. This wait
+                # is for the device's `played`, which some firmware never sends --
+                # so the wait ran to its full timeout while every wake inside it
+                # was dismissed as an echo. Measured: one working conversation,
+                # then the next two attempts silenced with "treating as a
+                # self-trigger". The person is awake and asking; answer them.
+                name = Detection.from_event(event).name
+                _LOGGER.warning("wake word %r arrived while waiting for playback to "
+                                "finish; the reply is done as far as the person is "
+                                "concerned -- holding it for the next turn", name)
+                self._hold_wake(name)
+                return True
 
     # -- interruption while a task is running (2026-09-23) --------------
 
@@ -881,6 +895,10 @@ class VoiceLoop:
             _LOGGER.warning("could not re-arm the satellite after an interruption: %s", exc)
 
     async def capture_utterance(self, wake_word: str) -> Optional[EndpointResult]:
+        # Counts the microphone frames that actually arrive. "The device is
+        # streaming but the bridge hears nothing" is only diagnosable when the two
+        # ends are counted separately; the device prints the matching `capacct`.
+        audio_frames_seen = 0
         """Feed mic audio to the endpointer until the utterance is complete.
 
         Raises the announcement gate on entry. While the microphone is open the room is, by
@@ -909,6 +927,13 @@ class VoiceLoop:
                 continue
             if AudioChunk.is_type(event.type):
                 chunk = AudioChunk.from_event(event)
+                audio_frames_seen += 1
+                if audio_frames_seen % 50 == 0:
+                    # Runs every ~0.5 s of real audio. If these stop while the
+                    # device reports `capacct: sent …`, the loss is after the wire;
+                    # if the device reports drops, it never left the board.
+                    _LOGGER.info("capture: %d microphone frames received from %s",
+                                 audio_frames_seen, getattr(self.sat, "device_id", "satellite"))
                 result = endpoint.process(chunk.audio)
                 if result is not None:
                     return result
@@ -994,6 +1019,8 @@ class VoiceLoop:
             if endpoint.ended_by == "no_speech":
                 # Silence for the whole window is an empty room, not a blip: close the
                 # activation rather than listening again.
+                _LOGGER.info("capture: only %d microphone frames arrived in the whole window",
+                             audio_frames_seen)
                 return None, "nothing said after the wake word"
             if not endpoint.rejected:
                 return endpoint, ""

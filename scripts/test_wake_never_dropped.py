@@ -74,6 +74,44 @@ class HeldWakeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(name, 'hey-hermes')
         self.assertIsNone(loop._held_wake, 'a held wake is consumed exactly once')
 
+    async def test_a_wake_during_wait_for_played_is_not_dismissed_as_echo(self):
+        """THE measured failure: after a reply the turn waits for the device's
+        `played`, which this firmware never sends. Every wake inside that wait was
+        logged as "treating as a self-trigger" and discarded -- so one conversation
+        worked and the next two attempts were silently swallowed."""
+        loop = VoiceLoop.__new__(VoiceLoop)
+        loop._held_wake = None
+        loop._speaking = False
+        loop.self_trigger_count = 0
+        loop.sat = AsyncMock()
+        loop.sat.eof = False
+
+        async def next_event(_timeout):
+            return type('E', (), {'type': 'detection'})()
+
+        loop.sat.next_event = next_event
+        with patch('bridge.loop.Detection') as Detection:
+            Detection.is_type.return_value = True
+            Detection.from_event.return_value = type('D', (), {'name': 'hey-hermes'})()
+            finished = await asyncio.wait_for(loop.wait_for_played(timeout=5.0),
+                                              timeout=3.0)
+        self.assertTrue(finished, 'a wake means the person is done waiting')
+        self.assertEqual(loop._held_wake, 'hey-hermes')
+        self.assertEqual(loop.self_trigger_count, 0,
+                         'a real wake must not be counted as our own echo')
+
+    async def test_wait_for_played_does_not_park_a_turn_for_minutes(self):
+        """A device that never emits `played` must not stall the conversation."""
+        loop = VoiceLoop.__new__(VoiceLoop)
+        loop._held_wake = None
+        loop.sat = AsyncMock()
+        loop.sat.eof = True          # the link is gone: nothing will arrive
+        import inspect
+        default = inspect.signature(loop.wait_for_played).parameters['timeout'].default
+        self.assertLessEqual(default, 30.0,
+                             f'wait_for_played default timeout is {default}s; a turn '
+                             'must not be parked waiting for an event that may never come')
+
     async def test_no_held_wake_still_uses_the_live_queue(self):
         loop = VoiceLoop.__new__(VoiceLoop)
         loop._held_wake = None
