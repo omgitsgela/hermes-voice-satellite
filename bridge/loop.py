@@ -213,6 +213,10 @@ class VoiceLoop:
         self._last_turn_at: Optional[float] = None
         self._speaking = False
         self._speaking_at = 0.0   # monotonic time of the last playback activity
+        # A wake detection that arrived mid-task and could not be used. It is the
+        # person's only way to be heard, so it is kept for the next turn rather
+        # than discarded -- see wait_for_wake.
+        self._held_wake: Optional[str] = None
         self.self_trigger_count = 0
         self.turns: list[TurnStats] = []
 
@@ -655,6 +659,13 @@ class VoiceLoop:
         """
         from bridge.config import WAKE_WAIT_SECONDS
 
+        # A wake held from an earlier, unusable moment comes before anything on the
+        # queue: the person already asked, and they have been waiting since.
+        if self._held_wake is not None:
+            name, self._held_wake = self._held_wake, None
+            _LOGGER.info("wake word: %s (held from a detection that arrived mid-task)", name)
+            return name
+
         if timeout is None:
             timeout = WAKE_WAIT_SECONDS
         deadline = asyncio.get_running_loop().time() + timeout
@@ -769,6 +780,19 @@ class VoiceLoop:
         _LOGGER.warning("interruption: run would not accept the text, so it was dropped")
         return "steer_failed"
 
+    def _hold_wake(self, name: str) -> None:
+        """Keep a wake detection that arrived at a moment we could not use it.
+
+        A wake word is the person's only way to be heard. The interruption watcher
+        owns the satellite queue while a task runs, so a wake it cannot act on used
+        to be consumed and discarded: the tone sounded in the room and then nothing
+        at all happened. Hold it instead, and wait_for_wake hands it to the next
+        turn. Only one is kept -- a later wake replaces it, which is the more
+        recent request."""
+        self._held_wake = name
+        _LOGGER.info("wake word %r arrived mid-task and could not be used; "
+                     "keeping it for the next turn", name)
+
     async def _watch_for_interruption(self, state: "InterruptState") -> None:
         """Watch the satellite for a wake word while a task is running, and interrupt it.
 
@@ -811,16 +835,20 @@ class VoiceLoop:
                 _LOGGER.info("interruption: no speech after the wake (%.0fs); "
                              "carrying on with the running task", INTERRUPT_CAPTURE_SECONDS)
                 await self._end_capture()
+                self._hold_wake(name)
                 continue
             if state.done:
+                self._hold_wake(name)
                 return
             if result is None:
                 await self._end_capture()
+                self._hold_wake(name)
                 continue
             transcript = await self.transcribe(result.audio)
             if not transcript:
                 _LOGGER.info("interruption: nothing intelligible after the wake; ignoring")
                 await self._end_capture()
+                self._hold_wake(name)
                 continue
             _LOGGER.info("interruption heard: %s", transcript)
             outcome = await self._handle_interruption(transcript)
