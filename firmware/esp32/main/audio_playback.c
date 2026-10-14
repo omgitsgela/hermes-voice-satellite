@@ -3,6 +3,7 @@
 
 #include "wyoming_audio.h"   /* the amp GPO command encoder + XVF I2C/GPO constants (the audio contract) */
 #include "wyoming_session.h"
+#include "wy_wake.h"
 #include "driver/i2c_master.h"
 #include "driver/i2s_std.h"
 #include "esp_err.h"
@@ -365,6 +366,11 @@ static wy_session *playback_session;
 static void *playback_user;
 static int (*playback_write)(void *, const void *, size_t);
 static int played_reported = 1;   /* nothing to report until a stream is armed */
+/* The done tone is the awake pair descending ("that answer is finished"), and it is queued
+ * through the SAME ring as the answer so the amplifier policy carries it. Rendered once. */
+static int16_t done_tone[5120];
+static size_t done_tone_samples;
+static int done_queued;
 
 void audio_playback_bind(void *session, void *user,
                          int (*write)(void *, const void *, size_t)) {
@@ -444,7 +450,23 @@ static void playback_task_fn(void *argument) {
          * playback flag, so the next answer is reported too. */
         if (wy_session_playback_active(s)) {
             played_reported = 0;
+            done_queued = 0;
         } else if (!played_reported && wy_session_playback_ended(s) &&
+                   wy_session_playback_bytes(s) == 0 && !done_queued) {
+            /* The answer has finished sounding: mark it with the done tone BEFORE saying
+             * `played`, so the bridge's wait ends after the room has heard the closing
+             * gesture too. One tone per answer, never per chunk. */
+            if (!done_tone_samples) {
+                size_t need = wy_done_render(NULL, 0);
+                if (need <= sizeof(done_tone) / sizeof(done_tone[0]))
+                    done_tone_samples = wy_done_render(done_tone, need);
+            }
+            if (done_tone_samples &&
+                wy_session_local_play(s, done_tone, done_tone_samples) == WY_OK) {
+                ESP_LOGI("plb", "done tone queued (%u samples)", (unsigned)done_tone_samples);
+            }
+            done_queued = 1;
+        } else if (!played_reported && done_queued && wy_session_playback_ended(s) &&
                    wy_session_playback_bytes(s) == 0) {
             if (playback_write &&
                 wy_session_send_played(s, playback_write, playback_user) == WY_OK) {

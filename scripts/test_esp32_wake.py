@@ -290,6 +290,51 @@ class WakeCoreTests(unittest.TestCase):
         self.assertEqual(sounds(1, 4096, 100000), 1,
                          'an asserted bridge stream stays authoritative')
 
+    def test_the_chime_matches_the_reference_sound_set(self):
+        """The device must reproduce the reference satellite's awake tone, not merely
+        "a two-note chime". scripts/make_chimes.py is the source of truth: G4 392 Hz
+        for 120 ms, an 18 ms gap, then C5 523 Hz for 170 ms. This reads the note
+        frequencies back out of the rendered samples so a re-tuned constant cannot
+        quietly drift away from the sound people already know."""
+        lib = self.library()
+        lib.wy_chime_render.argtypes = [C.POINTER(C.c_int16), C.c_size_t]
+        lib.wy_chime_render.restype = C.c_size_t
+        need = lib.wy_chime_render(None, 0)
+        buf = (C.c_int16 * need)()
+        got = lib.wy_chime_render(buf, need)
+        self.assertEqual(got, need)
+
+        rate = 16000.0
+
+        def freq_of(start, length):
+            # Zero crossings over a window: cheap and unambiguous for a pure tone.
+            seg = list(buf[start:start + length])
+            crossings = sum(1 for a, b in zip(seg, seg[1:]) if (a >= 0) != (b >= 0))
+            return crossings * rate / (2.0 * length)
+
+        # note 1: 120 ms at 16 kHz, sampled inside its ring (after the 15 ms attack)
+        n1 = int(rate * 0.120)
+        gap = int(rate * 0.018)
+        n2 = int(rate * 0.170)
+        self.assertEqual(n1 + gap + n2, need, 'the layout must be 120 ms + 18 ms + 170 ms')
+        f1 = freq_of(int(rate * 0.030), int(rate * 0.070))
+        f2 = freq_of(n1 + gap + int(rate * 0.030), int(rate * 0.070))
+        self.assertAlmostEqual(f1, 392.0, delta=25.0,
+                               msg='note 1 is G4 (392 Hz), not a re-tuned value')
+        self.assertAlmostEqual(f2, 523.0, delta=25.0,
+                               msg='note 2 is C5 (523 Hz), not a re-tuned value')
+
+    def test_the_done_tone_is_the_same_pair_falling(self):
+        """The done tone is the awake pair reversed: C5 then G4, so the two sound of a
+        piece while still telling you which half of the exchange you are in."""
+        lib = self.library()
+        lib.wy_done_render.argtypes = [C.POINTER(C.c_int16), C.c_size_t]
+        lib.wy_done_render.restype = C.c_size_t
+        lib.wy_chime_render.argtypes = [C.POINTER(C.c_int16), C.c_size_t]
+        lib.wy_chime_render.restype = C.c_size_t
+        self.assertEqual(lib.wy_done_render(None, 0), lib.wy_chime_render(None, 0),
+                         'the pair shares one envelope and length')
+
     def test_the_stall_bound_is_reachable_from_the_glue(self):
         """The bound has to be a real, named value the device glue can use to age
         its queue; a predicate with no bound is not a predicate."""
@@ -480,7 +525,10 @@ class ChimeRenderTests(unittest.TestCase):
         lib = self.library()
         needed = lib.wy_chime_render(None, 0)
         self.assertGreater(needed, 0)
-        self.assertLess(needed, 4096, 'the awake chime is a short tone, < 256 ms')
+        # 4928 samples at 16 kHz = 308 ms, matching the reference sound set exactly
+        # (scripts/make_chimes.py: G4 120 ms + 18 ms gap + C5 170 ms).
+        self.assertEqual(needed, 4928,
+                         'the awake chime must be the reference 308 ms design')
         # The query is repeatable and never writes.
         self.assertEqual(lib.wy_chime_render(None, 0), needed)
 

@@ -132,4 +132,8 @@ bool wy_wake_has_model(const wy_wake *w);
  * needs; otherwise it renders min(cap, needed) samples into `out` and returns the
  * number written. The device glue streams the samples to the I2S TX. */
 size_t wy_chime_render(int16_t *out, size_t cap);
+/* The done tone: "that answer is finished". Same pair as the chime, descending.
+ * Both reproduce the reference satellite's sound set exactly -- see
+ * `scripts/make_chimes.py`, the single source of truth for these tones. */
+size_t wy_done_render(int16_t *out, size_t cap);
 #endif
