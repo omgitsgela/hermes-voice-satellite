@@ -165,6 +165,38 @@ void wy_wake_set_playback_active(wy_wake *w, int active)
     w->playback = active ? 1 : 0;
 }
 
+/* How many 10 ms feed frames a queue may go without shrinking before it counts
+ * as STALLED rather than draining. A live speaker consumes the ring continuously,
+ * so the gap between drains is small even for a full ring; a wedged pump never
+ * advances it at all. */
+#define WY_WAKE_STALL_FRAMES 50u   /* 500 ms with no movement */
+
+uint32_t wy_wake_playback_stall_frames(void)
+{
+    return WY_WAKE_STALL_FRAMES;
+}
+
+/* Is the device's own output still audible to its microphone?
+ *
+ * `active` is the bridge's stream flag; `queued_bytes` is what the ring still
+ * holds; `frames_since_queue_moved` is how many feed frames have passed since the
+ * ring last SHRANK by any amount.
+ *
+ * The second clause used to read `queued_bytes > 0` on its own, and that is the
+ * deadlock: a queue that is filled and never drained keeps the detector deaf for
+ * ever, while the room hears nothing because nothing is playing. Silence and
+ * permanent deafness from one predicate. Whether audio can be heard is a question
+ * about DRAINING, not about the queue being non-empty. */
+int wy_wake_playback_sounds(int active, size_t queued_bytes,
+                            uint32_t frames_since_queue_moved)
+{
+    if (active)
+        return 1;   /* the bridge says it is sending audio: authoritative */
+    if (queued_bytes == 0)
+        return 0;
+    return frames_since_queue_moved < WY_WAKE_STALL_FRAMES;
+}
+
 void wy_wake_stream_ended(wy_wake *w)
 {
     if (w == NULL)

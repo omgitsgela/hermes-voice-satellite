@@ -51,6 +51,14 @@ static struct {
     size_t chime_samples;
     size_t chime_left;      /* sample-time countdown while the tone sounds (self-trigger guard) */
 
+    /* How long the playback queue has gone WITHOUT shrinking. See
+     * wy_wake_playback_sounds: "the queue still holds audio" is not the same as
+     * "the speaker is sounding", and conflating them left this device mute and
+     * deaf at once. */
+    size_t queue_last;      /* queue bytes seen on the previous feed */
+    uint32_t queue_moved;   /* feed frames since the queue last shrank */
+    int queue_stall_logged; /* report each stall episode once, not once per frame */
+
     int prev_streaming;     /* to detect the 1->0 stream-end edge that starts the cooldown */
     /* live-test: one-shot forced detection (D2's force-fire hook). Set from the console task,
      * read/cleared in the capture task -- a single aligned int flag, so `volatile` keeps the
@@ -289,6 +297,9 @@ void wake_detector_start(void *session, void *user,
     wy_wake_set_seams(wd.core, score_frame, model_load, chime_play, wake_fire, NULL);
     wd.prev_streaming = 0;
     wd.chime_left = 0;
+    wd.queue_last = 0;
+    wd.queue_moved = 0;
+    wd.queue_stall_logged = 0;
     wd.core_ready = (wy_wake_init(wd.core, threshold, WAKE_COOLDOWN_MS, word) == 0);
 
     /* The #110 scorer over the bytes init just validated. A model whose
@@ -308,11 +319,23 @@ void wake_detector_feed(const int16_t *mono, size_t n) {
         wd.chime_left = (wd.chime_left > n) ? wd.chime_left - n : 0;
     }
     int streaming = wy_session_streaming(wd.session);
-    /* "The speaker is sounding" is the ring being non-empty (a chime or an answer still
-     * draining) OR the bridge's playback flag: either way the mic can hear the device's own
-     * output, so the detector must be deaf against a self-trigger. */
-    int playing = wy_session_playback_active(wd.session) ||
-                  wy_session_playback_bytes(wd.session) > 0;
+    /* Is our own output audible to our own microphone? NOT simply "the queue is
+     * non-empty". A queue that is filled and never drained is STALLED: nothing is
+     * sounding, so the room is silent and the detector must keep working. The
+     * shared predicate lives in the core so it is host-tested. */
+    int active = wy_session_playback_active(wd.session);
+    size_t queued = wy_session_playback_bytes(wd.session);
+    if (queued < wd.queue_last) { wd.queue_moved = 0; wd.queue_stall_logged = 0; }
+    else if (wd.queue_moved < 0xffffffffu) wd.queue_moved++;
+    wd.queue_last = queued;
+    int playing = wy_wake_playback_sounds(active, queued, wd.queue_moved);
+    if (!playing && queued > 0 && !wd.queue_stall_logged) {
+        /* The exact failure that produced "nothing was audible and no more wakes": say so. */
+        ESP_LOGW("wake", "playback queue stalled: %u bytes idle for %u frames; "
+                 "treating the room as quiet so the detector keeps working",
+                 (unsigned)queued, (unsigned)wd.queue_moved);
+        wd.queue_stall_logged = 1;
+    }
     if (wd.prev_streaming && !streaming) wy_wake_stream_ended(wd.core);   /* 1->0: cooldown */
     wd.prev_streaming = streaming;
     wy_wake_set_streaming(wd.core, streaming);
@@ -349,6 +372,9 @@ void wake_detector_stop(void) {
     wd.scorer_cold = 1;
     wd.prev_streaming = 0;
     wd.chime_left = 0;
+    wd.queue_last = 0;
+    wd.queue_moved = 0;
+    wd.queue_stall_logged = 0;
     wd.force_fire = 0;
     wd.session = NULL;
     wd.user = NULL;

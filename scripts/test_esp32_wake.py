@@ -257,6 +257,46 @@ class WakeCoreTests(unittest.TestCase):
         self.assertEqual(lib.td_get_wake_calls(), 1,
                          'playback over: the same score now fires')
 
+    def test_a_stalled_playback_ring_must_not_deafen_the_detector(self):
+        """THE deadlock: the glue treats "the ring still holds audio" as "the
+        speaker is sounding". A ring that is queued but never drained (the pump
+        wedged, or the chime was queued and nothing played it) then keeps the
+        detector deaf for ever -- and since nothing plays, the room hears nothing
+        too. Both symptoms at once: silence and permanent deafness.
+
+        Whether audio is still audible is a question about DRAINING, not about
+        the ring being non-empty. A ring that has not drained for longer than the
+        bound is a stalled queue, not playback."""
+        lib = self.library()
+        lib.wy_wake_playback_sounds.argtypes = [C.c_int, C.c_size_t, C.c_uint32]
+        lib.wy_wake_playback_sounds.restype = C.c_int
+
+        def sounds(active, queued, since_drained):
+            # Call through the attribute every time: this harness caches attribute
+            # access as separate _FuncPtr objects, so a captured alias can lose
+            # the restype set above.
+            return lib.wy_wake_playback_sounds(active, queued, since_drained)
+
+        # The bridge's stream flag is authoritative while it is asserted.
+        self.assertEqual(sounds(1, 0, 0), 1)
+        # A ring that is draining is audible, whatever the level says.
+        self.assertEqual(sounds(0, 4096, 0), 1)
+        self.assertEqual(sounds(0, 4096, 1), 1)
+        # Nothing queued and nothing active: quiet.
+        self.assertEqual(sounds(0, 0, 0), 0)
+        # THE REGRESSION: a non-empty ring that has not drained for a long time
+        # is STALLED, not playing, and must not deafen anything.
+        self.assertEqual(sounds(0, 4096, 100000), 0)
+        self.assertEqual(sounds(1, 4096, 100000), 1,
+                         'an asserted bridge stream stays authoritative')
+
+    def test_the_stall_bound_is_reachable_from_the_glue(self):
+        """The bound has to be a real, named value the device glue can use to age
+        its queue; a predicate with no bound is not a predicate."""
+        lib = self.library()
+        lib.wy_wake_playback_stall_frames.restype = C.c_uint32
+        self.assertGreater(lib.wy_wake_playback_stall_frames(), 0)
+
     def test_cooldown_after_stream_end_eats_high_frames(self):
         """After stream_ended, the core stays deaf for the configured cooldown
         (milliseconds, counted in 10 ms feed frames: 160 samples = 10 ms).

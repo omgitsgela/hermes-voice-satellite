@@ -97,6 +97,16 @@ void wy_wake_set_streaming(wy_wake *w, int streaming);
  * self-trigger, not a person, and is consumed. The core does not manage this
  * flag itself -- the glue owns it, because only the glue knows how long a
  * rendered sound lasts. */
+/* Is the device's own output still audible to its microphone?
+ * `active` is the bridge's stream flag, `queued_bytes` what the ring still holds,
+ * and `frames_since_queue_moved` how many 10 ms feed frames have passed since the
+ * ring last SHRANK. A queue that has stopped moving is stalled, not playing: it
+ * must not keep the detector deaf. See the definition for why that distinction is
+ * the difference between a working device and one that is silently mute. */
+int wy_wake_playback_sounds(int active, size_t queued_bytes,
+                            uint32_t frames_since_queue_moved);
+uint32_t wy_wake_playback_stall_frames(void);
+
 void wy_wake_set_playback_active(wy_wake *w, int active);
 
 /* The stream stopped (the bridge's transcript or a pause). The core leaves
