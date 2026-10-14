@@ -412,6 +412,17 @@ int __attribute__((used)) wy_session_wake(wy_session *session, const char *wake_
     return WY_OK;
 }
 
+/* Tell the bridge its speaker has finished.
+ *
+ * `played` is the device saying "that answer is done sounding". The bridge waits for
+ * it after every reply, and firmware that never sends it parks the conversation in
+ * that wait -- measured at a full 20 s of dead air after every answer. It is one
+ * control frame under the writer lock, exactly like every other link write. */
+int wy_session_send_played(wy_session *session, wy_write_fn write_fn, void *ctx) {
+    if (!session || !write_fn) return WY_INVALID;
+    return locked_send(session, write_fn, ctx, "played", NULL, NULL, 0);
+}
+
 int wy_session_send_audio(wy_session *session, const void *pcm, size_t length,
                           wy_write_fn write_fn, void *ctx) {
     /* The mic is open only between a wake and the bridge's transcript; outside that window

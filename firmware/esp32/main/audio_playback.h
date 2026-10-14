@@ -20,6 +20,9 @@
  * pump task. Idempotent. Returns 0 when running, -1 when the channel could not be created. The
  * ring is the session's, configured by wy_session_playback_configure. */
 int audio_playback_start(void);
+/* Tell the pump where to report `played`. Refreshed per link, like the capture path. */
+void audio_playback_bind(void *session, void *user,
+                         int (*write)(void *, const void *, size_t));
 
 /* Stop the pump task and release the I2S TX channel. Idempotent: safe to call when nothing is
  * running, and safe to call from the link-down path. The amp is disarmed. */

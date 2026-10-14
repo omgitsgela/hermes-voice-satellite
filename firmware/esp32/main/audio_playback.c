@@ -355,6 +355,24 @@ int audio_playback_amp(int enabled) {
 
 static int pump_logged;
 
+/* Where to report `played`, and whether this answer has already been reported.
+ *
+ * `played` is the device saying its speaker finished. Without it the bridge waits
+ * after every reply for an event that never arrives, which measured as ~20 s of
+ * dead air per turn. The link pointers are refreshed on every bind, exactly like
+ * the capture path: a reconnect hands back the same pump with a new transport. */
+static wy_session *playback_session;
+static void *playback_user;
+static int (*playback_write)(void *, const void *, size_t);
+static int played_reported = 1;   /* nothing to report until a stream is armed */
+
+void audio_playback_bind(void *session, void *user,
+                         int (*write)(void *, const void *, size_t)) {
+    playback_session = (wy_session *)session;
+    playback_user = user;
+    playback_write = write;
+}
+
 /* Bounded retry for a stalled I2S write. Each idle attempt costs PLAYBACK_WRITE_MS plus a 1 ms
  * yield; this many in a row means the channel is genuinely not taking data, and the batch must be
  * abandoned rather than spun on until the task watchdog reboots the device. */
@@ -420,6 +438,22 @@ static void playback_task_fn(void *argument) {
              * auto-clear flags off, that starved DMA replays stale audio instead of silence --
              * which is exactly the choppiness in speech. Amplifier bookkeeping falls through so
              * the keepalive below runs unconditionally. */
+        }
+        /* A stream that has ENDED and a ring that has DRAINED means the speaker is
+         * finished: say so exactly once. Re-armed by the rising edge of the bridge's
+         * playback flag, so the next answer is reported too. */
+        if (wy_session_playback_active(s)) {
+            played_reported = 0;
+        } else if (!played_reported && wy_session_playback_ended(s) &&
+                   wy_session_playback_bytes(s) == 0) {
+            if (playback_write &&
+                wy_session_send_played(s, playback_write, playback_user) == WY_OK) {
+                ESP_LOGI("plb", "played: reported to the gateway");
+            } else {
+                ESP_LOGW("plb", "played: could not be reported (link=%p write=%p)",
+                         playback_user, (const void *)playback_write);
+            }
+            played_reported = 1;
         }
         size_t n = wy_session_playback_read(s, frame, sizeof(frame));   /* bytes, <= sizeof(frame) */
         if (n == 0) {

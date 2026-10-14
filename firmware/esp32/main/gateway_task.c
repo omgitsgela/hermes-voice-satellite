@@ -125,6 +125,14 @@ static int gateway_task_on_registered(void *user) {
         gateway_tls_link_set_deadline(&state.tls_link, GATEWAY_SOCKET_NO_DEADLINE);
     else
         state.tcp_socket.deadline_us = GATEWAY_SOCKET_NO_DEADLINE;
+    /* The pump reports `played` when an answer finishes sounding, so bind it to the
+     * link alongside the capture path. Refreshed every registration: a reconnect
+     * hands back the same tasks with a new transport. */
+    {
+        gw_link link = gateway_supervisor_link(&supervisor);
+        audio_playback_bind(gateway_supervisor_session(&supervisor), link.user,
+                            link.write_fn);
+    }
     audio_playback_start();
     return 0;
 }

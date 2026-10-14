@@ -118,6 +118,10 @@ int wy_session_wake(wy_session *session, const char *wake_word,
  * under the writer lock, so the link never carries two frames at once. Returns INVALID when
  * the stream is not running (the mic is closed and the audio is dropped, exactly like the
  * reference satellite's event_from_mute path). */
+/* Report that playback finished, so the bridge stops waiting on `played`. */
+int wy_session_send_played(wy_session *session,
+                           int (*write_fn)(void *, const void *, size_t), void *ctx);
+
 int wy_session_send_audio(wy_session *session, const void *pcm, size_t length,
                           wy_write_fn write_fn, void *ctx);
 int wy_session_streaming(const wy_session *session);

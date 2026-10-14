@@ -90,6 +90,11 @@ _LOGGER = logging.getLogger("bridge.loop")
 # this a wake is a genuine one no matter what any flag says.
 SELF_TRIGGER_WINDOW_S = 3.0
 
+# How long the assistant may think out loud before it says anything at all before we say
+# "One moment." on its behalf. The reference satellite fills a slow tool call the same way, and
+# a slow first TOKEN deserves it just as much: silence after "Hey Hermes" reads as failure.
+SILENCE_FILLER_SECONDS = 4.0
+
 # Phrases that rotate the session on demand, checked on the normalised transcript.
 NEW_CONVERSATION_PHRASES = (
     "new conversation", "start a new conversation", "start over", "forget that",
@@ -1310,17 +1315,32 @@ class VoiceLoop:
         self._speaking_at = time.monotonic()
         spoken_any = False
 
-        async def fill_silence(_event) -> None:
-            """A tool call costs seconds of silence; say something so it does not feel dead.
+        async def fill_silence(_event=None) -> None:
+            """Silence after "Hey Hermes" reads as failure; say something.
 
-            Only before the first real sentence, and only once: if the model has already begun
-            answering, a lead-in would talk over it.
+            Covers BOTH of the ways a turn goes quiet before it starts: a tool call,
+            and a model that simply takes a while to produce its first token. The
+            reference satellite fills a slow tool call the same way; a slow first
+            token is the same experience from the room and deserves the same answer.
+
+            Only before the first real sentence, and only once: if the model has
+            already begun answering, a lead-in would talk over it.
             """
             nonlocal spoken_any
             if not spoken_any and stats.first_delta_seconds == 0.0:
-                _LOGGER.info("tool call before any speech: filling the silence")
+                _LOGGER.info("nothing spoken yet after %.0fs: filling the silence",
+                             SILENCE_FILLER_SECONDS)
                 await stream.say("One moment.")
                 spoken_any = True
+
+        # The clock-based half of that: a turn that is merely slow to start used to
+        # get nothing, because nothing fired without a tool call.
+        async def _fill_if_still_silent() -> None:
+            await asyncio.sleep(SILENCE_FILLER_SECONDS)
+            await fill_silence()
+
+        filler_guard = asyncio.create_task(_fill_if_still_silent(),
+                                           name="silence-filler")
 
         # Watch for an interruption for as long as the task is running. The satellite keeps
         # listening for its wake word throughout, so a detection arriving here means someone
@@ -1343,6 +1363,7 @@ class VoiceLoop:
                                                     on_tool_started=fill_silence):
                     if stats.first_delta_seconds == 0.0:
                         stats.first_delta_seconds = time.perf_counter() - t_gateway
+                        filler_guard.cancel()   # the model is answering: let it
                     if state.stop_playback:
                         break
                     for piece in buffer.push(delta):
@@ -1385,6 +1406,7 @@ class VoiceLoop:
                               getattr(self.sat, "generation", None))
             raise
         finally:
+            filler_guard.cancel()
             state.done = True
             watcher.cancel()
             try:
