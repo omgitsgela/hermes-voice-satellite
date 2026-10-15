@@ -75,7 +75,27 @@ typedef struct {
      * NULL until wired, where a config frame is drained and the link stays alive. */
     int (*config_handler)(void *config, const char *desired_json, char *report_out, size_t report_cap);
     void *config_user;
-} wy_session;
+    /* The presentation seam. The core announces WHICH PHASE a turn is in and the glue decides
+     * what that looks like -- the core never knows about lights, speakers or colours, so it
+     * stays host-testable and free of device headers. NULL until wired, where a turn simply
+     * announces nothing. */
+    void (*phase_notify)(void *user, int phase);
+    void *phase_user;
+    } wy_session;
+
+    /* The phases a turn moves through, in order. These are meanings, not colours: the device maps
+    * them onto its ring and the reference satellite maps them onto its own LEDs, and the two
+    * agree because they read the same vocabulary. docs/leds.md owns the mapping. */
+    enum {
+    WY_PHASE_LISTENING = 1,  /* the mic is open and the query is being captured */
+    WY_PHASE_TRANSCRIPT,     /* words arrived; the answer is being worked out */
+    WY_PHASE_SPEAKING,       /* the answer is arriving */
+    WY_PHASE_IDLE            /* the turn is over */
+    };
+
+    /* Install the presentation callback. Safe to call before or after init; passing NULL clears it. */
+    void wy_session_set_phase_notify(wy_session *session,
+                                 void (*fn)(void *user, int phase), void *user);
 size_t wy_session_size(void);
 int wy_session_init(wy_session *session, const char *device_id, const char *boot_id);
 /* Set the device identity (name / area / firmware_version / detection name) that the

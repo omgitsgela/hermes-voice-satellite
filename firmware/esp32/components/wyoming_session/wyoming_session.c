@@ -328,6 +328,10 @@ int wy_session_init(wy_session *session, const char *device_id, const char *boot
      * agent's durable state -- the generation guard -- would be orphaned along with it). */
     int (*config_handler)(void *, const char *, char *, size_t) = session->config_handler;
     void *config_user = session->config_user;
+    /* The presentation seam is the same kind of installed-once config: the glue announces it once
+     * and a reconnect must not leave the device unlit for the rest of the boot. */
+    void (*phase_notify)(void *, int) = session->phase_notify;
+    void *phase_user = session->phase_user;
     /* The device identity is the same kind of installed-once config: a reconnect must not
      * forget the satellite's name, area, firmware version or detection name. */
     char name[65], area[65], firmware_version[33], wake_name[65];
@@ -344,6 +348,8 @@ int wy_session_init(wy_session *session, const char *device_id, const char *boot
     session->playback_volume = playback_volume;
     session->config_handler = config_handler;
     session->config_user = config_user;
+    session->phase_notify = phase_notify;
+    session->phase_user = phase_user;
     memcpy(session->name, name, sizeof(name));
     memcpy(session->area, area, sizeof(area));
     memcpy(session->firmware_version, firmware_version, sizeof(firmware_version));
@@ -422,6 +428,22 @@ int __attribute__((used)) wy_session_wake(wy_session *session, const char *wake_
  * it after every reply, and firmware that never sends it parks the conversation in
  * that wait -- measured at a full 20 s of dead air after every answer. It is one
  * control frame under the writer lock, exactly like every other link write. */
+/* Announce a phase to the presentation layer. Called only from wy_session_step -- the LINK task,
+ * never the realtime playback pump -- so a device that lights its ring does so off the audio
+ * path. A missing callback is not an error: the core does not require a presentation. */
+static void announce_phase(wy_session *session, int phase)
+{
+    if (session && session->phase_notify) session->phase_notify(session->phase_user, phase);
+}
+
+void wy_session_set_phase_notify(wy_session *session,
+                                 void (*fn)(void *user, int phase), void *user)
+{
+    if (!session) return;
+    session->phase_notify = fn;
+    session->phase_user = user;
+}
+
 int wy_session_send_played(wy_session *session, wy_write_fn write_fn, void *ctx) {
     if (!session || !write_fn) return WY_INVALID;
     return locked_send(session, write_fn, ctx, "played", NULL, NULL, 0);
@@ -622,6 +644,10 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
             result = WY_INVALID;
         else
             result = stop_streaming(session, write_fn, ctx);
+        /* The utterance has been captured and handed over. From here the bridge is working out
+         * the answer, which is exactly the "thinking" the device should be showing: the gap
+         * between the person stopping talking and the first word coming back. */
+        if (result == WY_OK) announce_phase(session, WY_PHASE_TRANSCRIPT);
     } else if (!strcmp(frame.type, "audio-start")) {
         /* The bridge's answer begins. The device plays the stream on the board's clock: it must
          * be the bridge's SND_FORMAT (22050 Hz / 16-bit / mono) -- the one rate this device
@@ -647,6 +673,8 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
             session->playback_active = 1;
             ESP_LOGW("audstart", "audio-start: playback armed, returning to the link loop");
             session->playback_ended = 0;
+            /* The answer is arriving: stop glowing and start showing that it is being said. */
+            announce_phase(session, WY_PHASE_SPEAKING);
         }
     } else if (!strcmp(frame.type, "audio-chunk")) {
         /* Inbound playback audio: converted into the ring by the payload block above when the
@@ -661,6 +689,11 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
         if (session->playback_active) {
             session->playback_active = 0;
             session->playback_ended = 1;
+            /* Everything the bridge will say has been sent. The ring still drains and the
+             * speaker still sounds its tail, so the light goes dark a moment early -- chosen
+             * deliberately over announcing from the playback pump, which is the realtime path
+             * and must not be made to do I2C work. */
+            announce_phase(session, WY_PHASE_IDLE);
         }
     } else if (!strcmp(frame.type, "wake-now")) {
         /* The bridge's "open the microphone" command, for a follow-up window that has no wake

@@ -544,6 +544,12 @@ int gateway_task_start(const char *host, unsigned port, int transport,
      * re-init exactly like the writer-lock callbacks and the playback ring. */
     gateway_task_set_identity((wy_session *)gateway_supervisor_session(&supervisor));
 
+    /* The presentation seam, installed once like the identity and the writer lock: the session
+     * announces which phase a turn is in and the ring shows it. Survives the supervisor's per-link
+     * re-init because the callback and its user live in the session, not in the link. */
+    wy_session_set_phase_notify((wy_session *)gateway_supervisor_session(&supervisor),
+                                led_status_on_phase, NULL);
+
     /* The playback ring is a device-lifetime PSRAM buffer: the bridge's answers convert into it
      * and the pump reads it at realtime. It is owned here (the file-static playback_ring), not
      * in the session -- a gateway restart frees the old session (the supervisor does it on

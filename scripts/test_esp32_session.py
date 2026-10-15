@@ -406,7 +406,9 @@ class SessionTests(unittest.TestCase):
                         ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
                         ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
                         ('config_handler', C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_char_p, C.c_size_t)),
-                        ('config_user', C.c_void_p)]
+                        ('config_user', C.c_void_p),
+                        ('phase_notify', C.CFUNCTYPE(None, C.c_void_p, C.c_int)),
+                        ('phase_user', C.c_void_p)]
         self.assertEqual(C.sizeof(WYSession), lib.wy_session_size(), 'the host struct must match the production layout')
         session = WYSession()
         self.assertEqual(lib.wy_session_init(C.byref(session), b'control-fixture', b'boot-1'), 0)
@@ -458,7 +460,9 @@ class SessionTests(unittest.TestCase):
                         ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
                         ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
                         ('config_handler', C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_char_p, C.c_size_t)),
-                        ('config_user', C.c_void_p)]
+                        ('config_user', C.c_void_p),
+                        ('phase_notify', C.CFUNCTYPE(None, C.c_void_p, C.c_int)),
+                        ('phase_user', C.c_void_p)]
         self.assertEqual(C.sizeof(WYSession), lib.wy_session_size(), 'the host struct must match the production layout')
         session = WYSession()
         self.assertEqual(lib.wy_session_init(C.byref(session), b'control-fixture', b'boot-1'), 0)
@@ -540,7 +544,9 @@ class SessionTests(unittest.TestCase):
                         ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
                         ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
                         ('config_handler', C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_char_p, C.c_size_t)),
-                        ('config_user', C.c_void_p)]
+                        ('config_user', C.c_void_p),
+                        ('phase_notify', C.CFUNCTYPE(None, C.c_void_p, C.c_int)),
+                        ('phase_user', C.c_void_p)]
         self.assertEqual(C.sizeof(WYSession), lib.wy_session_size(), 'host struct must match the production layout')
         session = WYSession()
         self.assertEqual(lib.wy_session_init(C.byref(session), b'control-fixture', b'boot-1'), 0)
@@ -591,7 +597,9 @@ class SessionTests(unittest.TestCase):
                         ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
                         ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
                         ('config_handler', C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_char_p, C.c_size_t)),
-                        ('config_user', C.c_void_p)]
+                        ('config_user', C.c_void_p),
+                        ('phase_notify', C.CFUNCTYPE(None, C.c_void_p, C.c_int)),
+                        ('phase_user', C.c_void_p)]
         session = WYSession()
         lib.wy_session_init(C.byref(session), b'cf', b'b1')
         ring = (C.c_int32 * 4096)()
@@ -1221,7 +1229,9 @@ class SessionTests(unittest.TestCase):
                         ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
                         ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
                         ('config_handler', C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_char_p, C.c_size_t)),
-                        ('config_user', C.c_void_p)]
+                        ('config_user', C.c_void_p),
+                        ('phase_notify', C.CFUNCTYPE(None, C.c_void_p, C.c_int)),
+                        ('phase_user', C.c_void_p)]
         self.assertEqual(C.sizeof(WYSession), lib.wy_session_size(), 'the host struct must match the production layout')
         session = WYSession()
         self.assertEqual(lib.wy_session_init(C.byref(session), b'control-fixture', b'boot-1'), 0)
@@ -1372,7 +1382,9 @@ class SessionTests(unittest.TestCase):
                         ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
                         ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
                         ('config_handler', C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_char_p, C.c_size_t)),
-                        ('config_user', C.c_void_p)]
+                        ('config_user', C.c_void_p),
+                        ('phase_notify', C.CFUNCTYPE(None, C.c_void_p, C.c_int)),
+                        ('phase_user', C.c_void_p)]
         self.assertEqual(C.sizeof(WYSession), lib.wy_session_size(),
                          'the ctypes WYSession mirror no longer matches the C struct size. '
                          'Update the mirrors and WYResampler to the current wyoming_session.h.')

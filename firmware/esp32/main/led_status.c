@@ -14,6 +14,7 @@
 
 #include "audio_playback.h"
 #include "wy_led.h"
+#include "wyoming_session.h"
 
 static const char *TAG = "led";
 
@@ -173,6 +174,20 @@ int led_status_set_brightness(unsigned level_1_31)
     if (!started) return -1;
     led_take(); led_advance_locked(); rc = wy_led_set_brightness(led, level_1_31); led_give();
     return rc;
+}
+
+void led_status_on_phase(void *user, int phase)
+{
+    (void)user;
+    /* The session says WHAT is happening; this decides what it looks like. Mapping lives here so
+     * the core stays free of colours and the session core stays free of lights. */
+    switch (phase) {
+    case WY_PHASE_LISTENING:  (void)led_status_listening(); break;
+    case WY_PHASE_TRANSCRIPT: (void)led_status_thinking();  break;
+    case WY_PHASE_SPEAKING:   (void)led_status_speaking();  break;
+    case WY_PHASE_IDLE:       (void)led_status_idle();      break;
+    default: break;   /* a phase this build does not know is not a fault */
+    }
 }
 
 int led_status_start(void)

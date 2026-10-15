@@ -75,12 +75,28 @@ what is not matters when you are reading the lights:
 |---|---|
 | Boot, Ready, Reconnect, Trouble connecting | **live** |
 | Wake sweep, Listening (direction) | **live** |
-| Voice started, Transcript, Thinking, Speaking, Follow-up, Idle, Error | **not yet** |
+| Transcript (the thinking glow), Speaking, Idle | **live** |
+| Voice started, Follow-up, Error | not yet |
 
-The unwired ones need an injected phase callback at the session boundary, so the Wyoming session can
-announce "a transcript arrived" and "the answer is being worked out" without the host-testable core
-depending on ESP headers. Until that exists, a query will show the sweep and the direction marker
-and then go dark, and the violet thinking glow will not appear.
+A turn therefore reads: rainbow sweep for the length of the ding, the bright marker sitting on
+whoever is talking, a **violet glow while the answer is worked out**, violet while it is said, then
+dark.
+
+The wiring runs through an injected callback at the session boundary (`wy_session_set_phase_notify`).
+The Wyoming session announces *which phase* a turn is in and the glue decides what that looks like,
+so the core never learns about colours and the session core never learns about lights. That matters:
+both stay host-testable, and `scripts/test_esp32_phase.py` asserts the exact sequence a turn hands
+over, including that thinking is announced **before** the answer starts. A glow that appeared after
+the first word would claim the device is thinking while it is talking.
+
+Three phases are still unwired and are not shown today: **Voice started**, **Follow-up** and
+**Error**. They have no device-side event yet; the bridge's own `led-busy` / `led-idle` /
+`led-followup` hooks are the Raspberry Pi's command path and do not reach this device.
+
+**One honest caveat on the tail.** Idle is announced at `audio-stop`, when the bridge stops sending,
+not when the speaker falls silent: the playback ring still has to drain. The light therefore goes
+dark a moment before the audio does. Announcing from the playback pump would be exact but would put
+I2C work back on the realtime audio path, which was deliberately removed.
 
 ## What the hardware can and cannot do
 

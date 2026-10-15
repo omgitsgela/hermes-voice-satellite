@@ -38,6 +38,11 @@ int led_status_set_brightness(unsigned level_1_31);
  * wake path. Returns 0 on success. The auto-selected beam (index 3) is the one the ring follows. */
 int led_status_read_doa(float *radians_out);
 
+/* The presentation callback for the Wyoming session's phase announcements (WY_PHASE_*). Installed
+ * once by the gateway task; the session core calls it from the link task, never from the realtime
+ * playback pump. An unknown phase is ignored rather than treated as an error. */
+void led_status_on_phase(void *user, int phase);
+
 #ifdef __cplusplus
 }
 #endif
