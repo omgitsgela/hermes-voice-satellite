@@ -1,4 +1,5 @@
 #include "gateway_task.h"
+#include "led_status.h"
 #include "gateway_supervisor.h"
 #include "gateway_tls.h"
 #include "gateway_socket.h"
@@ -112,6 +113,10 @@ static int gateway_task_establish(void *user, gw_link *link) {
     return 0;
 }
 
+/* Whether this boot has ever reached the host. Decides green-once versus silent-reconnect; see
+ * docs/leds.md. Declared here because both the registration and the link-down hooks read it. */
+static int led_have_connected;
+
 /* Called by the supervisor exactly when a session (re)reaches registered: the handshake regime
  * is over, the idle regime begins, and an idle read is the healthy state. Lifting the deadline
  * to "no deadline" is what makes the persistent read block until a real end of stream instead of
@@ -121,6 +126,9 @@ static int gateway_task_establish(void *user, gw_link *link) {
  * re-registration after a link bounce (which stopped the pump in on_link_down) starts it again. */
 static int gateway_task_on_registered(void *user) {
     (void)user;
+    /* The green ready flash on the first connection of a boot; silent on any reconnect. */
+    led_status_connected(!led_have_connected);
+    led_have_connected = 1;
     if (state.transport == PROVISION_TRANSPORT_TLS)
         gateway_tls_link_set_deadline(&state.tls_link, GATEWAY_SOCKET_NO_DEADLINE);
     else
@@ -310,6 +318,8 @@ static void gateway_task_on_link_down(void *user) {
      * by peer"). This path is reached at the exact moment a voice reply should arrive, and until
      * now it has been silent. */
     ESP_LOGW("gwlink", "on_link_down: the gateway link is going away (user=%p)", user);
+    led_have_connected = 0;
+    led_status_disconnected();   /* red only if it stays away: see docs/leds.md */
     (void)user;
     audio_capture_stop();
     audio_playback_stop();
@@ -481,6 +491,11 @@ int gateway_task_start(const char *host, unsigned port, int transport,
                        const char *ssid, const char *psk, char *report, size_t capacity) {
     if (active) return -1;  /* one gateway session at a time */
     if (!host || !host[0] || !ssid || !ssid[0]) return -1;
+
+    /* The ring says "starting up" before anything else can fail, and keeps saying it until the
+     * host connects. A device with power and no network should be visibly alive, not dark. */
+    if (led_status_start() == 0) (void)led_status_boot();
+    led_have_connected = 0;
 
     if (device_identity(state.device_id, sizeof(state.device_id),
                         state.boot_id, sizeof(state.boot_id)) != 0) return -1;

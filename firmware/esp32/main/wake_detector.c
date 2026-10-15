@@ -1,4 +1,5 @@
 #include "wake_detector.h"
+#include "led_status.h"
 
 #include "wy_model.h"
 #include "wy_mww_scorer.h"
@@ -234,6 +235,10 @@ static int chime_play(void *user) {
     }
     ESP_LOGI("plb_chime", "chime_play: %u samples queued", (unsigned)wd.chime_samples);
     wd.chime_left = wd.chime_samples;
+    /* The ring sweeps while the activation tone rings, then points at the speaker on its own.
+     * Queued here rather than at the wake itself so the lights and the ding are simultaneous --
+     * a light show that leads or trails its tone reads as a different event entirely. */
+    (void)led_status_wake();
     return 0;
 }
 

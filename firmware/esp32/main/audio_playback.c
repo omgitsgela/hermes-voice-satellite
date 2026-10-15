@@ -1,4 +1,5 @@
 #include "audio_playback.h"
+#include "led_status.h"
 #include "driver/gpio.h"
 
 #include "wyoming_audio.h"   /* the amp GPO command encoder + XVF I2C/GPO constants (the audio contract) */
@@ -200,6 +201,39 @@ int audio_xvf_write(uint8_t resid, uint8_t cmd, const uint8_t *params, size_t np
     return xvf_control_write_at(XVF_I2C_ADDRESS, buf, 3 + nparams, "xvf write");
 }
 
+/* Read an arbitrary XVF3800 control register. The caller sends the command bytes already
+ * marked as a read (cmd | 0x80) and sized; the reply is [status, ...data]. This is the same
+ * shape the bring-up probe uses for VERSION, which is the verified part of the pattern. Used
+ * for the direction-of-arrival telemetry the LED ring follows. */
+int audio_xvf_read(const uint8_t *cmd, size_t cmdlen, uint8_t *reply, size_t replylen) {
+    if (!cmd || !reply || cmdlen == 0 || replylen == 0 || replylen > 32) return -1;
+    i2c_master_bus_handle_t bus = NULL;
+    i2c_master_bus_config_t bus_cfg = {
+        .i2c_port = (i2c_port_num_t)-1,
+        .sda_io_num = XVF_I2C_SDA_PIN,
+        .scl_io_num = XVF_I2C_SCL_PIN,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+    esp_err_t rc = i2c_new_master_bus(&bus_cfg, &bus);
+    if (rc != ESP_OK) return -(int)rc;
+    i2c_master_dev_handle_t dev = NULL;
+    i2c_device_config_t dev_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = XVF_I2C_ADDRESS,
+        .scl_speed_hz = XVF_I2C_SCL_HZ,
+        .flags.disable_ack_check = false,
+    };
+    rc = i2c_master_bus_add_device(bus, &dev_cfg, &dev);
+    if (rc == ESP_OK) {
+        rc = i2c_master_transmit_receive(dev, cmd, cmdlen, reply, replylen, 200);
+        i2c_master_bus_rm_device(dev);
+    }
+    i2c_del_master_bus(bus);
+    return rc == ESP_OK ? 0 : -(int)rc;
+}
+
 int audio_xvf_route_output(int right, int category, int source) {
     uint8_t cmd[XVF_I2C_GPO_CMD_LEN];
     wy_output_route_command(cmd, right, category, source);
@@ -315,6 +349,10 @@ int audio_playback_amp(int enabled) {
      * the link is left alone. */
     uint8_t cmd[XVF_I2C_GPO_CMD_LEN];
     wy_amp_gpo_command(cmd, enabled);
+    /* The ring follows the speaker: bright while the answer sounds, dark when it stops. This
+     * transition happens at most twice per answer, so the extra control writes are
+     * proportionate -- and the lights and the sound change together. */
+    if (enabled) led_status_speaking(); else led_status_idle();
     i2c_master_bus_handle_t bus = NULL;
     i2c_master_bus_config_t bus_cfg = {
         .i2c_port = (i2c_port_num_t)-1,
