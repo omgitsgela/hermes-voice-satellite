@@ -284,6 +284,7 @@ int audio_dac_write(uint8_t reg, uint8_t value) {
 
 int audio_dac_read(uint8_t reg, uint8_t *value) {
     if (!value) return -1;
+    i2c_bus_take();   /* the codec is on the same pins as the amp, the LEDs and the XVF */
     i2c_master_bus_handle_t bus = NULL;
     i2c_master_bus_config_t bus_cfg = {
         .i2c_port = (i2c_port_num_t)-1,
@@ -294,7 +295,7 @@ int audio_dac_read(uint8_t reg, uint8_t *value) {
         .flags.enable_internal_pullup = true,
     };
     esp_err_t rc = i2c_new_master_bus(&bus_cfg, &bus);
-    if (rc != ESP_OK) return -(int)rc;
+    if (rc != ESP_OK) { i2c_bus_give(); return -(int)rc; }
     i2c_master_dev_handle_t dev = NULL;
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
@@ -306,6 +307,7 @@ int audio_dac_read(uint8_t reg, uint8_t *value) {
     if (rc == ESP_OK) rc = i2c_master_transmit_receive(dev, &reg, 1, value, 1, 200);
     i2c_master_bus_rm_device(dev);
     i2c_del_master_bus(bus);
+    i2c_bus_give();
     return rc == ESP_OK ? 0 : -(int)rc;
 }
 
@@ -378,6 +380,7 @@ int audio_playback_amp(int enabled) {
      * it blocked the audio pump on three extra I2C transactions, and it overwrote the wake
      * sweep, because the activation chime uses this same amplifier. The chime's amp edges are
      * not speech, and they must not be presented as though they were. */
+    i2c_bus_take();
     i2c_master_bus_handle_t bus = NULL;
     i2c_master_bus_config_t bus_cfg = {
         .i2c_port = (i2c_port_num_t)-1,
@@ -394,6 +397,7 @@ int audio_playback_amp(int enabled) {
     if (rc != ESP_OK) {
         ESP_LOGW("plb_amp", "amp %d: i2c_new_master_bus failed %d (sda=%d scl=%d)",
                  enabled, (int)rc, (int)XVF_I2C_SDA_PIN, (int)XVF_I2C_SCL_PIN);
+        i2c_bus_give();
         return (int)rc;
     }
     i2c_master_dev_handle_t dev = NULL;
@@ -414,8 +418,9 @@ int audio_playback_amp(int enabled) {
     }
     i2c_master_bus_rm_device(dev);
     i2c_del_master_bus(bus);
+    i2c_bus_give();
     return (int)rc;
-}
+    }
 
 static int pump_logged;
 

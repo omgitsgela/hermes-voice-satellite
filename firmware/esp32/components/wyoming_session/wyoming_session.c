@@ -475,8 +475,12 @@ int wy_session_send_audio(wy_session *session, const void *pcm, size_t length,
                  "(the host stopped driving this utterance)",
                  (unsigned)session->stream_frames);
         (void)stop_streaming(session, write_fn, ctx);
+        /* A stream that ends without a transcript still ends. Without this the ring is left
+         * showing a query that is not happening -- a false wake with no speech would leave the
+         * direction marker lit for the rest of the boot. */
+        announce_phase(session, WY_PHASE_IDLE);
         return WY_INVALID;
-    }
+        }
     if (length == 0 || length > WY_AUDIO_CHUNK_SAMPLES * 2 || length % 2) return WY_INVALID;
     int lock_result = writer_lock(session);
     if (lock_result != WY_OK) return lock_result;
@@ -627,20 +631,26 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
         else {
             /* The reference stops a running stream on run-satellite too (it is "back to
              * wake-word listening"), and clears a pause. */
+            int was_streaming = session->streaming;
             if (session->streaming) result = stop_streaming(session, write_fn, ctx);
             if (!result) {
                 session->paused = 0;
                 session->state = WY_SESSION_RUN_REQUESTED;
+                /* The bridge closes a silent window this way: "back to wake-word listening". A
+                 * wake that heard nothing must not leave the ring claiming a query. */
+                if (was_streaming) announce_phase(session, WY_PHASE_IDLE);
             }
         }
     } else if (!strcmp(frame.type, "pause-satellite")) {
         if (session->state != WY_SESSION_REGISTERED && session->state != WY_SESSION_RUN_REQUESTED)
             result = WY_INVALID;
         else {
+            int was_streaming = session->streaming;
             if (session->streaming) result = stop_streaming(session, write_fn, ctx);
             if (!result) {
                 session->paused = 1;
                 session->state = WY_SESSION_REGISTERED;
+                if (was_streaming) announce_phase(session, WY_PHASE_IDLE);
             }
         }
     } else if (!strcmp(frame.type, "transcript")) {
@@ -716,6 +726,15 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
          * This is the moment the reference satellite shows its dim teal, and it is the only
          * signal the device has that the conversation is not over. */
         announce_phase(session, WY_PHASE_FOLLOWUP);
+    } else if (!strcmp(frame.type, "led-idle") || !strcmp(frame.type, "led-busy") ||
+               !strcmp(frame.type, "led-followup")) {
+        /* The bridge's explicit presentation commands. The reference satellite receives these
+         * over its own control socket; here they arrive as ordinary events. They matter because
+         * the bridge uses led-idle to clean up after aborted work and an expired follow-up --
+         * exactly the cases the device cannot work out for itself. */
+        if (!strcmp(frame.type, "led-idle")) announce_phase(session, WY_PHASE_IDLE);
+        else if (!strcmp(frame.type, "led-busy")) announce_phase(session, WY_PHASE_TRANSCRIPT);
+        else announce_phase(session, WY_PHASE_FOLLOWUP);
     } else if (!strcmp(frame.type, "hermes.config.desired")) {
         /* The bridge's declarative config dispatch, sent right after registration (and on
          * reconnect). The session is only the transport: it NUL-terminates the decoded data

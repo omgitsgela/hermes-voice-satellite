@@ -389,7 +389,7 @@ class SessionTests(unittest.TestCase):
         lib = self.library()
         WY_HEADER_MAX, WY_DATA_MAX = 1024, 4096
         class WYSession(C.Structure):
-            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
+            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('stream_frames', C.c_uint32), ('paused', C.c_int),
                         ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
                         ('name', C.c_char * 65),
                         ('area', C.c_char * 65),
@@ -397,7 +397,7 @@ class SessionTests(unittest.TestCase):
                         ('wake_name', C.c_char * 65),
                         ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
                         ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
-                        ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
+                        ('unlock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
                         ('writer_lock_user', C.c_void_p),
                         ('playback_active', C.c_int), ('playback_ended', C.c_int),
                         ('playback_volume', C.c_int), ('playback_rate', C.c_int),
@@ -418,9 +418,9 @@ class SessionTests(unittest.TestCase):
         def acquire(user):
             acquired[0] += 1
             return 0
-        @C.CFUNCTYPE(None, C.c_void_p)
+        @C.CFUNCTYPE(C.c_int, C.c_void_p)
         def release(user):
-            pass
+            return 0
         session.lock_writer = acquire
         session.unlock_writer = release
         # Re-init, exactly as the supervisor does on a reconnect: the lock must survive.
@@ -443,7 +443,7 @@ class SessionTests(unittest.TestCase):
         lib = self.library()
         WY_HEADER_MAX, WY_DATA_MAX = 1024, 4096
         class WYSession(C.Structure):
-            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
+            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('stream_frames', C.c_uint32), ('paused', C.c_int),
                         ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
                         ('name', C.c_char * 65),
                         ('area', C.c_char * 65),
@@ -451,7 +451,7 @@ class SessionTests(unittest.TestCase):
                         ('wake_name', C.c_char * 65),
                         ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
                         ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
-                        ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
+                        ('unlock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
                         ('writer_lock_user', C.c_void_p),
                         ('playback_active', C.c_int), ('playback_ended', C.c_int),
                         ('playback_volume', C.c_int), ('playback_rate', C.c_int),
@@ -527,7 +527,7 @@ class SessionTests(unittest.TestCase):
         lib = self.library()
         WY_HEADER_MAX, WY_DATA_MAX = 1024, 4096
         class WYSession(C.Structure):
-            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
+            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('stream_frames', C.c_uint32), ('paused', C.c_int),
                         ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
                         ('name', C.c_char * 65),
                         ('area', C.c_char * 65),
@@ -535,7 +535,7 @@ class SessionTests(unittest.TestCase):
                         ('wake_name', C.c_char * 65),
                         ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
                         ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
-                        ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
+                        ('unlock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
                         ('writer_lock_user', C.c_void_p),
                         ('playback_active', C.c_int), ('playback_ended', C.c_int),
                         ('playback_volume', C.c_int), ('playback_rate', C.c_int),
@@ -580,7 +580,7 @@ class SessionTests(unittest.TestCase):
         lib = self.library()
         WY_HEADER_MAX, WY_DATA_MAX = 1024, 4096
         class WYSession(C.Structure):
-            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
+            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('stream_frames', C.c_uint32), ('paused', C.c_int),
                         ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
                         ('name', C.c_char * 65),
                         ('area', C.c_char * 65),
@@ -588,7 +588,7 @@ class SessionTests(unittest.TestCase):
                         ('wake_name', C.c_char * 65),
                         ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
                         ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
-                        ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
+                        ('unlock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
                         ('writer_lock_user', C.c_void_p),
                         ('playback_active', C.c_int), ('playback_ended', C.c_int),
                         ('playback_volume', C.c_int), ('playback_rate', C.c_int),
@@ -1212,7 +1212,7 @@ class SessionTests(unittest.TestCase):
         lib.wy_session_set_playback_volume.restype = C.c_int
         WY_HEADER_MAX, WY_DATA_MAX = 1024, 4096
         class WYSession(C.Structure):
-            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
+            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('stream_frames', C.c_uint32), ('paused', C.c_int),
                         ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
                         ('name', C.c_char * 65),
                         ('area', C.c_char * 65),
@@ -1220,7 +1220,7 @@ class SessionTests(unittest.TestCase):
                         ('wake_name', C.c_char * 65),
                         ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
                         ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
-                        ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
+                        ('unlock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
                         ('writer_lock_user', C.c_void_p),
                         ('playback_active', C.c_int), ('playback_ended', C.c_int),
                         ('playback_volume', C.c_int), ('playback_rate', C.c_int),
@@ -1366,14 +1366,14 @@ class SessionTests(unittest.TestCase):
         # Mirrors are declared per test method; rebuild the smallest complete one here so this
         # guard does not depend on another test having run.
         class WYSession(C.Structure):
-            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
+            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('stream_frames', C.c_uint32), ('paused', C.c_int),
                         ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
                         ('name', C.c_char * 65),
                         ('area', C.c_char * 65), ('firmware_version', C.c_char * 33),
                         ('wake_name', C.c_char * 65),
                         ('header', C.c_char * 1024), ('body', C.c_char * 4097),
                         ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
-                        ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
+                        ('unlock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
                         ('writer_lock_user', C.c_void_p),
                         ('playback_active', C.c_int), ('playback_ended', C.c_int),
                         ('playback_volume', C.c_int), ('playback_rate', C.c_int),

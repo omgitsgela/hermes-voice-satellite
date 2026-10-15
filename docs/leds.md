@@ -16,23 +16,35 @@ change it in all three places: here, `wy_led.h`, and `pi/2mic_service.py`.
 | **Boot** | white | breath (pulse) | until the host connects | "I am alive and starting up" |
 | **Ready** | green | single, ×3 flash | 3 × 0.3 s on / 0.3 s off | first connection of this boot: "I am ready" |
 | **Reconnect** | black | off | — | a reconnect is silent |
+| **Wake** | rainbow | rainbow (circular sweep) | 400 ms | "I heard you" |
+| **Voice started** | yellow | single | 500 ms | the microphone is open |
+| **Listening** | black ring + white marker | **direction of arrival** | while the query runs | the bright point is where the person is |
+| **Thinking** | violet (150, 70, 255) | breath (glow) | while the answer is worked out | "I am thinking" |
+| **Speaking** | violet (150, 70, 255) | single | while the answer plays | the answer is audible |
+| **Follow-up** | dim teal (0, 64, 64) | single | until the window closes | keep talking, no wake word needed |
+| **Idle** | black | off | — | nothing is happening |
 | **Trouble connecting** | red | single | until it reconnects | the link is genuinely gone |
+| **Error** | red | single | until the host reconnects | something is actually wrong |
+
+There is no separate "Transcript" look: on the reference satellite a transcript briefly shows green
+and then the working glow begins, while here the arrival of the transcript **is** what starts the
+thinking glow. The green one-second flash exists in the core (`wy_led_transcript`) but the live
+mapping goes straight to the glow, because a beat of green between the marker and the violet reads
+as noise rather than as progress.
 
 A disconnect goes **dark immediately**. Whatever the ring was showing — speech, a flash, the ready
 handshake — was about a session that no longer exists, and leaving it lit would claim otherwise for
 the whole grace period. Red then appears only if the outage survives the 30 seconds.
-| **Wake** | rainbow | rainbow (circular sweep) | the length of the activation tone | "I heard you" |
-| **Voice started** | yellow | single | 0.5 s | the microphone is open |
-| **Listening** | black ring + white marker | **direction of arrival** | while the query runs | the bright point is where the person is |
-| **Follow-up** | dim teal (0, 64, 64) | single | until the window closes | keep talking, no wake word needed |
-| **Error** | red | single | until cleared | something is actually wrong |
-| **Voice started** | yellow | single | until the next phase | the microphone is open |
-| **Transcript** | green | single | 1 s | words arrived |
-| **Thinking** | violet (150, 70, 255) | breath (glow) | while the answer is worked out | "I am thinking" |
-| **Speaking** | violet (150, 70, 255) | single | while the answer plays | the answer is audible |
-| **Follow-up** | dim teal (0, 64, 64) | single | until the window closes | waiting for you to keep talking |
-| **Idle** | black | off | — | nothing is happening |
-| **Error** | red | single | until cleared | something is actually wrong |
+
+**Red, once earned, is not replaced.** Only a reconnect releases it. A stray idle arriving after
+the outage has gone red used to blank the one message the device was trying to send, so the room
+read "everything is fine" while the link had been dead for minutes. A repeated disconnect does not
+restart the 30-second clock either — the supervisor notifies twice and a retry loop notifies many
+times, and each used to push the red further into the future.
+
+**Error is not an outage.** Red at once says "the host said no"; red after 30 s says "I cannot
+reach it". A refusal is followed almost immediately by ordinary disconnect handling, and that used
+to overwrite the more important message with darkness.
 
 ## The two behaviours worth getting right
 
@@ -55,9 +67,16 @@ arrival**. The XMOS computes the direction itself, from the four-microphone arra
 effect centres its bright marker on the *auto-selected beam* — the direction it has decided speech
 is coming from. So "point at the person who is talking" needs no angle maths of our own.
 
-On activation the ring sweeps a rainbow for as long as the ding rings, then settles into direction
-mode on its own. That sequence — sweep during the tone, point during the query — is the whole
+On activation the ring runs **one animation of three stages**: a rainbow sweep for as long as the
+ding rings (400 ms), a yellow "the microphone is open" beat (500 ms), then the direction marker for
+the query. Sweep during the tone, acknowledge, point at the person — that progression is the whole
 design intent.
+
+The three stages are chained from `wy_led_wake()` rather than driven by three callers, because the
+session announces "the microphone opened" at almost the same instant the animation starts. A naive
+handler truncates the rainbow every single time. That announcement is accepted and politely ignored
+while the chain runs, and it is genuinely needed when a stream opens with **no** wake animation at
+all (a bridge-driven `wake-now`), where it is the only thing that shows.
 
 **The sweep is measured from the moment the tone is queued, not from the moment it is heard.** The
 playback pump has to prime its DMA and settle the amplifier first, which typically costs 50–150 ms,
@@ -70,9 +89,6 @@ auto-selected, in radians), and `led_status_read_doa()` exposes the auto-selecte
 diagnostics.
 
 ## Which phases are live today
-
-The vocabulary is complete and the core implements every phase. What is wired to a real event and
-what is not matters when you are reading the lights:
 
 **Every phase is wired.** This is full parity with the reference satellite: there is no light that
 one device can show and the other cannot.
@@ -99,9 +115,13 @@ both stay host-testable, and `scripts/test_esp32_phase.py` asserts the exact seq
 over, including that thinking is announced **before** the answer starts. A glow that appeared after
 the first word would claim the device is thinking while it is talking.
 
-Three phases are still unwired and are not shown today: **Voice started**, **Follow-up** and
-**Error**. They have no device-side event yet; the bridge's own `led-busy` / `led-idle` /
-`led-followup` hooks are the Raspberry Pi's command path and do not reach this device.
+The bridge's own `led-busy` / `led-idle` / `led-followup` commands are honoured too. `led-idle` in
+particular is how the bridge cleans up after aborted work and an expired follow-up window, which is
+exactly what the device cannot work out for itself: a silent window closed by `run-satellite` now
+goes dark instead of leaving the direction marker lit for a query that is not happening.
+
+`WY_PHASE_LISTENING` is the one phase the session does not announce — the wake animation reaches it
+on its own, and `scripts/test_esp32_led.py` covers that transition instead.
 
 **One honest caveat on the tail.** Idle is announced at `audio-stop`, when the bridge stops sending,
 not when the speaker falls silent: the playback ring still has to drain. The light therefore goes

@@ -36,6 +36,8 @@ struct wy_led {
      * presentation that happens to occur while it runs. */
     uint32_t outage_ms;      /* >0 while a disconnect is waiting out its grace period */
     int outage;              /* 1 while the link is down, whatever the ring is showing */
+    int outage_red;          /* the grace expired: red is showing FOR THE OUTAGE */
+    int error_latch;         /* a definite fault is showing: red until the host reconnects */
 };
 
 size_t wy_led_size(void) { return sizeof(struct wy_led); }
@@ -97,6 +99,12 @@ static int set_speed(wy_led *led, uint8_t speed)
 /* --- whole looks --- */
 
 static void enter(wy_led *led, unsigned state) { led->state = state; }
+
+/* True while the ring is showing red for a reason nothing else may overwrite: a real outage whose
+ * grace has expired, or a definite fault. Only a reconnect releases it. Without this, a stray
+ * idle arriving after the red was earned would blank the one message the device is trying to
+ * send, and the room would read "everything is fine" while the link has been dead for minutes. */
+static int red_owns(const wy_led *led) { return led && (led->outage_red || led->error_latch); }
 
 static int show_off(wy_led *led)
 {
@@ -172,6 +180,7 @@ int wy_led_boot(wy_led *led)
 {
     int rc = 0;
     if (!led) return -1;
+    if (red_owns(led)) return 0;   /* red is already saying something more important */
     /* Once per boot, and it ENDS when the host connects -- that is the moment the device is
      * genuinely ready, and a light show that outlives its welcome is just noise. The caller
      * reaches this once per boot by construction: the state lives in RAM. */
@@ -184,10 +193,12 @@ int wy_led_connected(wy_led *led, int first_this_boot)
 {
     int rc = 0;
     if (!led) return -1;
-    /* A reconnect cancels the outage before anything else is shown: the grace countdown is
-     * abandoned, so the red it would eventually have shown never appears. */
+    /* A reconnect is the ONLY thing that releases a red. The outage is over and any latched
+     * refusal is answered by the fact that we are now connected. */
     led->outage = 0;
     led->outage_ms = 0;
+    led->outage_red = 0;
+    led->error_latch = 0;
     led->act = ACT_NONE;
     if (!first_this_boot) {
         /* Silent. Going dark here also stops a restart inside the startup window from leaving the
@@ -214,15 +225,24 @@ int wy_led_disconnected(wy_led *led)
      * handshake -- was about a session that no longer exists, and leaving it lit would claim
      * otherwise for the whole grace period. The countdown itself lives in the outage slot, so
      * this OFF cannot cancel it the way a presentation action used to. */
+    if (red_owns(led)) return 0;   /* red is already saying something more important */
     int rc = show_off(led);
-    led->outage = 1;
-    led->outage_ms = WY_LED_DISCONNECT_GRACE_MS;
+    /* IDEMPOTENT: only the transition INTO an outage starts the countdown. A supervisor that
+     * notifies twice (the TLS teardown does), or a registration retry that fails repeatedly, used
+     * to reset the 30 s every time and push the red into the future indefinitely -- so a device
+     * that had been offline for minutes stayed dark. A second notification must not restart a
+     * clock that has been running, nor blank a red that has already been earned. */
+    if (!led->outage) {
+        led->outage = 1;
+        led->outage_ms = WY_LED_DISCONNECT_GRACE_MS;
+    }
     return rc;
 }
 
 int wy_led_wake(wy_led *led)
 {
     if (!led) return -1;
+    if (red_owns(led)) return 0;   /* red is already saying something more important */
     /* One animation, three stages, driven entirely from here so the pieces cannot race each
      * other: rainbow for the length of the activation tone, a yellow "I hear you" beat while the
      * microphone opens, then the direction marker for the query. The session announcing voice
@@ -238,12 +258,14 @@ int wy_led_wake(wy_led *led)
 int wy_led_listening(wy_led *led)
 {
     if (!led) return -1;
+    if (red_owns(led)) return 0;   /* red is already saying something more important */
     return show_doa(led, WY_LED_STATE_LISTENING, 1);
 }
 
 int wy_led_voice_started(wy_led *led)
 {
     if (!led) return -1;
+    if (red_owns(led)) return 0;   /* red is already saying something more important */
     /* The wake animation already owns this moment and will arrive here on its own. A session
      * that announces "the microphone opened" while the sweep or the beat is running would restart
      * the chain and could truncate the rainbow, so it is politely ignored: the lights are one
@@ -260,6 +282,7 @@ int wy_led_voice_started(wy_led *led)
 int wy_led_transcript(wy_led *led)
 {
     if (!led) return -1;
+    if (red_owns(led)) return 0;   /* red is already saying something more important */
     /* Green, briefly: a transcript arrived. The reference satellite shows it for one second. */
     enter(led, WY_LED_STATE_TRANSCRIPT);
     led->act = ACT_BRIEF;
@@ -273,6 +296,7 @@ int wy_led_transcript(wy_led *led)
 int wy_led_thinking(wy_led *led)
 {
     if (!led) return -1;
+    if (red_owns(led)) return 0;   /* red is already saying something more important */
     /* The glow while the answer is worked out. Bounded on the reference satellite by the
      * busy-pulse budget; here
      * the turn's own end takes over, so an unbounded look cannot outlive the work. */
@@ -283,6 +307,7 @@ int wy_led_thinking(wy_led *led)
 int wy_led_speaking(wy_led *led)
 {
     if (!led) return -1;
+    if (red_owns(led)) return 0;   /* red is already saying something more important */
     return show_single(led, WY_LED_STATE_SPEAKING,
                        WY_LED_WORKING_R, WY_LED_WORKING_G, WY_LED_WORKING_B, 1);
 }
@@ -290,6 +315,7 @@ int wy_led_speaking(wy_led *led)
 int wy_led_followup(wy_led *led)
 {
     if (!led) return -1;
+    if (red_owns(led)) return 0;   /* red is already saying something more important */
     /* Steady, dim, teal: "waiting for a follow-up". Steady so it cannot be mistaken for the
      * thinking glow, dim so it reads as waiting rather than as an alarm. */
     return show_single(led, WY_LED_STATE_FOLLOWUP,
@@ -299,13 +325,18 @@ int wy_led_followup(wy_led *led)
 int wy_led_idle(wy_led *led)
 {
     if (!led) return -1;
+    if (red_owns(led)) return 0;   /* red is already saying something more important */
     return show_off(led);
 }
 
 int wy_led_error(wy_led *led)
 {
     if (!led) return -1;
-    /* Immediate red: something is actually wrong, as opposed to merely not connected. */
+    /* Immediate red: something is actually wrong, as opposed to merely not connected. Latched,
+     * because the ordinary disconnect handling that follows a refusal would otherwise overwrite
+     * it with darkness a moment later -- the device would show "offline" when the truth is "the
+     * host said no", which is the one distinction red exists to make. */
+    led->error_latch = 1;
     return show_single(led, WY_LED_STATE_ERROR, WY_LED_RED_R, WY_LED_RED_G, WY_LED_RED_B, 1);
 }
 
@@ -385,6 +416,7 @@ int wy_led_tick(wy_led *led, uint32_t elapsed_ms)
     /* An outage that outlived its grace period outranks whatever is on screen: the ring is being
      * asked to say the link is gone, and nothing else matters as much as that. */
     if (outage_fired) {
+        led->outage_red = 1;   /* from here red is the outage's to keep */
         return show_single(led, WY_LED_STATE_ERROR, WY_LED_RED_R, WY_LED_RED_G, WY_LED_RED_B, 1);
     }
     return 0;

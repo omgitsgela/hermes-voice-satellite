@@ -137,25 +137,54 @@ class PhaseSequenceTests(unittest.TestCase):
         self.assertIn(FOLLOWUP, self.seen, 'a follow-up window must be shown')
 
     def test_a_dropped_wake_now_still_announces_the_followup_window(self):
-        """A wake-now the core drops is not a fault, but the window IS open either way -- the
-        bridge is listening for more speech regardless of whether the device re-armed."""
+        """A wake-now the core DROPS is not a fault, but the window IS open either way -- the
+        bridge is listening for more speech regardless of whether the device re-armed. The first
+        opens the stream; the second lands while it is already running and is genuinely dropped."""
         self._armed()
         self.lib.wy_session_step(self.sess, self._source_for([
             Event(type='wake-now'),
         ]), self._writer(), None)
         self.assertEqual(self.seen[-1], FOLLOWUP)
+        self.lib.wy_session_step(self.sess, self._source_for([
+            Event(type='wake-now'),          # dropped: the stream is already open
+        ]), self._writer(), None)
+        self.assertEqual(self.seen[-1], FOLLOWUP, 'a dropped wake-now still means a window is open')
 
     def test_the_whole_vocabulary_is_reachable(self):
         """Parity with the reference satellite: every phase it can show, this one can too.
-        A phase that exists in the enum but is never announced is a light that never lights."""
+        A phase that exists in the enum but is never announced is a light that never lights.
+        WY_PHASE_LISTENING is the one exception and is deliberately NOT asserted here: it is
+        reached inside the wake animation (rainbow -> yellow -> direction marker) rather than
+        announced by the session, and scripts/test_esp32_led.py covers that transition."""
         self._armed()
         for ev in (Event(type='wake-now'),
                    Event(type='transcript', data={'text': 'hi'}),
                    Event(type='audio-start', data={'rate': 22050, 'width': 2, 'channels': 1}),
                    Event(type='audio-stop')):
             self.lib.wy_session_step(self.sess, self._source_for([ev]), self._writer(), None)
-        for phase in (TRANSCRIPT, SPEAKING, IDLE, FOLLOWUP):
+        for phase in (TRANSCRIPT, SPEAKING, IDLE, FOLLOWUP, VOICE):
             self.assertIn(phase, self.seen, f'phase {phase} is unreachable')
+
+    def test_error_is_reachable_too(self):
+        """Error cannot share the happy-path test above: a refusal ends the session, so it needs
+        its own turn."""
+        self._armed()
+        self.lib.wy_session_step(self.sess, self._source_for([
+            Event(type='hermes.register.refused', data={'reason': 'no'}),
+        ]), self._writer(), None)
+        self.assertIn(ERROR, self.seen)
+
+    def test_the_bridge_presentation_events_are_honoured(self):
+        """led-idle is how the bridge cleans up after aborted work and an expired follow-up --
+        exactly the cases the device cannot work out for itself."""
+        self._armed()
+        for name, expected in (('led-busy', TRANSCRIPT),
+                               ('led-followup', FOLLOWUP),
+                               ('led-idle', IDLE)):
+            self.lib.wy_session_step(self.sess, self._source_for([
+                Event(type=name),
+            ]), self._writer(), None)
+            self.assertEqual(self.seen[-1], expected, f'{name} must reach the lights')
 
     def test_a_stop_with_no_armed_stream_announces_nothing(self):
         self._armed()

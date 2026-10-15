@@ -206,14 +206,59 @@ class LedHarness(unittest.TestCase):
         turned the ring red at all. An outage is a fact about the link, not a thing being shown."""
         self.lib.wy_led_disconnected(self.buf)
         self.tick(10000)
-        self.lib.wy_led_idle(self.buf)               # would have cancelled it before the fix
-        self.lib.wy_led_thinking(self.buf)
-        self.lib.wy_led_error(self.buf)
+        for call in (self.lib.wy_led_idle, self.lib.wy_led_thinking,
+                     self.lib.wy_led_speaking, self.lib.wy_led_wake, self.lib.wy_led_followup):
+            call(self.buf)                           # would have cancelled it before the fix
         self.assertEqual(self.lib.wy_led_red_pending(self.buf), 1,
                          'a later presentation must not swallow the outage')
+        self.writes.clear()                          # only what happens FROM the expiry counts
         self.tick(20001)
-        self.assertEqual(self.effect_of(), 3, 'the outage survives the grace period and shows red')
+        reds = [w for w in self.writes if w.cmd == 16 and w.params[:3] == bytes([255, 0, 0])]
+        self.assertEqual(len(reds), 1, 'the expiry itself must EMIT the red, not merely think it')
+        self.assertEqual(self.effect_of(), 3)
+
+    def test_red_once_earned_cannot_be_replaced(self):
+        """REGRESSION: a stray idle arriving after the red was earned blanked the one message the
+        device is trying to send, so a room read "everything is fine" with the link dead."""
+        self.lib.wy_led_disconnected(self.buf)
+        self.tick(30001)
+        self.assertEqual(self.effect_of(), 3, 'red is showing')
+        self.lib.wy_led_idle(self.buf)
+        self.lib.wy_led_thinking(self.buf)
+        self.lib.wy_led_wake(self.buf)
+        self.lib.wy_led_speaking(self.buf)
+        self.assertEqual(self.effect_of(), 3, 'red survives every ordinary presentation')
         self.assertEqual(self.colour_of(), bytes([255, 0, 0]))
+        self.lib.wy_led_connected(self.buf, 0)       # only a reconnect releases it
+        self.assertEqual(self.effect_of(), 0)
+
+    def test_a_repeated_disconnect_does_not_restart_the_grace(self):
+        """REGRESSION: the supervisor notifies twice and a retry loop notifies many times. Each
+        used to reset the 30 s, so a device offline for minutes stayed dark."""
+        self.lib.wy_led_disconnected(self.buf)
+        self.tick(20000)
+        self.lib.wy_led_disconnected(self.buf)       # a second notification for the SAME outage
+        self.lib.wy_led_disconnected(self.buf)       # and a third
+        self.tick(10001)
+        self.assertEqual(self.effect_of(), 3, 'red lands at 30 s of the ORIGINAL outage')
+        self.assertEqual(self.lib.wy_led_red_pending(self.buf), 0)
+
+    def test_a_disconnect_after_red_is_showing_does_not_blank_it(self):
+        self.lib.wy_led_disconnected(self.buf)
+        self.tick(30001)
+        self.assertEqual(self.effect_of(), 3)
+        self.lib.wy_led_disconnected(self.buf)       # teardown can fire again
+        self.assertEqual(self.effect_of(), 3, 'a late disconnect must not restart the darkness')
+        self.assertEqual(self.lib.wy_led_red_pending(self.buf), 0)
+
+    def test_a_refusal_red_survives_the_disconnect_that_follows_it(self):
+        """REGRESSION: the supervisor tears the link down right after a refusal, and that used to
+        overwrite "the host said no" with the ordinary outage darkness."""
+        self.lib.wy_led_error(self.buf)
+        self.assertEqual(self.effect_of(), 3, 'a refusal is red at once')
+        self.lib.wy_led_disconnected(self.buf)       # what the supervisor does next
+        self.assertEqual(self.effect_of(), 3, 'the refusal is the more important message')
+        self.assertEqual(self.lib.wy_led_red_pending(self.buf), 0, 'and it is not an outage')
 
     def test_a_link_down_stops_claiming_speech(self):
         self.lib.wy_led_speaking(self.buf)
@@ -278,6 +323,11 @@ class LedHarness(unittest.TestCase):
         self.tick(401)
         self.lib.wy_led_voice_started(self.buf)     # the beat is running; still ignored
         self.assertEqual(self.colour_of(), bytes([255, 255, 0]), 'the beat is intact')
+        # The real test: an ignored announcement must not RESTART the beat. If it did, the
+        # direction marker would arrive 500 ms late every turn and a naive assertion on "is it
+        # yellow right now" would still pass.
+        self.tick(500)
+        self.assertEqual(self.effect_of(), 4, 'the beat expired on its ORIGINAL deadline')
 
     def test_voice_started_on_its_own_goes_yellow_then_direction(self):
         """A stream can open without a wake animation (a bridge-driven wake-now)."""
