@@ -18,6 +18,7 @@ from wyoming.event import Event, write_event
 ROOT = Path(__file__).resolve().parents[1]
 
 LISTENING, TRANSCRIPT, SPEAKING, IDLE = 1, 2, 3, 4
+VOICE, FOLLOWUP, ERROR = 5, 6, 7
 
 PHASES = C.CFUNCTYPE(None, C.c_void_p, C.c_int)
 
@@ -116,6 +117,45 @@ class PhaseSequenceTests(unittest.TestCase):
                    Event(type='audio-start', data={'rate': 16000, 'width': 2, 'channels': 1})):
             self.lib.wy_session_step(self.sess, self._source_for([ev]), self._writer(), None)
         self.assertNotIn(SPEAKING, self.seen, 'an unarmed stream is not speech')
+
+    def test_a_refusal_is_announced_as_an_error(self):
+        """A refusal is not a wobbly link that might come back -- the host said no. It must be
+        distinguishable from an ordinary disconnect, which shows nothing for 30 seconds."""
+        self._armed()
+        self.lib.wy_session_step(self.sess, self._source_for([
+            Event(type='hermes.register.refused', data={'reason': 'no such device'}),
+        ]), self._writer(), None)
+        self.assertIn(ERROR, self.seen, 'a definite refusal is an error, not an outage')
+
+    def test_a_followup_window_is_announced(self):
+        """wake-now is the bridge saying "keep talking, no wake word needed". It is the only
+        signal the device has that the conversation is not over."""
+        self._armed()
+        self.lib.wy_session_step(self.sess, self._source_for([
+            Event(type='wake-now'),
+        ]), self._writer(), None)
+        self.assertIn(FOLLOWUP, self.seen, 'a follow-up window must be shown')
+
+    def test_a_dropped_wake_now_still_announces_the_followup_window(self):
+        """A wake-now the core drops is not a fault, but the window IS open either way -- the
+        bridge is listening for more speech regardless of whether the device re-armed."""
+        self._armed()
+        self.lib.wy_session_step(self.sess, self._source_for([
+            Event(type='wake-now'),
+        ]), self._writer(), None)
+        self.assertEqual(self.seen[-1], FOLLOWUP)
+
+    def test_the_whole_vocabulary_is_reachable(self):
+        """Parity with the reference satellite: every phase it can show, this one can too.
+        A phase that exists in the enum but is never announced is a light that never lights."""
+        self._armed()
+        for ev in (Event(type='wake-now'),
+                   Event(type='transcript', data={'text': 'hi'}),
+                   Event(type='audio-start', data={'rate': 22050, 'width': 2, 'channels': 1}),
+                   Event(type='audio-stop')):
+            self.lib.wy_session_step(self.sess, self._source_for([ev]), self._writer(), None)
+        for phase in (TRANSCRIPT, SPEAKING, IDLE, FOLLOWUP):
+            self.assertIn(phase, self.seen, f'phase {phase} is unreachable')
 
     def test_a_stop_with_no_armed_stream_announces_nothing(self):
         self._armed()

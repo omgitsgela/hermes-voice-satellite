@@ -94,6 +94,7 @@ extern "C" {
  * 50-150 ms. The rendered tone is 308 ms (4928 samples at 16 kHz), so 400 ms covers the audible
  * window rather than the render length. See docs/leds.md for why this is not simply 308. */
 #define WY_LED_WAKE_SWEEP_MS          400u
+#define WY_LED_VOICE_MS               500u   /* the "I hear you" beat between tone and query */
 #define WY_LED_TICK_MS_DEFAULT       100u    /* how often the glue should call wy_led_tick */
 
 /* --- brightness contract ---

@@ -388,6 +388,22 @@ int wy_session_set_config(wy_session *session,
     return WY_OK;
 }
 
+/* Announce a phase to the presentation layer. Called only from wy_session_step -- the LINK task,
+ * never the realtime playback pump -- so a device that lights its ring does so off the audio
+ * path. A missing callback is not an error: the core does not require a presentation. */
+static void announce_phase(wy_session *session, int phase)
+{
+    if (session && session->phase_notify) session->phase_notify(session->phase_user, phase);
+}
+
+void wy_session_set_phase_notify(wy_session *session,
+                                 void (*fn)(void *user, int phase), void *user)
+{
+    if (!session) return;
+    session->phase_notify = fn;
+    session->phase_user = user;
+}
+
 int __attribute__((used)) wy_session_wake(wy_session *session, const char *wake_word,
                     wy_write_fn write_fn, void *ctx) {
     if (!session || !wake_word || !write_fn) return WY_INVALID;
@@ -419,31 +435,20 @@ int __attribute__((used)) wy_session_wake(wy_session *session, const char *wake_
     }
     writer_unlock(session);
     if (result != WY_OK) { session->state = WY_SESSION_FAILED; return result; }
+    /* The microphone is open and the query is being captured. The device's wake animation
+     * already covers this moment and will usually get here first; the announcement is for the
+     * case where a stream opens without one (a bridge-driven wake-now), and the presentation
+     * layer is free to ignore it when it is already showing this phase. */
+    announce_phase(session, WY_PHASE_VOICE);
     return WY_OK;
-}
+    }
 
-/* Tell the bridge its speaker has finished.
+    /* Tell the bridge its speaker has finished.
  *
  * `played` is the device saying "that answer is done sounding". The bridge waits for
  * it after every reply, and firmware that never sends it parks the conversation in
  * that wait -- measured at a full 20 s of dead air after every answer. It is one
  * control frame under the writer lock, exactly like every other link write. */
-/* Announce a phase to the presentation layer. Called only from wy_session_step -- the LINK task,
- * never the realtime playback pump -- so a device that lights its ring does so off the audio
- * path. A missing callback is not an error: the core does not require a presentation. */
-static void announce_phase(wy_session *session, int phase)
-{
-    if (session && session->phase_notify) session->phase_notify(session->phase_user, phase);
-}
-
-void wy_session_set_phase_notify(wy_session *session,
-                                 void (*fn)(void *user, int phase), void *user)
-{
-    if (!session) return;
-    session->phase_notify = fn;
-    session->phase_user = user;
-}
-
 int wy_session_send_played(wy_session *session, wy_write_fn write_fn, void *ctx) {
     if (!session || !write_fn) return WY_INVALID;
     return locked_send(session, write_fn, ctx, "played", NULL, NULL, 0);
@@ -611,6 +616,9 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
             version->valuedouble != 1) result = WY_INVALID;
         else session->state = WY_SESSION_REGISTERED;
     } else if (!strcmp(frame.type, "hermes.register.refused")) {
+        /* The host said no. This is not a wobbly link that might come back -- it is a definite
+         * refusal -- so it is red at once rather than after the disconnect grace. */
+        announce_phase(session, WY_PHASE_ERROR);
         session->state = WY_SESSION_REFUSED;
         result = WY_REFUSED;
     } else if (!strcmp(frame.type, "run-satellite")) {
@@ -704,6 +712,10 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
          * before the host is ready fails the same way an out-of-order wake would. */
         result = wy_session_wake(session, session_wake_name(session), write_fn, ctx);
         if (result == WY_INVALID) result = WY_OK;   /* a dropped wake-now is not a fault */
+        /* A follow-up window is open: the bridge is listening for more speech with no wake word.
+         * This is the moment the reference satellite shows its dim teal, and it is the only
+         * signal the device has that the conversation is not over. */
+        announce_phase(session, WY_PHASE_FOLLOWUP);
     } else if (!strcmp(frame.type, "hermes.config.desired")) {
         /* The bridge's declarative config dispatch, sent right after registration (and on
          * reconnect). The session is only the transport: it NUL-terminates the decoded data

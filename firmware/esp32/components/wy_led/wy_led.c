@@ -10,8 +10,9 @@ enum {
     ACT_NONE = 0,
     ACT_FLASH,          /* the first-connect green triple-flash */
     ACT_BRIEF,          /* show a colour briefly, then go dark */
-    ACT_SWEEP,          /* the circular rainbow during the activation tone, then direction mode */
-    ACT_DELAYED_RED     /* wait out the grace period; only then show red */
+    ACT_SWEEP,          /* the circular rainbow during the activation tone */
+    ACT_VOICE,          /* the yellow "I hear you" beat, then direction mode */
+    ACT_DELAYED_RED     /* retained; the outage now lives in its own slot (see outage_ms) */
 };
 
 struct wy_led {
@@ -222,13 +223,15 @@ int wy_led_disconnected(wy_led *led)
 int wy_led_wake(wy_led *led)
 {
     if (!led) return -1;
-    /* Circular sweep for as long as the activation tone rings, then it settles into direction
-     * mode on its own. wy_led_listening() can also drive that transition explicitly. */
+    /* One animation, three stages, driven entirely from here so the pieces cannot race each
+     * other: rainbow for the length of the activation tone, a yellow "I hear you" beat while the
+     * microphone opens, then the direction marker for the query. The session announcing voice
+     * started mid-chain must not restart or truncate this -- see wy_led_voice_started(). */
     int rc = show_sweep(led, WY_LED_STATE_WAKE, 1);
     led->act = ACT_SWEEP;
     led->act_step = 0;
-    led->act_ms = WY_LED_WAKE_SWEEP_MS;   /* exactly as long as the tone rings */
-    led->next_state = WY_LED_STATE_LISTENING;
+    led->act_ms = WY_LED_WAKE_SWEEP_MS;
+    led->next_state = WY_LED_STATE_VOICE;
     return rc;
 }
 
@@ -241,7 +244,17 @@ int wy_led_listening(wy_led *led)
 int wy_led_voice_started(wy_led *led)
 {
     if (!led) return -1;
-    return show_single(led, WY_LED_STATE_VOICE, WY_LED_YELLOW_R, WY_LED_YELLOW_G, WY_LED_YELLOW_B, 1);
+    /* The wake animation already owns this moment and will arrive here on its own. A session
+     * that announces "the microphone opened" while the sweep or the beat is running would restart
+     * the chain and could truncate the rainbow, so it is politely ignored: the lights are one
+     * animation, not a queue of competing callers. */
+    if (led->act == ACT_SWEEP || led->act == ACT_VOICE) return 0;
+    int rc = show_single(led, WY_LED_STATE_VOICE, WY_LED_YELLOW_R, WY_LED_YELLOW_G, WY_LED_YELLOW_B, 1);
+    led->act = ACT_VOICE;
+    led->act_step = 0;
+    led->act_ms = WY_LED_VOICE_MS;
+    led->next_state = WY_LED_STATE_LISTENING;
+    return rc;
 }
 
 int wy_led_transcript(wy_led *led)
@@ -343,11 +356,23 @@ int wy_led_tick(wy_led *led, uint32_t elapsed_ms)
             (void)show_off(led);
             break;
         case ACT_SWEEP:
-            /* The tone has stopped ringing. Now point at the person who is talking. */
-            if (led->next_state == WY_LED_STATE_LISTENING)
+            /* The tone has stopped ringing. The microphone is open: say so in the language the
+             * reference satellite uses (yellow), then point at the person who is talking. */
+            if (led->next_state == WY_LED_STATE_VOICE) {
+                (void)show_single(led, WY_LED_STATE_VOICE,
+                                  WY_LED_YELLOW_R, WY_LED_YELLOW_G, WY_LED_YELLOW_B, 1);
+                led->act = ACT_VOICE;
+                led->act_ms = WY_LED_VOICE_MS;
+                led->next_state = WY_LED_STATE_LISTENING;
+            } else if (led->next_state == WY_LED_STATE_LISTENING) {
                 (void)show_doa(led, WY_LED_STATE_LISTENING, 1);
-            else
+            } else {
                 (void)show_off(led);
+            }
+            break;
+        case ACT_VOICE:
+            /* The beat is over: now the ring shows where the person is. */
+            (void)show_doa(led, WY_LED_STATE_LISTENING, 1);
             break;
         default:
             led->act = ACT_NONE;

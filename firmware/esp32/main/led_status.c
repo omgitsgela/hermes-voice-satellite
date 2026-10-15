@@ -182,10 +182,13 @@ void led_status_on_phase(void *user, int phase)
     /* The session says WHAT is happening; this decides what it looks like. Mapping lives here so
      * the core stays free of colours and the session core stays free of lights. */
     switch (phase) {
-    case WY_PHASE_LISTENING:  (void)led_status_listening(); break;
-    case WY_PHASE_TRANSCRIPT: (void)led_status_thinking();  break;
-    case WY_PHASE_SPEAKING:   (void)led_status_speaking();  break;
-    case WY_PHASE_IDLE:       (void)led_status_idle();      break;
+    case WY_PHASE_LISTENING:  (void)led_status_listening();    break;
+    case WY_PHASE_TRANSCRIPT: (void)led_status_thinking();     break;
+    case WY_PHASE_SPEAKING:   (void)led_status_speaking();     break;
+    case WY_PHASE_IDLE:       (void)led_status_idle();         break;
+    case WY_PHASE_VOICE:      (void)led_status_voice_started();break;
+    case WY_PHASE_FOLLOWUP:   (void)led_status_followup();     break;
+    case WY_PHASE_ERROR:      (void)led_status_error();        break;
     default: break;   /* a phase this build does not know is not a fault */
     }
 }

@@ -255,14 +255,37 @@ class LedHarness(unittest.TestCase):
         self.lib.wy_led_wake(self.buf)
         self.assertEqual(self.effect_of(), 2, 'the activation tone rings under a rainbow sweep')
 
-    def test_the_sweep_settles_into_direction_mode(self):
-        """The brightest point goes where the person is, which the XMOS computes for us."""
+    def test_the_wake_animation_is_one_chain(self):
+        """rainbow (the tone) -> yellow (the mic opened) -> direction marker (the query).
+        Three stages driven from ONE place so they cannot race each other."""
         self.lib.wy_led_wake(self.buf)
+        self.assertEqual(self.effect_of(), 2, 'the tone rings under a circular sweep')
         self.tick(399)
-        self.assertEqual(self.effect_of(), 2, 'the sweep runs for as long as the tone rings')
+        self.assertEqual(self.effect_of(), 2, 'the sweep runs as long as the tone rings')
         self.tick(2)
-        self.assertEqual(self.effect_of(), 4, 'after the tone, the ring shows the direction')
+        self.assertEqual(self.effect_of(), 3, 'then the microphone says it is open')
+        self.assertEqual(self.colour_of(), bytes([255, 255, 0]))
+        self.tick(501)
+        self.assertEqual(self.effect_of(), 4, 'then the ring points at the person talking')
         self.assertEqual(self.lib.wy_led_state(self.buf), 4)   # WY_LED_STATE_LISTENING
+
+    def test_voice_started_cannot_stomp_the_wake_animation(self):
+        """The session announces "the microphone opened" at the same moment the wake animation
+        is starting. If that restarted the chain the rainbow would be truncated every time."""
+        self.lib.wy_led_wake(self.buf)
+        self.lib.wy_led_voice_started(self.buf)     # must be politely ignored
+        self.assertEqual(self.effect_of(), 2, 'the rainbow survived the announcement')
+        self.tick(401)
+        self.lib.wy_led_voice_started(self.buf)     # the beat is running; still ignored
+        self.assertEqual(self.colour_of(), bytes([255, 255, 0]), 'the beat is intact')
+
+    def test_voice_started_on_its_own_goes_yellow_then_direction(self):
+        """A stream can open without a wake animation (a bridge-driven wake-now)."""
+        self.lib.wy_led_voice_started(self.buf)
+        self.assertEqual(self.effect_of(), 3)
+        self.assertEqual(self.colour_of(), bytes([255, 255, 0]))
+        self.tick(501)
+        self.assertEqual(self.effect_of(), 4, 'and then it points at the speaker')
 
     def test_direction_mode_pairs_a_quiet_ring_with_a_bright_marker(self):
         self.lib.wy_led_listening(self.buf)

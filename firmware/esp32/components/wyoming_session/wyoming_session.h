@@ -87,10 +87,13 @@ typedef struct {
     * them onto its ring and the reference satellite maps them onto its own LEDs, and the two
     * agree because they read the same vocabulary. docs/leds.md owns the mapping. */
     enum {
-    WY_PHASE_LISTENING = 1,  /* the mic is open and the query is being captured */
-    WY_PHASE_TRANSCRIPT,     /* words arrived; the answer is being worked out */
-    WY_PHASE_SPEAKING,       /* the answer is arriving */
-    WY_PHASE_IDLE            /* the turn is over */
+        WY_PHASE_LISTENING = 1,  /* the mic is open and the query is being captured */
+        WY_PHASE_TRANSCRIPT,     /* words arrived; the answer is being worked out */
+        WY_PHASE_SPEAKING,       /* the answer is arriving */
+        WY_PHASE_IDLE,           /* the turn is over */
+        WY_PHASE_VOICE,          /* the microphone opened: "I hear you" */
+        WY_PHASE_FOLLOWUP,       /* waiting for you to keep talking, no wake word needed */
+        WY_PHASE_ERROR           /* something is actually wrong, as opposed to merely offline */
     };
 
     /* Install the presentation callback. Safe to call before or after init; passing NULL clears it. */

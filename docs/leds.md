@@ -22,7 +22,10 @@ A disconnect goes **dark immediately**. Whatever the ring was showing — speech
 handshake — was about a session that no longer exists, and leaving it lit would claim otherwise for
 the whole grace period. Red then appears only if the outage survives the 30 seconds.
 | **Wake** | rainbow | rainbow (circular sweep) | the length of the activation tone | "I heard you" |
+| **Voice started** | yellow | single | 0.5 s | the microphone is open |
 | **Listening** | black ring + white marker | **direction of arrival** | while the query runs | the bright point is where the person is |
+| **Follow-up** | dim teal (0, 64, 64) | single | until the window closes | keep talking, no wake word needed |
+| **Error** | red | single | until cleared | something is actually wrong |
 | **Voice started** | yellow | single | until the next phase | the microphone is open |
 | **Transcript** | green | single | 1 s | words arrived |
 | **Thinking** | violet (150, 70, 255) | breath (glow) | while the answer is worked out | "I am thinking" |
@@ -71,16 +74,23 @@ diagnostics.
 The vocabulary is complete and the core implements every phase. What is wired to a real event and
 what is not matters when you are reading the lights:
 
-| Phase | Wired |
-|---|---|
-| Boot, Ready, Reconnect, Trouble connecting | **live** |
-| Wake sweep, Listening (direction) | **live** |
-| Transcript (the thinking glow), Speaking, Idle | **live** |
-| Voice started, Follow-up, Error | not yet |
+**Every phase is wired.** This is full parity with the reference satellite: there is no light that
+one device can show and the other cannot.
 
-A turn therefore reads: rainbow sweep for the length of the ding, the bright marker sitting on
-whoever is talking, a **violet glow while the answer is worked out**, violet while it is said, then
-dark.
+A turn therefore reads: **rainbow** for the length of the ding, a brief **yellow** while the
+microphone opens, the **bright marker** sitting on whoever is talking, a **violet glow** while the
+answer is worked out, **violet** while it is said, then dark. A follow-up window shows dim teal;
+a definite refusal from the host shows red at once.
+
+**The wake is one animation, not three competing callers.** Rainbow, yellow and the direction
+marker are chained from `wy_led_wake()` so the session's "the microphone opened" announcement
+cannot restart or truncate the sweep. That announcement is accepted and politely ignored while the
+chain runs, because a stream can also open without a wake animation (a bridge-driven `wake-now`),
+where it is the only thing that shows.
+
+**Error is not the same as an outage.** Red appears after 30 seconds for a link that has merely
+gone away, and *immediately* for a definite refusal from the host. One says "I cannot reach it",
+the other says "it said no".
 
 The wiring runs through an injected callback at the session boundary (`wy_session_set_phase_notify`).
 The Wyoming session announces *which phase* a turn is in and the glue decides what that looks like,
