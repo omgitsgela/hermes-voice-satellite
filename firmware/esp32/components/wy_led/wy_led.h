@@ -8,8 +8,8 @@
  * the whole feature testable off-device, which is the point of keeping the policy here and the
  * I2C bytes in the glue (main/led_status.c).
  *
- * THE VOCABULARY IS WYOMING1'S
- * ---------------------------
+ * THE VOCABULARY IS THE REFERENCE SATELLITE'S
+ * ---------------------------------------
  * Every colour and every meaning is copied from pi/2mic_service.py, so the two satellites read the
  * same from across a room. Someone who learns the lights on one device has learned them on both.
  * If you change a colour here, change it there and in docs/leds.md too.
@@ -89,8 +89,11 @@ extern "C" {
 #define WY_LED_FLASH_OFF_MS          300u
 #define WY_LED_FLASH_COUNT           3u
 #define WY_LED_BRIEF_MS              1000u   /* the green "show for 1 sec" */
-#define WY_LED_WAKE_SWEEP_MS          400u   /* the circular sweep lasts the activation tone
-                                              * (308 ms rendered, 4928 samples at 16 kHz) */
+/* The circular sweep is measured from the moment the tone is QUEUED, not from the moment it is
+ * heard: the pump has to prime its DMA and settle the amplifier first, which typically costs
+ * 50-150 ms. The rendered tone is 308 ms (4928 samples at 16 kHz), so 400 ms covers the audible
+ * window rather than the render length. See docs/leds.md for why this is not simply 308. */
+#define WY_LED_WAKE_SWEEP_MS          400u
 #define WY_LED_TICK_MS_DEFAULT       100u    /* how often the glue should call wy_led_tick */
 
 /* --- brightness contract ---

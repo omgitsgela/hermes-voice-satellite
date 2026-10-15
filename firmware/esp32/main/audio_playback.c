@@ -1,5 +1,4 @@
 #include "audio_playback.h"
-#include "led_status.h"
 #include "driver/gpio.h"
 
 #include "wyoming_audio.h"   /* the amp GPO command encoder + XVF I2C/GPO constants (the audio contract) */
@@ -79,6 +78,23 @@ static TickType_t plb_delay_ms(int ms) {
 static i2s_chan_handle_t tx;
 static TaskHandle_t task;
 static volatile int stopping;
+
+/* One lock for the shared I2C pins (SDA 5 / SCL 6), held across an ENTIRE transaction's
+ * bus-create-through-bus-delete lifetime. The bus is created per call with the port left to the
+ * driver to pick, and the ESP32-S3 has two controllers: separate handles do not serialise two
+ * users of the same pins. The amplifier, the codec, the LED ring and the diagnostics all share
+ * this bus, so without this a timer-driven LED write can collide with an audio control write and
+ * take the sound down with it. */
+static SemaphoreHandle_t i2c_bus_lock;
+
+static void i2c_bus_take(void) {
+    if (!i2c_bus_lock) {
+        i2c_bus_lock = xSemaphoreCreateMutex();
+        if (!i2c_bus_lock) return;
+    }
+    xSemaphoreTake(i2c_bus_lock, portMAX_DELAY);
+}
+static void i2c_bus_give(void) { if (i2c_bus_lock) xSemaphoreGive(i2c_bus_lock); }
 static void *session;   /* the supervisor's session; the ring's single reader is the pump task */
 /* When set, the amplifier stays in whatever state it was forced to and the pump leaves it
  * alone. Without this the pump releases the amp the moment the ring drains, so a manual
@@ -154,6 +170,10 @@ int audio_playback_play_mono(const int16_t *mono, size_t n) {
 #define AIC3104_I2S_32BIT       0x30
 
 static int xvf_control_write_at(uint8_t addr, const uint8_t *cmd, size_t len, const char *what) {
+    /* The lock is held across the WHOLE create-transmit-destroy lifetime, not just the transmit:
+     * two users allocating and tearing down the same pins concurrently can interfere at any of
+     * those steps. */
+    i2c_bus_take();
     i2c_master_bus_handle_t bus = NULL;
     i2c_master_bus_config_t bus_cfg = {
         .i2c_port = (i2c_port_num_t)-1,
@@ -165,7 +185,7 @@ static int xvf_control_write_at(uint8_t addr, const uint8_t *cmd, size_t len, co
     };
     esp_err_t rc = i2c_new_master_bus(&bus_cfg, &bus);
     if (rc != ESP_OK) { ESP_LOGW("xvf", "%s: bus failed %d (addr=0x%02x)", what, (int)rc, (unsigned)addr);
-        return -(int)rc; }
+        i2c_bus_give(); return -(int)rc; }
     i2c_master_dev_handle_t dev = NULL;
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
@@ -184,6 +204,7 @@ static int xvf_control_write_at(uint8_t addr, const uint8_t *cmd, size_t len, co
     }
     i2c_master_bus_rm_device(dev);
     i2c_del_master_bus(bus);
+    i2c_bus_give();
     return rc == ESP_OK ? 0 : -(int)rc;
 }
 
@@ -216,8 +237,9 @@ int audio_xvf_read(const uint8_t *cmd, size_t cmdlen, uint8_t *reply, size_t rep
         .glitch_ignore_cnt = 7,
         .flags.enable_internal_pullup = true,
     };
+    i2c_bus_take();
     esp_err_t rc = i2c_new_master_bus(&bus_cfg, &bus);
-    if (rc != ESP_OK) return -(int)rc;
+    if (rc != ESP_OK) { i2c_bus_give(); return -(int)rc; }
     i2c_master_dev_handle_t dev = NULL;
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
@@ -227,10 +249,12 @@ int audio_xvf_read(const uint8_t *cmd, size_t cmdlen, uint8_t *reply, size_t rep
     };
     rc = i2c_master_bus_add_device(bus, &dev_cfg, &dev);
     if (rc == ESP_OK) {
+        /* Request and reply are ONE transaction to a caller: the lock covers both halves. */
         rc = i2c_master_transmit_receive(dev, cmd, cmdlen, reply, replylen, 200);
         i2c_master_bus_rm_device(dev);
     }
     i2c_del_master_bus(bus);
+    i2c_bus_give();
     return rc == ESP_OK ? 0 : -(int)rc;
 }
 
@@ -349,10 +373,11 @@ int audio_playback_amp(int enabled) {
      * the link is left alone. */
     uint8_t cmd[XVF_I2C_GPO_CMD_LEN];
     wy_amp_gpo_command(cmd, enabled);
-    /* The ring follows the speaker: bright while the answer sounds, dark when it stops. This
-     * transition happens at most twice per answer, so the extra control writes are
-     * proportionate -- and the lights and the sound change together. */
-    if (enabled) led_status_speaking(); else led_status_idle();
+    /* Deliberately NO LED work here. The amplifier is armed from the playback pump's realtime
+     * path and from the local-tone path, so lighting the ring here did two bad things at once:
+     * it blocked the audio pump on three extra I2C transactions, and it overwrote the wake
+     * sweep, because the activation chime uses this same amplifier. The chime's amp edges are
+     * not speech, and they must not be presented as though they were. */
     i2c_master_bus_handle_t bus = NULL;
     i2c_master_bus_config_t bus_cfg = {
         .i2c_port = (i2c_port_num_t)-1,

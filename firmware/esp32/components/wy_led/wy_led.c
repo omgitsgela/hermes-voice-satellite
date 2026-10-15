@@ -27,6 +27,14 @@ struct wy_led {
     uint32_t act_step;       /* which step of the action we are on */
     uint32_t act_r, act_g, act_b;
     uint32_t next_state;     /* the state to enter when an ACT_SWEEP completes */
+
+    /* The outage countdown, kept DELIBERATELY apart from the presentation action slot above.
+     * These used to share one slot, and any later presentation -- an idle, a flash, anything --
+     * silently cancelled a pending red, so a real sustained outage never turned the ring red at
+     * all. An outage is a fact about the link, not a thing being shown; it must survive every
+     * presentation that happens to occur while it runs. */
+    uint32_t outage_ms;      /* >0 while a disconnect is waiting out its grace period */
+    int outage;              /* 1 while the link is down, whatever the ring is showing */
 };
 
 size_t wy_led_size(void) { return sizeof(struct wy_led); }
@@ -175,8 +183,11 @@ int wy_led_connected(wy_led *led, int first_this_boot)
 {
     int rc = 0;
     if (!led) return -1;
+    /* A reconnect cancels the outage before anything else is shown: the grace countdown is
+     * abandoned, so the red it would eventually have shown never appears. */
+    led->outage = 0;
+    led->outage_ms = 0;
     led->act = ACT_NONE;
-    /* A reconnect cancels any pending red before anything else is shown. */
     if (!first_this_boot) {
         /* Silent. Going dark here also stops a restart inside the startup window from leaving the
          * ring breathing forever. */
@@ -196,12 +207,16 @@ int wy_led_disconnected(wy_led *led)
 {
     if (!led) return -1;
     /* Red means a REAL outage, never a blink. A cable that wobbles for half a second must not
-     * paint the room red, so nothing is shown now: the colour only appears if the outage survives
-     * the grace period. */
-    led->act = ACT_DELAYED_RED;
-    led->act_step = 0;
-    led->act_ms = WY_LED_DISCONNECT_GRACE_MS;
-    return 0;
+     * paint the room red, so the colour only appears if the outage survives the grace period.
+     *
+     * The ring goes dark NOW, though: whatever it was showing -- speech, a flash, the ready
+     * handshake -- was about a session that no longer exists, and leaving it lit would claim
+     * otherwise for the whole grace period. The countdown itself lives in the outage slot, so
+     * this OFF cannot cancel it the way a presentation action used to. */
+    int rc = show_off(led);
+    led->outage = 1;
+    led->outage_ms = WY_LED_DISCONNECT_GRACE_MS;
+    return rc;
 }
 
 int wy_led_wake(wy_led *led)
@@ -232,7 +247,7 @@ int wy_led_voice_started(wy_led *led)
 int wy_led_transcript(wy_led *led)
 {
     if (!led) return -1;
-    /* Green, briefly: a transcript arrived. wyoming1 shows it for one second. */
+    /* Green, briefly: a transcript arrived. The reference satellite shows it for one second. */
     enter(led, WY_LED_STATE_TRANSCRIPT);
     led->act = ACT_BRIEF;
     led->act_step = 0;
@@ -245,7 +260,8 @@ int wy_led_transcript(wy_led *led)
 int wy_led_thinking(wy_led *led)
 {
     if (!led) return -1;
-    /* The glow while the answer is worked out. Bounded on wyoming1 by the busy-pulse budget; here
+    /* The glow while the answer is worked out. Bounded on the reference satellite by the
+     * busy-pulse budget; here
      * the turn's own end takes over, so an unbounded look cannot outlive the work. */
     return show_breath(led, WY_LED_STATE_THINKING,
                        WY_LED_WORKING_R, WY_LED_WORKING_G, WY_LED_WORKING_B, 1);
@@ -285,46 +301,68 @@ int wy_led_error(wy_led *led)
 int wy_led_tick(wy_led *led, uint32_t elapsed_ms)
 {
     if (!led) return -1;
-    if (led->act == ACT_NONE) return 0;
 
-    if (elapsed_ms < led->act_ms) {
-        led->act_ms -= elapsed_ms;
-        return 0;
-    }
-    elapsed_ms -= led->act_ms;
-    led->act_ms = 0;
-
-    switch (led->act) {
-    case ACT_FLASH: {
-        /* on, off, on, off, on, off -> three visible flashes. */
-        int on = (int)(led->act_step % 2u == 0u);
-        led->act_step++;
-        if (led->act_step >= WY_LED_FLASH_COUNT * 2u) {
-            /* The final phase was an off, so the ring is already dark. Commanding it dark again
-             * would be a phantom fourth off-phase to anything counting the flashes. */
-            led->act = ACT_NONE;
-            enter(led, WY_LED_STATE_OFF);
-            return 0;
+    /* The outage countdown advances first and independently of whatever is being shown, so no
+     * presentation can swallow it. */
+    int outage_fired = 0;
+    if (led->outage && led->outage_ms > 0) {
+        if (elapsed_ms >= led->outage_ms) {
+            led->outage_ms = 0;
+            outage_fired = 1;
+        } else {
+            led->outage_ms -= elapsed_ms;
         }
-        led->act_ms = on ? WY_LED_FLASH_OFF_MS : WY_LED_FLASH_ON_MS;
-        return on ? set_effect(led, WY_LED_FX_OFF) : set_effect(led, WY_LED_FX_SINGLE);
     }
-    case ACT_BRIEF:
-        return show_off(led);
-    case ACT_SWEEP: {
-        /* The tone has stopped ringing. Now point at the person who is talking. */
-        unsigned next = led->next_state;
-        if (next == WY_LED_STATE_LISTENING) return show_doa(led, WY_LED_STATE_LISTENING, 1);
-        return show_off(led);
+
+    /* Consume elapsed time across as MANY action steps as it covers. One tick can span several
+     * phases -- a 1800 ms tick must finish the whole ready flash, not just its first step --
+     * so returning after one step would stretch the sequence and leave an action pending long
+     * after it should have completed. */
+    while (led->act != ACT_NONE && elapsed_ms >= led->act_ms) {
+        elapsed_ms -= led->act_ms;
+        led->act_ms = 0;
+
+        switch (led->act) {
+        case ACT_FLASH: {
+            /* on, off, on, off, on, off -> three visible flashes. */
+            int on = (int)(led->act_step % 2u == 0u);
+            led->act_step++;
+            if (led->act_step >= WY_LED_FLASH_COUNT * 2u) {
+                /* The final phase was an off, so the ring is already dark. Commanding it dark
+                 * again would be a phantom fourth off-phase to anything counting the flashes. */
+                led->act = ACT_NONE;
+                enter(led, WY_LED_STATE_OFF);
+                break;
+            }
+            led->act_ms = on ? WY_LED_FLASH_OFF_MS : WY_LED_FLASH_ON_MS;
+            if (on) (void)set_effect(led, WY_LED_FX_OFF);
+            else    (void)set_effect(led, WY_LED_FX_SINGLE);
+            break;
+        }
+        case ACT_BRIEF:
+            (void)show_off(led);
+            break;
+        case ACT_SWEEP:
+            /* The tone has stopped ringing. Now point at the person who is talking. */
+            if (led->next_state == WY_LED_STATE_LISTENING)
+                (void)show_doa(led, WY_LED_STATE_LISTENING, 1);
+            else
+                (void)show_off(led);
+            break;
+        default:
+            led->act = ACT_NONE;
+            (void)show_off(led);
+            break;
+        }
     }
-    case ACT_DELAYED_RED:
-        /* The outage survived the grace period: now it is worth showing. */
+    if (led->act != ACT_NONE && elapsed_ms > 0) led->act_ms -= elapsed_ms;
+
+    /* An outage that outlived its grace period outranks whatever is on screen: the ring is being
+     * asked to say the link is gone, and nothing else matters as much as that. */
+    if (outage_fired) {
         return show_single(led, WY_LED_STATE_ERROR, WY_LED_RED_R, WY_LED_RED_G, WY_LED_RED_B, 1);
-    default:
-        break;
     }
-    (void)elapsed_ms;
-    return show_off(led);
+    return 0;
 }
 
 int wy_led_set_brightness(wy_led *led, unsigned level_1_31)
@@ -335,4 +373,9 @@ int wy_led_set_brightness(wy_led *led, unsigned level_1_31)
 }
 
 unsigned wy_led_state(const wy_led *led) { return led ? led->state : 0u; }
-int wy_led_red_pending(const wy_led *led) { return led && led->act == ACT_DELAYED_RED; }
+int wy_led_red_pending(const wy_led *led)
+{
+    /* True only while the grace period is still running. An outage that has already shown red,
+     * or one that has been cancelled by a reconnect, is not pending. */
+    return led && led->outage && led->outage_ms > 0;
+}

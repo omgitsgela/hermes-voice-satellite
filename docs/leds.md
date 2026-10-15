@@ -3,7 +3,7 @@
 The satellite speaks in lights as well as in tone and voice. This document is the vocabulary: what
 each phase means, what colour it is, and how long it lasts.
 
-**Both satellites use the same vocabulary.** `wyoming1` (the Raspberry Pi) drives its 3 × APA102
+**Both satellites use the same vocabulary.** The Raspberry Pi satellite drives its 3 × APA102
 from `pi/2mic_service.py`; `wyoming2` (the ESP32 + XVF3800) drives its 12 × WS2812 ring from
 `firmware/esp32/components/wy_led/`. The colours and the meanings are copied deliberately, so
 someone who learns the lights on one device has learned them on both. If you change a colour,
@@ -17,6 +17,10 @@ change it in all three places: here, `wy_led.h`, and `pi/2mic_service.py`.
 | **Ready** | green | single, ×3 flash | 3 × 0.3 s on / 0.3 s off | first connection of this boot: "I am ready" |
 | **Reconnect** | black | off | — | a reconnect is silent |
 | **Trouble connecting** | red | single | until it reconnects | the link is genuinely gone |
+
+A disconnect goes **dark immediately**. Whatever the ring was showing — speech, a flash, the ready
+handshake — was about a session that no longer exists, and leaving it lit would claim otherwise for
+the whole grace period. Red then appears only if the outage survives the 30 seconds.
 | **Wake** | rainbow | rainbow (circular sweep) | the length of the activation tone | "I heard you" |
 | **Listening** | black ring + white marker | **direction of arrival** | while the query runs | the bright point is where the person is |
 | **Voice started** | yellow | single | until the next phase | the microphone is open |
@@ -52,9 +56,31 @@ On activation the ring sweeps a rainbow for as long as the ding rings, then sett
 mode on its own. That sequence — sweep during the tone, point during the query — is the whole
 design intent.
 
+**The sweep is measured from the moment the tone is queued, not from the moment it is heard.** The
+playback pump has to prime its DMA and settle the amplifier first, which typically costs 50–150 ms,
+so the audible tone runs later and longer than its 308 ms of rendered audio. The sweep is 400 ms
+to cover the audible window rather than the render length. Making it exact would mean notifying on
+playback *onset* rather than on enqueue, which is the honest fix and is not done yet.
+
 The four beams can be read back (`AEC_AZIMUTH_VALUES`: focused 1, focused 2, free-running,
 auto-selected, in radians), and `led_status_read_doa()` exposes the auto-selected one for
 diagnostics.
+
+## Which phases are live today
+
+The vocabulary is complete and the core implements every phase. What is wired to a real event and
+what is not matters when you are reading the lights:
+
+| Phase | Wired |
+|---|---|
+| Boot, Ready, Reconnect, Trouble connecting | **live** |
+| Wake sweep, Listening (direction) | **live** |
+| Voice started, Transcript, Thinking, Speaking, Follow-up, Idle, Error | **not yet** |
+
+The unwired ones need an injected phase callback at the session boundary, so the Wyoming session can
+announce "a transcript arrived" and "the answer is being worked out" without the host-testable core
+depending on ESP headers. Until that exists, a query will show the sweep and the direction marker
+and then go dark, and the violet thinking glow will not appear.
 
 ## What the hardware can and cannot do
 

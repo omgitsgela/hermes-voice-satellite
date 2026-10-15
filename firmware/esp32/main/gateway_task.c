@@ -233,9 +233,9 @@ static void cfg_stage_wake(const char *key, const char *value) {
 
 /* The apply adapter: the device's real "what can I actually apply" half. It sets the LIVE
  * playback volume (the one setting with a live path -- the next audio slice picks it up), stages
- * the wake settings to NVS for the next increment, and is HONEST about the rest: mic_gain /
- * led_brightness / locale / update_channel have no live adapter, so they are never put in
- * `actual`. The health reported is degraded whenever any desired key is not in `actual` (which
+ * wake settings to NVS for the next increment, applies led_brightness to the ring, and is HONEST
+ * about the rest: mic_gain / locale / update_channel have no live adapter, so they are never put
+ * in `actual`. The health reported is degraded whenever any desired key is not in `actual` (which
  * is always, on this device, because the bridge sends the full 7-key profile). Only what is
  * really applied goes in `actual` -- nothing is claimed that was not. */
 static int cfg_apply(void *user, const char *settings_json,
@@ -281,6 +281,21 @@ static int cfg_apply(void *user, const char *settings_json,
     const cJSON *word = cJSON_GetObjectItemCaseSensitive(settings, "wake_word");
     if (word && cJSON_IsString(word) && word->valuestring)
         cfg_stage_wake("wake_word", word->valuestring);
+    /* led_brightness: NOW a live adapter. It was staged as "no adapter" before the ring had a
+     * driver, which left every device pinned at full regardless of what the fleet asked for. The
+     * fleet's scale is 1-31 (docs/configuration-plane.md); the ring's own scale is 0-255 and the
+     * core does the scaling. Only a value the device actually took is reported in `actual`. */
+    const cJSON *brightness = cJSON_GetObjectItemCaseSensitive(settings, "led_brightness");
+    if (brightness) {
+        if (cJSON_IsNumber(brightness) && !cJSON_IsBool(brightness) &&
+            brightness->valuedouble >= 1 && brightness->valuedouble <= 31 &&
+            brightness->valuedouble == (double)(long)brightness->valuedouble &&
+            led_status_set_brightness((unsigned)brightness->valuedouble) == 0) {
+            cJSON_AddNumberToObject(actual, "led_brightness", brightness->valuedouble);
+        } else {
+            degraded = 1;
+        }
+    }
     /* Any desired key that did not land in `actual` makes this a partial apply. */
     if (!cJSON_Compare(actual, settings, 1)) degraded = 1;
     *out_health = degraded ? WY_CFG_HEALTH_DEGRADED : WY_CFG_HEALTH_HEALTHY;
@@ -318,7 +333,9 @@ static void gateway_task_on_link_down(void *user) {
      * by peer"). This path is reached at the exact moment a voice reply should arrive, and until
      * now it has been silent. */
     ESP_LOGW("gwlink", "on_link_down: the gateway link is going away (user=%p)", user);
-    led_have_connected = 0;
+    /* NOT led_have_connected = 0. This latch is "has this MCU boot ever reached the host", and a
+     * disconnect is not a reboot. Clearing it here made every reconnect flash green, which turns
+     * the once-per-boot handshake into a routine blink people learn to ignore. */
     led_status_disconnected();   /* red only if it stays away: see docs/leds.md */
     (void)user;
     audio_capture_stop();
@@ -495,7 +512,8 @@ int gateway_task_start(const char *host, unsigned port, int transport,
     /* The ring says "starting up" before anything else can fail, and keeps saying it until the
      * host connects. A device with power and no network should be visibly alive, not dark. */
     if (led_status_start() == 0) (void)led_status_boot();
-    led_have_connected = 0;
+    /* The latch is NOT reset here either: restarting the gateway session is not a reboot, and the
+     * startup look must not replay for it. led_status_boot() itself is once-per-boot. */
 
     if (device_identity(state.device_id, sizeof(state.device_id),
                         state.boot_id, sizeof(state.boot_id)) != 0) return -1;

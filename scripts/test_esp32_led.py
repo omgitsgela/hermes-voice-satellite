@@ -104,10 +104,15 @@ class LedHarness(unittest.TestCase):
         self.assertEqual(colour.params[3], 0, 'the fourth byte is reserved and must be zero')
 
     def test_the_command_ids_match_seeeds_published_example(self):
-        """EFFECT 12, BRIGHTNESS 13, SPEED 15, COLOR 16: from Seeed's own Arduino sketch."""
-        self.lib.wy_led_error(self.buf)
-        self.assertIsNotNone(self.last(12))
-        self.assertIsNotNone(self.last(16))
+        """EFFECT 12, BRIGHTNESS 13, SPEED 15, COLOR 16: from Seeed's own Arduino sketch.
+        Every one is asserted, because a wrong ID in any of them is a feature that silently
+        does nothing. They are not all written by one lifecycle call -- brightness is set at
+        boot and on change, not on every look -- so drive the paths that own each."""
+        self.lib.wy_led_boot(self.buf)               # brightness 13, colour 16, speed 15, effect 12
+        self.lib.wy_led_set_brightness(self.buf, 20)  # brightness 13 again
+        self.lib.wy_led_thinking(self.buf)            # colour 16, speed 15, effect 12
+        for cmd in (12, 13, 15, 16):
+            self.assertIsNotNone(self.last(cmd), f'command {cmd} was never emitted')
 
     # --- the palette, byte for byte against pi/2mic_service.py ---
 
@@ -136,6 +141,27 @@ class LedHarness(unittest.TestCase):
         self.lib.wy_led_boot(self.buf)
         self.assertEqual(self.last(16).params[:3], bytes([255, 255, 255]))
         self.assertEqual(self.effect_of(), 1, 'the startup look pulses')
+
+    def test_one_coarse_tick_completes_the_whole_flash(self):
+        """REGRESSION: elapsed time beyond the current step was discarded, so a single large tick
+        stretched the sequence instead of finishing it. Equivalent durations must give the same
+        result whatever they are partitioned into."""
+        self.lib.wy_led_connected(self.buf, 1)
+        self.writes.clear()
+        self.tick(1800)                              # the entire flash, in one go
+        effects = [w.params[0] for w in self.writes if w.cmd == 12]
+        self.assertEqual(effects, [0, 3, 0, 3, 0],
+                         'the five remaining phases all run inside one tick')
+        self.assertEqual(self.lib.wy_led_state(self.buf), 0, 'ends dark')
+        self.assertEqual(self.lib.wy_led_red_pending(self.buf), 0)
+
+    def test_a_tick_split_irregularly_gives_the_same_result(self):
+        self.lib.wy_led_connected(self.buf, 1)
+        self.writes.clear()
+        for step in (100, 200, 700, 100, 700):
+            self.tick(step)
+        effects = [w.params[0] for w in self.writes if w.cmd == 12]
+        self.assertEqual(effects, [0, 3, 0, 3, 0], 'irregular ticks give the same phases')
 
     def test_the_first_connect_flashes_green_three_times(self):
         self.lib.wy_led_boot(self.buf)
@@ -168,10 +194,32 @@ class LedHarness(unittest.TestCase):
 
     # --- red is an OUTAGE, never a blink ---
 
-    def test_a_disconnect_does_not_show_red_immediately(self):
+    def test_a_disconnect_goes_dark_immediately(self):
+        """The ring stops claiming a session that no longer exists, but says nothing else."""
+        self.lib.wy_led_speaking(self.buf)          # something lit to begin with
         self.lib.wy_led_disconnected(self.buf)
-        self.assertIsNone(self.effect_of(), 'nothing at all is commanded at the moment of disconnect')
-        self.assertEqual(self.lib.wy_led_red_pending(self.buf), 1)
+        self.assertEqual(self.effect_of(), 0, 'the ring goes dark the moment the link is lost')
+        self.assertEqual(self.lib.wy_led_red_pending(self.buf), 1, 'and the grace period runs')
+
+    def test_a_presentation_during_an_outage_cannot_cancel_the_pending_red(self):
+        """REGRESSION: an idle used to clear the pending red, so a real sustained outage never
+        turned the ring red at all. An outage is a fact about the link, not a thing being shown."""
+        self.lib.wy_led_disconnected(self.buf)
+        self.tick(10000)
+        self.lib.wy_led_idle(self.buf)               # would have cancelled it before the fix
+        self.lib.wy_led_thinking(self.buf)
+        self.lib.wy_led_error(self.buf)
+        self.assertEqual(self.lib.wy_led_red_pending(self.buf), 1,
+                         'a later presentation must not swallow the outage')
+        self.tick(20001)
+        self.assertEqual(self.effect_of(), 3, 'the outage survives the grace period and shows red')
+        self.assertEqual(self.colour_of(), bytes([255, 0, 0]))
+
+    def test_a_link_down_stops_claiming_speech(self):
+        self.lib.wy_led_speaking(self.buf)
+        self.lib.wy_led_disconnected(self.buf)
+        self.assertEqual(self.lib.wy_led_state(self.buf), 0,
+                         'a disconnect during an answer must not leave it looking like speech')
 
     def test_red_appears_only_after_the_grace_period(self):
         self.lib.wy_led_disconnected(self.buf)
@@ -233,7 +281,9 @@ class LedHarness(unittest.TestCase):
     def test_transcript_is_green_and_brief(self):
         self.lib.wy_led_transcript(self.buf)
         self.assertEqual(self.last(16).params[:3], bytes([0, 255, 0]))
-        self.tick(1001)
+        self.tick(999)
+        self.assertEqual(self.effect_of(), 3, 'it is still green just before the second is up')
+        self.tick(2)
         self.assertEqual(self.effect_of(), 0, 'it does not stay green')
 
     def test_idle_is_dark(self):
@@ -243,6 +293,7 @@ class LedHarness(unittest.TestCase):
     def test_speaking_is_the_working_colour(self):
         self.lib.wy_led_speaking(self.buf)
         self.assertEqual(self.last(16).params[:3], bytes([150, 70, 255]))
+        self.assertEqual(self.effect_of(), 3, 'solid while the answer is audible')
 
     # --- brightness ---
 
