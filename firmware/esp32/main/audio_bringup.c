@@ -19,7 +19,10 @@
 #define XVF_I2S_WS_PIN         GPIO_NUM_7
 #define XVF_I2S_TX_PIN         GPIO_NUM_44
 #define XVF_I2S_RX_PIN         GPIO_NUM_43
-#define XVF_I2S_RATE_HZ        16000
+/* The 48 kHz profile: the I2S link runs at 48 kHz in both directions, matching the Seeed
+ * reference (docs/audio-fidelity.md). The ESP32 is the clock MASTER and the XVF3800 PLLs its
+ * own MCLK from BCLK, so this constant is what sets the whole board's rate. */
+#define XVF_I2S_RATE_HZ        48000
 
 /* Application Servicer (system) VERSION read: resid 48, cmd 0, three bytes. The I2C read protocol
  * is a 3-byte write [resid, cmd|0x80, read_len+1] followed by [status, data...]; status 0 is

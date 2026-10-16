@@ -59,7 +59,10 @@ typedef struct {
     int playback_ended;   /* 1 after audio-stop (the ring still drains) */
     int playback_volume;  /* percent, the no-silence floor applied in wy_apply_volume */
     int playback_rate;    /* the stream's rate, from audio-start (the bridge's 22050) */
-    wy_resampler playback_rs;
+    /* The bridge's TTS is 22050 Hz and the link is WY_AUDIO_I2S_RATE_HZ, so playback is
+     * up-sampled. wy_upsampler, not wy_resampler: see wyoming_audio.h for why the up-sampler
+     * needs its own state. */
+    wy_upsampler playback_rs;
     int32_t *ring;        /* caller-provided; NULL on the host until configured */
     size_t ring_capacity; /* bytes */
     size_t ring_head;     /* read pointer, bytes consumed */

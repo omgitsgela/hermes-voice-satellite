@@ -205,6 +205,13 @@ them, and the pattern is written down with the contract rather than with the inc
 [`configuration-plane.md`](configuration-plane.md) for the configuration plane and
 [`timers-and-alarms.md`](timers-and-alarms.md) for the timer store.
 
+## Done
+
+- **48 kHz audio path** — the I2S link now runs at 48 kHz in both directions, matching the Seeed
+  reference profile. Playback keeps the bridge's full TTS bandwidth instead of being low-passed at
+  7400 Hz. See `docs/audio-fidelity.md`. The capture side decimates back to 16 kHz for the wake
+  model and the uplink, which are 16 kHz contracts and did not change.
+
 ## Planned, not yet started
 
 These are design intentions, not commitments. Each needs its own decision note before work starts.

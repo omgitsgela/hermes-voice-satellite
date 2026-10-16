@@ -15,6 +15,12 @@
  * the ceiling, not the cadence. */
 #define WY_AUDIO_CHUNK_SAMPLES 1024u
 
+/* The board's I2S link rate, in both directions. This is THE constant for the 48 kHz profile
+ * (docs/audio-fidelity.md); audio_bringup.c, audio_capture.c and audio_playback.c each set their
+ * channel clocks from it and must agree. A local tone rendered at 16 kHz must be up-sampled to
+ * this rate before it reaches the ring, or it plays three times too fast and far too high. */
+#define WY_AUDIO_I2S_RATE_HZ 48000u
+
 /* One playback resampler per stream: the bridge's TTS arrives at 22050 Hz (SND_FORMAT) but
  * the board's I2S clock is 16 kHz (shared with the capture), so the device resamples playback
  * down. It keeps an ABSOLUTE input cursor, so the output grid is independent of how the audio
@@ -43,6 +49,62 @@ typedef struct wy_resampler {
 size_t wy_resample_22050_to_16000(wy_resampler *r, const int16_t *in, size_t n,
                                   int16_t *out, size_t cap);
 void wy_resampler_reset(wy_resampler *r);   /* fresh stream: cursor and base back to 0 */
+
+/* The 48 kHz profile (docs/audio-fidelity.md): the board's I2S clock runs at 48 kHz in both
+ * directions, matching the Seeed reference, so playback no longer has to be crushed into 16 kHz.
+ * Two conversions are needed and they are NOT symmetric, which is the whole point of writing
+ * both explicitly rather than parameterising one:
+ *
+ *   wy_resample_22050_to_48000   UP-samples the bridge's TTS. No anti-aliasing filter: up-
+ *                                sampling cannot alias, and running the 7400 Hz low-pass that
+ *                                the 16 kHz path needs would throw away exactly the 7.4-11 kHz
+ *                                content this profile exists to KEEP. Linear interpolation
+ *                                already suppresses the interpolation images enough for a
+ *                                voice.
+ *
+ *   wy_decimate_48000_to_16000   DOWN-samples captured audio 3:1 for the wake model and the
+ *                                uplink, both of which are 16 kHz contracts. This one MUST
+ *                                low-pass first: 48 kHz input carries energy to 24 kHz and
+ *                                every component above 8 kHz would fold back into the voice.
+ *
+ * Both keep wy_resampler's absolute-cursor contract: feeding the same total input in any
+ * chunking produces the same output sequence. */
+/* The up-sampler keeps its own state rather than sharing wy_resampler: cubic interpolation needs
+ * a small history (two samples behind the cursor) that the FIR-based down-sampler's prev_value
+ * does not provide, and bolting one onto the other would make both harder to reason about.
+ * hist[] holds the last three RAW input samples consumed (hist[0] is the oldest of the three). */
+typedef struct wy_upsampler {
+    double position;      /* absolute input offset of the next output sample */
+    double consumed;      /* absolute input offset of the start of the NEXT chunk */
+    int16_t hist[3];      /* the last three raw input samples: k = -3, -2, -1 */
+    double ratio;         /* input samples per output sample (in_rate / out_rate) */
+} wy_upsampler;
+
+/* Reset for the bridge's TTS: 22050 Hz in, 48000 Hz out. */
+void wy_upsampler_reset(wy_upsampler *u);
+
+/* Reset for any other rate pair. The local tones (chime, done tone) are rendered at 16 kHz by
+ * the same generator the Pi satellite uses, and the I2S link is 48 kHz, so they need a 16000 -> 48000
+ * up-sample or they play three times too fast and an octave and a half too high. */
+void wy_upsampler_reset_at(wy_upsampler *u, double in_rate, double out_rate);
+
+size_t wy_resample_22050_to_48000(wy_upsampler *u, const int16_t *in, size_t n,
+                                  int16_t *out, size_t cap);
+
+/* A 48 kHz -> 16 kHz decimator: one anti-aliasing FIR history plus the 3:1 phase. The phase is
+ * carried across chunks so a chunk boundary cannot shift which samples survive. */
+typedef struct wy_decimator {
+    int16_t hist[WY_FIR_TAPS - 1];   /* previous raw samples, so the FIR is continuous */
+    int phase;                        /* input samples consumed mod 3: 0 emits a sample */
+} wy_decimator;
+
+void wy_decimator_reset(wy_decimator *d);
+
+/* Feed the next chunk of `n` 48000 Hz mono S16 samples and emit up to `cap` 16000 Hz mono S16
+ * samples (one per three input samples, after the low-pass). Returns how many were written.
+ * Bounded: never reads past in[n), never writes past out[cap]. */
+size_t wy_decimate_48000_to_16000(wy_decimator *d, const int16_t *in, size_t n,
+                                  int16_t *out, size_t cap);
 
 /* Playback volume. The project rule (docs/volume.md): NO PATH MAY TAKE THE DEVICE TO SILENCE.
  * A value of 0, or a value below the floor, becomes the floor -- a small but non-zero gain --

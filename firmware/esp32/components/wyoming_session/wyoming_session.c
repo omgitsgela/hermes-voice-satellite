@@ -62,6 +62,16 @@ static const char *session_wake_name(const wy_session *s) {
  * single-threaded, so the lock compiles out and the layout is unchanged. */
 #define WY_PLAYBACK_MONO_MAX   2048u   /* int16: resampled 16 kHz mono, one slice */
 #define WY_PLAYBACK_FRAME_MAX  4096u   /* int32: stereo-32 frames, one slice */
+
+/* The largest 22050 Hz INPUT slice whose up-sampled result still fits WY_PLAYBACK_MONO_MAX.
+ * 22050 -> 48000 expands by 2.177 and the up-sampler needs two samples of lookahead, so at most
+ * (2048 - 2) * 22050 / 48000 = 940 input samples may be fed per call.
+ *
+ * This bound matters, not just tidies: wy_resample_22050_to_48000 stops when its OUTPUT buffer
+ * fills, and marks the whole input chunk consumed regardless. Feed it more than 940 samples in
+ * one call and the tail of the answer is silently discarded -- audible as a reply cut short. The
+ * caller therefore slices its input to this, exactly as wy_session_local_play does for a tone. */
+#define WY_PLAYBACK_IN_MAX     940u   /* 22050 Hz samples per call: never overflows the scratch */
 static int16_t playback_mono_scratch[WY_PLAYBACK_MONO_MAX];
 static int32_t playback_frame_scratch[WY_PLAYBACK_FRAME_MAX];
 #ifdef ESP_PLATFORM
@@ -136,7 +146,7 @@ int wy_session_playback_configure(wy_session *session, int32_t *ring, size_t rin
     session->playback_volume = volume;   /* clamped in wy_apply_volume; the floor never silences */
     session->playback_active = 0;
     session->playback_ended = 0;
-    wy_resampler_reset(&session->playback_rs);
+    wy_upsampler_reset(&session->playback_rs);
     playback_ring_lock_give();
     return WY_OK;
 }
@@ -171,31 +181,40 @@ int wy_session_local_play(wy_session *session, const int16_t *mono, size_t n) {
              (unsigned)n, (unsigned)session->ring_capacity, (unsigned)session->playback_volume);
     /* The device's own local tone (the wake chime): the same speaker path as a bridge answer,
      * so the pump task's amplifier policy (armed while the ring is not empty) carries it. The
-     * difference from the inbound audio-chunk path is only the source: this is already at the
-     * board's 16 kHz (the chime is rendered at that rate), so there is no resample step -- but
-     * the volume (the config plane's level, the floor never silences) and the stereo-32 expand
+     * difference from the inbound audio-chunk path is only the source: the chime is rendered at
+     * 16 kHz by the same generator the Pi satellite uses, so it is UP-SAMPLED to the link rate here
+     * (one up-sampler per tone, reset at entry, so its history is the tone's own) -- then the
+     * volume (the config plane's level, the floor never silences) and the stereo-32 expand
      * are the SAME wy_apply_volume / wy_expand_mono16_to_stereo32 the answer uses, and the ring
      * append is under the ring lock, exactly like the inbound path: the append's drop-oldest
      * touches the same head the pump advances, and the scratch is shared with every
      * wy_session_step driver, so the conversion+append is one atomic unit. Input longer than
      * one scratch slice is sliced: the scratch is file-static and shared, and a second driver
      * between slices must not find a half-converted buffer. */
+    /* One up-sampler per tone. It is reset at entry, not per slice: the cursor and the cubic
+     * history must span the whole tone or every slice boundary would step the waveform. */
+    static wy_upsampler tone_up;
+    wy_upsampler_reset_at(&tone_up, 16000.0, (double)WY_AUDIO_I2S_RATE_HZ);
+    /* The slice is sized for the UP-SAMPLED result: a 3:1 expansion must fit the scratch, so at
+     * most a third of it may be fed in. Slicing larger would overflow playback_mono_scratch. */
+    const size_t max_in = WY_PLAYBACK_MONO_MAX / 3;
     size_t remaining = n;
+    const int16_t *src = mono;
     while (remaining) {
-        size_t slice = remaining < WY_PLAYBACK_MONO_MAX ? remaining : WY_PLAYBACK_MONO_MAX;
+        size_t slice = remaining < max_in ? remaining : max_in;
         playback_ring_lock_take();
-        size_t mono_n = slice;
-        memcpy(playback_mono_scratch, mono, mono_n * 2);
+        size_t mono_n = wy_resample_22050_to_48000(&tone_up, src, slice,
+                                playback_mono_scratch, WY_PLAYBACK_MONO_MAX);
         wy_apply_volume(playback_mono_scratch, mono_n, session->playback_volume);
         size_t frame_n = wy_expand_mono16_to_stereo32(playback_mono_scratch, mono_n,
                             playback_frame_scratch, WY_PLAYBACK_FRAME_MAX);
         playback_ring_append_locked(session, playback_frame_scratch, frame_n);
         playback_ring_lock_give();
-        mono += mono_n;
+        src += slice;
         remaining -= slice;
-    }
-    return WY_OK;
-}
+        }
+        return WY_OK;
+        }
 
 int wy_session_playback_active(const wy_session *session) {
     return session ? session->playback_active : 0;
@@ -553,16 +572,26 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
                      * lock across both is what keeps a second converter or a concurrent pump
                      * read from clobbering either. The wire read is OUTSIDE the lock, so a
                      * slow reader never holds the transport up. */
-                    playback_ring_lock_take();
+                    /* Sub-slice to WY_PLAYBACK_IN_MAX so the up-sampled result always fits the
+                     * scratch (see its definition for what silently breaks otherwise). Each
+                     * sub-slice is one lock/append unit; the resampler's absolute cursor keeps
+                     * the sub-slices continuous. */
+                    const int16_t *src = (const int16_t *)session->body;
                     size_t samples = even / 2;
-                    size_t mono_n = wy_resample_22050_to_16000(&session->playback_rs,
-                                        (const int16_t *)session->body, samples,
-                                        playback_mono_scratch, WY_PLAYBACK_MONO_MAX);
-                    wy_apply_volume(playback_mono_scratch, mono_n, session->playback_volume);
-                    size_t frame_n = wy_expand_mono16_to_stereo32(playback_mono_scratch, mono_n,
-                                        playback_frame_scratch, WY_PLAYBACK_FRAME_MAX);
-                    playback_ring_append_locked(session, playback_frame_scratch, frame_n);
-                    playback_ring_lock_give();
+                    while (samples) {
+                        size_t take = samples < WY_PLAYBACK_IN_MAX ? samples : WY_PLAYBACK_IN_MAX;
+                        playback_ring_lock_take();
+                        size_t mono_n = wy_resample_22050_to_48000(&session->playback_rs,
+                                            src, take,
+                                            playback_mono_scratch, WY_PLAYBACK_MONO_MAX);
+                        wy_apply_volume(playback_mono_scratch, mono_n, session->playback_volume);
+                        size_t frame_n = wy_expand_mono16_to_stereo32(playback_mono_scratch, mono_n,
+                                            playback_frame_scratch, WY_PLAYBACK_FRAME_MAX);
+                        playback_ring_append_locked(session, playback_frame_scratch, frame_n);
+                        playback_ring_lock_give();
+                        src += take;
+                        samples -= take;
+                    }
                     remaining -= even;
                 }
                 if (remaining & 1) {
@@ -678,7 +707,7 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
         if (cJSON_IsNumber(rate) && rate->valuedouble == 22050 &&
             cJSON_IsNumber(width) && width->valuedouble == 2 &&
             cJSON_IsNumber(channels) && channels->valuedouble == 1) {
-            wy_resampler_reset(&session->playback_rs);
+            wy_upsampler_reset(&session->playback_rs);
             /* Reset the ring under the lock: the playback task may be mid-read (draining the
              * last answer) while the bridge starts the next one, so an unlocked reset would
              * race the reader's head advance. */

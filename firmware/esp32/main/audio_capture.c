@@ -20,7 +20,10 @@
 #define CAPTURE_I2S_BCLK_PIN   GPIO_NUM_8
 #define CAPTURE_I2S_WS_PIN     GPIO_NUM_7
 #define CAPTURE_I2S_RX_PIN     GPIO_NUM_43
-#define CAPTURE_I2S_RATE_HZ    16000
+/* 48 kHz I2S, per docs/audio-fidelity.md. The wake model and the Wyoming uplink are 16 kHz
+ * contracts, so audio_capture_send_chunk decimates 3:1 after the downmix; everything downstream
+ * of that point is unchanged and still speaks 16 kHz. */
+#define CAPTURE_I2S_RATE_HZ    48000
 /* Same MCLK as the playback side: capture and playback share one I2S port in
  * full-duplex, so there is one master clock for both. */
 #define CAPTURE_I2S_MCLK_PIN   GPIO_NUM_9
@@ -98,12 +101,29 @@ static uint32_t chunks_dropped;
 static uint32_t samples_sent;
 static uint32_t samples_dropped;
 
+/* The capture path's 48 kHz -> 16 kHz decimator. ONE instance, driven only from the capture
+ * task (audio_capture_send_chunk is called from nowhere else), so its phase history is the
+ * stream's own and needs no lock. Reset when a fresh stream starts. */
+static wy_decimator capture_decim;
+
+void audio_capture_reset_decimator(void) {
+    wy_decimator_reset(&capture_decim);
+}
+
 void audio_capture_send_chunk(const int32_t *frames, size_t frame_count) {
     if (!frames || !capture.session) return;
-    int16_t mono[AUDIO_CAPTURE_FRAMES];
-    size_t samples = wy_audio_downmix_mono16(frames, frame_count, mono,
-                                             sizeof(mono) / sizeof(mono[0]));
+    /* Two stages, in this order. The downmix runs at the I2S rate (48 kHz); the decimator then
+     * takes 3:1 down to the 16 kHz the wake model and the Wyoming uplink both contract for.
+     * Decimating IN PLACE is safe because the decimator emits one sample per three read, so its
+     * write index never overtakes its read index. */
+    int16_t wide[AUDIO_CAPTURE_FRAMES];                 /* 48 kHz, the I2S rate */
+    int16_t mono[AUDIO_CAPTURE_CHUNK_SAMPLES];          /* 16 kHz, the contract rate */
+    size_t samples = wy_audio_downmix_mono16(frames, frame_count, wide,
+                                             sizeof(wide) / sizeof(wide[0]));
     if (!samples) return;
+    samples = wy_decimate_48000_to_16000(&capture_decim, wide, samples,
+                                         mono, sizeof(mono) / sizeof(mono[0]));
+    if (!samples) return;   /* fewer than three input samples since the last chunk: nothing yet */
     /* D1 (increment 4): every downmixed chunk feeds the LOCAL wake detector first, always --
      * before the wake the chunk goes only to the detector (the reference's "audio goes to the
      * wake engine, not to the bridge"). The detector is driven from this task alone (its

@@ -152,6 +152,127 @@ size_t wy_resample_22050_to_16000(wy_resampler *r, const int16_t *in, size_t n,
     return written;
 }
 
+/* The 48 kHz profile's up-sampler: 22050 Hz TTS in, 48000 Hz out. See wyoming_audio.h for why
+ * there is deliberately NO anti-aliasing filter here (up-sampling cannot alias, and the 16 kHz
+ * path's 7400 Hz low-pass is exactly what this profile exists to stop doing). The cursor,
+ * seam handling and chunking contract are wy_resample_22050_to_16000's, minus the FIR: the
+ * interpolation reads the RAW input samples. */
+#define WY_RESAMPLE_UP_RATIO  (22050.0 / 48000.0)
+
+void wy_upsampler_reset_at(wy_upsampler *u, double in_rate, double out_rate) {
+    if (u) {
+        u->position = 0.0; u->consumed = 0.0;
+        u->hist[0] = u->hist[1] = u->hist[2] = 0;
+        /* The ratio is input-samples-per-output-sample, so an UP-sampler has ratio < 1
+         * (22050/48000 = 0.459). Do not "helpfully" clamp it up to 1: that silently turns the
+         * up-sampler into a pass-through and plays everything one octave down at the wrong
+         * speed. Only a non-positive rate is invalid, and unity is the safe fallback there. */
+        u->ratio = (out_rate > 0.0 && in_rate > 0.0) ? (in_rate / out_rate) : 1.0;
+        if (u->ratio <= 0.0) u->ratio = 1.0;
+    }
+}
+
+void wy_upsampler_reset(wy_upsampler *u) {
+    wy_upsampler_reset_at(u, 22050.0, 48000.0);
+}
+
+/* The raw sample at chunk-local index k, where k may be -3..-1 (from the carried history).
+ * Returns 0 for anything genuinely unavailable; the caller checks before relying on it. */
+static int16_t wy_up_at(const wy_upsampler *u, const int16_t *in, size_t n, long k) {
+    if (k >= 0 && (size_t)k < n) return in[k];
+    if (k == -1) return u->hist[2];
+    if (k == -2) return u->hist[1];
+    if (k == -3) return u->hist[0];
+    return 0;
+}
+
+/* Catmull-Rom cubic through four points. Linear interpolation is a first-order hold and loses
+ * 44% of the amplitude of a 9 kHz tone on a 22050 -> 48000 up-sample -- audible dulling, on the
+ * exact band this profile exists to preserve. Cubic costs three more multiplies per output
+ * sample and keeps that band essentially flat. */
+static int16_t wy_cubic(int16_t p0, int16_t p1, int16_t p2, int16_t p3, double t) {
+    double a = (double)p1;
+    double b = 0.5 * ((double)p2 - (double)p0);
+    double c = (double)p0 - 2.5 * (double)p1 + 2.0 * (double)p2 - 0.5 * (double)p3;
+    double d = -0.5 * (double)p0 + 1.5 * (double)p1 - 1.5 * (double)p2 + 0.5 * (double)p3;
+    double v = ((d * t + c) * t + b) * t + a;
+    int32_t r = (int32_t)llround(v);
+    if (r > 32767) r = 32767;
+    if (r < -32768) r = -32768;
+    return (int16_t)r;
+}
+
+size_t wy_resample_22050_to_48000(wy_upsampler *u, const int16_t *in, size_t n,
+                                  int16_t *out, size_t cap) {
+    if (!u || !in || !out || n == 0 || cap == 0) return 0;
+    double base = u->consumed;
+    size_t written = 0;
+
+    while (written < cap) {
+        double p = u->position;
+        long i0 = (long)floor(p - base);       /* the sample at or just below the cursor */
+        double t = (p - base) - (double)i0;    /* fraction between i0 and i0+1 */
+        /* Cubic needs i0-1 .. i0+2. History covers -3..-1; the chunk covers 0..n-1. */
+        if (i0 + 2 >= (long)n) break;          /* not enough input ahead yet: the next chunk
+                                                  will produce these, with the same cursor */
+        out[written++] = wy_cubic(wy_up_at(u, in, n, i0 - 1), wy_up_at(u, in, n, i0),
+                                  wy_up_at(u, in, n, i0 + 1), wy_up_at(u, in, n, i0 + 2), t);
+        u->position += u->ratio;
+    }
+    /* Carry the last three raw samples so the next chunk's cubic still spans the seam. */
+    if (n >= 3) {
+        u->hist[0] = in[n - 3]; u->hist[1] = in[n - 2]; u->hist[2] = in[n - 1];
+    } else {
+        for (size_t k = 0; k < n; ++k) { u->hist[0] = u->hist[1]; u->hist[1] = u->hist[2]; u->hist[2] = in[k]; }
+    }
+    u->consumed = base + (double)n;
+    return written;
+}
+
+/* Anti-aliasing filter for the 48000 -> 16000 decimator. 32 taps, Hann window, cutoff 7500 Hz
+ * (the output's Nyquist is 8 kHz, so 7.5 kHz leaves a small transition band), unity DC gain.
+ * Q15. The accumulator below is int64: 32 taps at max |tap| 9815 over full-scale int16 input
+ * reaches ~1.0e10, which a 32-bit accumulator cannot hold. */
+static const int16_t wy_decim_fir_q15[WY_FIR_TAPS] = {
+         0,       7,      20,     -22,    -135,    -181,      35,     459,
+       645,      98,   -1056,   -1789,    -761,    2482,    6766,    9815,
+      9815,    6766,    2482,    -761,   -1789,   -1056,      98,     645,
+       459,      35,    -181,    -135,     -22,      20,       7,       0
+};
+
+void wy_decimator_reset(wy_decimator *d) {
+    if (d) {
+        for (int i = 0; i < WY_FIR_TAPS - 1; ++i) d->hist[i] = 0;
+        d->phase = 0;
+    }
+}
+
+size_t wy_decimate_48000_to_16000(wy_decimator *d, const int16_t *in, size_t n,
+                                  int16_t *out, size_t cap) {
+    if (!d || !in || !out || n == 0 || cap == 0) return 0;
+    size_t written = 0;
+    for (size_t k = 0; k < n && written < cap; ++k) {
+        /* Build the tap window for this input sample: hist holds the previous TAPS-1 raw
+         * samples and in[k] is the newest, so the window is [hist[0..TAPS-2], in[k]]. */
+        int64_t acc = 0;
+        for (int i = 0; i < WY_FIR_TAPS - 1; ++i) {
+            acc += (int64_t)wy_decim_fir_q15[i] * (int64_t)d->hist[i];
+        }
+        acc += (int64_t)wy_decim_fir_q15[WY_FIR_TAPS - 1] * (int64_t)in[k];
+        for (int i = 0; i < WY_FIR_TAPS - 2; ++i) d->hist[i] = d->hist[i + 1];
+        d->hist[WY_FIR_TAPS - 2] = in[k];
+
+        if (d->phase == 0) {
+            int32_t v = (int32_t)((acc + 16384) >> 15);
+            if (v > 32767) v = 32767;
+            if (v < -32768) v = -32768;
+            out[written++] = (int16_t)v;
+        }
+        d->phase = (d->phase + 1) % 3;   /* carried across chunks: a boundary cannot shift phase */
+    }
+    return written;
+}
+
 size_t wy_apply_volume(int16_t *pcm, size_t n, int percent) {
     if (!pcm || n == 0) return 0;
     if (percent < WY_VOLUME_FLOOR_PERCENT) percent = WY_VOLUME_FLOOR_PERCENT;

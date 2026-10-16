@@ -47,7 +47,10 @@
 #define PLAYBACK_I2S_BCLK_PIN  GPIO_NUM_8
 #define PLAYBACK_I2S_WS_PIN    GPIO_NUM_7
 #define PLAYBACK_I2S_TX_PIN    GPIO_NUM_44
-#define PLAYBACK_I2S_RATE_HZ   16000
+/* 48 kHz I2S, per docs/audio-fidelity.md. This is the profile's real win: the bridge's TTS at
+ * 22050 Hz is now UP-sampled to 48 kHz instead of being low-passed at 7400 Hz and crushed into
+ * 16 kHz. The voice keeps its full bandwidth. */
+#define PLAYBACK_I2S_RATE_HZ   48000
 /* MCLK feeds the XVF3800 and, through it, the AIC3104: GPIO9 on the XIAO ESP32S3.
  * Seeed publishes this pin as part of the board's I2S pin map. */
 #define PLAYBACK_I2S_MCLK_PIN  GPIO_NUM_9
@@ -667,8 +670,8 @@ int audio_playback_start(void) {
         return -1;
     }
     /* Size the amp's drain rest (F4) from the real DMA queue the driver allocated, not a guess.
-     * total_dma_buf_size is the whole queue in bytes; at 16 kHz * 2 channels * 4 bytes per
-     * word = 128000 bytes/second that is a real-time duration. It is an UPPER bound on how long
+     * total_dma_buf_size is the whole queue in bytes; at 48 kHz * 2 channels * 4 bytes per
+     * word = 384000 bytes/second that is a real-time duration. It is an UPPER bound on how long
      * audio can still be sounding after the ring drains, so resting the amp that long can never
      * clip the tail, and the queue is short (a few hundred ms) so the amp barely overruns its
      * silence. A failed query leaves the drain at 0, i.e. the pre-fix behaviour: still safe
