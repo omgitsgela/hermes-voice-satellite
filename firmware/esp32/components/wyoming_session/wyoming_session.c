@@ -191,9 +191,14 @@ int wy_session_local_play(wy_session *session, const int16_t *mono, size_t n) {
      * wy_session_step driver, so the conversion+append is one atomic unit. Input longer than
      * one scratch slice is sliced: the scratch is file-static and shared, and a second driver
      * between slices must not find a half-converted buffer. */
-    /* One up-sampler per tone. It is reset at entry, not per slice: the cursor and the cubic
-     * history must span the whole tone or every slice boundary would step the waveform. */
-    static wy_upsampler tone_up;
+    /* One up-sampler per tone, as an AUTOMATIC (stack) variable -- not static. A file-static
+     * one was reset outside the ring lock and the lock was released between slices, so a second
+     * tone (a diagnostic tone overlapping the playback task's done tone) could reset or advance
+     * the first one's cursor and history mid-tone. The resampler's lifetime is per invocation;
+     * only the scratch and the ring are shared, and those stay under the per-slice lock.
+     * It is reset at entry rather than per slice: the cursor and the cubic history must span the
+     * whole tone or every slice boundary would step the waveform. */
+    wy_upsampler tone_up;
     wy_upsampler_reset_at(&tone_up, 16000.0, (double)WY_AUDIO_I2S_RATE_HZ);
     /* The slice is sized for the UP-SAMPLED result: a 3:1 expansion must fit the scratch, so at
      * most a third of it may be fed in. Slicing larger would overflow playback_mono_scratch. */

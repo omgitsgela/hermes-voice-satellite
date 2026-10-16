@@ -238,11 +238,65 @@ class Test48kDecimate(unittest.TestCase):
         self.assertGreater(min(tail), 9850, f"DC gain is not unity: min {min(tail)}")
         self.assertLess(max(tail), 10150, f"DC gain is not unity: max {max(tail)}")
 
+    def test_saturated_chunks_match_the_whole_stream(self):
+        """THE production shape: 480 input samples into a 160-sample output buffer, repeated.
+
+        This is the call audio_capture_send_chunk makes, and it is where the decimator used to
+        stop consuming input the moment its output filled. The last two samples of every chunk
+        were then missing from the FIR history and the phase counter, so the NEXT chunk filtered
+        against the wrong state -- 320 of 480 outputs differed from a continuous filter. This
+        asserts the real call shape produces exactly what one continuous filter would.
+        """
+        sig = tone(48000, 700, 1440, phase=0.2)     # three production chunks
+        whole = decimate(LIB, sig)                  # ample capacity, one call
+
+        d = Decimator()
+        LIB.wy_decimator_reset(C.byref(d))
+        out = (C.c_int16 * 600)()
+        total = 0
+        for start in range(0, len(sig), 480):
+            dest = C.cast(C.byref(out, total * C.sizeof(C.c_int16)), C.POINTER(C.c_int16))
+            got = LIB.wy_decimate_48000_to_16000(d, to_buf(sig[start:start + 480]), 480,
+                                                 dest, 160)   # exactly the production cap
+            self.assertEqual(got, 160, 'a 480-sample read must yield exactly 160 samples')
+            total += got
+        _assert_identical(self, list(out[:total]), whole, "saturated decimated")
+
+    def test_trailing_input_still_advances_the_phase(self):
+        """Samples that cannot produce output must still be consumed: they belong to the FIR
+        history and they advance the 3:1 phase. A decimator that forgets them misaligns the
+        next chunk."""
+        sig = tone(48000, 500, 483)
+        d = Decimator()
+        LIB.wy_decimator_reset(C.byref(d))
+        out = (C.c_int16 * 300)()
+        LIB.wy_decimate_48000_to_16000(d, to_buf(sig), 483, out, 300)
+        # 483 inputs = 161 complete groups of 3, so the phase must be back to 0, not 1 or 2.
+        self.assertEqual(d.phase, 0,
+                         f'trailing samples were not consumed: phase is {d.phase}, expected 0')
+
     def test_reset_clears_phase_and_history(self):
+        """Reset must clear a DIRTY decimator, not just describe a fresh one. The first version of
+        this test compared two separately zero-initialised objects and passed even if reset were
+        a no-op."""
         sig = tone(48000, 500, 960)
-        a = decimate(LIB, sig)
-        b = decimate(LIB, sig)     # a fresh decimator
-        self.assertEqual(a, b, "a fresh decimator did not reproduce the same output")
+        fresh = decimate(LIB, sig)
+
+        d = Decimator()
+        LIB.wy_decimator_reset(C.byref(d))
+        # Dirty it: nonzero history AND a nonzero phase.
+        dirty_in = tone(48000, 333, 500, amp=9000.0)
+        LIB.wy_decimate_48000_to_16000(d, to_buf(dirty_in), len(dirty_in),
+                                       (C.c_int16 * 400)(), 400)
+        self.assertNotEqual(d.phase, 0, 'the decimator was not actually dirtied')
+        LIB.wy_decimator_reset(C.byref(d))
+        self.assertEqual(d.phase, 0, 'reset left the phase dirty')
+        self.assertEqual(list(d.hist), [0] * (TAPS - 1), 'reset left the FIR history dirty')
+
+        out = (C.c_int16 * 400)()
+        n = LIB.wy_decimate_48000_to_16000(d, to_buf(sig), len(sig), out, 400)
+        self.assertEqual(list(out[:n]), fresh,
+                         "a reset decimator did not reproduce a fresh one's output")
 
 
 if __name__ == "__main__":

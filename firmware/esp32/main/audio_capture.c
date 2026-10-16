@@ -255,6 +255,13 @@ int audio_capture_start(void *session, void *user,
      * early-out above, so it runs on a REAL task start, not on a pointer refresh. It reads the
      * config wake settings and loads the model from flash once. */
     wake_detector_start(session, user, write);
+    /* Fresh filter state for a fresh hardware stream. capture_decim is file-static and holds the
+     * previous stream's FIR history and 3:1 phase; without this a restarted channel opens with
+     * stale history and a phase that may not match, so the first few outputs of the new stream
+     * are filtered against the OLD one's samples. This is the only place it is reset: the
+     * capture task is the sole reader of the decimator, and a task START is the moment a new
+     * stream begins. Resetting it per wake or from another task would corrupt a live stream. */
+    audio_capture_reset_decimator();
     if (xTaskCreate(capture_task_fn, "aud_cap", CAPTURE_TASK_STACK, NULL,
                     CAPTURE_TASK_PRIORITY, &capture.task) != pdPASS || !capture.task) {
         capture.task = NULL;

@@ -251,7 +251,14 @@ size_t wy_decimate_48000_to_16000(wy_decimator *d, const int16_t *in, size_t n,
                                   int16_t *out, size_t cap) {
     if (!d || !in || !out || n == 0 || cap == 0) return 0;
     size_t written = 0;
-    for (size_t k = 0; k < n && written < cap; ++k) {
+    /* Consume EVERY input sample, even after the output buffer is full. Stopping the loop at
+     * `written == cap` (as this once did) leaves the trailing samples out of the FIR history and
+     * out of the phase counter, so the NEXT call filters from the wrong state and the two calls
+     * together differ from one continuous filter. The production shape makes this real: a 480
+     * sample read emits its 160th output at input index 477, and 478-479 must still shift
+     * through the history and advance the phase. An output due with no room is dropped rather
+     * than corrupting the state -- which cannot happen for correctly sized callers anyway. */
+    for (size_t k = 0; k < n; ++k) {
         /* Build the tap window for this input sample: hist holds the previous TAPS-1 raw
          * samples and in[k] is the newest, so the window is [hist[0..TAPS-2], in[k]]. */
         int64_t acc = 0;
@@ -262,7 +269,7 @@ size_t wy_decimate_48000_to_16000(wy_decimator *d, const int16_t *in, size_t n,
         for (int i = 0; i < WY_FIR_TAPS - 2; ++i) d->hist[i] = d->hist[i + 1];
         d->hist[WY_FIR_TAPS - 2] = in[k];
 
-        if (d->phase == 0) {
+        if (d->phase == 0 && written < cap) {
             int32_t v = (int32_t)((acc + 16384) >> 15);
             if (v > 32767) v = 32767;
             if (v < -32768) v = -32768;

@@ -39,7 +39,24 @@
  * end of the send, then decays. A 30 s answer therefore needs ~15 s of hold. 16 s of stereo-32
  * at 16 kHz = 16 * 16000 * 2 = 512000 slots = 2 MiB of PSRAM (ample on the 8 MiB XIAO S3).
  * Overflow drops the OLDEST frame (a late sample is unplayable), never the link. */
-#define GATEWAY_PLAYBACK_RING_FRAMES 512000
+/* The ring is sized in SECONDS of audio at the link rate, never in raw slots. It used to be a
+ * bare 512000 with a comment saying "16 s at 16 kHz"; when the link went to 48 kHz the constant
+ * stayed and the buffer silently shrank to 5.33 s, so a long answer sent at the bridge's 2x pace
+ * overflowed and dropped speech with no error anywhere. Deriving it from the rate means the two
+ * cannot drift apart again.
+ *
+ * 16 s is the real requirement, not padding: the bridge sends at 2x pace, so a 30 s answer
+ * finishes arriving in 15 s while 30 s of audio still has to drain -- roughly 15 s must be
+ * held. At 48 kHz stereo-32 that is 16 * 48000 * 2 = 1536000 slots = 5.86 MiB of PSRAM.
+ * See the fallback below for what happens when the 8 MiB XIAO cannot give that. */
+#define GATEWAY_PLAYBACK_RING_SECONDS 16u
+#define GATEWAY_PLAYBACK_RING_FRAMES \
+    (GATEWAY_PLAYBACK_RING_SECONDS * WY_AUDIO_I2S_RATE_HZ * 2u)
+
+/* How far the fallback may shrink before admitting defeat. 4 s is the smallest buffer that still
+ * plays a typical short answer end to end at 2x pace; below that the ring is worse than useless
+ * because it clips almost every reply. */
+#define GATEWAY_PLAYBACK_RING_MIN_SECONDS 4u
 
 static struct {
     char host[PROVISION_HOST_MAX];
@@ -571,16 +588,39 @@ int gateway_task_start(const char *host, unsigned port, int transport,
         heap_caps_free(playback_ring);
         playback_ring = NULL;
     }
-    int32_t *ring = heap_caps_calloc(GATEWAY_PLAYBACK_RING_FRAMES, sizeof(int32_t),
-                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    /* Ask for the full 16 s, then halve until it fits. The 8 MiB PSRAM must also hold the wake
+     * model and the diagnostic arena, so a 48 kHz-sized ring is not guaranteed; refusing to
+     * configure playback at all (the old behaviour on any failure) would leave the device silent
+     * when a smaller ring still plays most answers. Each attempt is logged so a device that is
+     * silently running short can be diagnosed from the console. */
+    int32_t *ring = NULL;
+    size_t ring_frames = GATEWAY_PLAYBACK_RING_FRAMES;
+    for (unsigned seconds = GATEWAY_PLAYBACK_RING_SECONDS;
+         seconds >= GATEWAY_PLAYBACK_RING_MIN_SECONDS; seconds /= 2) {
+        ring_frames = (size_t)seconds * WY_AUDIO_I2S_RATE_HZ * 2u;
+        ring = heap_caps_calloc(ring_frames, sizeof(int32_t),
+                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (ring) {
+            if (seconds != GATEWAY_PLAYBACK_RING_SECONDS) {
+                ESP_LOGW("gwplay", "playback ring: %u s did not fit; using %u s (%u slots)",
+                         (unsigned)GATEWAY_PLAYBACK_RING_SECONDS, seconds, (unsigned)ring_frames);
+            }
+            break;
+        }
+        ESP_LOGW("gwplay", "playback ring: %u s (%u slots) did not fit in PSRAM",
+                 seconds, (unsigned)ring_frames);
+    }
     if (ring) {
         wy_session_playback_configure((wy_session *)session, ring,
-                                      GATEWAY_PLAYBACK_RING_FRAMES * sizeof(int32_t),
+                                      ring_frames * sizeof(int32_t),
                                       WY_VOLUME_DEFAULT_PERCENT);
         playback_ring = ring;
-        ESP_LOGI("plb_ring", "playback ring ready: %u frames", (unsigned)GATEWAY_PLAYBACK_RING_FRAMES);
+        ESP_LOGI("plb_ring", "playback ring ready: %u frames (%u s at %u Hz)",
+                 (unsigned)ring_frames, (unsigned)(ring_frames / (WY_AUDIO_I2S_RATE_HZ * 2u)),
+                 (unsigned)WY_AUDIO_I2S_RATE_HZ);
     } else {
-        ESP_LOGW("plb_ring", "playback ring allocation FAILED (%u frames)", (unsigned)GATEWAY_PLAYBACK_RING_FRAMES);
+        ESP_LOGW("plb_ring", "playback ring allocation FAILED (tried down to %u frames)",
+                 (unsigned)ring_frames);
         gateway_report_append(state.report, sizeof(state.report), "playback=unavailable reason=psram");
     }
     /* Point the pump at THIS session unconditionally, not only when the ring allocated: on a

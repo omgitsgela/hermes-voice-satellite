@@ -31,6 +31,16 @@ Measured through the new up-sampler (input amplitude 20000):
 
 On the 16 kHz path every one of those above 7.4 kHz was zero.
 
+**One honest caveat on those numbers.** They measure the *wanted* tone only. Cubic interpolation
+is a compromise, not a reconstruction filter: it preserves the high band but also puts up
+**spectral images** below the 24 kHz output Nyquist (a 10.5 kHz input shows an unwanted 11.55 kHz
+component at comparable amplitude to the wanted one). These are imaging artifacts from the
+interpolation, not aliasing — up-sampling genuinely cannot alias — but they are real extra energy
+in the output. A polyphase FIR reconstruction filter would reject them and is the right answer if
+that ever becomes audible; it was not done here because it is substantially more code and cubic is
+already a large improvement over discarding the band outright. If you upgrade this, replace the
+interpolation, do not add the 7400 Hz low-pass back.
+
 ## How the rates actually work
 
 ```
@@ -88,14 +98,39 @@ history) to `wy_upsampler` (three samples and a ratio), so every ctypes mirror i
 note that padding had previously absorbed a mirror gap and let a real offset error through, so
 treat "the sizes match" as necessary, not sufficient.
 
-## The hardware unknown
+## The hardware unknowns
 
-The XVF3800's firmware image is built for a chosen interface rate. The ESP32 is the I2S clock
-**master** here and the XVF3800 PLLs its own MCLK from BCLK, so the rate is ours to set — but if
-the image on the board is a 16 kHz-only build, driving 48 kHz will stop the mic pipeline (the
-symptom noted in `audio_playback.c` when the clock was corrupted: the LED beam display goes dead
-and the DAC clicks). If that happens, the fix is a single constant: set `WY_AUDIO_I2S_RATE_HZ`
-back to 16000 and the three per-channel rates follow.
+**1. Does the XVF3800's firmware image follow a 48 kHz clock?** The ESP32 is the I2S clock
+**master** and the XVF3800 PLLs its own MCLK from BCLK, so the rate is ours to set — but if the
+image on the board is a 16 kHz-only build, driving 48 kHz will stop the mic pipeline (the symptom
+noted in `audio_playback.c` when the clock was corrupted: the LED beam display goes dead and the
+DAC clicks).
+
+**2. Is the AIC3104 still inside its valid fs(ref) range?** The codec's PLL is fed from BCLK and
+its rates scale with it, which is why the register sequence is unchanged. But `Register 7 D7`
+declares fs(ref) as nominally 48 kHz, and tripling BCLK triples that. If playback is flaky at
+48 kHz but clean at 16 kHz, this is the first suspect. (Separately: an older comment in
+`audio_playback.c` claimed these registers set `J = 48`. The datasheet says the J field is
+Register 4 bits D7-D2, so `0x30` is **J = 12**. The values work; the comment did not describe
+them. Do not "fix" the register to match the old comment.)
+
+### Reverting is NOT one constant — do not be misled
+
+An earlier version of this page claimed you could set `WY_AUDIO_I2S_RATE_HZ` back to 16000 and
+everything would follow. **That was wrong, and it is exactly the kind of tidy story that gets
+someone stranded at the bench.** In reality:
+
+- `audio_bringup.c`, `audio_capture.c` and `audio_playback.c` each hard-code `48000` for their own
+  channel clock.
+- `wy_upsampler_reset` independently assumes 22050 → 48000.
+- The capture path always applies the fixed 3:1 decimator.
+- `AUDIO_CAPTURE_FRAMES` is 480 to keep a 10 ms chunk at 48 kHz; at 16 kHz it must be 160.
+- The codec clock registers assume a 3.072 MHz BCLK.
+
+A revert is a **coordinated change across all of those**, not one edit. The 16 kHz down-sampler
+`wy_resample_22050_to_16000` and its FIR were deliberately kept so the revert is possible at all,
+but nothing makes it automatic. If a profile selector is ever wanted, it has to cover the channel
+clocks, both conversions, the chunk size, the buffer sizing and the codec registers together.
 
 ## Where each piece lives
 
@@ -116,5 +151,5 @@ a constant rather than a rewrite.
 ## Related
 
 - `docs/prompt-tones.md` — the tones themselves. They are rendered at 16 kHz by the same generator
-  `wyoming1` uses and up-sampled on the way out, so the note timings there are unchanged.
+  the Pi satellite uses and up-sampled on the way out, so the note timings there are unchanged.
 - `docs/leds.md` — the LED phases, whose wake sweep is timed against the activation tone.

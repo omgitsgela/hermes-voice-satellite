@@ -320,11 +320,23 @@ int audio_dac_init(void) {
 
     /* ---- Clocking first: without a locked PLL nothing else means anything. ----------
      * The XVF3800 clocks the AIC3104 with BCLK = 1.024 MHz (16 kHz x 64) and there is no
-     * separate MCLK reaching this chip, so the PLL is fed from BCLK. TI's documented
-     * relation is fs(ref) = (PLLCLK_IN x K x R) / (2048 x P), which for BCLK 1.024 MHz and
-     * J=48, D=0, R=2, P=1 gives exactly 48 kHz; register 2 then selects fs = fs(ref)/3 =
-     * 16 kHz. The register sequence follows a known-working AIC3104 setup, rescaled to our
-     * BCLK. Register 3: PLL enable (D7), Q (D6-D3), P (D2-D0). */
+     * separate MCLK reaching this chip, so the PLL is fed from BCLK and fs TRACKS BCLK: triple
+     * the bit clock and every derived rate triples with it. That is why this sequence is
+     * unchanged for the 48 kHz link -- it is not a fixed-rate configuration.
+     *
+     * CORRECTION, 2026-10-15. This comment used to say "J = 48". The datasheet disagrees: Page 0
+     * Register 4 is "PLL Programming Register B", with the PLL J value in D7-D2 (000001 = J 1
+     * ... 111111 = J 63) and D1-D0 reserved. So 0x30 = 0b00110000 puts 0b001100 = 12 in the J
+     * field, i.e. J = 12, not 48. The VALUES are right -- they are what produces correct-speed
+     * audio on real hardware -- but the number written beside them was not the number the chip
+     * reads. Do not "correct" the register to 0xC0 on the strength of the old comment: the chip
+     * was never reading 48.
+     *
+     * The one open question is whether fs(ref) (which Register 7 D7 declares as nominally 48 kHz)
+     * remains inside the chip's valid range once BCLK has tripled. It is left as-is because the
+     * alternative is a speculative register change to a path that demonstrably works and cannot
+     * be A/B tested here. If playback is ever flaky at 48 kHz but fine at 16 kHz, that is the
+     * first thing to look at. Register 3: PLL enable (D7), Q (D6-D3), P (D2-D0). */
     rc |= aic_write(0x66, 0xA2);   /* reg 102: CLKDIV_IN and PLLCLK_IN both = BCLK */
     rc |= aic_write(0x65, 0x00);   /* reg 101: CODEC_CLKIN = PLLDIV_OUT */
     rc |= aic_write(0x03, 0x91);   /* reg 3:   PLL on, Q=2, P=1 */
@@ -670,17 +682,27 @@ int audio_playback_start(void) {
         return -1;
     }
     /* Size the amp's drain rest (F4) from the real DMA queue the driver allocated, not a guess.
-     * total_dma_buf_size is the whole queue in bytes; at 48 kHz * 2 channels * 4 bytes per
-     * word = 384000 bytes/second that is a real-time duration. It is an UPPER bound on how long
+     * total_dma_buf_size is the whole queue in bytes; at the link rate * 2 channels * 4 bytes
+     * per word that is a real-time duration. The rate is DERIVED, not retyped: the old code
+     * kept dividing by 128000 (the 16 kHz byte rate) after the comment above it had already
+     * been updated to 48 kHz, so the reported drain duration was three times the truth. It is an UPPER bound on how long
      * audio can still be sounding after the ring drains, so resting the amp that long can never
      * clip the tail, and the queue is short (a few hundred ms) so the amp barely overruns its
      * silence. A failed query leaves the drain at 0, i.e. the pre-fix behaviour: still safe
      * (no use-after-free), just a possible clipped tail. */
     i2s_chan_info_t info;
-    if (i2s_channel_get_info(tx, &info) == ESP_OK && info.total_dma_buf_size > 0)
-        playback_drain_ms = (int32_t)((uint64_t)info.total_dma_buf_size * 1000u / 128000u);
-    else
+    if (i2s_channel_get_info(tx, &info) == ESP_OK && info.total_dma_buf_size > 0) {
+        /* Bytes per second of I2S wire: link rate * 2 channels * 4 bytes per 32-bit word.
+         * Derived from the rate constant so this cannot silently disagree with the clock again.
+         * The division rounds UP: this is an upper bound on how long audio can still be sounding,
+         * and under-estimating it would let the amplifier be cut while the ring is still draining. */
+        const uint64_t bytes_per_second =
+            (uint64_t)PLAYBACK_I2S_RATE_HZ * 2u * 4u;
+        playback_drain_ms = (int32_t)(((uint64_t)info.total_dma_buf_size * 1000u
+                                       + bytes_per_second - 1u) / bytes_per_second);
+    } else {
         playback_drain_ms = 0;
+    }
     /* The TX clocks out silence until the first write, and the amp stays off until the session
      * says an answer is playing, so starting the channel early (at registration, before the
      * first wake) is what makes the first answer start clean: the DMA is already primed. */
