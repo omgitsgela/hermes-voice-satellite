@@ -61,6 +61,11 @@ redistributed, so embedding a community model in a published binary is a licence
 technical one. Where a model has to be inside an image, use one whose licence permits redistribution,
 or have the installer fetch the model separately and keep it out of the distributed image.
 
+That is why the bundled ESP32 default is the Apache-2.0 `okay_nabu` rather than a community-library
+model: a published image must redistribute a model whose licence allows it. The restricted models in
+this tree — the `hey_hermes` rollback pair and anything hosted-trainer sourced — stay out of public
+artifacts and are covered by their own terms on the home network.
+
 ## Release readiness: the bundled ESP32 model
 
 The bundled model `firmware/esp32/models/okay_nabu.tflite`
@@ -72,8 +77,10 @@ non-commercial only), and the delivered bytes are byte-identical to the upstream
 `scripts/test_esp32_wake_scorer.py`). The bundled default is therefore clean for a public
 prebuilt bundle.
 
-The rollback model `hey_hermes.tflite` stays in the tree for the one-command ESP32 rollback
-(`install-esp32.sh --model firmware/esp32/models/hey_hermes.tflite --model-name hey_hermes`).
+The rollback model `hey_hermes.tflite` stays in the tree for the ESP32 rollback. Restoring it is a
+three-step move, not one command: provision its blob, point the board's `wake_word` selector at
+`hey_hermes`, and revert the compile-time inference parameters in `wy_mww_params_default()`
+(0.5/5/10/32000) with a firmware rebuild — `firmware/esp32/models/NOTICE.md` walks through all three.
 A public release must not include it in any release asset or image — its personal/non-commercial
 terms do not grant redistribution. If a future rollback to it is wanted in a *published*
 artifact, the original three routes still apply: a commercial licence from microwakeword.com

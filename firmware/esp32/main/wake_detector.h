@@ -31,7 +31,7 @@
 
 /* One-time per link: install the seams and bring the core up with the config-plane wake
  * settings (wake_threshold, wake_word) read from the hermes_cfg NVS namespace, falling back to
- * the schema defaults (0.35 / hey_hermes) when absent. `session`, `user` and `write` describe
+ * the schema defaults (0.35 / okay_nabu) when absent. `session`, `user` and `write` describe
  * the live link -- the same triple the capture task sends mic audio over, so a wake fires
  * through the very transport the stream will use. Idempotent: a second call re-inits the core
  * (used after a link bounce to reset its state). */

@@ -20,7 +20,7 @@
  * live in the hermes_cfg namespace next to the agent's state blob. When a key is absent (first
  * boot, or the bridge never sent the setting) the schema defaults below are used -- the same
  * defaults wyoming_config.c validates against. wake_threshold is stored as a "%f" string and
- * wake_word as the model SELECTOR string (underscore form, e.g. hey_hermes), NOT the detection
+ * wake_word as the model SELECTOR string (underscore form, e.g. okay_nabu), NOT the detection
  * name (WYAKE_WORD_NAME). See the plan's D5. */
 #define WAKE_NVS_NAMESPACE "hermes_cfg"
 #define WAKE_NVS_THRESHOLD "wake_threshold"
@@ -103,8 +103,8 @@ static void scorer_teardown(void) {
 /* Build the real scorer over the validated model bytes the loader kept (the
  * WKM1 header is ours; the scorer consumes the tflite bytes that follow). The
  * inference parameters are the wy_mww defaults, which are exactly the shipped
- * manifest's values (models/hey_hermes.json: cutoff 0.5, window 5, 10 ms
- * steps, 32000 arena) -- pinned against that file by
+ * manifest's values (models/okay_nabu.json: cutoff 0.97, window 5, 10 ms
+ * steps, 26080 arena) -- pinned against that file by
  * scripts/test_esp32_wake_scorer.py. Returns 0 when real inference is live. */
 static int scorer_setup(void) {
     if (!wd.model || wd.model_len <= WY_MODEL_HEADER_SIZE) return -1;

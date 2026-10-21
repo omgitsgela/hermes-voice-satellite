@@ -174,8 +174,9 @@ port in `bridge.env`.
 
 ## 6. Speak the wake word (the acceptance test)
 
-Stand at normal speaking distance and say the wake word — **"Hey Hermes"** — then ask one short
-question.
+Stand at normal speaking distance and say the wake word — **"Okay Nabu"** on the ESP32
+(say it clearly: its 0.97 cutoff is the selectivity gate) — **"Hey Hermes"** on the Pi —
+then ask one short question.
 
 **Success looks like:** the awake chime plays immediately, and a spoken answer comes back
 within a few seconds. On the Pi that is the whole test: the acoustic wake word is live.
@@ -193,9 +194,10 @@ answer path without speaking, or when the room is too noisy to test acoustically
 detector; follow the turn in `journalctl --user -u hermes-voice-bridge -f`. No chime at all —
 the detector did not fire: ESP32, `WAKE_STATUS` on the console (re-run the provision step if no
 model is loaded); Pi, `journalctl -u wyoming-openwakeword -u wake-shim` and check the model
-file exists. Too many false wakes in a busy room — the bundled model ships
-`probability_cutoff 0.5`; raise it toward 0.90–0.99 (`firmware/esp32/models/NOTICE.md`) before
-touching anything else.
+file exists. Too many false wakes in a busy room — say the phrase less clearly at first
+(the bundled `okay_nabu` model ships `probability_cutoff 0.97`, already near the top of its
+range, so the cutoff is barely a lever: `firmware/esp32/models/NOTICE.md`), and check the
+room and the microphone before reaching for settings.
 
 ---
 

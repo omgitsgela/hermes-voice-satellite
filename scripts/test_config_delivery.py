@@ -26,24 +26,30 @@ class FakeConnection:
 
 
 class FakeSlot:
-    def __init__(self, device_id: str) -> None:
+    def __init__(self, device_id: str, *, firmware_version="1.2.3") -> None:
         self.device_id = device_id
         self.connection = FakeConnection()
         self.identity = DeviceIdentity(
             device_id=device_id, name="Kitchen", area="kitchen",
-            firmware_version="1.2.3", capabilities=("speaker", "led"), boot_id="boot-1",
+            firmware_version=firmware_version, capabilities=("speaker", "led"),
+            boot_id="boot-1",
         )
 
 
 class FakeRegistry:
     def __init__(self, slot: FakeSlot) -> None:
+        self.slots: dict[str, FakeSlot] = {slot.device_id: slot}
+        self.slot = slot
+
+    def add(self, slot: FakeSlot) -> None:
+        self.slots[slot.device_id] = slot
         self.slot = slot
 
     def get(self, device_id: str):
-        return self.slot if device_id == self.slot.device_id else None
+        return self.slots.get(device_id)
 
     def connected_devices(self):
-        return [self.slot.device_id]
+        return list(self.slots)
 
 
 async def main() -> int:
@@ -64,7 +70,7 @@ async def main() -> int:
         # _adopt_device). A bare loop built with __new__ has to provide it, or registration
         # fails on a missing attribute before it can do its work.
         loop.device_id = ""
-        slot = FakeSlot("kitchen-1")
+        slot = FakeSlot("esp32-1234567890abcdef12345678")
         loop.registry = FakeRegistry(slot)
 
         await loop._on_device_registered(slot)
@@ -77,9 +83,20 @@ async def main() -> int:
               and desired_event.data["settings"]["wake_word"] == "okay_nabu",
               desired_event)
 
+        # A Pi registers under an operator name, not the esp32-<sha> id the board mints
+        # for itself. The Pi installer ships hey_hermes.tflite, so a fresh Pi must
+        # be seeded hey_hermes; seeding it the ESP32's okay_nabu would report permanent
+        # degraded (model absent) even though the Pi's own wake word works.
+        pi_slot = FakeSlot("study-pi", firmware_version="")
+        loop.registry.add(pi_slot)
+        await loop._on_device_registered(pi_slot)
+        check("a fresh Pi is seeded the model its installer ships",
+              pi_slot.connection.events[0].data["settings"]["wake_word"] == "hey_hermes",
+              pi_slot.connection.events[0])
+
         changed = loop.config_plane.set_desired(
-            "kitchen-1", {"mic_gain": 82}, expected_generation=1)
-        sent = await loop._dispatch_device_config("kitchen-1", changed)
+            "esp32-1234567890abcdef12345678", {"mic_gain": 82}, expected_generation=1)
+        sent = await loop._dispatch_device_config("esp32-1234567890abcdef12345678", changed)
         check("API writes dispatch over the live device connection",
               sent is True and slot.connection.events[-1].data["generation"] == 2,
               slot.connection.events[-1])
@@ -90,12 +107,13 @@ async def main() -> int:
             "health": "healthy",
             "error": None,
         })
-        handled = await loop._on_device_control_event("kitchen-1", report)
-        current = loop.config_plane.get_device("kitchen-1")
+        handled = await loop._on_device_control_event("esp32-1234567890abcdef12345678", report)
+        current = loop.config_plane.get_device("esp32-1234567890abcdef12345678")
         check("device reports update actual state", handled is True and current["converged"] is True,
               current)
 
-        ignored = await loop._on_device_control_event("kitchen-1", Event(type="audio-chunk"))
+        ignored = await loop._on_device_control_event("esp32-1234567890abcdef12345678",
+                                                     Event(type="audio-chunk"))
         check("non-configuration events are not consumed", ignored is False)
 
     if problems:

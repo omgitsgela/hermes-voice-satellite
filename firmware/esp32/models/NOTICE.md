@@ -34,11 +34,26 @@ default moved to `okay_nabu`: an Apache-2.0 microWakeWord v2 model from the same
 library the firmware's engine runs, with the same tensor contract (`[1, 3, 40]` int8 in,
 `[1, 1]` uint8 out) the scorer validates at init.
 
-`hey_hermes.tflite` + `hey_hermes.json` remain in this tree as a **rollback pair**:
-`install-esp32.sh --model firmware/esp32/models/hey_hermes.tflite --model-name hey_hermes`
-restores the previous model (and the previous params, which live in the firmware's
-`wy_mww_params_default` — see `docs/wake-word-licensing.md` for the rollback note). It keeps the
-microwakeword.com personal/non-commercial terms, so it must not enter a public bundle.
+`hey_hermes.tflite` + `hey_hermes.json` remain in this tree as a **rollback pair**, but a
+complete rollback is three steps, not one, because the model, the model *selector*, and the
+inference *policy* live in three separate places:
+
+1. **Provision the blob.** Re-run the installer's provision step with the old model
+   (`install-esp32.sh --provision --port <usb-port> --model firmware/esp32/models/hey_hermes.tflite
+   --model-name hey_hermes`, plus the board's usual `--device-id`/`--endpoint`/Wi-Fi arguments —
+   the provision path requires them, so a bare `--model` line exits with usage).
+2. **Point the selector at it.** The firmware loads a model only when the blob's header name
+   equals the NVS `wake_word` selector (which the config plane's `wake_word` setting drives).
+   Set the board's desired `wake_word` to `hey_hermes`, or it will reject the blob and fall back
+   to the placeholder.
+3. **Restore the inference policy.** The cutoff/window/step/arena are compile-time defaults in
+   `wy_mww_params_default()`, currently `okay_nabu`'s 0.97/5/10/26080. `hey_hermes` wants
+   0.5/5/10/32000 — until those are reverted and the firmware rebuilt and flashed, the old model
+   runs under the new (stricter, wrong-sized) policy. Reverting the parameters and rebuilding is
+   the part that makes this a "restore the previous model" rather than a partial swap.
+
+The model itself keeps the microwakeword.com personal/non-commercial terms, so it must not
+enter a public bundle.
 
 One difference that is expected, not a bug: `okay_nabu` ships `probability_cutoff` 0.97 while
 `hey_hermes` shipped 0.5. The cutoff is the model's primary selectivity gate — the scorer only

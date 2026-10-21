@@ -131,7 +131,12 @@ not the reported state: a device can be connected and unconverged, or converged 
 ### Monotonic generations
 
 Every desired-state write increments `generation` by exactly one. Generation `0` means "never written";
-enrolment seeds generation `1` with the full default profile. Generations never go backwards and are never
+enrolment seeds generation `1` with the full default profile. The seeded `wake_word` is platform-aware:
+an ESP32 (device id `esp32-…`) is seeded `okay_nabu`, the model its firmware bundles; every other
+device is a Pi, seeded `hey_hermes`, the model its installer provisions — so a fresh device matches the
+model already on the box instead of reporting a permanent missing-model degradation. Move any device to
+any other word with `set_desired` once the model is deployed. Generations never go backwards and are
+never
 reused, so a device can discard a stale or replayed write by comparison alone.
 
 ### Atomic, private persistence

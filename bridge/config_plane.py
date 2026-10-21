@@ -262,7 +262,18 @@ class ConfigPlane:
     def ensure_device(
         self, device_id: str, *, metadata: Optional[dict[str, Any]] = None
     ) -> dict[str, Any]:
-        """Create a newly enrolled device with the complete safe default profile."""
+        """Create a newly enrolled device with the complete safe default profile.
+
+        The wake word is seeded per platform, because each installer ships exactly one model
+        to the device and a desired value whose model is absent reads as a permanent degraded
+        report. The ESP32 bundles `okay_nabu` (firmware/esp32/models/), and an ESP32 board
+        always self-identifies with the `esp32-<elf sha256>` device_id its firmware mints
+        (main/device_identity.c), so that prefix is the platform signal. Every other device is
+        a Pi, whose installer (scripts/install-pi.sh) provisions `hey_hermes.tflite` at install
+        time and only ever writes it to the device's own config, so a fresh Pi must be seeded
+        `hey_hermes` to match what is actually on the box. `set_desired` remains the way to
+        move a device to any other word once its model is deployed.
+        """
         candidate = deepcopy(self._state)
         record = self._record(device_id, state=candidate)
         clean_metadata: dict[str, Any] = {}
@@ -290,6 +301,11 @@ class ConfigPlane:
             record["desired"] = {
                 name: spec["default"] for name, spec in DEVICE_SETTING_SCHEMA.items()
             }
+            # Seed the wake word to match the model each installer actually ships, so a
+            # freshly enrolled device is healthy on first apply instead of reporting a
+            # model it does not have (see the docstring).
+            if not _validate_device_id(device_id).startswith("esp32-"):
+                record["desired"]["wake_word"] = "hey_hermes"
             record["generation"] = 1
             record["desired_updated_at"] = _utc_now()
             changed = True
