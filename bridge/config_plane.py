@@ -22,7 +22,7 @@ _WAKE_WORD = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 DEVICE_SETTING_SCHEMA: dict[str, dict[str, Any]] = {
     "wake_word": {
         "type": "string", "pattern": _WAKE_WORD.pattern,
-        "default": "hey_hermes", "apply": "wake_service_restart",
+        "default": "okay_nabu", "apply": "wake_service_restart",
     },
     "wake_threshold": {
         "type": "number", "minimum": 0.05, "maximum": 0.99,

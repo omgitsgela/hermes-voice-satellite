@@ -26,7 +26,7 @@
 #define WAKE_NVS_THRESHOLD "wake_threshold"
 #define WAKE_NVS_WORD      "wake_word"
 #define WAKE_DEFAULT_THRESHOLD 0.35
-#define WAKE_DEFAULT_WORD      "hey_hermes"
+#define WAKE_DEFAULT_WORD      "okay_nabu"
 
 /* The post-stream deaf window (the plan's "deaf lead-in after speech"): after a stream ends the
  * detector stays deaf this long so it does not re-fire on the answer's tail or the done tone. The

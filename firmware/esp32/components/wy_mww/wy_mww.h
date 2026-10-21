@@ -53,7 +53,7 @@ extern "C" {
 #define WY_MWW_STRIDE_MAX 32u
 
 /*
- * The model manifest (models/hey_hermes.json, the `micro` block). The device
+ * The model manifest (models/okay_nabu.json, the `micro` block). The device
  * cannot read the JSON at runtime -- the model partition carries the bare
  * .tflite under the WKM1 header -- so the firmware uses wy_mww_params_default
  * and scripts/test_esp32_wake_scorer.py pins those defaults to the shipped
@@ -61,14 +61,14 @@ extern "C" {
  * any future path that provisions the manifest alongside the model.
  */
 typedef struct wy_mww_params {
-    float probability_cutoff;    /* 0..1 (0.5 in the bundled manifest) */
+    float probability_cutoff;    /* 0..1 (0.97 in the bundled manifest) */
     unsigned sliding_window_size; /* probabilities per average (5) */
     unsigned feature_step_ms;    /* frontend step size in ms (10) */
-    unsigned tensor_arena_size;  /* manifest tensor arena hint (32000) */
+    unsigned tensor_arena_size;  /* manifest tensor arena hint (26080) */
     unsigned feature_size;       /* features per slice (40) */
 } wy_mww_params;
 
-/* Defaults, exactly the values of firmware/esp32/models/hey_hermes.json. */
+/* Defaults, exactly the values of firmware/esp32/models/okay_nabu.json. */
 void wy_mww_params_default(wy_mww_params *out);
 
 /* Parse a manifest JSON (the .json companion of a microWakeWord model).

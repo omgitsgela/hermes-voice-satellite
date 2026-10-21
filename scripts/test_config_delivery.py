@@ -74,7 +74,7 @@ async def main() -> int:
         check("desired event carries the complete generation",
               desired_event.type == CONFIG_DESIRED_EVENT
               and desired_event.data["generation"] == 1
-              and desired_event.data["settings"]["wake_word"] == "hey_hermes",
+              and desired_event.data["settings"]["wake_word"] == "okay_nabu",
               desired_event)
 
         changed = loop.config_plane.set_desired(

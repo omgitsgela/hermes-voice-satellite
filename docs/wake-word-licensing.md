@@ -41,11 +41,13 @@ voice and to any audio it generates.
 ## What this project does with models
 
 **The ESP32 firmware bundles a default wake model** at `firmware/esp32/models/`
-(`hey_hermes.tflite`, trained through microwakeword.com, with attribution and terms in that
-directory's `NOTICE.md`). It is personal/non-commercial-licensed, which fits a home satellite in a
-**private** repository; before any public release the bundle needs a licence pass — either a
-commercial licence for that model, a switch to an Apache-2.0 model, or moving the model out of the
-image and fetching it at install time.
+(`okay_nabu.tflite` from [esphome/micro-wake-word-models](https://github.com/esphome/micro-wake-word-models),
+Apache-2.0, with attribution in that directory's `NOTICE.md`). Apache-2.0 permits
+redistribution, so the bundled default is clean for a public prebuilt bundle. The
+previous default, `hey_hermes` (microwakeword.com community library, personal and
+non-commercial only), remains in the tree as a documented **rollback** model for the
+ESP32; it must not enter any public bundle, and the Pi's model is fetched at install
+time by whoever installs the Pi.
 
 **The Pi side fetches its model at install time** rather than shipping one in the image, which keeps
 that licence question with the person installing it.
@@ -61,30 +63,24 @@ or have the installer fetch the model separately and keep it out of the distribu
 
 ## Release readiness: the bundled ESP32 model
 
-The bundled model `firmware/esp32/models/hey_hermes.tflite` (microwakeword.com community
-library) is licensed **personal/non-commercial only**. That is fine for this home satellite in
-a private repository. It is not fine for a **public prebuilt-bundle release**: publishing the
-model file (or any release artifact that carries it) redistributes it, and redistribution is
-what the non-commercial default does not grant. Before such a release ships, one of three
-routes must be taken:
+The bundled model `firmware/esp32/models/okay_nabu.tflite`
+([esphome/micro-wake-word-models](https://github.com/esphome/micro-wake-word-models)) is
+licensed **Apache-2.0**, which permits redistribution. The bundle was deliberately switched to it
+on 2026-10-20 (from `hey_hermes`, microwakeword.com community library, personal and
+non-commercial only), and the delivered bytes are byte-identical to the upstream repository's
+`models/v2/okay_nabu.tflite` (SHA-256 pinned in `NOTICE.md` and
+`scripts/test_esp32_wake_scorer.py`). The bundled default is therefore clean for a public
+prebuilt bundle.
 
-1. **A commercial licence** for that model from microwakeword.com's operator
-   (<https://microwakeword.com/license>), covering the redistribution.
-2. **An Apache-2.0 model swap** — replace the bundled default with a model whose licence
-   permits redistribution, such as the pre-trained models in
-   [esphome/micro-wake-word-models](https://github.com/esphome/micro-wake-word-models)
-   (see the table above and `firmware/esp32/models/NOTICE.md` for the swap mechanics).
-3. **Fetch-at-install** — keep the model out of every distributed artifact and have the
-   installer download it at provisioning time. The plumbing already exists:
-   `install-esp32.sh --download-model <url>` stages a model that way, and the model is written
-   to its own flash partition at provision time (never part of the app bundle), so no rebuild
-   is involved.
-
-**The current gate, plainly:** the repository is private and no prebuilt bundle or model is
-published, so no redistribution is happening today. Until one of the three routes above is
-done, a public release must not include `hey_hermes.tflite` in the tree, in a release asset,
-or inside any image. This is a description of the licence terms and the release decision they
-force, not legal advice.
+The rollback model `hey_hermes.tflite` stays in the tree for the one-command ESP32 rollback
+(`install-esp32.sh --model firmware/esp32/models/hey_hermes.tflite --model-name hey_hermes`).
+A public release must not include it in any release asset or image — its personal/non-commercial
+terms do not grant redistribution. If a future rollback to it is wanted in a *published*
+artifact, the original three routes still apply: a commercial licence from microwakeword.com
+(<https://microwakeword.com/license>), another Apache-2.0 swap, or fetch-at-install
+(`install-esp32.sh --download-model <url>` stages a model that way, and the model is written
+to its own flash partition at provision time, never part of the app bundle). This is a
+description of the licence terms and the release decision they force, not legal advice.
 
 ## Changing the model
 

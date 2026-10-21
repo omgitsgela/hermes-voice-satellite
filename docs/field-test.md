@@ -99,7 +99,7 @@ scripts/install-esp32.sh --provision --port <usb-port> \
 
 Provisioning is a **set, not a menu**: TLS credential, wake model, endpoint and Wi-Fi profile
 are all required and an incomplete set is refused before a byte is written. The wake model
-defaults to the bundled `hey_hermes` (`firmware/esp32/models/`, licence note in its
+default to the bundled `okay_nabu` (`firmware/esp32/models/`, licence note in its
 `NOTICE.md`); `--model <file>` or `--download-model <url>` stage a different one.
 `<psk-file>` holds exactly the Wi-Fi passphrase (plus one trailing newline) — the passphrase
 moves as a file path, never through argv.

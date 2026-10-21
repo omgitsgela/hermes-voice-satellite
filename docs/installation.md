@@ -195,7 +195,7 @@ The four things staged to the board:
    by `scripts/provision-device-tls.py` (never through the console, because the console echoes what
    it is sent, and a private key through a line protocol is a private key in a log), and read back
    to prove the write.
-2. **Wake model** — the bundled default is `hey_hermes` (`firmware/esp32/models/hey_hermes.tflite`,
+2. **Wake model** — the bundled default is `okay_nabu` (`firmware/esp32/models/okay_nabu.tflite`,
    attribution and licence in `firmware/esp32/models/NOTICE.md`). `--model` takes any local model;
    `--download-model` fetches one.
 3. **Endpoint** — `tls://host:port` (or `tcp://` for a trusted LAN). This is what the board dials;

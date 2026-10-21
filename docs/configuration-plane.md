@@ -49,7 +49,7 @@ the host already did, because a host is not a trust boundary for a device.
 
 | Setting | Type | Bounds | Default | Applies by |
 |---|---|---|---|---|
-| `wake_word` | string | `^[a-z0-9][a-z0-9_-]{0,63}$` | `hey_hermes` | wake service restart |
+| `wake_word` | string | `^[a-z0-9][a-z0-9_-]{0,63}$` | `okay_nabu` | wake service restart |
 | `wake_threshold` | number | 0.05 – 0.99 | `0.35` | wake service restart |
 | `mic_gain` | integer | 0 – 100 | `78` | immediate |
 | `playback_volume` | integer | 0 – 100 | `55` | immediate |

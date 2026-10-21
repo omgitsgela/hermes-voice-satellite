@@ -513,7 +513,7 @@ if [ "$GUIDED" = 1 ]; then
         elif [ -n "$MODEL_FILE" ]; then
             echo "    wake model: $MODEL_FILE"
         else
-            echo "    wake model: the bundled default (hey_hermes.tflite)"
+            echo "    wake model: the bundled default (okay_nabu.tflite)"
         fi
         if [ -n "$MODEL_NAME" ]; then echo "    model name: $MODEL_NAME (the name the device reports)"; fi
     fi
@@ -762,7 +762,7 @@ if [ "$DO_PROVISION" = 1 ]; then
         [ "$DRY_RUN" = 1 ] || curl -fsSL -o "$MODEL_FILE" "$MODEL_URL" || die "model download failed: $MODEL_URL"
         echo "   saved to $MODEL_FILE"
     elif [ -z "$MODEL_FILE" ]; then
-        MODEL_FILE="$REPO_ROOT/firmware/esp32/models/hey_hermes.tflite"
+        MODEL_FILE="$REPO_ROOT/firmware/esp32/models/okay_nabu.tflite"
         echo "   using the bundled default wake model: $MODEL_FILE"
     fi
     # The detection name is what the device reports as the wake word. It defaults to the model's
