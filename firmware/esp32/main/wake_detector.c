@@ -107,10 +107,17 @@ static void scorer_teardown(void) {
  * steps, 26080 arena) -- pinned against that file by
  * scripts/test_esp32_wake_scorer.py. Returns 0 when real inference is live. */
 static int scorer_setup(void) {
-    if (!wd.model || wd.model_len <= WY_MODEL_HEADER_SIZE) return -1;
+    if (!wd.model || wd.model_len <= WY_MODEL_HEADER_SIZE) {
+        ESP_LOGW("wake", "scorer_setup: no model bytes (model=%p len=%u)",
+                 (void *)wd.model, (unsigned)wd.model_len);
+        return -1;
+    }
+    ESP_LOGI("wake", "scorer_setup: building scorer over %u bytes",
+             (unsigned)(wd.model_len - WY_MODEL_HEADER_SIZE));
     wd.scorer = wy_mww_scorer_create(wd.model + WY_MODEL_HEADER_SIZE,
                                      wd.model_len - WY_MODEL_HEADER_SIZE, NULL);
     wd.scorer_cold = 1;
+    ESP_LOGI("wake", "scorer_setup: scorer=%p", (void *)wd.scorer);
     return wd.scorer ? 0 : -1;
 }
 
@@ -271,6 +278,7 @@ static int wake_fire(void *user) {
 
 void wake_detector_start(void *session, void *user,
                          int (*write)(void *, const void *, size_t)) {
+    ESP_LOGI("wake", "wake_detector_start: session=%p write=%p", session, (void *)write);
     if (!session || !write) return;
     wd.session = session;
     wd.user = user;
@@ -297,6 +305,7 @@ void wake_detector_start(void *session, void *user,
     double threshold;
     char word[WY_MODEL_NAME_MAX];
     read_wake_config(&threshold, word, sizeof(word));
+    ESP_LOGI("wake", "wake_detector_start: threshold=%.2f word='%s'", threshold, word);
 
     /* Seams first, then init: init loads the model through the load seam. */
     wy_wake_set_seams(wd.core, score_frame, model_load, chime_play, wake_fire, NULL);
@@ -306,6 +315,7 @@ void wake_detector_start(void *session, void *user,
     wd.queue_moved = 0;
     wd.queue_stall_logged = 0;
     wd.core_ready = (wy_wake_init(wd.core, threshold, WAKE_COOLDOWN_MS, word) == 0);
+    ESP_LOGI("wake", "wake_detector_start: core_ready=%d have_real_model=%d", wd.core_ready, wd.have_real_model);
 
     /* The #110 scorer over the bytes init just validated. A model whose
      * interpreter will not build (wrong tensor layout, arena exhaustion) is

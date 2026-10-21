@@ -28,7 +28,13 @@
  * full-duplex, so there is one master clock for both. */
 #define CAPTURE_I2S_MCLK_PIN   GPIO_NUM_9
 
-#define CAPTURE_TASK_STACK     6144
+/* The capture task also runs the wake detector's one-time model + scorer init on its own
+ * stack (wake_detector_start -> model_load + scorer_setup -> the TFLM interpreter build,
+ * which is several KB of stack by itself). 6 KB was enough when the detector only armed at
+ * RUN_REQUESTED; now that a satellite arms at REGISTERED too (responsive the moment it
+ * registers), the init runs here more often and a 6 KB stack overflowed into a reboot loop
+ * (a stack overflow in task aud_cap). 12 KB gives the interpreter build room to breathe. */
+#define CAPTURE_TASK_STACK     12288
 #define CAPTURE_TASK_PRIORITY  4
 #define CAPTURE_READ_TIMEOUT_MS 10   /* 10 ms of silence is a tick, not a fault */
 /* i2s_channel_read takes its timeout in MILLISECONDS and converts to ticks itself, so the
