@@ -40,8 +40,9 @@ inference *policy* live in three separate places:
 
 1. **Provision the blob.** Re-run the installer's provision step with the old model
    (`install-esp32.sh --provision --port <usb-port> --model firmware/esp32/models/hey_hermes.tflite
-   --model-name hey_hermes`, plus the board's usual `--device-id`/`--endpoint`/Wi-Fi arguments —
-   the provision path requires them, so a bare `--model` line exits with usage).
+   --model-name hey_hermes`, plus the board's usual `--tls-certs`, `--device-id`, `--endpoint`
+   and Wi-Fi arguments — the provision path requires them all, so a bare `--model` line exits
+   with usage).
 2. **Point the selector at it.** The firmware loads a model only when the blob's header name
    equals the NVS `wake_word` selector (which the config plane's `wake_word` setting drives).
    Set the board's desired `wake_word` to `hey_hermes`, or it will reject the blob and fall back

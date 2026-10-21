@@ -266,13 +266,16 @@ class ConfigPlane:
 
         The wake word is seeded per platform, because each installer ships exactly one model
         to the device and a desired value whose model is absent reads as a permanent degraded
-        report. The ESP32 bundles `okay_nabu` (firmware/esp32/models/), and an ESP32 board
-        always self-identifies with the `esp32-<elf sha256>` device_id its firmware mints
-        (main/device_identity.c), so that prefix is the platform signal. Every other device is
-        a Pi, whose installer (scripts/install-pi.sh) provisions `hey_hermes.tflite` at install
-        time and only ever writes it to the device's own config, so a fresh Pi must be seeded
-        `hey_hermes` to match what is actually on the box. `set_desired` remains the way to
-        move a device to any other word once its model is deployed.
+        report. The platform signal is `firmware_version`, not the device id: an ESP32 board
+        always reports `esp32-<elf sha256>`, computed by its own firmware from the linked ELF
+        (main/gateway_task.c), while a Pi never sets VOICE_FIRMWARE_VERSION and reports "".
+        The device id is NOT a platform signal: ESP32 boards derive theirs from the factory
+        MAC (main/device_identity.c), but a Pi's is whatever name the operator chose at
+        install time (scripts/install-pi.sh writes it verbatim into VOICE_DEVICE_ID), so a Pi
+        called "esp32-study" must still be treated as a Pi. The ESP32 bundles `okay_nabu`
+        (firmware/esp32/models/); the Pi installer (scripts/install-pi.sh) provisions
+        `hey_hermes.tflite` and writes only the device's own config. `set_desired` remains
+        the way to move a device to any other word once its model is deployed.
         """
         candidate = deepcopy(self._state)
         record = self._record(device_id, state=candidate)
@@ -303,8 +306,11 @@ class ConfigPlane:
             }
             # Seed the wake word to match the model each installer actually ships, so a
             # freshly enrolled device is healthy on first apply instead of reporting a
-            # model it does not have (see the docstring).
-            if not _validate_device_id(device_id).startswith("esp32-"):
+            # model it does not have (see the docstring). firmware_version, not the
+            # device id, is the platform signal: the ESP32 firmware computes it from the
+            # running image, a Pi reports "", and an operator can name a Pi anything.
+            firmware_version = clean_metadata.get("firmware_version", "")
+            if not firmware_version.startswith("esp32-"):
                 record["desired"]["wake_word"] = "hey_hermes"
             record["generation"] = 1
             record["desired_updated_at"] = _utc_now()

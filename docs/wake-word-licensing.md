@@ -52,7 +52,8 @@ time by whoever installs the Pi.
 **The Pi side fetches its model at install time** rather than shipping one in the image, which keeps
 that licence question with the person installing it.
 
-The bundled default is a community-library model, so it carries the non-commercial default above. A
+The restricted hosted-trainer models (the `hey_hermes` community model and anything from the
+openwakeword.com or microwakeword.com libraries) carry the non-commercial default above. A
 commercial deployment has three clean routes: buy a commercial licence from the model's operator,
 switch to one of the pre-trained Apache-2.0 models, or train your own with the open-source toolkit.
 

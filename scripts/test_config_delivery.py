@@ -26,7 +26,7 @@ class FakeConnection:
 
 
 class FakeSlot:
-    def __init__(self, device_id: str, *, firmware_version="1.2.3") -> None:
+    def __init__(self, device_id: str, *, firmware_version="") -> None:
         self.device_id = device_id
         self.connection = FakeConnection()
         self.identity = DeviceIdentity(
@@ -70,7 +70,8 @@ async def main() -> int:
         # _adopt_device). A bare loop built with __new__ has to provide it, or registration
         # fails on a missing attribute before it can do its work.
         loop.device_id = ""
-        slot = FakeSlot("esp32-1234567890abcdef12345678")
+        slot = FakeSlot("esp32-68ee8f4b5988",
+                        firmware_version="esp32-3ac695f8a90da56202ffecc1")
         loop.registry = FakeRegistry(slot)
 
         await loop._on_device_registered(slot)
@@ -83,20 +84,29 @@ async def main() -> int:
               and desired_event.data["settings"]["wake_word"] == "okay_nabu",
               desired_event)
 
-        # A Pi registers under an operator name, not the esp32-<sha> id the board mints
-        # for itself. The Pi installer ships hey_hermes.tflite, so a fresh Pi must
-        # be seeded hey_hermes; seeding it the ESP32's okay_nabu would report permanent
-        # degraded (model absent) even though the Pi's own wake word works.
-        pi_slot = FakeSlot("study-pi", firmware_version="")
+        # A Pi registers under an operator name, and its firmware_version is "" (the Pi
+        # never sets VOICE_FIRMWARE_VERSION). The Pi installer ships hey_hermes.tflite, so a
+        # fresh Pi must be seeded hey_hermes; seeding it the ESP32's okay_nabu would report
+        # permanent degraded (model absent) even though the Pi's own wake word works.
+        pi_slot = FakeSlot("study-pi")
         loop.registry.add(pi_slot)
         await loop._on_device_registered(pi_slot)
         check("a fresh Pi is seeded the model its installer ships",
               pi_slot.connection.events[0].data["settings"]["wake_word"] == "hey_hermes",
               pi_slot.connection.events[0])
+        # The device id is operator-chosen on a Pi, so a Pi named like an ESP32 board must
+        # still be treated as a Pi: the platform signal is the firmware the image reports,
+        # not the name the operator picked.
+        pi_misnamed = FakeSlot("esp32-study")
+        loop.registry.add(pi_misnamed)
+        await loop._on_device_registered(pi_misnamed)
+        check("a Pi named esp32-* is still seeded the Pi model",
+              pi_misnamed.connection.events[0].data["settings"]["wake_word"] == "hey_hermes",
+              pi_misnamed.connection.events[0])
 
         changed = loop.config_plane.set_desired(
-            "esp32-1234567890abcdef12345678", {"mic_gain": 82}, expected_generation=1)
-        sent = await loop._dispatch_device_config("esp32-1234567890abcdef12345678", changed)
+            "esp32-68ee8f4b5988", {"mic_gain": 82}, expected_generation=1)
+        sent = await loop._dispatch_device_config("esp32-68ee8f4b5988", changed)
         check("API writes dispatch over the live device connection",
               sent is True and slot.connection.events[-1].data["generation"] == 2,
               slot.connection.events[-1])
@@ -107,12 +117,12 @@ async def main() -> int:
             "health": "healthy",
             "error": None,
         })
-        handled = await loop._on_device_control_event("esp32-1234567890abcdef12345678", report)
-        current = loop.config_plane.get_device("esp32-1234567890abcdef12345678")
+        handled = await loop._on_device_control_event("esp32-68ee8f4b5988", report)
+        current = loop.config_plane.get_device("esp32-68ee8f4b5988")
         check("device reports update actual state", handled is True and current["converged"] is True,
               current)
 
-        ignored = await loop._on_device_control_event("esp32-1234567890abcdef12345678",
+        ignored = await loop._on_device_control_event("esp32-68ee8f4b5988",
                                                      Event(type="audio-chunk"))
         check("non-configuration events are not consumed", ignored is False)
 
