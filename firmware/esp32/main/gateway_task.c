@@ -441,14 +441,16 @@ static void gateway_task_fn(void *argument) {
             int state_after = wy_session_state((wy_session *)session);
             if (state_before == WY_SESSION_RUN_REQUESTED && state_after != WY_SESSION_RUN_REQUESTED)
                 gateway_task_maybe_stop_capture();
-            /* Restart is checked on every OK step, not just the armed transition: a capture
-             * task that self-exited on an I2S error leaves the session armed (run-satellite
-             * does not change state), so a repeat run-satellite fires no transition, and the
-             * armed hook would never run again -- the mic dead until a pause or a link bounce.
-             * The guard inside maybe_start_capture is armed-and-not-running, so this is
-             * idempotent, and it is what gives a failed first start (channel still in use) its
-             * retry. */
-            if (state_after == WY_SESSION_RUN_REQUESTED)
+            /* The start side is the whole fix. A registered satellite must already be listening
+             * for its wake word: "responsive the moment it registers" is exactly what a
+             * multi-satellite house needs, and maybe_stop_capture already treats REGISTERED as
+             * the idle listening state (it releases only on REFUSED/FAILED). Arming only on
+             * RUN_REQUESTED left the mic cold until the bridge ran the satellite, so a freshly
+             * registered board sat deaf at REGISTERED -- WAKE_STATUS showed model=placeholder
+             * scorer=stub threshold_armed=0 even though the model and selector were provisioned.
+             * Arming on REGISTERED too is idempotent (the guard inside maybe_start_capture is
+             * armed-and-not-running) and still retries a failed first start. */
+            if (state_after == WY_SESSION_REGISTERED || state_after == WY_SESSION_RUN_REQUESTED)
                 gateway_task_maybe_start_capture();
             continue;
         }
