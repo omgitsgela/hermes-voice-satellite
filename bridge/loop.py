@@ -79,7 +79,8 @@ LED_IDLE = "led-idle"
 
 from bridge.config import (CAPTURE_ACTIVATION_SECONDS, GATEWAY_BASE_URL, GATEWAY_ENV_FILE,
                            GATEWAY_API_KEY_VAR, SATELLITE_HOST, SATELLITE_PORT,
-                           VOICE_INSTRUCTIONS, VOICE_ROUTE_ALIAS, VOICE_SESSION_ID)
+                           VOICE_INSTRUCTIONS, VOICE_ROUTE_ALIAS, VOICE_SESSION_ID,
+                           WAKE_CLAIM_WINDOW_S)
 from bridge.endpointing import Endpointer, EndpointResult
 from bridge.gateway import VoiceGateway, VoiceGatewayError, read_api_key
 from bridge.satellite import SatelliteClient
@@ -193,6 +194,22 @@ class VoiceLoop:
         # The device we are serving, when one dialled in and was leased (issue #61). None means `self.sat` is
         # the client that dials the satellite at its configured address.
         self.leased = None
+        # Fleet leases (issue #111): EVERY registered device gets a lease, an arm and a
+        # supervisor reader. `self.sat` is whichever lease currently owns the conversation;
+        # the single lease that used to be the whole shape is what left a second registered
+        # device permanently deaf (measured 2026-10-23: generations 1..97, never armed).
+        self.leases: dict = {}
+        self._supervisor_tasks: dict = {}
+        # Which device owns the one global turn (decided 2026-10-23: one household
+        # conversation, wakes queue FIFO). None means nobody owns it and supervisors read freely.
+        self.turn_owner: Optional[str] = None
+        # Self-trigger suppression is keyed PER DEVICE: device X's own answer can re-wake
+        # device X, and today's global flag would wrongly suppress device Y's independent wake.
+        self._speaking_at_device: dict = {}
+        # Wakes from every armed device queue here, FIFO, and exactly one is claimed per turn.
+        from bridge.wake_router import WakeRouter
+        self.wake_router = WakeRouter(suppress_check=self._is_self_trigger,
+                                      claim_window_s=WAKE_CLAIM_WINDOW_S)
         self.registry = None
         self.registry_server = None
 
@@ -253,6 +270,8 @@ class VoiceLoop:
         self.announcer = Announcer(
             sat=self.sat,
             turn_started_at=lambda: self.turn_started_at,
+            # Fleet (issue #111): whose conversation an announcement must not talk over.
+            turn_owner=lambda: self.turn_owner,
             # The settings endpoint publishes the follow-up switch. It reads the attribute rather
             # than a copy, so a change made by voice or by the assistant is visible immediately.
             follow_up_get=lambda: self.follow_up,
@@ -266,6 +285,9 @@ class VoiceLoop:
             # write it back, so it goes through the same recorded path as a spoken change.
             volume_get=lambda: self.volume,
             volume_set=self._set_volume,
+            # Fleet (issue #111): announcements speak on every armed lease, each over its own
+            # registered connection, never a socket of the announcer's own.
+            satellites=lambda: list(self.leases.values()),
         )
 
     # -- session handling ---------------------------------------------------
@@ -653,23 +675,62 @@ class VoiceLoop:
             return buf.popleft()
         return await self.sat.next_event(timeout)
 
+    def _ensure_fleet(self) -> dict:
+        """Fleet state, created lazily so bare test loops (`VoiceLoop.__new__`) keep working.
+
+        Several tests build a VoiceLoop without __init__ (the config-plane and volume suites),
+        so every fleet touchpoint goes through here rather than assuming __init__ ran.
+        Idempotent attribute by attribute: a test that pre-seeds some state is respected.
+        """
+        if not hasattr(self, "leases"):
+            self.leases = {}
+        if not hasattr(self, "_supervisor_tasks"):
+            self._supervisor_tasks = {}
+        if not hasattr(self, "turn_owner"):
+            self.turn_owner = None
+        if not hasattr(self, "_speaking_at_device"):
+            self._speaking_at_device = {}
+        if not hasattr(self, "wake_router"):
+            from bridge.config import WAKE_CLAIM_WINDOW_S
+            from bridge.wake_router import WakeRouter
+            self.wake_router = WakeRouter(suppress_check=self._is_self_trigger,
+                                          claim_window_s=WAKE_CLAIM_WINDOW_S)
+        return self.leases
+
     async def wait_for_wake(self, timeout: Optional[float] = None) -> str:
-        """Block until the satellite reports its wake word. Returns the word name.
+        """Block until *any* armed device reports its wake word. Returns the word name.
 
         A timeout here is NOT a connection failure. An hour with nobody speaking is the normal
         overnight state, and treating it as fatal is exactly what made the bridge exit, restart,
         replay its connect tone, reload whisper and Piper, and go deaf for nine seconds, once an
         hour all night (2026-09-23). `run()` catches IdleWakeRefresh and refreshes the
         socket in place instead.
+
+        Fleet shape (issue #111): every lease has its own supervisor reader, and every wake it
+        hears is submitted to the WakeRouter FIFO. This method claims one record and hands the
+        conversation over to that device; the winner keeps its already-open listen stream
+        (decided 2026-10-23), so claiming sends the device nothing at all. With the registry off
+        the dialled-satellite queue path is unchanged.
         """
         from bridge.config import WAKE_WAIT_SECONDS
+
+        # A fresh wake begins a fresh claim: whatever owned the previous turn releases its
+        # socket now, so every supervisor resumes reading its device (issue #111). Follow-up
+        # chains never pass through here, so the chain's device stays owner throughout.
+        self._release_turn_owner()
+        leases = self._ensure_fleet()
 
         # A wake held from an earlier, unusable moment comes before anything on the
         # queue: the person already asked, and they have been waiting since.
         if self._held_wake is not None:
-            name, self._held_wake = self._held_wake, None
-            _LOGGER.info("wake word: %s (held from a detection that arrived mid-task)", name)
-            return name
+            held, self._held_wake = self._held_wake, None
+            held_device = getattr(self, "_held_wake_device", None)
+            self._held_wake_device = None
+            _LOGGER.info("wake word: %s (held from a detection that arrived mid-task)", held)
+            self._release_turn_owner()
+            if held_device and held_device in self._ensure_fleet():
+                return await self._claim_record(held_device, held)
+            return held
 
         if timeout is None:
             timeout = WAKE_WAIT_SECONDS
@@ -678,38 +739,126 @@ class VoiceLoop:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 raise IdleWakeRefresh(f"no wake word in {timeout:.0f}s")
+
+            # Fleet: the supervisors own the device sockets, so wakes arrive through the router
+            # and never through this loop's own read of a lease queue.
+            if self.leases:
+                record = await self.wake_router.claim(timeout=min(remaining, 5.0))
+                if record is None:
+                    continue
+                if record.device_id not in self.leases:
+                    # The lease died between the wake and the claim; the wake cannot be answered.
+                    # Retire the tentative claim or the next iteration would re-claim the same
+                    # dead record forever.
+                    _LOGGER.warning("wake from %s has no live lease; discarding it",
+                                    record.device_id)
+                    self.wake_router.retire()
+                    continue
+                return await self._claim_record(record.device_id, record.name)
+
+            # Registry off: the long-standing dialled-satellite queue path, unchanged. The 30s
+            # slice is deliberate: SatelliteClient.next_event cancels its queue read at each
+            # slice boundary, and a read cancelled after an item was handed to it loses that
+            # item, so the dialled path keeps the original long slice.
             event = await self._next(min(remaining, 30.0))
             if event is None:
                 if self.sat.eof:
                     raise ConnectionError("satellite connection closed")
                 continue
             if Detection.is_type(event.type):
-                name = Detection.from_event(event).name
-                # No acoustic echo cancellation, so our own answer can trigger the wake word.
-                # But the suppression must be TIME-BOUNDED, never a bare flag: _speaking is
-                # cleared only at the end of a turn, so if it ever latches true the device goes
-                # permanently deaf -- every wake is discarded as a self-trigger, no turn can
-                # start, and therefore nothing ever clears the flag. That deadlock was observed:
-                # wakes were still being rejected as "during playback" many minutes after the
-                # last audio played. The device also independently suppresses its own chime
-                # before reporting a detection, so this is a second line of defence, not the
-                # primary one, and it must never be able to suppress indefinitely.
-                recently_spoke = (time.monotonic() - self._speaking_at) < SELF_TRIGGER_WINDOW_S
-                if self._speaking and recently_spoke:
-                    self.self_trigger_count += 1
-                    _LOGGER.warning("wake word %r within %.0fs of playback: treating as a "
-                                    "self-trigger, ignoring", name, SELF_TRIGGER_WINDOW_S)
+                detection = Detection.from_event(event)
+                device_id = getattr(self.sat, "device_id", None) or self.device_id
+                if self._is_self_trigger(device_id):
                     continue
-                if self._speaking and not recently_spoke:
-                    # The flag is latched but playback is long over. Recover rather than stay
-                    # deaf, and say so loudly: a latch means a turn never completed.
-                    _LOGGER.warning("wake word %r arrived with _speaking still set %.0fs after "
-                                    "the last playback (a turn never completed); accepting it "
-                                    "and clearing the flag", name,
-                                    time.monotonic() - self._speaking_at)
-                    self._speaking = False
-                _LOGGER.info("wake word: %s", name)
-                return name
+                _LOGGER.info("wake word: %s", detection.name)
+                return detection.name
+
+    def _is_self_trigger(self, device_id: Optional[str]) -> bool:
+        """Whether a wake on THIS device is its own answer echoing back.
+
+        No acoustic echo cancellation, so a satellite's own speaker can trigger its own wake
+        word. But the suppression must be TIME-BOUNDED and PER DEVICE (issue #111): _speaking is
+        cleared only at the end of a turn, so if it ever latches true the device goes permanently
+        deaf -- wakes rejected as self-triggers forever, no turn starts, nothing ever clears the
+        flag. That deadlock was observed. And with a fleet, device X's answer must NOT swallow
+        device Y's independent wake: suppression keys on the *speaking* device, not on any device
+        that happens to hear a sound. The device also independently suppresses its own chime
+        before reporting a detection, so this is a second line of defence, not the primary one,
+        and it must never be able to suppress indefinitely.
+        """
+        if not self._speaking:
+            return False
+        key = device_id or ""
+        speaking_at = self._ensure_fleet() and self._speaking_at_device
+        # A device is only suspected of hearing its own answer when *that device* (or, on the
+        # dialled path with no per-device stamps at all, the loop's global stamp) spoke inside
+        # the window. A device absent from a non-empty per-device map simply has not spoken:
+        # device X's answer must never suppress device Y's independent wake (issue #111).
+        if key in speaking_at:
+            last_spoke = speaking_at[key]
+        elif not speaking_at:
+            last_spoke = self._speaking_at
+        else:
+            last_spoke = 0.0
+        recently_spoke = (time.monotonic() - last_spoke) < SELF_TRIGGER_WINDOW_S
+        if recently_spoke:
+            self.self_trigger_count += 1
+            _LOGGER.warning("wake word on %s within %.0fs of its own playback: treating as a "
+                            "self-trigger, ignoring", key or "the satellite", SELF_TRIGGER_WINDOW_S)
+            return True
+        # The flag is latched but this device's last playback is long over. Recover rather than
+        # stay deaf, and say so loudly: a latch means a turn never completed.
+        _LOGGER.warning("wake word on %s arrived with _speaking still set %.0fs after the last "
+                        "playback (a turn never completed); accepting it and clearing the flag",
+                        key or "the satellite", time.monotonic() - self._speaking_at)
+        self._speaking = False
+        return False
+
+    def _speaking_for_device(self, device_id: Optional[str], when: float) -> None:
+        """Record that this device spoke at `when`, for per-device echo suppression."""
+        self._ensure_fleet()
+        self._speaking_at_device[device_id or ""] = when
+
+    async def _claim_record(self, device_id: str, name: str) -> str:
+        """Hand the conversation to the device whose wake was claimed. Its stream stays open.
+
+        With the claim window open (Milestone B arbitration), wakes from OTHER devices that
+        arrived for the same utterance are gathered and released — their listen streams
+        cancelled, wake words re-armed — while the winner keeps the stream it already opened
+        under the activation word it heard (decided 2026-10-23). With the window closed
+        (Milestone A default) a wake from another device is a separate request: it stays in
+        the FIFO for the next turn and nobody is cancelled.
+        """
+        leases = self._ensure_fleet()
+        lease = leases.get(device_id)
+        if lease is not None:
+            self._use_satellite(lease, leased=True)
+            self.turn_owner = device_id
+            # A7 (issue #111): config/volume addressing follows the device actually being
+            # talked to, not whichever registered most recently.
+            self._adopt_device(device_id)
+            if self.wake_router.claim_window_s > 0:
+                candidates = await self.wake_router.resolve_pending()
+                losers = [c for c in candidates if c.device_id != device_id]
+                if losers:
+                    _LOGGER.info(
+                        "arbitration: winner=%s (heard %s) releasing %d unfavourable device(s): %s",
+                        device_id, name, len(losers),
+                        ", ".join(f"{c.device_id}:{c.name}" for c in losers),
+                    )
+                    for loser in losers:
+                        self.wake_router.release(loser)
+                        await self._release_losing_stream(loser.device_id,
+                                                          f"out-heard by {device_id}")
+            _LOGGER.info("arbitration: %s claims the turn (listen stream kept open)", device_id)
+        self.wake_router.retire()
+        return name
+
+    def _release_turn_owner(self) -> None:
+        """End of a turn (or a turn that never happened): nobody owns the socket, so every
+        supervisor resumes reading its device."""
+        self._ensure_fleet()
+        self.turn_owner = None
 
     async def wait_for_played(self, timeout: float = 20.0) -> bool:
         """Wait for the satellite's `played`, absorbing stray detections meanwhile.
@@ -799,7 +948,7 @@ class VoiceLoop:
         _LOGGER.warning("interruption: run would not accept the text, so it was dropped")
         return "steer_failed"
 
-    def _hold_wake(self, name: str) -> None:
+    def _hold_wake(self, name: str, device_id: Optional[str] = None) -> None:
         """Keep a wake detection that arrived at a moment we could not use it.
 
         A wake word is the person's only way to be heard. The interruption watcher
@@ -807,8 +956,10 @@ class VoiceLoop:
         to be consumed and discarded: the tone sounded in the room and then nothing
         at all happened. Hold it instead, and wait_for_wake hands it to the next
         turn. Only one is kept -- a later wake replaces it, which is the more
-        recent request."""
+        recent request. It is pinned to the device that heard it (issue #111), so
+        the next turn runs on the speaker the person actually walked up to."""
         self._held_wake = name
+        self._held_wake_device = device_id or getattr(self.sat, "device_id", None) or self.device_id
         _LOGGER.info("wake word %r arrived mid-task and could not be used; "
                      "keeping it for the next turn", name)
 
@@ -1313,6 +1464,11 @@ class VoiceLoop:
         t_gateway = time.perf_counter()
         self._speaking = True
         self._speaking_at = time.monotonic()
+        # Per-device echo suppression (issue #111): stamp the device that is about to speak,
+        # not "whichever device exists". Device X's answer must only suppress device X's wake.
+        self._speaking_for_device(getattr(self.sat, "device_id", None)
+                                  or getattr(self, "device_id", ""),
+                                  self._speaking_at)
         spoken_any = False
 
         async def fill_silence(_event=None) -> None:
@@ -1571,6 +1727,10 @@ class VoiceLoop:
             await self._acquire_a_satellite()
         else:
             await self.sat.connect()
+        # Claim the conversation socket while the handshake and first arm run, so the fleet
+        # supervisors pause on it and cannot steal the describe reply into their parked
+        # buffers (issue #111: exactly one consumer per socket at a time).
+        self.turn_owner = getattr(self.sat, "device_id", None)
         info = await self.sat.describe()
         if info is not None:
             name = getattr(getattr(info, "satellite", None), "name", "?")
@@ -1579,6 +1739,7 @@ class VoiceLoop:
         _LOGGER.info("gateway health: %s", health)
         # Tell the satellite we are ready; it arms its wake word and stops being inert.
         await self.sat.run()
+        self.turn_owner = None
 
         # Pre-warm the slow parts, off the event loop, so the first real turn is not noticeably
         # slower than the rest (Whisper model load is seconds, Piper's ~1 s).
@@ -1627,35 +1788,186 @@ class VoiceLoop:
         ready = self.registry.connections(ready_only=True)
         if not ready:
             return None
-        if len(ready) > 1:
-            _LOGGER.info(
-                "%d devices are ready; leasing %s and leaving the rest registered (one conversation at a "
-                "time)", len(ready), ready[0].device_id,
-            )
         return ready[0]
 
-    async def _acquire_a_satellite(self) -> None:
-        """Take hold of a satellite, preferring a device that dialled in.
+    # -- fleet leases (issue #111) ------------------------------------------------
+    #
+    # Every registered device gets a lease, an arm and a supervisor reader. The old shape
+    # leased exactly one device and left the rest registered-but-deaf: the firmware only
+    # scores wake words under RUN_REQUESTED, and an unleased device is never sent
+    # run-satellite. Measured 2026-10-23: one device held the lease since Oct 21 while the
+    # other re-registered 97 times and never armed.
 
-        A lease is checked first every time round: it is the intended shape, and two clients competing for
-        one device is exactly what the one-client rule exists to prevent. The direct dial is an explicit
-        migration/rollback option; when enabled it still waits out the lease grace period first.
+    def _ensure_lease(self, connection):
+        """Create (or generation-replace) the lease for one registered connection.
+
+        Only real `SatelliteConnection`s get leases: the config-plane tests drive the
+        registration hook with fakes, and a supervisor must never try to supervise one.
+        Generation-safe the same way the registry is: a stale connection object must never
+        replace its own successor's lease.
+        """
+        from bridge.registry import SatelliteConnection
+
+        leases = getattr(self, "leases", None)
+        if leases is None or not isinstance(connection, SatelliteConnection):
+            # Bare test loops (VoiceLoop.__new__) and fake registry slots have no fleet to
+            # supervise; the registration hook still does its config-plane work.
+            return None
+        existing = leases.get(connection.device_id)
+        if existing is not None:
+            if existing.generation == connection.generation:
+                return existing
+            _LOGGER.info(
+                "device %s re-registered (generation %s -> %s): replacing its lease",
+                connection.device_id, existing.generation, connection.generation,
+            )
+            if existing is not self.sat:
+                asyncio.ensure_future(existing.close())
+            self.leases.pop(connection.device_id, None)
+        from bridge.lease import LeasedSatellite
+
+        lease = LeasedSatellite(connection, log_events=self._log_events)
+        leases[connection.device_id] = lease
+        task = self._supervisor_tasks.get(connection.device_id)
+        if task is None or task.done():
+            self._supervisor_tasks[connection.device_id] = asyncio.create_task(
+                self._supervise_device(connection.device_id),
+                name=f"lease-supervisor-{connection.device_id}",
+            )
+        return lease
+
+    def _drop_lease(self, device_id: str, why: str) -> None:
+        """Forget a lease whose link died. The registry's slot cleanup owns the socket.
+
+        Cancels the supervisor too: a poller must never outlive its lease, or a generation
+        replacement would end up with two pollers on one device (issue #111's two-readers
+        failure class). The supervisor re-arms itself when `_ensure_lease` creates the new one.
+        """
+        lease = self.leases.pop(device_id, None)
+        if lease is None:
+            return
+        _LOGGER.info("dropping lease on %s (%s)", device_id, why)
+        lease._cancel_pending()
+        task = self._supervisor_tasks.get(device_id)
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+        if device_id == self.turn_owner:
+            self.turn_owner = None
+
+    async def _arm_all(self) -> None:
+        """Send `run-satellite` to every lease: registration arms a device, but the
+        wake gates (RUN_REQUESTED) only stay armed while the host keeps saying it is
+        ready, so every arm point here is what keeps a device genuinely wake-responsive.
+        """
+        for device_id, lease in list(self.leases.items()):
+            if lease.connection.closed:
+                self._drop_lease(device_id, "link closed")
+                continue
+            try:
+                await lease.run()
+            except Exception as exc:  # noqa: BLE001 - one deaf device must not stop the others
+                _LOGGER.warning("could not arm %s: %s", device_id, exc)
+
+    async def _supervise_device(self, device_id: str) -> None:
+        """One reader per leased socket, for the whole life of the lease.
+
+        The rule that keeps the historic two-readers-on-one-socket failure class (issues
+        #13/#46) shut: this coroutine only ever calls `get_nowait`, and only while the lease
+        does NOT own the conversation. A live blocking read (`_pending_get`) belongs to the
+        turn, and an arriving event is handed to a waiting getter before it can land in the
+        queue where a poll would see it, so the two consumers cannot take the same event or
+        cross order.
+
+        What the supervisor does with each event:
+          * detection  -> the WakeRouter (queued FIFO; per-device self-trigger suppression)
+          * audio-start/stop -> track the lease's streaming state
+          * everything else  -> the lease's bounded parked buffer, drained first by whoever
+            claims the lease next (this is what keeps the winner's post-wake chunks alive)
+        A supervisor that dies is logged with the device id, never silent (inversion
+        review P2).
+        """
+        slice_s = 0.05
+        logged_streaming = False
+        try:
+            while True:
+                lease = self.leases.get(device_id)
+                if lease is None:
+                    return
+                if lease.eof:
+                    self._drop_lease(device_id, "link closed")
+                    return
+                if device_id == self.turn_owner:
+                    # The turn machinery owns this socket right now. Do not touch it.
+                    await asyncio.sleep(slice_s)
+                    continue
+                event = lease.poll_event()
+                if event is None:
+                    await asyncio.sleep(slice_s)
+                    continue
+                if Detection.is_type(event.type):
+                    detection = Detection.from_event(event)
+                    self.wake_router.submit(device_id, detection.name, detection)
+                    continue
+                if event.type == "audio-start":
+                    lease.streaming = True
+                    if not logged_streaming:
+                        _LOGGER.info(
+                            "%s is streaming while another device owns the conversation; "
+                            "parking until arbitration releases it", device_id)
+                        logged_streaming = True
+                elif event.type == "audio-stop":
+                    lease.streaming = False
+                    logged_streaming = False
+                lease.parked.append(event)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a dead supervisor must be loud, not silent
+            _LOGGER.error("lease supervisor for %s died: %s", device_id, exc)
+            self._drop_lease(device_id, "supervisor died")
+        finally:
+            # Pop only our own slot: a generation replacement may already have installed its
+            # successor's supervisor, and popping blindly would orphan it.
+            if self._supervisor_tasks.get(device_id) is asyncio.current_task():
+                self._supervisor_tasks.pop(device_id, None)
+
+    async def _release_losing_stream(self, device_id: str, reason: str) -> None:
+        """Cancel the listen stream on an unfavourable device and return it to listening.
+
+        `pause-satellite` closes the mic stream on both platforms (the ESP32 session's stop-
+        streaming path; the Pi satellite's RunPause), then a *silent* run-satellite re-arms
+        its wake word with no done tone -- the documented invariant for the losing-arbitration
+        path. The device is wake-responsive again within one round trip.
+        """
+        lease = self.leases.get(device_id)
+        if lease is None:
+            return
+        _LOGGER.info("arbitration: releasing %s (%s)", device_id, reason)
+        lease.parked.clear()
+        lease.streaming = False
+        try:
+            await lease.pause()
+            await lease.run()
+        except Exception as exc:  # noqa: BLE001 - the device will re-register if the link is gone
+            _LOGGER.warning("could not release %s cleanly: %s", device_id, exc)
+            self._drop_lease(device_id, "release failed")
+
+    async def _acquire_a_satellite(self) -> None:
+        """Hold at least one satellite: leases arrive via registration; the dial is a fallback.
+
+        Fleet shape (issue #111): registration already leased and armed whatever dialled in
+        (`_on_device_registered`). This method's remaining job is to keep the loop alive until
+        at least one lease exists, and to honour the direct-dial migration/rollback option
+        after its grace period. When leases already exist (a re-acquire after a partial loss),
+        it arms the whole fleet rather than waiting.
         """
         from bridge.config import (DIRECT_DIAL_FALLBACK, REGISTRY_LEASE_WAIT_SECONDS,
                                    REGISTRY_WAIT_RETRY_SECONDS, SATELLITE_HOST, SATELLITE_PORT)
-        from bridge.lease import LeasedSatellite
 
         waited = 0.0
         while True:
-            connection = self._first_ready_device()
-            if connection is not None:
-                lease = LeasedSatellite(connection, log_events=self._log_events)
-                self._use_satellite(lease, leased=True)
-                # Address the device we just leased. A bridge that is talking to this
-                # device must name it the way the registry does, or configured volume and
-                # any other desired state will be filed under a name nobody answers to.
-                self._adopt_device(connection.device_id)
-                await lease.connect()
+            if self._ensure_fleet():
+                await self._arm_all()
+                self._use_satellite(next(iter(self.leases.values())), leased=True)
                 return
 
             if DIRECT_DIAL_FALLBACK and waited >= REGISTRY_LEASE_WAIT_SECONDS:
@@ -1689,16 +2001,32 @@ class VoiceLoop:
 
         In registry mode a lost link is not a reason to exit. A device that dialled in owns its socket and
         returns when it reconnects, and exiting would take the listeners down with it, which is the defect
-        that made this whole shape necessary. So drop what we had, build a fresh client for the dial
-        fallback, and acquire again. Nothing here reloads Whisper or Piper: only the link is replaced.
+        that made this whole shape necessary. Nothing here reloads Whisper or Piper: only the link is replaced.
+
+        Fleet shape (issue #111): a lost lease is dropped individually; the other leases keep their arms
+        and supervisors untouched. Only when there is no fleet at all does the dialled fallback path run.
         """
         from bridge.config import SATELLITE_HOST, SATELLITE_PORT
         from bridge.satellite import SatelliteClient
 
-        _LOGGER.warning(
-            "lost the %s (%s); re-acquiring rather than exiting",
-            "lease on a device that dialled in" if self.leased else "dialled satellite", exc,
-        )
+        lost_device = getattr(self.sat, "device_id", None)
+        if self._ensure_fleet():
+            _LOGGER.warning("lost the lease on %s (%s); the rest of the fleet stays armed",
+                            lost_device or "a device that dialled in", exc)
+            if lost_device:
+                self._drop_lease(lost_device, "link loss")
+            try:
+                await self.sat.close()
+            except Exception:  # noqa: BLE001 - a dead link is already dead
+                pass
+            await self._acquire_a_satellite()
+            _LOGGER.info(
+                "re-acquired a device that dialled in; listening again (session %s), %d lease(s) armed",
+                self.gateway.session_id, len(self.leases),
+            )
+            return
+
+        _LOGGER.warning("lost the dialled satellite (%s); re-acquiring rather than exiting", exc)
         try:
             await self.sat.close()
         except Exception:  # noqa: BLE001 - a dead link is already dead
@@ -1754,15 +2082,25 @@ class VoiceLoop:
         return True
 
     async def _on_device_registered(self, slot) -> None:
-        """A device completed the handshake and is available to be leased.
+        """A device completed the handshake: lease it, arm it, and supervise its socket.
 
-        The lease itself is taken by `_acquire_a_satellite`, at startup or after a link loss. This hook only
-        reports what arrived, so a registration is visible in the log even while the loop is elsewhere.
+        Fleet rule (issue #111): registration is not just "available to be leased later" --
+        every registered device is leased immediately, armed with run-satellite so its wake
+        gates open, and given one supervisor reader for the life of the connection. The lease
+        hook used to only log what arrived while a single lease elsewhere stayed pinned.
         """
         identity = getattr(slot, "identity", None)
-        # Address this device from now on. Done first, so the desired-state dispatch below
-        # and every later spoken command use the id that actually exists in the registry.
-        self._adopt_device(slot.device_id)
+        # Address this device from now on, UNLESS a conversation is in progress on another
+        # device (issue #111, A7): volume and desired-state addressing follow the device the
+        # person is actually talking to, not whichever registered most recently. The config
+        # dispatch below still uses slot.device_id directly, so the new device still gets its
+        # desired state immediately regardless of who is being addressed.
+        self._ensure_fleet()
+        if self.turn_owner is None or self.turn_owner == slot.device_id:
+            self._adopt_device(slot.device_id)
+        else:
+            _LOGGER.info("device %s registered during a conversation on %s; staying addressed to %s",
+                         slot.device_id, self.turn_owner, self.turn_owner)
         _LOGGER.info(
             "device registered: id=%s name=%s area=%s version=%s protocol=%s capabilities=%s",
             slot.device_id,
@@ -1776,6 +2114,14 @@ class VoiceLoop:
         record = self.config_plane.ensure_device(slot.device_id, metadata=metadata)
         if not await self._dispatch_device_config(slot.device_id, record):
             _LOGGER.warning("device %s registered but desired state could not be dispatched", slot.device_id)
+        lease = self._ensure_lease(getattr(slot, "connection", None))
+        if lease is not None:
+            try:
+                await lease.run()
+                _LOGGER.info("device %s leased and armed (generation %s); wake word live",
+                             lease.device_id, lease.generation)
+            except Exception as exc:  # noqa: BLE001 - a failed arm must not lose the registration
+                _LOGGER.warning("device %s registered but could not be armed: %s", slot.device_id, exc)
 
     async def say_startup_tone(self) -> None:
         """Play the "connected" tone, so the device can report the host link out loud.
@@ -1815,13 +2161,22 @@ class VoiceLoop:
                 _LOGGER.warning("could not record the boot id: %s", exc)
 
     async def _refresh_link(self) -> None:
-        """Refresh the satellite socket in place after an idle wait, without exiting.
+        """Refresh satellite links in place after an idle wait, without exiting.
 
         The satellite goes inert on a new connection until it is told the host is ready, so `run()`
         must be re-sent or the device would sit there awake but deaf. That re-send is the whole
         difference between a working refresh and a silent dead device.
+
+        Fleet shape (issue #111): the hourly refresh touches every lease, not just whichever
+        device happened to hold the single old lease. It stays silent: the once-per-boot marker
+        for the connected tone is untouched here, and re-arming is a `run-satellite`, not a chime.
         """
-        _LOGGER.info("refreshing the satellite link after an idle wait")
+        _LOGGER.info("refreshing satellite links after an idle wait")
+        if self._ensure_fleet():
+            await self._arm_all()
+            _LOGGER.info("satellite links refreshed; wake word re-armed on %d device(s)",
+                         len(self.leases))
+            return
         await self.sat.reconnect()
         await self.sat.run()
         _LOGGER.info("satellite link refreshed; wake word re-armed")
@@ -1866,6 +2221,15 @@ class VoiceLoop:
         _LOGGER.info("stopping after %d turn(s)", turns)
 
     async def close(self) -> None:
+        # Supervisors first: they poll the leases, so they must stop before the sockets do,
+        # or they log spurious "supervisor died" errors on the way out (issue #111).
+        self._ensure_fleet()
+        for task in list(self._supervisor_tasks.values()):
+            task.cancel()
+        if self._supervisor_tasks:
+            await asyncio.gather(*self._supervisor_tasks.values(), return_exceptions=True)
+        self._supervisor_tasks.clear()
+        self.leases.clear()
         for label, server in (("registry", getattr(self, "registry_server", None)),
                               ("plain registry", getattr(self, "legacy_registry_server", None))):
             if server is None:

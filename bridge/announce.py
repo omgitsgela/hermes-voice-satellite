@@ -95,6 +95,7 @@ class Announcer:
     """Owns the announcement HTTP endpoint, its queue, and the satellite connection it speaks on."""
 
     def __init__(self, *, sat: SatelliteClient, turn_started_at: Callable[[], Optional[float]],
+                 turn_owner: Optional[Callable[[], Optional[str]]] = None,
                  follow_up_get: Optional[Callable[[], bool]] = None,
                  follow_up_set: Optional[Callable[[bool], bool]] = None,
                  endpointing_profile_get: Optional[Callable[[], str]] = None,
@@ -108,8 +109,18 @@ class Announcer:
                  volume_get: Optional[Callable[[], int]] = None,
                  volume_set: Optional[Callable[[int], Any]] = None,
                  enrollment: Optional[EnrollmentService] = None,
+                 satellites: Optional[Callable[[], Iterable[Any]]] = None,
                  host: str = ANNOUNCE_HOST, port: int = ANNOUNCE_PORT) -> None:
         self._sat = sat          # the conversation loop's connection; see the module docstring
+        # Fleet (issue #111): the loop's current turn owner (device id, or None when idle).
+        # An announcement must never talk over the conversation on ITS device, and must not
+        # wait for a conversation it will never play on.
+        self._turn_owner = turn_owner
+        # Fleet (issue #111): when the loop supplies this, an announcement plays on EVERY
+        # armed satellite (each on its own registered, run-satellite-armed connection — the
+        # issue #46 rule that an announcement never opens its own socket still holds). With
+        # it unset or empty, announcements speak on `self._sat` exactly as before.
+        self._satellites = satellites
         self._turn_started_at = turn_started_at
         # Follow-up mode is the loop's state, not ours: we only publish the switch. Both callbacks
         # are optional so an Announcer built without a loop still works.
@@ -743,13 +754,39 @@ class Announcer:
     async def _wait_for_quiet(self, item: Announcement) -> float:
         started = time.monotonic()
         if self._turn_is_active():
+            # Fleet (issue #111): a conversation on ONE device only blocks announcements on
+            # THAT device — its mic is open and its speaker is busy. When other armed devices
+            # can carry the announcement, waiting for the whole conversation would be the
+            # wrong quiet. Without a fleet view this is the historical wait, unchanged.
+            if self._fleet_targets_available():
+                _LOGGER.info("announcement %s will skip the in-conversation device and speak "
+                             "on the other armed satellite(s)", item.id)
+                return 0.0
             _LOGGER.info("announcement %s is waiting: a conversation is in progress", item.id)
         while self._turn_is_active():
             await asyncio.sleep(0.25)
+            if self._fleet_targets_available():
+                _LOGGER.info("announcement %s will skip the in-conversation device and speak "
+                             "on the other armed satellite(s)", item.id)
+                break
             if time.monotonic() - started > ANNOUNCE_TURN_MAX_AGE + 5.0:
                 _LOGGER.warning("gave up waiting for the conversation to finish")
                 break
         return time.monotonic() - started
+
+    def _fleet_targets_available(self) -> bool:
+        """True when an armed satellite exists that the active conversation is NOT using."""
+        satellites = getattr(self, "_satellites", None)
+        if satellites is None:
+            return False
+        owner = self._active_turn_owner()
+        if owner is None:
+            return False
+        try:
+            armed = list(satellites())
+        except Exception:  # noqa: BLE001 - a broken fleet view falls back to waiting
+            return False
+        return any(getattr(sat, "device_id", None) != owner for sat in armed if sat is not None)
 
     async def _run_worker(self) -> None:
         """Speak announcements one at a time, in arrival order."""
@@ -773,6 +810,51 @@ class Announcer:
             finally:
                 self._queue.task_done()
 
+    def _active_turn_owner(self) -> Optional[str]:
+        """The device currently carrying the conversation, when a turn is active."""
+        if not self._turn_is_active():
+            return None
+        turn_owner = getattr(self, "_turn_owner", None)
+        if turn_owner is None:
+            return None
+        try:
+            return turn_owner()
+        except Exception:  # noqa: BLE001 - a broken view must not lose the announcement
+            return None
+
+    def _delivery_targets(self) -> list:
+        """The satellites one announcement should play on, deduplicated by identity.
+
+        Fleet mode (issue #111): every armed lease, which includes whichever lease owns the
+        conversation — so dedup by identity stops the conversation's device hearing the same
+        clip twice. While a turn is active the conversation's own device is EXCLUDED (the
+        #19 rule stands: its mic is open and its speaker is busy); the other armed devices
+        can be announced on, which is the inversion review's matrix line — an announcement
+        may play on another device during a turn. Single-satellite deployments (no callback,
+        or one that yields nothing) get `[self._sat]`, exactly the historical shape.
+        """
+        targets: list = []
+        seen: set[int] = set()
+        active_owner = self._active_turn_owner()
+        satellites = getattr(self, "_satellites", None)
+        if satellites is not None:
+            try:
+                for sat in satellites():
+                    if sat is None or id(sat) in seen:
+                        continue
+                    if active_owner is not None and getattr(sat, "device_id", None) == active_owner:
+                        continue
+                    seen.add(id(sat))
+                    targets.append(sat)
+            except Exception as exc:  # noqa: BLE001 - a broken fleet view must not lose the announcement
+                _LOGGER.warning("fleet satellite lookup failed (%s); announcing on the loop connection", exc)
+        if not targets and self._sat is not None and id(self._sat) not in seen:
+            # No usable fleet (single device, or the only armed device is mid-conversation
+            # and the gate already gave up on a wedged turn): the historical single-
+            # connection shape, speaking on the loop's connection.
+            targets.append(self._sat)
+        return targets
+
     async def _announce(self, item: Announcement) -> None:
         waited = await self._wait_for_quiet(item)
         wav = await asyncio.to_thread(self._build_wav, item)
@@ -785,9 +867,27 @@ class Announcer:
         # play_wav returns when the audio has been SENT, not when it finishes.
         restore_to = await self._raise_for_alarm(item)
         try:
-            await self._sat.play_wav(wav, wait_for_played=False)
+            # Fleet (issue #111): announce on every armed satellite, each over its own leased
+            # connection (never a new socket, per #46), each serialized by its own playback
+            # lock. One device's failure never cancels the others' announcements — the device
+            # is recorded and dropped like any failed delivery. Without a fleet callback this
+            # is exactly the single-connection shape it always was.
+            spoken_on = 0
+            failures_here: list[str] = []
+            for sat in self._delivery_targets():
+                try:
+                    await sat.play_wav(wav, wait_for_played=False)
+                    spoken_on += 1
+                except Exception as exc:  # noqa: BLE001 - a device that is gone must not kill the rest
+                    name = getattr(sat, "device_id", "satellite")
+                    failures_here.append(f"{name}: {type(exc).__name__}: {exc}")
             if restore_to is not None:
                 await asyncio.sleep(self._volume_hold_seconds(wav))
+            if failures_here:
+                _LOGGER.warning("announcement %s skipped on %d device(s): %s",
+                                item.id, len(failures_here), "; ".join(failures_here))
+            if spoken_on == 0:
+                raise RuntimeError("no satellite was reachable: " + "; ".join(failures_here))
         finally:
             if restore_to is not None:
                 try:

@@ -163,6 +163,10 @@ REGISTRY_LEASE_WAIT_SECONDS = float(_cfg("VOICE_REGISTRY_LEASE_WAIT_SECONDS", "3
 # old-shape device can opt in explicitly; even then the lease grace above is honoured before the dial.
 DIRECT_DIAL_FALLBACK = _cfg("VOICE_DIRECT_DIAL_FALLBACK", "").strip().lower() in (
     "1", "true", "yes", "on")
+# Fleet wake arbitration (issue #111): how long a claimed wake stays open to later detections
+# from OTHER devices for the same utterance. 0 (Milestone A default) means first arrival wins
+# outright. Milestone B turns this on (~500 ms) and picks the highest wake_level instead.
+WAKE_CLAIM_WINDOW_S = max(0.0, float(_cfg("VOICE_WAKE_CLAIM_WINDOW_MS", "0")) / 1000.0)
 
 # Taken from the satellite's own ExecStart flags, so these are its real formats:
 #   --mic-command 'arecord -D plughw:CARD=seeed2micvoicec,DEV=0 -r 16000 -c 1 -f S16_LE -t raw'
