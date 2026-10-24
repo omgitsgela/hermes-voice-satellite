@@ -29,6 +29,11 @@ class StreamBoundTests(unittest.TestCase):
         self.addCleanup(self.harness.doCleanups)
         self.lib = self.harness.library()
         self.IO = module.IO
+        # The wake seam's arbitration parameters are plain scalars: ctypes needs
+        # explicit argtypes for them (a float is not auto-convertible).
+        self.lib.wy_session_wake.argtypes = [C.c_void_p, C.c_char_p, C.c_int, C.c_float,
+                                             self.IO, C.c_void_p]
+        self.lib.wy_session_wake.restype = C.c_int
 
     def _armed_session(self):
         lib = self.lib
@@ -54,7 +59,9 @@ class StreamBoundTests(unittest.TestCase):
 
         for _ in range(3):
             self.assertEqual(lib.wy_session_step(session, read, write, None), 0)
-        self.assertEqual(lib.wy_session_wake(session, b'hey_hermes', write, None), 0)
+        # Level -1: this test is about the stream cap, not arbitration; the
+        # historical (context-free) wake shape exercises the cap unchanged.
+        self.assertEqual(lib.wy_session_wake(session, b"hey_hermes", -1, -1.0, write, None), 0)
         return session, write
 
     def test_a_stream_without_a_transcript_is_capped(self):

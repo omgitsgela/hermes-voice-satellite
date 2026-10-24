@@ -283,10 +283,15 @@ class SatelliteClient:
         Sends audio-start on entry and audio-stop on exit, so an answer is one playback
         session rather than one per fragment, and the satellite's tts-start/stop events fire
         once per answer.
+
+        Fleet (issue #111): the stream takes this client's playback lock. A dialled client
+        shares the process-wide class lock exactly as before; a satellite lease overrides it
+        with its own, so two devices' answers never serialize behind each other.
         """
         from bridge.tts import TtsStream
 
-        return TtsStream(self.send, pace=pace)
+        return TtsStream(self.send, pace=pace,
+                         lock=getattr(self, "_playback_lock_override", None))
 
     # -- playback -----------------------------------------------------------
 
@@ -294,11 +299,22 @@ class SatelliteClient:
     # snd service (one aplay process), so two concurrent streams would interleave into it, and
     # the announcement path deliberately uses its own connection, so a per-instance lock would
     # not be enough.
+    #
+    # Fleet exception (issue #111): the "one aplay" argument is per DEVICE, not per process.
+    # Two devices have two aploys; a LeasedSatellite sets `_playback_lock_override` to its own
+    # lock, and every playback entry point here resolves through `playback_lock` so a lease
+    # serializes against its own announcements and streams, and never against another device.
     PLAYBACK_LOCK = asyncio.Lock()
+
+    @property
+    def playback_lock(self) -> asyncio.Lock:
+        """This client's playback lock, resolved late so tests that swap the class lock still
+        affect clients that use it."""
+        return getattr(self, "_playback_lock_override", None) or SatelliteClient.PLAYBACK_LOCK
 
     async def play_wav(self, *args, **kwargs) -> bool:
         """Serialised entry point; the real work is in `_play_wav_inner`."""
-        async with SatelliteClient.PLAYBACK_LOCK:
+        async with self.playback_lock:
             return await self._play_wav_inner(*args, **kwargs)
 
     async def _play_wav_inner(self, wav_path: Path, *, wait_for_played: bool = True,

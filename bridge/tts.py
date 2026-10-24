@@ -80,7 +80,7 @@ class TtsStream:
     than realtime and aplay buffers the whole answer in a 416 MB board's memory.
     """
 
-    def __init__(self, send, *, pace: float = 2.0) -> None:
+    def __init__(self, send, *, pace: float = 2.0, lock=None) -> None:
         from wyoming.audio import AudioChunk, AudioChunkConverter, AudioStart, AudioStop
 
         self._AudioChunk = AudioChunk
@@ -92,6 +92,13 @@ class TtsStream:
         self._seconds_sent = 0.0
         self._chars_sent = 0
         self._holds_lock = False
+        # Per-device playback (issue #111): a satellite lease passes its own device lock so
+        # two devices' speech never serializes behind each other. None means the process-wide
+        # class lock, resolved late in __aenter__ — the dialled path and the lock tests swap
+        # `SatelliteClient.PLAYBACK_LOCK` between cases, and late resolution is what keeps
+        # them seeing the current lock rather than a captured one.
+        self._lock = lock
+        self._acquired_lock = None
 
     async def __aenter__(self) -> "TtsStream":
         # Hold the process-wide playback lock for the whole stream. The announcement path uses
@@ -104,8 +111,9 @@ class TtsStream:
         # The device simply looked stuck.
         from bridge.satellite import SatelliteClient
 
+        lock = self._lock if self._lock is not None else SatelliteClient.PLAYBACK_LOCK
         try:
-            await asyncio.wait_for(SatelliteClient.PLAYBACK_LOCK.acquire(), timeout=30.0)
+            await asyncio.wait_for(lock.acquire(), timeout=30.0)
         except asyncio.TimeoutError as exc:
             # Fail loudly rather than hanging in silence: a wedged lock should appear in the log
             # as this message, not as a device that stops answering.
@@ -113,6 +121,7 @@ class TtsStream:
                 "could not acquire the playback lock within 30s; something is holding it"
             ) from exc
         self._holds_lock = True
+        self._acquired_lock = lock
         try:
             await self._send(self._AudioStart(rate=SND_FORMAT[0], width=SND_FORMAT[1],
                                               channels=SND_FORMAT[2]).event())
@@ -123,8 +132,9 @@ class TtsStream:
             # and then failed, and the device looked simply stuck. Same failure class the note above
             # records, on the path that note did not cover (issue #14). BaseException on purpose, so
             # a CancelledError releases it too.
-            SatelliteClient.PLAYBACK_LOCK.release()
+            lock.release()
             self._holds_lock = False
+            self._acquired_lock = None
             raise
         return self
 
@@ -145,7 +155,9 @@ class TtsStream:
         finally:
             if self._holds_lock:
                 self._holds_lock = False
-                SatelliteClient.PLAYBACK_LOCK.release()
+                # Release exactly the lock this stream acquired, whatever it turned out to be.
+                (self._acquired_lock or SatelliteClient.PLAYBACK_LOCK).release()
+                self._acquired_lock = None
         return False
 
     async def say(self, text: str) -> float:

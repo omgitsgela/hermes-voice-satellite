@@ -155,6 +155,8 @@ expectation, 2026-09-23: a feature enhancement belongs on the Issues page, not o
 | [#9](https://github.com/omgitsgela/hermes-voice-satellite/issues/9) | The DKMS build-versus-installed warning |
 | [#10](https://github.com/omgitsgela/hermes-voice-satellite/issues/10) | Volume control by voice, with a hard floor that is never zero |
 | [#11](https://github.com/omgitsgela/hermes-voice-satellite/issues/11) | Multi-satellite configuration and management: onboarding, updates, options at fleet scale |
+| [#32](https://github.com/omgitsgela/hermes-voice-satellite/issues/32) | Single-responder arbitration when several satellites hear one wake. Landed in PR #112: the arbitration engine (measured level decides, wake score tiebreaks, arrival order last), ESP32 level emission in the wake core, and Pi-side level measurement in the wake shim, which meters the exact audio it relays and attaches `context.wake_level` to detections. Remaining: level comparability across different microphone chains, and enabling a non-zero claim window in a live fleet |
+| [#111](https://github.com/omgitsgela/hermes-voice-satellite/issues/111) | Registered devices were never armed (the bridge leased one satellite at a time). Fixed in PR #112: every registered device gets a lease, an arm, and a supervisor reader |
 | [#26](https://github.com/omgitsgela/hermes-voice-satellite/issues/26) | Optional slower-speaking accessibility mode for utterance endpointing |
 | [#61](https://github.com/omgitsgela/hermes-voice-satellite/issues/61) | **Connection inversion: devices dial the bridge.** The umbrella issue for the registry, the transport decision, enrolment and identity, and the licensing constraint |
 

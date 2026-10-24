@@ -271,7 +271,13 @@ int wake_detector_play_chime(void) {
 static int wake_fire(void *user) {
     (void)user;
     if (!wd.session || !wd.write) return -1;
-    return wy_session_wake(wd.session, WYAKE_WORD_NAME, wd.write, wd.user) == WY_OK ? 0 : -1;
+    /* The arbitration evidence (issue #32): the core froze its measured level and
+     * crossing score on the crossing frame BEFORE this seam ran; a forced fire with
+     * no scored frame (or no model) carries -1/-1, which the session sends as the
+     * historical, context-free detection shape. */
+    int level = wd.core ? wy_wake_last_level(wd.core) : -1;
+    float score = wd.core ? wy_wake_last_score(wd.core) : -1.0f;
+    return wy_session_wake(wd.session, WYAKE_WORD_NAME, level, score, wd.write, wd.user) == WY_OK ? 0 : -1;
 }
 
 /* ---- lifecycle ------------------------------------------------------------------ */

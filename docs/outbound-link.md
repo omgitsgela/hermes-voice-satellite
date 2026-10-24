@@ -111,8 +111,16 @@ the evidence that a device's own reconnect is not undone by its stale handler.
 
 **Standalone audio.** The relay carries a conversation only when the device also runs its own satellite
 service, which is the case on the Pi and is why this works today. A device with no local satellite (the ESP32
-firmware in #44, say) has to speak Wyoming itself, which is its own piece of work. A second device being
-conversed with at the same time as the first is also not supported: the bridge leases one at a time.
+firmware in #44, say) has to speak Wyoming itself, which is its own piece of work.
+
+**Fleet conversations (#11/#32).** The bridge now leases, arms and supervises *every* registered device at
+once (issue #111 landed: a registration gets its own lease, a `run-satellite` arm, and a reader, so a second
+device is wake-responsive instead of permanently deaf). What is still one-at-a-time is the *conversation*:
+wakes from any armed device queue FIFO and one device owns each turn, announcements play on every armed
+device except the one mid-conversation, and playback serializes per device. Single-responder arbitration when
+several devices hear the *same* utterance is wired but level-based only once devices report a wake level
+(`wake_level` in the detection context); until then the first arrival wins. Fully parallel conversations per
+room remain open in #11.
 
 ## TLS
 

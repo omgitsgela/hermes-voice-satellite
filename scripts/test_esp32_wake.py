@@ -76,6 +76,10 @@ class WakeCoreTests(unittest.TestCase):
         lib.wy_wake_init.restype = C.c_int
         lib.wy_wake_feed.argtypes = [C.c_void_p, C.c_void_p, C.c_size_t]
         lib.wy_wake_feed.restype = C.c_int
+        lib.wy_wake_last_level.argtypes = [C.c_void_p]
+        lib.wy_wake_last_level.restype = C.c_int
+        lib.wy_wake_last_score.argtypes = [C.c_void_p]
+        lib.wy_wake_last_score.restype = C.c_float
         lib.wy_wake_set_streaming.argtypes = [C.c_void_p, C.c_int]
         lib.wy_wake_set_playback_active.argtypes = [C.c_void_p, C.c_int]
         lib.wy_wake_stream_ended.argtypes = [C.c_void_p]
@@ -105,10 +109,115 @@ class WakeCoreTests(unittest.TestCase):
         self.assertEqual(lib.wy_wake_init(buf, threshold, cooldown_ms, model_name), 0)
         return buf
 
-    def feed(self, lib, det, frames=160):
-        """One 10 ms chunk (160 mono16 samples) through the core."""
+    def feed(self, lib, det, frames=160, amplitude=0):
+        """One 10 ms chunk (160 mono16 samples) through the core. `amplitude`
+        fills the chunk with an alternating-sign pattern at that sample
+        amplitude (0 = silence), so a test can give the core a room loudness."""
         pcm = C.create_string_buffer(frames * 2)
+        if amplitude:
+            samples = (C.c_int16 * frames)(
+                *[amplitude if i % 2 == 0 else -amplitude for i in range(frames)])
+            C.memmove(pcm, samples, frames * 2)
         return lib.wy_wake_feed(det, pcm, frames)
+
+    # -- arbitration level contract (issue #32) --------------------------------
+    def test_no_measurement_before_the_first_scored_frame(self):
+        """A core that has never scored an armed frame reports level -1 ("no
+        measurement"), NOT the silence floor: the bridge must be able to tell
+        "this device never heard anything armed" from "this device heard
+        silence"."""
+        lib = self.library()
+        det = self.detector(lib, [0.10])
+        self.assertEqual(lib.wy_wake_last_level(det), -1)
+        self.assertLess(lib.wy_wake_last_score(det), 0.0)
+
+    def test_fired_level_matches_the_fixed_scale(self):
+        """The frozen level is the documented mapping: dBFS mapped over
+        [-60, 0] -> 0..100. Amplitude A (alternating full-|A| samples) has
+        rms == A, so the expected value is computed from the contract itself."""
+        import math
+        lib = self.library()
+        for amplitude in (3277, 1035, 328, 32):   # ~-20, -30, -40, -60 dBFS-ish
+            det = self.detector(lib, [0.90])
+            self.feed(lib, det, amplitude=amplitude)
+            db = 20.0 * math.log10(amplitude / 32768.0)
+            expected = max(0, min(100, round((db + 60.0) / 60.0 * 100.0)))
+            got = lib.wy_wake_last_level(det)
+            self.assertIn(got, (expected, expected + 1),
+                          'amplitude %d: expected level ~%d, got %d' % (amplitude, expected, got))
+
+    def test_louder_room_reports_a_higher_level(self):
+        """The ordering the whole bridge arbitration depends on: same core, two
+        runs, the louder room gets the strictly higher frozen level."""
+        lib = self.library()
+        quiet = self.detector(lib, [0.90])
+        self.feed(lib, quiet, amplitude=300)
+        loud = self.detector(lib, [0.90])
+        self.feed(lib, loud, amplitude=12000)
+        self.assertGreater(lib.wy_wake_last_level(loud), lib.wy_wake_last_level(quiet))
+
+    def test_level_and_score_freeze_at_fire(self):
+        """After the fire, the reported level/score describe the DETECTION, not
+        the live room: later frames (even much louder ones while the core is
+        re-armed after the stream ends) must not rewrite the previous fire's
+        evidence, and the new measure starts fresh (-1)."""
+        lib = self.library()
+        det = self.detector(lib, [0.90, 0.90], cooldown_ms=0)
+        self.feed(lib, det, amplitude=4000)
+        first_level = lib.wy_wake_last_level(det)
+        first_score = lib.wy_wake_last_score(det)
+        self.assertGreaterEqual(first_level, 0)
+        self.assertAlmostEqual(first_score, 0.90, places=5)
+        lib.wy_wake_stream_ended(det)
+        # Fresh measure: nothing scored yet since the stream ended...
+        # ...and the frozen evidence of the LAST fire survives until the next fire.
+        self.assertEqual(lib.wy_wake_last_level(det), first_level)
+        self.feed(lib, det, amplitude=20000)
+        self.assertGreater(lib.wy_wake_last_level(det), first_level)
+
+    def test_deaf_frames_never_measure(self):
+        """Frames consumed while deaf (streaming / playback / cooldown) do not
+        contribute: the level describes the room, never the device's own
+        speaker or the answer's tail."""
+        lib = self.library()
+        # streaming: no measurement at all
+        det = self.detector(lib, [0.90])
+        lib.wy_wake_set_streaming(det, 1)
+        self.feed(lib, det, amplitude=30000)
+        self.assertEqual(lib.wy_wake_last_level(det), -1)
+        # playback: same
+        det = self.detector(lib, [0.90])
+        lib.wy_wake_set_playback_active(det, 1)
+        self.feed(lib, det, amplitude=30000)
+        self.assertEqual(lib.wy_wake_last_level(det), -1)
+        # cooldown: the loud tail frame is consumed silently, and the fire after
+        # the window reflects only post-window frames.
+        det = self.detector(lib, [0.10, 0.90], cooldown_ms=50)
+        lib.wy_wake_stream_ended(det)          # enters the 5-frame cooldown
+        for _ in range(5):
+            self.feed(lib, det, amplitude=32000)   # deaf: the tail must not measure
+        self.assertEqual(lib.wy_wake_last_level(det), -1,
+                         'cooldown frames must not seed the measure')
+
+    def test_exact_silence_reads_the_floor_not_no_measurement(self):
+        """A quiet room IS a measurement (0), distinct from never having scored
+        anything armed (-1): the bridge can then still rank a silent device
+        below a hearing one instead of treating it as unmeasured."""
+        lib = self.library()
+        det = self.detector(lib, [0.90])
+        self.feed(lib, det, amplitude=0)
+        self.assertEqual(lib.wy_wake_last_level(det), 0)
+
+    def test_model_less_core_never_measures(self):
+        """The armed-but-mute fallback (no model): no scorer runs, no frames
+        measure, and the level stays -1, so an unprovisioned device can never
+        win arbitration with a fake 0 or a stale number."""
+        lib = self.library()
+        det = self.detector(lib, [0.90], with_load=False)
+        for _ in range(3):
+            self.feed(lib, det, amplitude=20000)
+        self.assertEqual(lib.wy_wake_last_level(det), -1)
+        self.assertEqual(lib.td_get_wake_calls(), 0)
 
     # -- task 1: threshold decision -------------------------------------------
     def test_sub_threshold_frame_does_not_fire(self):

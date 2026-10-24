@@ -125,6 +125,30 @@ bool wy_wake_deaf(const wy_wake *w);
  * never calls the scorer. */
 bool wy_wake_has_model(const wy_wake *w);
 
+/* What the core heard when it fired (issue #32, cross-device wake arbitration).
+ * A device that heard the wake word cannot know how loudly the OTHER devices
+ * heard it -- so each device reports what IT heard, in a fixed scale, and the
+ * bridge compares the reports for one utterance. The core therefore measures
+ * the microphone loudness of its armed (actually scored) frames as an
+ * exponentially smoothed mean-square, and maps it ONCE at fire time:
+ *
+ *   level = 0..100, from 20*log10(rms/32768) mapped over [-60 dBFS, 0 dBFS]
+ *
+ * A fixed, installation-independent scale: -60 dBFS floor reads 0, full scale
+ * reads 100, silence (or a model-less/muted core that never scored a frame)
+ * reads -1 = "no measurement". Levels from two devices are comparable ONLY for
+ * the same utterance inside the bridge's claim window -- never across time,
+ * never across installations with different mic gains (the bridge treats them
+ * as an ordering signal, not an absolute loudness). The core contributes the
+ * SCORE it fired on as well (the bridge's arbitration tiebreaker), and both
+ * values freeze at fire: they describe the detection, not the live state. The
+ * measure resets when the stream ends, so the next wake measures fresh room
+ * audio; frames consumed while deaf (streaming, playback, cooldown) never
+ * contribute -- the level describes what the room sounded like, not what the
+ * device's own speaker played. */
+int   wy_wake_last_level(const wy_wake *w);  /* -1 = no measurement, else 0..100 */
+float wy_wake_last_score(const wy_wake *w);  /* the crossing score; <0 if never fired */
+
 /* The "awake" chime as a sample array -- pure math, no file dependency. A short
  * two-tone tone (E5 into A5), each note with a 5 ms linear attack and an
  * exponential decay, at 16 kHz / 16-bit, so it is host-testable and the device

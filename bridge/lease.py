@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from typing import Optional
 
 from wyoming.audio import AudioChunk
@@ -29,6 +30,12 @@ from bridge.registry import SatelliteConnection
 from bridge.satellite import SatelliteClient
 
 _LOGGER = logging.getLogger(__name__)
+
+# The fleet rule (issue #111): every registered device is leased, and a lease is read by its
+# supervisor whenever it does not own the conversation. A lease that wakes but loses
+# arbitration keeps streaming for a round trip before the bridge can cancel it; its chunks go
+# here, bounded, rather than being read and discarded by two consumers racing on one socket.
+PARKED_MAX_EVENTS = 2048   # ~2 minutes of 100 ms chunks, far past any arbitration window
 
 
 class LeasedSatellite(SatelliteClient):
@@ -45,8 +52,21 @@ class LeasedSatellite(SatelliteClient):
         self.connection = connection
         self.device_id = connection.device_id
         self.generation = connection.generation
+        # Fleet (issue #111): a lease serializes playback against ITSELF only. Each device has
+        # its own aplay, so two devices speaking at once is fine; two streams into ONE device
+        # is the interleaving the class lock was always about. SatelliteClient.playback_lock
+        # and TtsStream pick this up in place of the process-wide lock.
+        self._playback_lock_override = asyncio.Lock()
         # One read-ahead read, never cancelled mid-flight. See next_event for why.
         self._pending_get: Optional[asyncio.Task] = None
+        # Fleet state (issue #111), maintained by the loop's supervisor task while this lease
+        # does NOT own the conversation: `streaming` is what the device last told us (its own
+        # audio-start/stop), and `parked` holds events read before whoever claims this lease
+        # can. The winner of an arbitration keeps its already-open listen stream, so chunks
+        # that arrived between its wake and the claim must survive the gap; parked is bounded
+        # because a buffer that grows without limit is its own bug.
+        self.streaming = False
+        self.parked: deque = deque(maxlen=PARKED_MAX_EVENTS)
 
     @property
     def eof(self) -> bool:
@@ -87,8 +107,30 @@ class LeasedSatellite(SatelliteClient):
         if self._log_events and not AudioChunk.is_type(event.type):
             _LOGGER.info("us -> %s : %s", self.device_id, event.type)
 
+    def poll_event(self) -> Optional[Event]:
+        """One non-blocking read, for the fleet supervisor only (issue #111).
+
+        A finished-but-unconsumed read-ahead from a previous turn is consumed first, exactly
+        as the next blocking `next_event` would have handed it over. Otherwise the connection
+        queue is polled. A live-but-unfinished read is deliberately left in place: cancelling
+        a queue read after an item was handed to it loses that item (issue #13), so the
+        supervisor never cancels — the event that read is holding arrives on a later poll
+        instead. That is the whole two-readers safety argument: the supervisor never owns a
+        blocking read, and the turn never polls while it owns a lease.
+        """
+        if self._pending_get is not None:
+            if self._pending_get.done():
+                return self._consume_pending()
+        return self._log_incoming(self.connection.get_nowait())
+
     async def next_event(self, timeout: float) -> Optional[Event]:
         """Next event from the device, or None on timeout. `.eof` distinguishes a dead link.
+
+        Parked events come out first: the supervisor fills the parked buffer while this lease
+        does not own the conversation, and whoever claims the lease drains it before reaching
+        for new ones (issue #111, the winner-keeps-its-stream rule). The connection queue is
+        FIFO and both consumers pull from it, so a parked event can never be older than an
+        event this call already handed over: order survives the handover.
 
         The blocking read is kept as a single long-lived task and never cancelled, only ever consumed. The
         obvious implementation, `wait_for(queue.get(), slice)`, cancels the read on every slice boundary, and
@@ -97,6 +139,11 @@ class LeasedSatellite(SatelliteClient):
         wait races the pending read against the connection's closed signal instead, and a slice expiring
         simply leaves the read in place for the next call.
         """
+        if self.parked:
+            # A supervisor read this while the lease was idle. Hand it over before reaching for
+            # anything newer, so the winner of a wake keeps the audio that arrived under it.
+            return self._log_incoming(self.parked.popleft())
+
         if timeout <= 0:
             return self._log_incoming(self.connection.get_nowait())
 

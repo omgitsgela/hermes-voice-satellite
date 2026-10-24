@@ -15,6 +15,26 @@
 #define WY_WAKE_NAME_MAX 64u
 #define WY_WAKE_FRAME_MS 10u /* 160 samples at 16 kHz: the capture chunk cadence */
 
+/* Mean-square in full-scale units -> the fixed 0..100 comparison level
+ * (wy_wake.h contract): dB = 20*log10(rms), mapped over [-60 dBFS, 0 dBFS].
+ * -1.0 means "nothing measured": silence is a measurement, an unarmed or
+ * model-less core that never scored a frame is not. Out-of-range clamps rather
+ * than reporting nonsense: a level is an ORDERING signal for arbitration, and
+ * a clamped high reading still orders correctly. */
+static int level_from_mean_square(double mean_square)
+{
+    if (mean_square < 0.0)
+        return -1;
+    if (mean_square <= 0.0)
+        return 0; /* exact silence reads the floor, not "no measurement" */
+    double db = 10.0 * log10(mean_square); /* 20*log10(rms) == 10*log10(ms) */
+    if (db <= -60.0)
+        return 0;
+    if (db >= 0.0)
+        return 100;
+    return (int)((db + 60.0) / 60.0 * 100.0 + 0.5);
+}
+
 struct wy_wake {
     double threshold;
     unsigned cooldown_frames;
@@ -31,6 +51,13 @@ struct wy_wake {
     int playback;
     int in_cooldown;
     unsigned cooldown_left;
+    /* Cross-device wake arbitration (issue #32): the exponentially smoothed
+     * mean-square of the ARMED frames actually scored, frozen with the crossing
+     * score at fire. -1.0 mean-square = nothing measured yet. See wy_wake.h for
+     * the scale contract and why only same-utterance comparisons are valid. */
+    double mean_square;
+    int fired_level;  /* -1 = no measurement; else 0..100 */
+    double fired_score; /* <0 = never fired */
 };
 
 size_t wy_wake_size(void)
@@ -77,6 +104,11 @@ int wy_wake_init(wy_wake *w, double threshold, unsigned cooldown_ms, const char 
     w->cooldown_frames = (cooldown_ms + WY_WAKE_FRAME_MS - 1u) / WY_WAKE_FRAME_MS;
     strncpy(w->model_name, model_name, WY_WAKE_NAME_MAX - 1u);
     w->model_name[WY_WAKE_NAME_MAX - 1u] = '\0';
+    /* Fresh measure per init/stream: -1 means "nothing scored yet", which is NOT
+     * the same as the silence floor (the memset above would fake silence). */
+    w->mean_square = -1.0;
+    w->fired_level = -1;
+    w->fired_score = -1.0;
 
     /* A failed load is not an init failure: the core comes up armed but mute
      * (no model, no scorer calls, never fires). */
@@ -121,11 +153,36 @@ int wy_wake_feed(wy_wake *w, const int16_t *mono, size_t n)
     if (w->streaming || w->playback)
         return WY_WAKE_OK;
     if (w->has_model && w->score != NULL) {
+        /* The frame is ARMED and actually scored: it contributes to the room
+         * loudness the detection will report (issue #32). Deaf frames returned
+         * above never measure -- the level describes the room, not the device's
+         * own speaker. Exponentially smoothed mean-square in full-scale units:
+         * one multiply-accumulate per sample, fixed-point-free double math,
+         * and alpha 0.1 gives a ~100 ms effective window at the 10 ms frame
+         * cadence, which brackets a spoken wake phrase well. */
+        double frame_mean_square = 0.0;
+        for (size_t i = 0; i < n; i++)
+        {
+            double sample = (double)mono[i] / 32768.0;
+            frame_mean_square += sample * sample;
+        }
+        frame_mean_square /= (double)n;
+        if (w->mean_square < 0.0)
+            w->mean_square = frame_mean_square; /* first armed frame seeds the window */
+        else
+            w->mean_square = 0.9 * w->mean_square + 0.1 * frame_mean_square;
+
         float s = w->score(w->user, mono, n);
         /* A scorer that misbehaves (NaN, negative, over 1.0) must not fire the
          * device: only a sane reading in [0, 1] that crosses the threshold
          * does. NaN fails both range comparisons, so it can never cross. */
         if (s >= 0.0f && s <= 1.0f && s >= (float)w->threshold) {
+            /* Freeze the evidence THIS detection is made of BEFORE any seam
+             * runs: the wake seam reads it to put it on the wire, and a seam
+             * that re-enters the core (or a stream that starts mid-callback)
+             * must not be able to alter what was already heard. */
+            w->fired_level = level_from_mean_square(w->mean_square);
+            w->fired_score = (double)s;
             if (w->chime != NULL)
                 w->chime(w->user); /* the chime always comes first (the
                                       reference order: chime, then wake) */
@@ -206,6 +263,23 @@ void wy_wake_stream_ended(wy_wake *w)
     /* A 0 ms cooldown is no cooldown: the core re-arms on the next frame. */
     w->in_cooldown = (w->cooldown_frames > 0) ? 1 : 0;
     w->cooldown_left = w->cooldown_frames;
+    /* The next wake measures fresh room audio: the window that included the
+     * utterance and whatever fired is done describing detections. */
+    w->mean_square = -1.0;
+}
+
+int wy_wake_last_level(const wy_wake *w)
+{
+    if (w == NULL)
+        return -1;
+    return w->fired_level;
+}
+
+float wy_wake_last_score(const wy_wake *w)
+{
+    if (w == NULL)
+        return -1.0f;
+    return (float)w->fired_score;
 }
 
 bool wy_wake_deaf(const wy_wake *w)

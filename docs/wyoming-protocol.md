@@ -138,7 +138,7 @@ that leases a registered device is migration phase 4.
 |---|---|---|
 | `describe` / `info` | both | the bridge asks the satellite who it is at startup |
 | `audio-start`, `audio-chunk`, `audio-stop` | both | capture and playback, 16 kHz mono in, 22050 mono out |
-| `detect` / `detection` | both | wake word, via the shim |
+| `detect` / `detection` | both | wake word, via the shim. A device that measured what it heard attaches `context.wake_level` (0..100) and `context.wake_score` (0-1, the tiebreaker) — fixed scales, see `docs/voice-detection.md`; the bridge compares them across devices when several hear one utterance (#32). A level-less detection is the historical shape and arbitrates by documented fallbacks. |
 | `transcribe` / `transcript` | both | speech to text, sent to the local STT |
 | `synthesize-start`, `synthesize-chunk`, `synthesize-stop`, `synthesize-stopped` | both | streaming speech out, sentence by sentence |
 | `played` | satellite to bridge | what `wait_for_played` waits for |
