@@ -48,6 +48,64 @@ class WakeRecord:
     detection: object = None      # the wyoming Detection, for context (level) later
     released: bool = False        # arbitration judged this one unfavourable
 
+    # -- arbitration evidence (Milestone B) --------------------------------------
+    #
+    # Devices carry what they heard in the detection context:
+    #   context = {"wake_level": int 0-100, "wake_score": float, "window_ms": int}
+    # Levels are device-local fixed scales (the firmware rule), comparable ACROSS devices only
+    # for the same utterance inside one claim window — never across time or installations.
+    # A missing level (old firmware, a detection relayed without context) reads as None, and
+    # None compares equal to None: arbitration degrades to wake score, then arrival order.
+
+    def _context(self) -> dict:
+        context = getattr(self.detection, "context", None)
+        if isinstance(context, dict):
+            return context
+        return {}
+
+    @property
+    def wake_level(self) -> Optional[int]:
+        value = self._context().get("wake_level")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        if not (0.0 <= float(value) <= 100.0) or float(value) != float(value):  # NaN-proof
+            return None
+        return int(value)
+
+    @property
+    def wake_score(self) -> Optional[float]:
+        value = self._context().get("wake_score")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        score = float(value)
+        if score != score:  # NaN-proof
+            return None
+        return score
+
+
+def pick_winner(records: List["WakeRecord"]) -> Optional["WakeRecord"]:
+    """The best-hearing candidate: level first, wake score as tiebreaker, arrival as last resort.
+
+    The rule (issue #32): audio level decides, not wake confidence. A candidate without a
+    level never outranks one with a level (a device that measures gets trusted over one that
+    does not), and two level-less candidates fall back to exactly the old FIFO order.
+    """
+    best: Optional[WakeRecord] = None
+    best_key = None
+    for record in records:
+        if record.released:
+            continue
+        # (level or -1, score or -inf, -arrived) maximised: level dominates, then score,
+        # then earlier arrival. -1 sorts every level-less device below any measured one.
+        key = (
+            -1 if record.wake_level is None else record.wake_level,
+            float("-inf") if record.wake_score is None else record.wake_score,
+            -record.arrived_at,
+        )
+        if best_key is None or key > best_key:
+            best, best_key = record, key
+    return best
+
 
 SuppressionCheck = Callable[[str], bool]
 
@@ -166,6 +224,34 @@ class WakeRouter:
                 continue
             if not record.released:
                 candidates.append(record)
+
+    async def arbitrate(self) -> tuple[Optional[WakeRecord], List[WakeRecord]]:
+        """Resolve the tentative claim: gather same-utterance candidates, pick the best listener.
+
+        Returns (winner, losers). Milestone A (window 0) gathers nothing, so the tentative
+        claim itself wins and nobody is cancelled. Milestone B gathers the window and applies
+        pick_winner — the device that heard the utterance best keeps its stream, and the
+        losers' records are already marked released here so no stale wake can claim a turn
+        while the loop is cancelling their streams.
+        """
+        candidates = await self.resolve_pending()
+        candidates = [c for c in candidates if not c.released]
+        winner = pick_winner(candidates)
+        if winner is None:
+            return None, []
+        losers = [c for c in candidates if c.device_id != winner.device_id]
+        for loser in losers:
+            loser.released = True
+        return winner, losers
+
+    @staticmethod
+    def evidence(record: Optional[WakeRecord]) -> str:
+        """What a candidate heard, for the decision log: level, score, arrival."""
+        if record is None:
+            return "(none)"
+        level = record.wake_level if record.wake_level is not None else "no-level"
+        score = record.wake_score if record.wake_score is not None else "no-score"
+        return f"level={level} score={score}"
 
     def release(self, record: WakeRecord) -> None:
         """Mark one candidate unfavourable. The loop sends the actual cancel to the device."""

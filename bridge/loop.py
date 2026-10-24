@@ -822,37 +822,43 @@ class VoiceLoop:
     async def _claim_record(self, device_id: str, name: str) -> str:
         """Hand the conversation to the device whose wake was claimed. Its stream stays open.
 
-        With the claim window open (Milestone B arbitration), wakes from OTHER devices that
-        arrived for the same utterance are gathered and released — their listen streams
-        cancelled, wake words re-armed — while the winner keeps the stream it already opened
-        under the activation word it heard (decided 2026-10-23). With the window closed
-        (Milestone A default) a wake from another device is a separate request: it stays in
-        the FIFO for the next turn and nobody is cancelled.
+        Best-audio arbitration (issue #32 rule, decided 2026-10-23): with the claim window
+        open, wakes from OTHER devices that arrived for the same utterance are gathered, and
+        the winner is the device that heard it *best* — highest `wake_level` in the detection
+        context, tie-broken by wake score, tie-broken by arrival order. The winner keeps the
+        stream it already opened under the activation word it heard; every unfavourable device
+        gets its listen stream cancelled (Task A5) and a silent re-arm. With the window closed
+        (Milestone A default) the router gathers nothing, so first arrival wins and nobody is
+        cancelled. Detections without a level (old firmware, the rollback shape) compare equal,
+        so arbitration degrades to FIFO without crashing — arrival order decides, exactly as
+        before levels existed.
         """
         leases = self._ensure_fleet()
-        lease = leases.get(device_id)
-        if lease is not None:
-            self._use_satellite(lease, leased=True)
-            self.turn_owner = device_id
-            # A7 (issue #111): config/volume addressing follows the device actually being
-            # talked to, not whichever registered most recently.
-            self._adopt_device(device_id)
-            if self.wake_router.claim_window_s > 0:
-                candidates = await self.wake_router.resolve_pending()
-                losers = [c for c in candidates if c.device_id != device_id]
-                if losers:
-                    _LOGGER.info(
-                        "arbitration: winner=%s (heard %s) releasing %d unfavourable device(s): %s",
-                        device_id, name, len(losers),
-                        ", ".join(f"{c.device_id}:{c.name}" for c in losers),
-                    )
-                    for loser in losers:
-                        self.wake_router.release(loser)
-                        await self._release_losing_stream(loser.device_id,
-                                                          f"out-heard by {device_id}")
-            _LOGGER.info("arbitration: %s claims the turn (listen stream kept open)", device_id)
+        if device_id not in leases:
+            # The lease died between the wake and the claim: retire the record and fall back
+            # to the loop's connection, the pre-fleet shape.
+            self.wake_router.retire()
+            return name
+        winner, losers = await self.wake_router.arbitrate()
+        winner_device = winner.device_id if winner is not None else device_id
+        winner_name = winner.name if winner is not None else name
+        if winner is not None and winner.device_id != device_id:
+            _LOGGER.info("arbitration: %s out-heard %s on the same utterance (%s)",
+                         winner_device, device_id, self.wake_router.evidence(winner))
+        if losers:
+            _LOGGER.info("arbitration: releasing %d unfavourable device(s): %s",
+                         len(losers),
+                         "; ".join(f"{c.device_id} {self.wake_router.evidence(c)}" for c in losers))
+        self._use_satellite(leases[winner_device], leased=True)
+        self.turn_owner = winner_device
+        # A7 (issue #111): config/volume addressing follows the device actually being
+        # talked to, not whichever registered most recently.
+        self._adopt_device(winner_device)
+        for loser in losers:
+            await self._release_losing_stream(loser.device_id, f"out-heard by {winner_device}")
+        _LOGGER.info("arbitration: %s claims the turn (listen stream kept open)", winner_device)
         self.wake_router.retire()
-        return name
+        return winner_name
 
     def _release_turn_owner(self) -> None:
         """End of a turn (or a turn that never happened): nobody owns the socket, so every

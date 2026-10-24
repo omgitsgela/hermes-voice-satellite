@@ -123,8 +123,8 @@ class FakeDevice:
         await async_write_event(event, self.writer)
         await self.writer.drain()
 
-    async def send_detection(self, name: str = "okay nabu") -> None:
-        await self.send(Detection(name=name).event())
+    async def send_detection(self, name: str = "okay nabu", context: dict | None = None) -> None:
+        await self.send(Detection(name=name, context=context).event())
 
     async def send_chunks(self, n: int) -> None:
         await self.send(AudioStart(rate=16000, width=2, channels=1).event())
@@ -396,11 +396,103 @@ async def scenario_announce_fanout() -> None:
         await h.close()
 
 
+async def scenario_level_arbitration() -> None:
+    """Checks 15-19 (Milestone B, issue #32): with the claim window open, the device that
+    heard the utterance BEST wins the turn, the loser's stream is cancelled and re-armed,
+    and level-less detections degrade to first-arrival FIFO."""
+    from bridge.wake_router import WakeRecord, pick_winner
+
+    # -- pure unit: the ordering rule itself -------------------------------------
+    def rec(device: str, level=None, score=None, at=0.0):
+        detection = Detection(name="okay nabu",
+                             context=({} if level is None and score is None
+                                      else {k: v for k, v in
+                                            (("wake_level", level), ("wake_score", score))
+                                            if v is not None}))
+        return WakeRecord(device_id=device, name="okay nabu",
+                          arrived_at=at, detection=detection)
+
+    pool = [rec("quiet", level=30, score=0.7, at=1.0), rec("loud", level=80, score=0.5, at=2.0)]
+    check("loudest wins even when it arrived later", pick_winner(pool).device_id, "loud")
+    pool = [rec("scorey", level=None, score=0.9, at=1.0), rec("measured", level=5, score=0.1, at=2.0)]
+    check("any measured level outranks any score", pick_winner(pool).device_id, "measured")
+    pool = [rec("first", at=1.0), rec("second", at=2.0)]
+    check("no levels, no scores: FIFO wins", pick_winner(pool).device_id, "first")
+    pool = [rec("a", level=None, at=1.0), rec("b", level=None, at=2.0)]
+    check("garbage-free degradation is stable", pick_winner(pool).device_id, "a")
+    check("garbage in context reads as no-level",
+          WakeRecord(device_id="x", name="n", detection=type("D", (), {"context": {"wake_level": "loud"}})()).wake_level,
+          None)
+
+    # -- integration: real sockets, real detections, claim window open -----------
+    h = Harness()
+    await h.start()
+    try:
+        h.loop.wake_router.claim_window_s = 0.6
+        near = await h.register("arb-near")
+        far = await h.register("arb-far")
+        await near.wait_for("run-satellite")
+        await far.wait_for("run-satellite")
+
+        # The person walks up to NEAR (louder); FAR hears the same utterance faintly 100ms later.
+        await near.send_detection(context={"wake_level": 85, "wake_score": 0.9})
+        await asyncio.sleep(0.1)
+        await far.send_detection(context={"wake_level": 20, "wake_score": 0.95})
+
+        name = await asyncio.wait_for(h.loop.wait_for_wake(timeout=3.0), TIMEOUT + 1)
+        check("turn goes to the best-hearing device", h.loop.turn_owner, "arb-near")
+        check("winner's wake name preserved", name, "okay nabu")
+        # FAR was gathered within the window and released: pause then silent re-arm.
+        types = far.types_seen()
+        pause_at = -1
+        for _ in range(40):
+            types = far.types_seen()
+            pause_at = next((i for i, t in enumerate(types) if t == "pause-satellite"), -1)
+            if pause_at >= 0:
+                break
+            await asyncio.sleep(0.05)
+        runs = [i for i, t in enumerate(types) if t == "run-satellite"]
+        check("the loser's listen stream is cancelled", pause_at >= 0, True)
+        check("the loser is re-armed silently after the pause", any(r > pause_at for r in runs), True)
+        check("the winner keeps its stream open (no pause sent to near)", near.count("pause-satellite"), 0)
+
+        # Reversed levels: FAR heard it better even though NEAR arrived first.
+        h.loop._release_turn_owner()
+        await asyncio.sleep(0.1)
+        await near.send_detection(context={"wake_level": 15})
+        await asyncio.sleep(0.1)
+        await far.send_detection(context={"wake_level": 90})
+        await asyncio.wait_for(h.loop.wait_for_wake(timeout=3.0), TIMEOUT + 1)
+        check("arrival order never beats a better listener", h.loop.turn_owner, "arb-far")
+        # The out-heard arrival (near) got cancelled — poll, the pause write lands async.
+        pause_at = -1
+        for _ in range(40):
+            pause_at = next((i for i, t in enumerate(near.types_seen()) if t == "pause-satellite"), -1)
+            if pause_at >= 0:
+                break
+            await asyncio.sleep(0.05)
+        check("the out-heard arrival (near) got cancelled", pause_at >= 0, True)
+        near_pauses = near.count("pause-satellite")
+
+        # Both detections level-less (firmware rollback shape): first arrival still wins.
+        h.loop._release_turn_owner()
+        await asyncio.sleep(0.1)
+        await near.send_detection()
+        await asyncio.sleep(0.1)
+        await far.send_detection()
+        await asyncio.wait_for(h.loop.wait_for_wake(timeout=3.0), TIMEOUT + 1)
+        check("level-less detections degrade to FIFO", h.loop.turn_owner, "arb-near")
+        check("no extra cancels during a FIFO claim", near.count("pause-satellite"), near_pauses)
+    finally:
+        await h.close()
+
+
 async def main() -> int:
     await scenario_fleet_arming()
     await scenario_loser_release()
     await scenario_liveness()
     await scenario_announce_fanout()
+    await scenario_level_arbitration()
     print(f"{checks} checks, {len(failures)} failure(s)")
     for failure in failures:
         print(f"FAIL {failure}")
