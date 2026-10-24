@@ -11,6 +11,8 @@ What matters, in order of how badly it would hurt if it broke:
   * a requested injection arrives as a valid `detection` event;
   * an injection never corrupts a relayed event (this is why the upstream direction is
     event-at-a-time rather than a byte copy);
+  * a real detection relayed back down carries `context.wake_level`, measured from the same
+    audio the shim relayed upstream (issue #32), on the fixed 0..100 scale;
   * with no satellite connected, the control port says so instead of pretending;
 
     ~/hermes-voice-bridge/.venv/bin/python test_wake_shim.py
@@ -30,7 +32,7 @@ from wake_shim import WakeShim  # noqa: E402
 PROBLEMS = 0
 
 
-def check(label: str, ok: bool, detail: str = "") -> None:
+def check(label: str, ok: bool, detail: "object" = "") -> None:
     global PROBLEMS
     print(f"   {'OK  ' if ok else 'FAIL'} {label}{(' -- ' + str(detail)) if detail else ''}")
     if not ok:
@@ -248,7 +250,97 @@ async def main() -> int:
     check("a fragmented relayed event remains atomic across an injection",
           bytes(writer.data) == header + body + detection, repr(bytes(writer.data)))
 
-    # 5. A rejected command must not open the microphone.
+    # 5. Wake level for arbitration (issue #32): the shim measures the audio it relays upstream
+    # and puts the measurement into the detection it relays back down.
+    from wake_shim import _WakeLevelTap
+    import struct
+
+    def audio_chunk(amplitude: int, samples: int = 160) -> bytes:
+        payload = b"".join(struct.pack("<h", amplitude) for _ in range(samples))
+        return (json.dumps({"type": "audio-chunk",
+                            "data": {"rate": 16000, "width": 2, "channels": 1},
+                            "payload_length": len(payload)}).encode() + b"\n" + payload)
+
+    tap = _WakeLevelTap()
+    tap.feed(audio_chunk(1024))
+    check("the level scale matches the fixed contract (1024/32768 full scale is 50)",
+          tap.level() == 50, tap.level())
+    # The window is the last LEVEL_WINDOW_SAMPLES samples (~100 ms): it brackets a spoken wake
+    # phrase, so a few chunks blend, and sustained newer audio pushes older audio out.
+    for _ in range(11):
+        tap.feed(audio_chunk(16384))   # 11 * 160 > 1600: the quiet chunk is fully out of the window
+    check("the window follows the newest audio (a louder phrase pushes the quiet one out)",
+          tap.level() == 90, tap.level())
+    # Silence needs its own window: 160 silent samples inside a window still holding 1440 loud
+    # ones is a blend, not a measurement of the silence.
+    silent = _WakeLevelTap()
+    silent.feed(audio_chunk(0))
+    check("measured silence is 0 (the floor), not None", silent.level() == 0, silent.level())
+    check("no audio measured is None", _WakeLevelTap().level() is None)
+    quiet = _WakeLevelTap()
+    quiet.feed(b"this is not a wyoming header\n")
+    check("a tap that loses framing reports no level", quiet.level() is None)
+    quiet.feed(audio_chunk(16384))
+    check("a desynced tap stays off (it never re-guesses the framing)", quiet.level() is None)
+
+    # End to end through the live shim: satellite audio up, detection down with the level.
+    # The window is opened fresh here so the measurement describes only this scenario's audio.
+    shim._level_tap.reset()
+    before = len(sat.events)
+    sat.writer.write(audio_chunk(1024))
+    await sat.writer.drain()
+    for _ in range(40):
+        if shim._level_tap.level() is not None:
+            break
+        await asyncio.sleep(0.05)
+    measured = shim._level_tap.level()
+    await wake.send_event({"type": "detection", "data": {"name": "ok_nabu", "score": 0.9}})
+    await asyncio.sleep(0.2)
+    await sat.collect(0.6)
+    fresh = [e for e in sat.events[before:] if e.get("type") == "detection"]
+    carried = fresh[0].get("data", {}).get("context", {}).get("wake_level") if fresh else None
+    check("a real detection relayed down carries the measured wake_level",
+          len(fresh) == 1 and measured == 50 and carried == measured,
+          f"measured={measured} carried={carried} events={fresh}")
+    check("the rewrite preserves the rest of the detection (name, score)",
+          len(fresh) == 1 and fresh[0].get("data", {}).get("name") == "ok_nabu"
+          and fresh[0].get("data", {}).get("score") == 0.9, fresh)
+
+    # An existing context is merged into, never replaced.
+    before = len(sat.events)
+    await wake.send_event({"type": "detection",
+                           "data": {"name": "ok_nabu", "context": {"source": "wakeword"}}})
+    await asyncio.sleep(0.2)
+    await sat.collect(0.6)
+    fresh = [e for e in sat.events[before:] if e.get("type") == "detection"]
+    check("a detection that already has a context keeps its own keys and gains wake_level",
+          len(fresh) == 1
+          and fresh[0].get("data", {}).get("context", {}).get("source") == "wakeword"
+          and fresh[0].get("data", {}).get("context", {}).get("wake_level") == 50,
+          fresh)
+
+    # A stale measurement describes no live utterance: the detection keeps the historical shape.
+    assert shim._level_tap.last_sample_at is not None  # the check above just measured it
+    shim._level_tap.last_sample_at -= 10.0
+    before = len(sat.events)
+    await wake.send_event({"type": "detection", "data": {"name": "ok_nabu"}})
+    await asyncio.sleep(0.2)
+    await sat.collect(0.6)
+    fresh = [e for e in sat.events[before:] if e.get("type") == "detection"]
+    check("a stale measurement relays the historical, context-free detection",
+          len(fresh) == 1 and "context" not in fresh[0].get("data", {}), fresh)
+
+    # An injected wake-now detection has no wake audio behind it: it stays context-free even
+    # while a fresh measurement exists (it would be a lie to claim a level for audio nobody spoke).
+    before = len(sat.events)
+    reply = await send_control(control_port, "wake")
+    await sat.collect(0.6)
+    fresh = [e for e in sat.events[before:] if e.get("type") == "detection"]
+    check("a synthetic injection stays the historical, context-free shape",
+          reply == "ok" and len(fresh) == 1 and "context" not in fresh[0].get("data", {}),
+          fresh)
+
+    # 6. A rejected command must not open the microphone.
     reply = await send_control(control_port, "please listen")
     check("an unknown control command is refused", reply.startswith("usage"), repr(reply))
 

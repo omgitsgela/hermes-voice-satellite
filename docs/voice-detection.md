@@ -115,6 +115,15 @@ unmeasured detections behave exactly like the old first-arrival rule. The claim 
 `VOICE_WAKE_CLAIM_WINDOW_MS` (0 = first arrival wins, which is also what a fleet of older
 firmware gets automatically).
 
+A Pi satellite with a wake-word service behind a wake shim (`pi/wake_shim.py`) gets the same
+arbitration without touching the wake engine: the shim already relays the satellite's microphone
+audio byte for byte to the wake service, so it meters the same bytes with a fixed window of the
+last 1600 samples and, when it relays a detection back down, attaches `context.wake_level` on the
+identical scale. The meter is a passenger: it can never alter, hold or reorder the relayed audio,
+and if it loses framing it switches itself off with one log line rather than guess. An injected
+wake-now detection has no wake audio behind it, so it stays the historical, context-free shape.
+Host-tested in `pi/test_wake_shim.py`.
+
 ## Verifying a change here
 
 ```
