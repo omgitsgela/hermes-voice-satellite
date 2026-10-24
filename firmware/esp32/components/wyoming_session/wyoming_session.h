@@ -144,9 +144,11 @@ int wy_session_set_config(wy_session *session,
  * historical shape (no context at all), which the bridge reads as level-less and arbitrates by
  * its documented fallbacks. A level attaches to the detection as
  * `context.wake_level`; the bridge never compares levels across utterances or installations,
- * only devices within one claim window. */
+ * only devices within one claim window. `wake_score` is the crossing score (the core's
+ * fired_score, [0,1]) and rides as `context.wake_score` for the bridge's tiebreaker; a score
+ * outside (0, 1] or a level-less wake sends no score -- the historical shape again. */
 int wy_session_wake(wy_session *session, const char *wake_word, int wake_level,
-                    wy_write_fn write_fn, void *ctx);
+                    float wake_score, wy_write_fn write_fn, void *ctx);
 /* The capture task's one call: send one chunk of microphone audio (16 kHz / S16 / mono, at
  * most WY_AUDIO_CHUNK_SAMPLES*2 bytes) as an audio-chunk frame. The frame is written whole
  * under the writer lock, so the link never carries two frames at once. Returns INVALID when

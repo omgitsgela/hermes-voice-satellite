@@ -51,7 +51,7 @@ class WakeRecord:
     # -- arbitration evidence (Milestone B) --------------------------------------
     #
     # Devices carry what they heard in the detection context:
-    #   context = {"wake_level": int 0-100, "wake_score": float, "window_ms": int}
+    #   context = {"wake_level": int 0-100, "wake_score": float (0,1]}
     # Levels are device-local fixed scales (the firmware rule), comparable ACROSS devices only
     # for the same utterance inside one claim window — never across time or installations.
     # A missing level (old firmware, a detection relayed without context) reads as None, and

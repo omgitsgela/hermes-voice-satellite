@@ -87,6 +87,34 @@ does, and says why in a comment.
 "350/350" instead of by its actual RMS multiplied by 3500 and overflowed int16. Measure the base
 level; do not assume it.
 
+## The wake-window level (cross-device arbitration, #32)
+
+When several armed devices hear the *same* utterance, the conversation goes to the device that
+heard it best. A device cannot know how loudly the others heard it, so each device measures its
+own microphone loudness and reports it on the detection; the bridge compares the reports inside
+one claim window. The measurement lives in the wake core (`wy_wake.c`), host-tested in
+`scripts/test_esp32_wake.py` and proven on the wire in `scripts/test_esp32_wake_integration.py`:
+
+- an exponentially smoothed mean-square of the **armed, actually scored** frames (~100 ms
+  effective window at the 10 ms frame cadence — a spoken wake phrase brackets well inside it);
+- frozen **at fire** together with the crossing score, so the numbers describe the detection,
+  not the live room;
+- frames consumed while deaf (streaming, playback, post-stream cooldown) never contribute — the
+  level describes the room, never the device's own speaker or the tail of an answer;
+- the reported scale is fixed and installation-independent: `20*log10(rms/32768)` mapped over
+  [-60 dBFS, 0 dBFS] to 0..100. **`-1` means "no measurement" and is distinct from exact
+  silence (0)**: a silent device ranks below a hearing one, while an unprovisioned or
+  model-less core can never win arbitration with a stale or fake number;
+- levels compare **only across devices for one utterance inside the claim window** — never
+  across time, never across installations with different mic gains. They are an ordering
+  signal, not an absolute loudness.
+
+The bridge side (`bridge/wake_router.py`): level dominates, wake score is the tiebreaker,
+arrival order is the last resort; a measured level always beats an unmeasured one, and two
+unmeasured detections behave exactly like the old first-arrival rule. The claim window is
+`VOICE_WAKE_CLAIM_WINDOW_MS` (0 = first arrival wins, which is also what a fleet of older
+firmware gets automatically).
+
 ## Verifying a change here
 
 ```

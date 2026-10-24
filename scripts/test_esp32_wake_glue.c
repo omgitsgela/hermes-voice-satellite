@@ -34,7 +34,8 @@ int iw_session_wake_seam(void *user)
     if (c == NULL || c->session == NULL || c->name == NULL || c->write == NULL)
         return -1;
     int level = (c->core != NULL) ? wy_wake_last_level((wy_wake *)c->core) : -1;
-    return wy_session_wake((wy_session *)c->session, c->name, level, c->write, c->ctx);
+    float score = (c->core != NULL) ? wy_wake_last_score((wy_wake *)c->core) : -1.0f;
+    return wy_session_wake((wy_session *)c->session, c->name, level, score, c->write, c->ctx);
 }
 
 /* The test reads back the seam's address (restype c_void_p) to install it as

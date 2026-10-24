@@ -429,7 +429,7 @@ void wy_session_set_phase_notify(wy_session *session,
 }
 
 int __attribute__((used)) wy_session_wake(wy_session *session, const char *wake_word,
-                    int wake_level, wy_write_fn write_fn, void *ctx) {
+                    int wake_level, float wake_score, wy_write_fn write_fn, void *ctx) {
     if (!session || !wake_word || !write_fn) return WY_INVALID;
     /* Armed only: the microphone starts on run-satellite (the armed hook), so a wake in any
      * other state -- not registered yet, registered but not armed, or the stream already
@@ -439,12 +439,20 @@ int __attribute__((used)) wy_session_wake(wy_session *session, const char *wake_
     if (!token_valid(wake_word, 64)) return WY_INVALID;
     /* The detection data: the historical {"name":...} shape, plus the arbitration context
      * when the detector measured a level (issue #32). Anything outside the core's 0..100
-     * contract is treated as "no measurement" and sent exactly like the old frame -- a buggy
-     * or older caller can never corrupt the detection the bridge depends on. */
-    char name[128];
+     * contract (or the scorer's (0,1] for the score) is treated as "no measurement" and sent
+     * exactly like the old frame -- a buggy or older caller can never corrupt the detection
+     * the bridge depends on. The score only rides with a level: a level-less wake is the
+     * historical frame, full stop, so an old bridge sees byte-identical output. */
+    char name[144];
     int length;
-    if (wake_level >= 0 && wake_level <= 100)
-        length = snprintf(name, sizeof(name), "{\"name\":\"%s\",\"context\":{\"wake_level\":%d}}",
+    int score_ok = (wake_score > 0.0f && wake_score <= 1.0f);
+    if (wake_level >= 0 && wake_level <= 100 && score_ok)
+        length = snprintf(name, sizeof(name),
+                          "{\"name\":\"%s\",\"context\":{\"wake_level\":%d,\"wake_score\":%.3f}}",
+                          wake_word, wake_level, wake_score);
+    else if (wake_level >= 0 && wake_level <= 100)
+        length = snprintf(name, sizeof(name),
+                          "{\"name\":\"%s\",\"context\":{\"wake_level\":%d}}",
                           wake_word, wake_level);
     else
         length = snprintf(name, sizeof(name), "{\"name\":\"%s\"}", wake_word);
@@ -763,7 +771,7 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
          * device's wake word name. A wake-now that lands while the stream is already running or
          * the device is paused is dropped (wy_session_wake checks both), and one that arrives
          * before the host is ready fails the same way an out-of-order wake would. */
-        result = wy_session_wake(session, session_wake_name(session), -1, write_fn, ctx);
+        result = wy_session_wake(session, session_wake_name(session), -1, -1.0f, write_fn, ctx);
         if (result == WY_INVALID) result = WY_OK;   /* a dropped wake-now is not a fault */
         /* A follow-up window is open: the bridge is listening for more speech with no wake word.
          * This is the moment the reference satellite shows its dim teal, and it is the only

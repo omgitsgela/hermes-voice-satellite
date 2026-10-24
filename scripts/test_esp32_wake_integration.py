@@ -81,6 +81,8 @@ class WakeSessionIntegrationTests(unittest.TestCase):
         lib.wy_session_step.restype = C.c_int
         lib.wy_session_streaming.argtypes = [C.c_void_p]
         lib.wy_session_streaming.restype = C.c_int
+        lib.wy_session_wake.argtypes = [C.c_void_p, C.c_char_p, C.c_int, C.c_float, IO, C.c_void_p]
+        lib.wy_session_wake.restype = C.c_int
         # Driver + glue accessors.
         lib.td_reset.argtypes = [C.POINTER(C.c_float), C.c_int]
         lib.td_reset.restype = None
@@ -258,6 +260,10 @@ class WakeSessionIntegrationTests(unittest.TestCase):
                       % (level, expected))
         self.assertEqual(level, lib.wy_wake_last_level(det),
                          "the wire value and the core's report are the same frozen number")
+        score = context.get('wake_score')
+        self.assertIsNotNone(score, "the crossing score rides as the arbitration tiebreaker")
+        self.assertAlmostEqual(score, 0.90, places=3,
+                               msg="the score on the wire is the score the core fired on")
 
     def test_unmeasured_fire_keeps_the_historical_context_free_shape(self):
         """A forced fire with nothing measured sends the OLD detection frame exactly
@@ -273,7 +279,7 @@ class WakeSessionIntegrationTests(unittest.TestCase):
         # the unit test. On the integration side, the historical shape is proved by the
         # session core itself: wy_session_wake with level -1 (the wake-now path).
         start = output.tell()
-        self.assertEqual(lib.wy_session_wake(session, b'hey-hermes', -1, writer, None), 0)
+        self.assertEqual(lib.wy_session_wake(session, b'hey-hermes', -1, -1.0, writer, None), 0)
         output.seek(start)
         events = self.read_wire(output, 3)
         self.assertEqual([e.type for e in events],

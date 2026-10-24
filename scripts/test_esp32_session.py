@@ -209,7 +209,7 @@ class SessionTests(unittest.TestCase):
         task's audio leaves as 16 kHz / S16 / mono chunks, and the bridge's transcript stops it
         (streaming-stopped) while the microphone stays armed for the next wake."""
         lib = self.library()
-        lib.wy_session_wake.argtypes = [C.c_void_p, C.c_char_p, C.c_int, IO, C.c_void_p]
+        lib.wy_session_wake.argtypes = [C.c_void_p, C.c_char_p, C.c_int, C.c_float, IO, C.c_void_p]
         lib.wy_session_wake.restype = C.c_int
         lib.wy_session_send_audio.argtypes = [C.c_void_p, C.c_void_p, C.c_size_t, IO, C.c_void_p]
         lib.wy_session_send_audio.restype = C.c_int
@@ -251,7 +251,7 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(lib.wy_session_send_audio(session, pcm, len(pcm), writer, None), -1)
         # The local wake fires: the device answers with the three streaming events, in order.
         wake_start = output.tell()   # the writer appends at the current position
-        self.assertEqual(lib.wy_session_wake(session, b"hey-hermes", -1, writer, None), 0)
+        self.assertEqual(lib.wy_session_wake(session, b"hey-hermes", -1, -1.0, writer, None), 0)
         self.assertEqual(lib.wy_session_streaming(session), 1)
         output.seek(wake_start)
         events = []
@@ -279,7 +279,7 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(lib.wy_session_streaming(session), 0)
         output.seek(stop_start)
         self.assertEqual(read_event(output).type, 'streaming-stopped')
-        self.assertEqual(lib.wy_session_wake(session, b"hey-hermes", -1, writer, None), 0)
+        self.assertEqual(lib.wy_session_wake(session, b"hey-hermes", -1, -1.0, writer, None), 0)
         self.assertEqual(lib.wy_session_streaming(session), 1)
 
     def test_wake_now_before_run_satellite_is_dropped(self):
