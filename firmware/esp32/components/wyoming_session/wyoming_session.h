@@ -137,8 +137,15 @@ int wy_session_set_config(wy_session *session,
  * streaming-started in that order and start the mic stream. Valid while the host is ready
  * (registered or running) and not paused; a wake that lands while the stream is already
  * running, or while paused, is dropped. Returns OK when the stream is running (it may already
- * have been), INVALID when the wake is not allowed, and the send result on a dead link. */
-int wy_session_wake(wy_session *session, const char *wake_word,
+ * have been), INVALID when the wake is not allowed, and the send result on a dead link.
+ *
+ * `wake_level` (issue #32 arbitration): what the device heard, on the wake core's fixed
+ * 0..100 scale (wy_wake.h), or -1 for "no measurement" -- with -1 the detection frame is the
+ * historical shape (no context at all), which the bridge reads as level-less and arbitrates by
+ * its documented fallbacks. A level attaches to the detection as
+ * `context.wake_level`; the bridge never compares levels across utterances or installations,
+ * only devices within one claim window. */
+int wy_session_wake(wy_session *session, const char *wake_word, int wake_level,
                     wy_write_fn write_fn, void *ctx);
 /* The capture task's one call: send one chunk of microphone audio (16 kHz / S16 / mono, at
  * most WY_AUDIO_CHUNK_SAMPLES*2 bytes) as an audio-chunk frame. The frame is written whole

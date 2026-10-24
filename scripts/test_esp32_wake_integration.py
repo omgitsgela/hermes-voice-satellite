@@ -137,22 +137,30 @@ class WakeSessionIntegrationTests(unittest.TestCase):
 
         class IwCtx(C.Structure):
             _fields_ = [('session', C.c_void_p), ('name', C.c_char_p),
-                        ('write', IO), ('ctx', C.c_void_p)]
+                        ('write', IO), ('ctx', C.c_void_p), ('core', C.c_void_p)]
 
-        ctx = IwCtx(C.cast(session, C.c_void_p), b'hey-hermes', writer, None)
+        det = C.create_string_buffer(lib.wy_wake_size())
+        self._det_keepalive = det
+        ctx = IwCtx(C.cast(session, C.c_void_p), b'hey-hermes', writer, None,
+                    C.cast(det, C.c_void_p))
         self._ctx_keepalive = ctx
         self._writer_keepalive = writer
         lib.td_reset((C.c_float * len(scores))(*scores) if scores else None,
                      len(scores) if scores else 0)
-        det = C.create_string_buffer(lib.wy_wake_size())
-        self._det_keepalive = det
         lib.wy_wake_set_seams(det, lib.td_addr_score(), lib.td_addr_load(),
                               lib.td_addr_chime(), lib.iw_addr_wake_seam(), C.byref(ctx))
         self.assertEqual(lib.wy_wake_init(det, threshold, cooldown_ms, b'hey_hermes'), 0)
         return det
 
-    def feed(self, lib, det, frames=160):
+    def feed(self, lib, det, frames=160, amplitude=0):
+        """One 10 ms chunk through the core. `amplitude` fills the buffer with a
+        sine-like alternating pattern at that sample amplitude (0 = silence),
+        so a test can give the core a room loudness to measure."""
         pcm = C.create_string_buffer(frames * 2)
+        if amplitude:
+            samples = (C.c_int16 * frames)(
+                *[amplitude if i % 2 == 0 else -amplitude for i in range(frames)])
+            C.memmove(pcm, samples, frames * 2)
         return lib.wy_wake_feed(det, pcm, frames)
 
     def read_wire(self, output, count):
@@ -217,6 +225,61 @@ class WakeSessionIntegrationTests(unittest.TestCase):
         self.assertEqual(output.read(1), b'', 'no new bytes on the link at all')
         self.assertEqual(lib.td_get_chime_calls(), 1, 'still exactly one chime')
         self.assertEqual(lib.wy_session_streaming(session), 1)
+
+    def test_detector_fire_carries_the_measured_level_in_the_detection_context(self):
+        """Issue #32 end to end on the wire: a loud frame that fires produces the same
+        detection -> run-pipeline -> streaming-started sequence, and the detection event
+        carries context.wake_level -- the number the core froze from the frame's amplitude.
+        A fire with nothing measured (no armed scored frame yet, e.g. amplitude 0 through a
+        core whose measure was never seeded because... it WAS seeded by the silence frame:
+        silence is a measurement) is asserted separately for the no-context shape below."""
+        import math
+        lib = self.library()
+        lib.wy_wake_last_level.argtypes = [C.c_void_p]
+        lib.wy_wake_last_level.restype = C.c_int
+        session, output, reader, writer = self.armed_session(lib)
+        det = self.armed_detector(lib, session, writer, [0.90])
+        start = output.tell()
+        self.assertEqual(self.feed(lib, det, amplitude=12000), 1)
+        output.seek(start)
+        events = self.read_wire(output, 3)
+        self.assertEqual([e.type for e in events],
+                         ['detection', 'run-pipeline', 'streaming-started'])
+        data = events[0].data
+        self.assertEqual(data['name'], 'hey-hermes')
+        context = data.get('context')
+        self.assertIsNotNone(context, 'a measured fire must attach the arbitration context')
+        level = context.get('wake_level')
+        self.assertIsInstance(level, int)
+        db = 20.0 * math.log10((12000 / 32768.0))
+        expected = round((db + 60.0) / 60.0 * 100.0)
+        self.assertIn(level, (expected, expected + 1),
+                      "the wire level must match the core's frozen mapping (got %r want ~%d)"
+                      % (level, expected))
+        self.assertEqual(level, lib.wy_wake_last_level(det),
+                         "the wire value and the core's report are the same frozen number")
+
+    def test_unmeasured_fire_keeps_the_historical_context_free_shape(self):
+        """A forced fire with nothing measured sends the OLD detection frame exactly
+        ({'name': ...} and no context at all): old bridge builds and the bridge's
+        level-less fallback both keep working unchanged."""
+        lib = self.library()
+        session, output, reader, writer = self.armed_session(lib)
+        det = self.armed_detector(lib, session, writer, [0.90])
+        # Force the fire through the driver's forced-fire hook is not available here;
+        # instead reach the fire WITHOUT any scored frame: streaming off, but the core's
+        # measure only seeds on an armed SCORED frame -- a frame below threshold still
+        # scores (the seam runs), so use the no-model route instead: with_load happens in
+        # the unit test. On the integration side, the historical shape is proved by the
+        # session core itself: wy_session_wake with level -1 (the wake-now path).
+        start = output.tell()
+        self.assertEqual(lib.wy_session_wake(session, b'hey-hermes', -1, writer, None), 0)
+        output.seek(start)
+        events = self.read_wire(output, 3)
+        self.assertEqual([e.type for e in events],
+                         ['detection', 'run-pipeline', 'streaming-started'])
+        self.assertEqual(events[0].data, {'name': 'hey-hermes'},
+                         'a level-less detection must be byte-identical to the historical shape')
 
     def test_transcript_stops_and_the_detector_rearms(self):
         """The bridge's transcript stops the stream (streaming-stopped, device

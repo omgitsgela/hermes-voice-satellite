@@ -54,7 +54,9 @@ class StreamBoundTests(unittest.TestCase):
 
         for _ in range(3):
             self.assertEqual(lib.wy_session_step(session, read, write, None), 0)
-        self.assertEqual(lib.wy_session_wake(session, b'hey_hermes', write, None), 0)
+        # Level -1: this test is about the stream cap, not arbitration; the
+        # historical (context-free) wake shape exercises the cap unchanged.
+        self.assertEqual(lib.wy_session_wake(session, b'hey_hermes', -1, write, None), 0)
         return session, write
 
     def test_a_stream_without_a_transcript_is_capped(self):

@@ -10,16 +10,19 @@
  * writer's context. The trampoline dereferences it and calls wy_session_wake.
  */
 #include "wyoming_session.h"
+#include "wy_wake.h"
 #include <stdint.h>
 #include <stddef.h>
 
-typedef int (*iw_write_fn)(void *, const void *, size_t);
+typedef int (*wy_write_fn)(void *, const void *, size_t);
 
 typedef struct iw_wake_ctx {
     void *session;      /* wy_session* (the session core's buffer) */
     const char *name;   /* the detection name (the device's WYAKE_WORD_NAME) */
-    iw_write_fn write;  /* the link writer (the session's IO callback) */
+    wy_write_fn write;  /* the link writer (the session's IO callback) */
     void *ctx;          /* the writer's context */
+    void *core;         /* wy_wake* (issue #32): the seam reads the frozen level
+                         * from it, exactly like wake_detector.c's wake_fire */
 } iw_wake_ctx;
 
 /* The wake seam: the core calls this on a fire. It is exactly the device
@@ -30,7 +33,8 @@ int iw_session_wake_seam(void *user)
     iw_wake_ctx *c = (iw_wake_ctx *)user;
     if (c == NULL || c->session == NULL || c->name == NULL || c->write == NULL)
         return -1;
-    return wy_session_wake((wy_session *)c->session, c->name, c->write, c->ctx);
+    int level = (c->core != NULL) ? wy_wake_last_level((wy_wake *)c->core) : -1;
+    return wy_session_wake((wy_session *)c->session, c->name, level, c->write, c->ctx);
 }
 
 /* The test reads back the seam's address (restype c_void_p) to install it as
