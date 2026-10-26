@@ -56,19 +56,22 @@ python -c "import importlib.metadata as m; \
 
 ## C. Models and voices fetched at install
 
-Neither the wake word model nor the voice is redistributed in this repository. Both carry terms of their
-own, and **both defaults are non-commercial**:
+Neither the wake word model nor the voice is redistributed in this repository. Both carry terms of
+their own, and the wake word default is non-commercial:
 
 - **The recommended wake word model** comes from the community library of the hosted openWakeWord
   trainer, whose terms license such models for personal and non-commercial use only. Full detail, with the
   terms quoted: [`docs/wake-word-licensing.md`](docs/wake-word-licensing.md).
-- **The recommended voice**, `en_US-hfc_male-medium`, is published in the Piper voices collection, and its
-  model card records its training dataset as **CC BY-NC-SA 4.0**, a non-commercial licence. Treat the voice
-  as non-commercial. Piper voices differ from each other here, so check the model card of whichever voice
-  you choose: <https://huggingface.co/rhasspy/piper-voices>.
+- **The voice the code defaults to**, `en_US-libritts-high`, is published in the Piper voices
+  collection, and its model card records its training dataset (LibriTTS) as **CC BY 4.0**. Earlier
+  installations of this project used `en_US-hfc_male-medium`, whose dataset is **CC BY-NC-SA 4.0**
+  (non-commercial). Piper voices differ from each other here, so check the model card of whichever voice
+  you choose: <https://huggingface.co/rhasspy/piper-voices>. Changing the voice is
+  [`docs/switching-voices.md`](docs/switching-voices.md); this section must name the voice actually installed.
 
-So the default configuration of this project as a whole is a non-commercial one. A commercial deployment
-needs a wake model and a voice whose own terms allow it, and
+So the default configuration of this project as a whole is still a non-commercial one, because of the
+wake model. A commercial deployment needs a wake model whose own terms allow it (and a voice whose
+terms do; the voice default already does), and
 [`docs/wake-word-licensing.md`](docs/wake-word-licensing.md) sets out the routes for the wake model.
 
 ## D. Keeping this file honest

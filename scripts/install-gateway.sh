@@ -212,8 +212,22 @@ else
     run "$BASE/.venv/bin/python" -m pip install -r "$BASE/requirements.txt"
     run "$BASE/.venv/bin/python" -m pip check
     # The Piper voice the bridge speaks with (not committed; the unit's WorkingDirectory expects
-    # voices/ next to bridge/).
-    run "$BASE/.venv/bin/python" -m piper.download_voices --download-dir "$BASE/voices" en_US-hfc_male-medium
+    # voices/ next to bridge/). The name follows the installation's configuration — the same
+    # VOICE_PIPER_VOICE resolution bridge/config.py uses: an existing bridge.env wins, otherwise
+    # the code default. Changing the voice is docs/switching-voices.md; this line must not grow
+    # its own default. bridge/config.py needs only the stdlib, so either interpreter can read it.
+    VOICE_PY=""
+    if [ -x "$BASE/.venv/bin/python" ]; then VOICE_PY="$BASE/.venv/bin/python"; else VOICE_PY="python3"; fi
+    PIPER_VOICE_NAME="$("$VOICE_PY" -c '
+import sys; sys.path.insert(0, sys.argv[1])
+from bridge.config import PIPER_VOICE_NAME
+print(PIPER_VOICE_NAME)' "$BASE" 2>/dev/null || true)"
+    if [ -z "$PIPER_VOICE_NAME" ]; then
+        echo "   could not read the configured voice name from bridge/config.py; skipping the voice download" >&2
+    else
+        echo "   bridge voice: $PIPER_VOICE_NAME"
+        run "$BASE/.venv/bin/python" -m piper.download_voices --download-dir "$BASE/voices" "$PIPER_VOICE_NAME"
+    fi
 fi
 
 # ---------------------------------------------------------------- 2. bridge.env

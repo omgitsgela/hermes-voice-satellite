@@ -16,11 +16,79 @@ from pathlib import Path
 from typing import Iterator
 
 from piper.voice import PiperVoice
+from piper.config import SynthesisConfig
 
-from bridge.config import SND_FORMAT, VOICE_CONFIG, VOICE_MODEL
+from bridge.config import (
+    PIPER_LENGTH_SCALE,
+    PIPER_SPEAKER_SETTING,
+    SND_FORMAT,
+    VOICE_CONFIG,
+    VOICE_MODEL,
+)
 import asyncio
 
 _LOGGER = logging.getLogger("bridge.tts")
+
+# The voice config path resolves against the configured voice name. Module-level so tests can
+# point it at a fixture without a real .onnx.
+PIPER_VOICE_MODEL_CONFIG_PATH = VOICE_CONFIG
+
+
+def resolve_speaker_id(setting, config_path: Path):
+    """Turn a configured speaker into the numeric id Piper wants.
+
+    Accepts a name from the voice's own speaker_id_map ("p2769") or a plain numeric id.
+    Names are preferred over indices because Piper voices have been re-released with speaker
+    lists in a different order; a name cannot land on the wrong person after a re-download.
+
+    Raises ValueError on anything the voice cannot honour (a name not in its map, a negative,
+    fractional, or nonnumeric token) rather than letting Piper fall to its default speaker in
+    silence -- the household would just hear someone else. Raises FileNotFoundError when the
+    voice's .onnx.json is absent, which is the "download the voice first" answer, not a crash
+    in the audio path. Empty/None means no override: Piper's own default speaker.
+    """
+    if setting is None or str(setting).strip() == "":
+        return None
+    setting = str(setting).strip()
+
+    if not Path(config_path).is_file():
+        raise FileNotFoundError(
+            f"voice config {Path(config_path).name} not found; download the voice before "
+            f"starting the bridge (see docs/switching-voices.md)")
+
+    import json
+
+    config = json.loads(Path(config_path).read_text())
+    speaker_map = config.get("speaker_id_map", {})
+
+    if setting in speaker_map:
+        return int(speaker_map[setting])
+    try:
+        index = int(setting)
+    except ValueError:
+        raise ValueError(
+            f"speaker {setting!r} is not a name in {Path(config_path).name}'s speaker_id_map "
+            f"({len(speaker_map)} speakers) and is not a numeric id; list them with "
+            f"scripts/list-piper-speakers.py") from None
+    num_speakers = int(config.get("num_speakers", len(speaker_map) or 1))
+    if index < 0 or (num_speakers > 1 and index >= num_speakers):
+        raise ValueError(
+            f"speaker id {index} is outside this voice's range (0..{num_speakers - 1})")
+    return index
+
+
+def build_synthesis_config():
+    """The Piper SynthesisConfig for every synthesis this process does.
+
+    Built per call on purpose: it is cheap, and resolving the speaker per call means a bad
+    setting surfaces as a clear ValueError in the log at the first synthesis, not as a wrong
+    voice. load_voice()'s cache keeps the expensive part (the model) warm.
+    """
+    syn = SynthesisConfig()
+    syn.speaker_id = resolve_speaker_id(PIPER_SPEAKER_SETTING, PIPER_VOICE_MODEL_CONFIG_PATH)
+    if PIPER_LENGTH_SCALE is not None:
+        syn.length_scale = PIPER_LENGTH_SCALE
+    return syn
 
 
 @lru_cache(maxsize=2)
@@ -36,7 +104,7 @@ def synthesize_to_wav(text: str, out_path: Path) -> Path:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     voice = load_voice()
     with wave.open(str(out_path), "wb") as wav_file:
-        voice.synthesize_wav(text, wav_file)
+        voice.synthesize_wav(text, wav_file, syn_config=build_synthesis_config())
     _LOGGER.info("synthesized %d chars -> %s", len(text), out_path.name)
     return out_path
 
@@ -61,7 +129,7 @@ def synthesize_chunks(text: str) -> Iterator[tuple[bytes, int, int, int]]:
     before the whole sentence has been synthesized.
     """
     voice = load_voice()
-    for chunk in voice.synthesize(text):
+    for chunk in voice.synthesize(text, syn_config=build_synthesis_config()):
         pcm = chunk.audio_int16_bytes
         if pcm:
             yield pcm, chunk.sample_rate, chunk.sample_width, chunk.sample_channels

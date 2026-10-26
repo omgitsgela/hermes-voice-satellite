@@ -112,8 +112,9 @@ Software: Python 3.11 is the tested bridge runtime. Use a dedicated virtual envi
 with `requirements.txt` (faster-whisper, piper-tts, wyoming, aiohttp, silero VAD,
 webrtcvad fallback). Hermes Agent is installed separately; the bridge calls its HTTP API
 and does not need the `hermes-agent` Python distribution in its virtual environment.
-The Piper voice `en_US-hfc_male-medium` (61 MB, not committed
-here) comes from the Piper voices release; the custom wake model is a community TFLite file, see
+The Piper voice `en_US-libritts-high` (137 MB, not committed
+here) comes from the Piper voices release; `VOICE_PIPER_SPEAKER=p2769` selects its speaker,
+and `docs/switching-voices.md` covers changing either. The custom wake model is a community TFLite file, see
 `docs/switching-wake-words.md`.
 
 ## Install
@@ -136,7 +137,7 @@ cd ~/hermes-voice-bridge
 python3.11 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m pip check
-.venv/bin/python -m piper.download_voices --download-dir voices en_US-hfc_male-medium
+.venv/bin/python -m piper.download_voices --download-dir voices en_US-libritts-high
 cp bridge.env.example bridge.env
 ```
 
