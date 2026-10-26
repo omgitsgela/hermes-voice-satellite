@@ -17,8 +17,8 @@ All live in `bridge.env` (environment variable first, then this file, then the c
 
 | Key | Meaning | Default |
 |---|---|---|
-| `VOICE_PIPER_VOICE` | Voice name: a Piper catalog name (`en_US-lessac-medium`) or a curated external name (`clean100`) | `clean100` |
-| `VOICE_PIPER_SPEAKER` | For multi-speaker voices: a speaker name from the voice's own map (`78`) or a numeric id. Ignored by single-speaker voices. | `78` |
+| `VOICE_PIPER_VOICE` | Voice name: a Piper catalog name (`en_US-hfc_male-medium`) or a curated external name (`clean100`) | `en_US-hfc_male-medium` |
+| `VOICE_PIPER_SPEAKER` | For multi-speaker voices: a speaker name from the voice's own map (`78`) or a numeric id. Ignored by single-speaker voices. | (empty — the default voice has one speaker) |
 | `VOICE_PIPER_LENGTH_SCALE` | Speaking rate: `< 1` faster, `> 1` slower. Empty uses the voice's own default. | (empty) |
 
 The voice files live in `voices/` beside `bridge/`, named `{VOICE_PIPER_VOICE}.onnx` and
@@ -38,6 +38,11 @@ cd ~/hermes-voice-bridge
 #       player is the fastest audition). Names look like en_US-lessac-medium.
 #    b) curated external voices (.venv/bin/python scripts/fetch-voice.py --list), e.g.
 #       clean100 — not in the catalog, hosted by its author, fetched with pinned sha256.
+#
+#    Voices already installed in voices/ on this host (all auditioned 2026-10-26, all 22,050 Hz,
+#    all kept for rollback and future auditions): en_US-hfc_male-medium (the current voice),
+#    clean100 (245 speakers; listened to 0/6209 and 36/78), en_US-libritts-high (904 speakers;
+#    listened to p2769).
 
 # 2. Download it into the installation's voices/ directory.
 #    Catalog voice:
@@ -50,7 +55,6 @@ cd ~/hermes-voice-bridge
 #    Piper falls to an arbitrary default otherwise, and the household hears a stranger:
 .venv/bin/python scripts/list-piper-speakers.py --voice clean100 --search 78
 #    -> "78 -> 36" (the substring search also shows 7800, 6078, ...; use the exact name)
-
 # 4. (Optional, recommended) Listen to candidates offline before restarting anything:
 #    synthesize the same sentence through each setting and compare the WAVs. The bridge's own
 #    code path is the honest way to preview it:
@@ -69,6 +73,7 @@ PY
 # 5. Point the bridge at it in bridge.env:
 #      VOICE_PIPER_VOICE=clean100
 #      VOICE_PIPER_SPEAKER=78
+#    (a catalog single-speaker voice needs only VOICE_PIPER_VOICE; leave the speaker empty)
 #    (VOICE_PIPER_LENGTH_SCALE only if the voice speaks too fast or too slow.)
 
 # 6. Restart the bridge and verify the new voice is the one that loaded:
@@ -103,8 +108,11 @@ every TTS call logs a failed download and nothing speaks):
 ```
 
 Hermes resolves a cache hit before it ever tries to download, so a seeded voice loads exactly like
-a catalog one. The live pair right now: `clean100` / `VOICE_PIPER_SPEAKER=78` on the bridge and
-`tts.piper.voice: clean100` / `tts.piper.speaker_id: 36` on Hermes (36 is what `78` resolves to).
+a catalog one. The live pair right now: `en_US-hfc_male-medium` with `VOICE_PIPER_SPEAKER` unset
+on the bridge, and `tts.piper.voice: en_US-hfc_male-medium` on Hermes with no `speaker_id` (a
+single-speaker voice needs none). The clean100 pair — `VOICE_PIPER_SPEAKER=78` and
+`tts.piper.speaker_id: 36` — is what that looked like while clean100 was installed, and is the
+example to follow for any multi-speaker voice.
 
 ## Multi-speaker voices: why a speaker id is mandatory in practice
 
@@ -112,7 +120,7 @@ a catalog one. The live pair right now: `clean100` / `VOICE_PIPER_SPEAKER=78` on
 falls to the voice's default speaker when none is asked for, so an unset `VOICE_PIPER_SPEAKER`
 means "somebody from the corpus", not a choice. The bridge resolves the setting through the
 voice's own `speaker_id_map` and **refuses** a name that is not in it (`ValueError` in the
-bridge log at the first synthesis, not a wrong voice). Prefer the name (`6209`) over the number:
+bridge log at the first synthesis, not a wrong voice). Prefer the name (`78`) over the number:
 published voices have been re-released with speaker lists in a different order, so a name cannot
 land on the wrong person after a re-download.
 
@@ -133,13 +141,13 @@ Quality costs CPU. Measured on the deployment host (`i5-12500`, CPU-only, 41-wor
 
 | Voice | Synthesis speed vs realtime | First audio chunk |
 |---|---|---|
-| `en_US-hfc_male-medium` (early voice) | ~20x | < 0.1 s |
-| `en_US-libritts-high` + `p2769` (briefly the voice) | ~4.4x | ~0.26 s |
-| `clean100` + speaker `78` (the current voice) | ~20x | ~0.05 s |
+| `en_US-hfc_male-medium` (the current voice) | ~20x | < 0.1 s |
+| `en_US-libritts-high` + `p2769` (auditioned 2026-10-26) | ~4.4x | ~0.26 s |
+| `clean100` + speaker `78` (auditioned 2026-10-26) | ~20x | ~0.05 s |
 
-clean100 is a medium-quality voice with 245 speakers: it lands back near the speed of the old
-`hfc_male` while keeping multi-speaker choice, which is the best latency/quality trade found so
-far on this host. For comparison, Qwen3-TTS 0.6B (a much larger neural model) measured ~0.45x
+clean100 is a medium-quality voice with 245 speakers: it lands back near the speed of
+`hfc_male` while keeping multi-speaker choice. For comparison, Qwen3-TTS 0.6B (a much larger
+neural model) measured ~0.45x
 realtime on this CPU, and even Piper's `high`-quality libritts costs 4x — a 20-word answer is
 audible to the device faster than it can be spoken by any of these except a GPU run.
 
@@ -155,11 +163,14 @@ evidence the voice is wrong.
 Piper voices carry **their own** terms; the collection's repo license (MIT) covers the code,
 not the models. Check each voice's model card at
 <https://huggingface.co/rhasspy/piper-voices> before adopting it, and keep
-`THIRD-PARTY.md` section C honest about the voice actually installed. The previous default,
-`en_US-hfc_male-medium`, is trained on a CC BY-NC-SA dataset (non-commercial). The current voice,
-`clean100`, is LibriTTS-r "Clean 100" (CC BY 4.0) with no further restriction from its author; its
-pins and terms are recorded in `scripts/fetch-voice.py` and `THIRD-PARTY.md`. None of these is
-redistributed in this repository, which is why `voices/` is git-ignored.
+`THIRD-PARTY.md` section C honest about the voice actually installed. The default,
+`en_US-hfc_male-medium`, is trained on a **CC BY-NC-SA** dataset (non-commercial) — fine for this
+household, worth knowing before publishing anything spoken by it. Voices with more permissive
+terms exist and were auditioned on 2026-10-26: the current lineup did not win on sound, but the
+audition samples and their measurements are in the operations journal. `clean100` (LibriTTS-r
+"Clean 100", **CC BY 4.0**, no further restriction from its author) is the permissive option kept
+installed; its pins and terms are recorded in `scripts/fetch-voice.py` and `THIRD-PARTY.md`. None
+of these is redistributed in this repository, which is why `voices/` is git-ignored.
 
 ## What the tests pin
 

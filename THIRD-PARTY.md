@@ -62,20 +62,24 @@ their own, and the wake word default is non-commercial:
 - **The recommended wake word model** comes from the community library of the hosted openWakeWord
   trainer, whose terms license such models for personal and non-commercial use only. Full detail, with the
   terms quoted: [`docs/wake-word-licensing.md`](docs/wake-word-licensing.md).
-- **The voice the code defaults to**, `clean100` (245 speakers, 22,050 Hz, medium quality), is
-  hosted by its author at <https://brycebeattie.com/files/tts> rather than in the Piper voices
-  catalog, and its stated dataset is the "Clean 100" subset of LibriTTS-r, **CC BY 4.0**
-  (<https://www.openslr.org/141/>); the author imposes no further restriction. It is fetched by
-  `scripts/fetch-voice.py` with pinned sha256 (hashes recorded there and verified at fetch time),
-  never redistributed here. Earlier installations used `en_US-libritts-high` (LibriTTS, CC BY 4.0)
-  and before that `en_US-hfc_male-medium`, whose dataset is **CC BY-NC-SA 4.0** (non-commercial).
-  Piper voices differ from each other here, so check the terms of whichever voice you choose:
-  <https://huggingface.co/rhasspy/piper-voices> for catalog voices. Changing the voice is
+- **The voice the code defaults to**, `en_US-hfc_male-medium` (single speaker, 22,050 Hz, medium
+  quality), is fetched at install time by `piper.download_voices` from the Piper voices catalog
+  (<https://huggingface.co/rhasspy/piper-voices>) into the git-ignored `voices/` directory. Its
+  dataset is **CC BY-NC-SA 4.0** (non-commercial). On 2026-10-26 the household auditioned two more
+  permissive voices and kept them installed without making either the default:
+  `en_US-libritts-high` (LibriTTS, **CC BY 4.0**, 904 speakers) and `clean100` (245 speakers,
+  hosted by its author at <https://brycebeattie.com/files/tts> outside the catalog, dataset the
+  "Clean 100" subset of LibriTTS-r, **CC BY 4.0** (<https://www.openslr.org/141/>), the author
+  imposes no further restriction). A curated voice like `clean100` is fetched by
+  `scripts/fetch-voice.py` with pinned sha256 (hashes recorded there and verified at fetch time).
+  None is redistributed here. Piper voices differ from each other on terms, so check the terms of
+  whichever voice you choose. Changing the voice is
   [`docs/switching-voices.md`](docs/switching-voices.md); this section must name the voice actually installed.
 
-So the default configuration of this project as a whole is still a non-commercial one, because of the
-wake model. A commercial deployment needs a wake model whose own terms allow it (and a voice whose
-terms do; the voice default already does), and
+So the default configuration of this project as a whole is a non-commercial one, because of the
+wake model and, since 2026-10-26 again, the voice too. A commercial deployment needs a wake model
+whose own terms allow it and a voice whose terms do; the CC BY 4.0 voices auditioned on 2026-10-26
+(`clean100`, `en_US-libritts-high`) would satisfy the voice half of that, and
 [`docs/wake-word-licensing.md`](docs/wake-word-licensing.md) sets out the routes for the wake model.
 
 ## D. Keeping this file honest

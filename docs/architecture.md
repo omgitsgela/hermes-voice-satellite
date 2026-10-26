@@ -38,7 +38,7 @@ SPEAKING                                            →  the device hears a wake
   6  think  gateway.py ──► Hermes API server :8642 ── route "voice-fast" ──► deepseek-flash           │
         │        (plus bridge-local commands and the timers path, which answer without a model)       │
         │                                                                                            │
-  7  speak  tts.py ──► Piper  (voices/clean100.onnx, speaker 78)                                       │
+  7  speak  tts.py ──► Piper  (voices/en_US-hfc_male-medium.onnx)                                     │
         │                                                                                            │
   8  play  ──► back down the same TCP link ──► the device's aplay ──► the HAT's speaker               │
         └────────────────────────────────────────────────────────────────────────────────────────────┘
@@ -119,7 +119,7 @@ transport to the firmware and to the bridge; the endpoint shape needs no further
 | 6 think | `gateway.py` over the Runs API | bridge | **written by us** | ours |
 | 6 think | Hermes agent + API server at `http://127.0.0.1:8642` | bridge host | Hermes Agent | platform |
 | 6 think | route `voice-fast` → `deepseek-flash` | bridge host | configured | ours (config) |
-| 7 speak | `tts.py` + Piper `clean100` (`VOICE_PIPER_SPEAKER=78`) | bridge | Piper | ours + model file |
+| 7 speak | `tts.py` + Piper `en_US-hfc_male-medium` | bridge | Piper | ours + model file |
 | 8 play | `aplay` on the device's HAT | device | ALSA | config |
 | — | `announce.py`, `registry.py`, `lease.py`, `timers.py`, `volume.py`, `config_plane.py` | bridge | **written by us** | ours |
 | — | `hermes/plugins/voice_satellite`, `hermes_timers` | bridge host | **written by us** | ours |
@@ -138,7 +138,7 @@ of that in full; `docs/voice-detection.md` covers the detector.
 | which model the voice surface uses | `~/.hermes/config.yaml` `gateway.api_server.model_routes.voice-fast` | `deepseek` / `deepseek-flash` |
 | that route, selected by the bridge | `bridge/config.py` `VOICE_ROUTE_ALIAS` | `voice-fast` |
 | speech-to-text model | `bridge/loop.py` `stt_model` (a default argument, **not** a config constant) | `small.en`, int8, CPU |
-| text-to-speech voice | `bridge/config.py` `PIPER_VOICE_NAME` (+ `PIPER_SPEAKER_SETTING`, `PIPER_LENGTH_SCALE`) | `en_US-libritts-high`, speaker `p2769` |
+| text-to-speech voice | `bridge/config.py` `PIPER_VOICE_NAME` (+ `PIPER_SPEAKER_SETTING`, `PIPER_LENGTH_SCALE`) | `en_US-hfc_male-medium` |
 | the gateway the bridge calls | `bridge/config.py` `GATEWAY_BASE_URL` | `http://127.0.0.1:8642` |
 
 ## What each stage actually decides

@@ -55,10 +55,13 @@ def load_config(env: dict | None = None):
 
 cfg = load_config()
 check("default voice is the configured installation voice",
-      cfg["PIPER_VOICE_NAME"] == "clean100")
+      cfg["PIPER_VOICE_NAME"] == "en_US-hfc_male-medium")
 check("VOICE_PIPER_SPEAKER is read as configuration", "PIPER_SPEAKER_SETTING" in cfg)
-check("default speaker names the chosen speaker",
-      cfg.get("PIPER_SPEAKER_SETTING") == "78")
+# The shipped default voice has a single speaker, so its default is deliberately no override.
+# (A multi-speaker default would have to name a speaker or Piper silently picks one from the
+# corpus; test_piper_voice_config's multi-speaker checks below pin that behaviour.)
+check("default speaker is no override, because the default voice is single-speaker",
+      cfg.get("PIPER_SPEAKER_SETTING") == "")
 check("VOICE_PIPER_LENGTH_SCALE is read as configuration", "PIPER_LENGTH_SCALE" in cfg)
 
 cfg = load_config({"VOICE_PIPER_VOICE": "en_US-amy-medium", "VOICE_PIPER_SPEAKER": ""})
