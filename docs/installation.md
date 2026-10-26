@@ -79,8 +79,9 @@ certificate no device could ever pin.
 What the installer does, in order:
 
 1. **venv** — `~/hermes-voice-bridge/.venv` with `requirements.txt` (faster-whisper, Piper,
-   wyoming, silero VAD) plus the Piper voice `en_US-libritts-high` (its speaker is selected by
-   `VOICE_PIPER_SPEAKER`; see `docs/switching-voices.md`).
+   wyoming, silero VAD) plus the Piper voice `clean100`, fetched by `scripts/fetch-voice.py` with
+   pinned checksums (its speaker is selected by `VOICE_PIPER_SPEAKER`; see
+   `docs/switching-voices.md`).
 2. **bridge.env** — from `bridge.env.example`, with the registry link values appended: the listener
    enabled, bound to the reachable address, the TLS certificate paths, and the satellite dial
    (`VOICE_SATELLITE_HOST/PORT`, loopback by default for the old shape).

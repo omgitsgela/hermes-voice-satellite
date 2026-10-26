@@ -62,11 +62,15 @@ their own, and the wake word default is non-commercial:
 - **The recommended wake word model** comes from the community library of the hosted openWakeWord
   trainer, whose terms license such models for personal and non-commercial use only. Full detail, with the
   terms quoted: [`docs/wake-word-licensing.md`](docs/wake-word-licensing.md).
-- **The voice the code defaults to**, `en_US-libritts-high`, is published in the Piper voices
-  collection, and its model card records its training dataset (LibriTTS) as **CC BY 4.0**. Earlier
-  installations of this project used `en_US-hfc_male-medium`, whose dataset is **CC BY-NC-SA 4.0**
-  (non-commercial). Piper voices differ from each other here, so check the model card of whichever voice
-  you choose: <https://huggingface.co/rhasspy/piper-voices>. Changing the voice is
+- **The voice the code defaults to**, `clean100` (245 speakers, 22,050 Hz, medium quality), is
+  hosted by its author at <https://brycebeattie.com/files/tts> rather than in the Piper voices
+  catalog, and its stated dataset is the "Clean 100" subset of LibriTTS-r, **CC BY 4.0**
+  (<https://www.openslr.org/141/>); the author imposes no further restriction. It is fetched by
+  `scripts/fetch-voice.py` with pinned sha256 (hashes recorded there and verified at fetch time),
+  never redistributed here. Earlier installations used `en_US-libritts-high` (LibriTTS, CC BY 4.0)
+  and before that `en_US-hfc_male-medium`, whose dataset is **CC BY-NC-SA 4.0** (non-commercial).
+  Piper voices differ from each other here, so check the terms of whichever voice you choose:
+  <https://huggingface.co/rhasspy/piper-voices> for catalog voices. Changing the voice is
   [`docs/switching-voices.md`](docs/switching-voices.md); this section must name the voice actually installed.
 
 So the default configuration of this project as a whole is still a non-commercial one, because of the

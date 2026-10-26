@@ -62,7 +62,7 @@ with patch.dict(os.environ, {}, clear=True), patch.object(Path, 'read_text', sid
     assert ns['SATELLITE_HOST'] == '127.0.0.1'
     assert ns['VOICE_SESSION_ID'] == 'voice-satellite'
     assert ns['VOICE_ROUTE_ALIAS'] == 'voice-fast'
-    assert ns['PIPER_VOICE_NAME'] == 'en_US-libritts-high'
+    assert ns['PIPER_VOICE_NAME'] == 'clean100'
     assert ns['REGISTRY_HOST'] == '127.0.0.1'
 from bridge.announce import Announcer
 with patch.dict(os.environ, {}, clear=True), patch.object(config, '_LOCAL_ENV_CACHE', {'VOICE_ANNOUNCE_TOKEN': 'test-token'}):

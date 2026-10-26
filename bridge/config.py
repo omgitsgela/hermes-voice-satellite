@@ -205,14 +205,17 @@ except (TypeError, ValueError):
     FLEET_DISPATCH_TIMEOUT_SECONDS = 30.0
 VOICES_DIR = PROJECT_DIR / "voices"
 # The Piper voice. A pick made for this installation (2026-10-26; changed 2026-09-22 to the
-# platform voice, 2026-10-26 to the higher-quality multi-speaker one), so it is a value a
-# different deployment would want to change. The whole procedure is docs/switching-voices.md.
-PIPER_VOICE_NAME = _cfg("VOICE_PIPER_VOICE", "en_US-libritts-high")
+# platform voice, 2026-10-26 briefly to en_US-libritts-high, then the same day to clean100
+# after listening tests). A different deployment would want to change it: the whole procedure
+# is docs/switching-voices.md. clean100 is not in the Piper catalog; it is fetched by
+# scripts/fetch-voice.py with pinned hashes.
+PIPER_VOICE_NAME = _cfg("VOICE_PIPER_VOICE", "clean100")
 # Multi-speaker voices hold hundreds of speakers and Piper falls to the voice's own default
 # unless one is chosen. A name from the voice's own speaker_id_map (preferred: a name survives
 # a voice re-release where the index could shift) or a plain numeric id. Ignored by
-# single-speaker voices; empty means Piper's default speaker.
-PIPER_SPEAKER_SETTING = _cfg("VOICE_PIPER_SPEAKER", "p2769")
+# single-speaker voices; empty means Piper's default speaker. clean100 names its speakers by
+# their LibriVox reader ids; "6209" is speaker 0, the male voice the author's own sample uses.
+PIPER_SPEAKER_SETTING = _cfg("VOICE_PIPER_SPEAKER", "6209")
 # Optional speaking-rate knob: < 1 is faster, > 1 is slower. Empty (or an unparseable value)
 # means the voice's own default from its .onnx.json.
 PIPER_LENGTH_SCALE_RAW = _cfg("VOICE_PIPER_LENGTH_SCALE", "")
