@@ -224,6 +224,11 @@ from bridge.config import PIPER_VOICE_NAME
 print(PIPER_VOICE_NAME)' "$BASE" 2>/dev/null || true)"
     if [ -z "$PIPER_VOICE_NAME" ]; then
         echo "   could not read the configured voice name from bridge/config.py; skipping the voice download" >&2
+    elif "$VOICE_PY" "$BASE/scripts/fetch-voice.py" --is-external "$PIPER_VOICE_NAME" >/dev/null 2>&1; then
+        # Voices outside the Piper catalog (clean100): fetched with pinned sha256 and a
+        # 22,050 Hz contract check, because piper.download_voices cannot know them.
+        echo "   bridge voice: $PIPER_VOICE_NAME (curated external voice, hash-pinned)"
+        run "$VOICE_PY" "$BASE/scripts/fetch-voice.py" "$PIPER_VOICE_NAME" --download-dir "$BASE/voices"
     else
         echo "   bridge voice: $PIPER_VOICE_NAME"
         run "$BASE/.venv/bin/python" -m piper.download_voices --download-dir "$BASE/voices" "$PIPER_VOICE_NAME"

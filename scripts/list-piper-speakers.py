@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """List the speakers a Piper voice carries, name -> numeric id.
 
-Multi-speaker Piper voices (en_US-libritts-high: 904 speakers) are unusable without a
-chosen speaker; this is the lookup that turns "I liked a sample" into a
+Multi-speaker Piper voices (clean100: 245 speakers; en_US-libritts-high: 904) are unusable
+without a chosen speaker; this is the lookup that turns "I liked a sample" into a
 VOICE_PIPER_SPEAKER value. Reads the voice's own speaker_id_map from its .onnx.json, so
 what it prints is exactly what the bridge can resolve.
 
   .venv/bin/python scripts/list-piper-speakers.py                  # configured voice
-  .venv/bin/python scripts/list-piper-speakers.py --voice en_US-libritts-high
+  .venv/bin/python scripts/list-piper-speakers.py --voice clean100
   .venv/bin/python scripts/list-piper-speakers.py --voice /path/to/some.onnx.json
   .venv/bin/python scripts/list-piper-speakers.py --search 2769    # substring over names
 
@@ -46,8 +46,9 @@ def main() -> int:
     config_path = resolve_config_path(args.voice)
     if not config_path.is_file():
         print(f"no voice config at {config_path}", file=sys.stderr)
-        print("download it first, e.g.: .venv/bin/python -m piper.download_voices "
-              "--download-dir voices en_US-libritts-high", file=sys.stderr)
+        print("download it first: .venv/bin/python -m piper.download_voices "
+              "--download-dir voices <name> (catalog voice) or "
+              ".venv/bin/python scripts/fetch-voice.py <name> (curated voice)", file=sys.stderr)
         return 1
 
     config = json.loads(config_path.read_text())

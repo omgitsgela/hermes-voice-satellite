@@ -55,10 +55,10 @@ def load_config(env: dict | None = None):
 
 cfg = load_config()
 check("default voice is the configured installation voice",
-      cfg["PIPER_VOICE_NAME"] == "en_US-libritts-high")
+      cfg["PIPER_VOICE_NAME"] == "clean100")
 check("VOICE_PIPER_SPEAKER is read as configuration", "PIPER_SPEAKER_SETTING" in cfg)
 check("default speaker names the chosen speaker",
-      cfg.get("PIPER_SPEAKER_SETTING") == "p2769")
+      cfg.get("PIPER_SPEAKER_SETTING") == "6209")
 check("VOICE_PIPER_LENGTH_SCALE is read as configuration", "PIPER_LENGTH_SCALE" in cfg)
 
 cfg = load_config({"VOICE_PIPER_VOICE": "en_US-amy-medium", "VOICE_PIPER_SPEAKER": ""})
@@ -169,6 +169,7 @@ if doc.is_file():
     for knob in ("VOICE_PIPER_VOICE", "VOICE_PIPER_SPEAKER", "VOICE_PIPER_LENGTH_SCALE"):
         check(f"doc names the knob {knob}", knob in text)
     check("doc points at the speaker-listing tool", "scripts/list-piper-speakers.py" in text)
+    check("doc points at the external-voice fetcher", "scripts/fetch-voice.py" in text)
     check("doc tells the reader voices/ is git-ignored", "git-ignored" in text or "not committed" in text)
 
 check("the speaker-listing tool exists", (ROOT / "scripts/list-piper-speakers.py").is_file())
