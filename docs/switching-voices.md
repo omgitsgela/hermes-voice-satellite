@@ -18,7 +18,7 @@ All live in `bridge.env` (environment variable first, then this file, then the c
 | Key | Meaning | Default |
 |---|---|---|
 | `VOICE_PIPER_VOICE` | Voice name: a Piper catalog name (`en_US-lessac-medium`) or a curated external name (`clean100`) | `clean100` |
-| `VOICE_PIPER_SPEAKER` | For multi-speaker voices: a speaker name from the voice's own map (`6209`) or a numeric id. Ignored by single-speaker voices. | `6209` |
+| `VOICE_PIPER_SPEAKER` | For multi-speaker voices: a speaker name from the voice's own map (`78`) or a numeric id. Ignored by single-speaker voices. | `78` |
 | `VOICE_PIPER_LENGTH_SCALE` | Speaking rate: `< 1` faster, `> 1` slower. Empty uses the voice's own default. | (empty) |
 
 The voice files live in `voices/` beside `bridge/`, named `{VOICE_PIPER_VOICE}.onnx` and
@@ -48,8 +48,8 @@ cd ~/hermes-voice-bridge
 
 # 3. If it is a MULTI-SPEAKER voice (num_speakers > 1 in its .onnx.json), choose a speaker.
 #    Piper falls to an arbitrary default otherwise, and the household hears a stranger:
-.venv/bin/python scripts/list-piper-speakers.py --voice clean100 --search 6209
-#    -> "6209 -> 0"
+.venv/bin/python scripts/list-piper-speakers.py --voice clean100 --search 78
+#    -> "78 -> 36" (the substring search also shows 7800, 6078, ...; use the exact name)
 
 # 4. (Optional, recommended) Listen to candidates offline before restarting anything:
 #    synthesize the same sentence through each setting and compare the WAVs. The bridge's own
@@ -59,7 +59,7 @@ import sys; sys.path.insert(0, '.')
 from bridge import tts
 from piper.config import SynthesisConfig
 v = tts.load_voice()
-sc = SynthesisConfig(); sc.speaker_id = 0    # speaker 6209
+sc = SynthesisConfig(); sc.speaker_id = 36   # speaker 78
 import wave
 with wave.open('/tmp/try-this-voice.wav', 'wb') as w:
     v.synthesize_wav("The satellite is awake. This is what the new voice sounds like.", w,
@@ -68,7 +68,7 @@ PY
 
 # 5. Point the bridge at it in bridge.env:
 #      VOICE_PIPER_VOICE=clean100
-#      VOICE_PIPER_SPEAKER=6209
+#      VOICE_PIPER_SPEAKER=78
 #    (VOICE_PIPER_LENGTH_SCALE only if the voice speaks too fast or too slow.)
 
 # 6. Restart the bridge and verify the new voice is the one that loaded:
@@ -103,8 +103,8 @@ every TTS call logs a failed download and nothing speaks):
 ```
 
 Hermes resolves a cache hit before it ever tries to download, so a seeded voice loads exactly like
-a catalog one. The live pair right now: `clean100` / `VOICE_PIPER_SPEAKER=6209` on the bridge and
-`tts.piper.voice: clean100` / `tts.piper.speaker_id: 0` on Hermes (0 is what `6209` resolves to).
+a catalog one. The live pair right now: `clean100` / `VOICE_PIPER_SPEAKER=78` on the bridge and
+`tts.piper.voice: clean100` / `tts.piper.speaker_id: 36` on Hermes (36 is what `78` resolves to).
 
 ## Multi-speaker voices: why a speaker id is mandatory in practice
 
@@ -116,9 +116,12 @@ bridge log at the first synthesis, not a wrong voice). Prefer the name (`6209`) 
 published voices have been re-released with speaker lists in a different order, so a name cannot
 land on the wrong person after a re-download.
 
-clean100 names its speakers by their LibriVox reader ids (`6209`, `1088`, ...). There is no
-metadata about who they are — no gender, age, or accent list — so finding one you like is a
-listening exercise: `scripts/list-piper-speakers.py` prints names and ids, and the preview
+clean100 names its speakers by their LibriVox reader ids (`78`, `1088`, ...), not by position.
+That is a trap worth knowing: the author's own sample zip numbers files by **numeric id**
+(`0.wav` ... `244.wav`), so "voice 36" on his page means numeric id 36, which in this voice's
+map is the name `78`. Configure the name, not the number, and `scripts/list-piper-speakers.py`
+is the lookup that turns one into the other. There is no metadata about who the speakers are —
+no gender, age, or accent list — so finding one you like is a listening exercise, and the preview
 snippet in step 4 renders any of them.
 
 Single-speaker voices (`en_US-hfc_male-medium`, `en_US-lessac-medium`, `en_US-amy-medium`, ...)
@@ -132,7 +135,7 @@ Quality costs CPU. Measured on the deployment host (`i5-12500`, CPU-only, 41-wor
 |---|---|---|
 | `en_US-hfc_male-medium` (early voice) | ~20x | < 0.1 s |
 | `en_US-libritts-high` + `p2769` (briefly the voice) | ~4.4x | ~0.26 s |
-| `clean100` + speaker `6209` (the current voice) | ~19x | ~0.05 s |
+| `clean100` + speaker `78` (the current voice) | ~20x | ~0.05 s |
 
 clean100 is a medium-quality voice with 245 speakers: it lands back near the speed of the old
 `hfc_male` while keeping multi-speaker choice, which is the best latency/quality trade found so

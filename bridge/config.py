@@ -214,8 +214,9 @@ PIPER_VOICE_NAME = _cfg("VOICE_PIPER_VOICE", "clean100")
 # unless one is chosen. A name from the voice's own speaker_id_map (preferred: a name survives
 # a voice re-release where the index could shift) or a plain numeric id. Ignored by
 # single-speaker voices; empty means Piper's default speaker. clean100 names its speakers by
-# their LibriVox reader ids; "6209" is speaker 0, the male voice the author's own sample uses.
-PIPER_SPEAKER_SETTING = _cfg("VOICE_PIPER_SPEAKER", "6209")
+# their LibriVox reader ids; "78" is numeric speaker 36, the voice picked after listening
+# (the author's sample zip numbers speakers by numeric id, so his "36" is this name).
+PIPER_SPEAKER_SETTING = _cfg("VOICE_PIPER_SPEAKER", "78")
 # Optional speaking-rate knob: < 1 is faster, > 1 is slower. Empty (or an unparseable value)
 # means the voice's own default from its .onnx.json.
 PIPER_LENGTH_SCALE_RAW = _cfg("VOICE_PIPER_LENGTH_SCALE", "")
