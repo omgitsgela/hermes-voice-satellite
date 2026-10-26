@@ -48,6 +48,7 @@ PIPELINE_DOCS = (
     "configuration-plane.md",
     "satellite-http-config.md",
     "switching-wake-words.md",
+    "switching-voices.md",
     "supported-devices.md",
 )
 
