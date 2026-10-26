@@ -50,6 +50,26 @@ def key_present_in_example(example: dict, dotted: str) -> bool:
     return True
 
 
+def delete_path(data: dict, dotted: str) -> bool:
+    """Remove a dotted key if present. Returns True when something was actually deleted.
+
+    Used for knobs that are only meaningful for some values of another knob: `tts.piper.
+    speaker_id` must disappear (not become null or 0) when the chosen voice has a single
+    speaker, because Hermes reads a missing key as "no override" while a numeric 0 is a real
+    request for speaker 0.
+    """
+    parts = dotted.split(".")
+    node = data
+    for part in parts[:-1]:
+        if not isinstance(node, dict) or part not in node:
+            return False
+        node = node[part]
+    if isinstance(node, dict) and parts[-1] in node:
+        del node[parts[-1]]
+        return True
+    return False
+
+
 def set_path(data: dict, dotted: str, value) -> None:
     parts = dotted.split(".")
     node = data
@@ -76,9 +96,14 @@ def main() -> int:
                         help="the Hermes config.yaml to edit (default ~/.hermes/config.yaml)")
     parser.add_argument("--example", required=True,
                         help="the example config shipped in the repo, for the keys' documentation")
-    parser.add_argument("pairs", nargs="+",
+    parser.add_argument("--unset", action="append", default=[], metavar="DOTTED.KEY",
+                        help="remove this key (repeatable). Absent is not an error: this is how a "
+                             "knob that only applies to some voices gets cleared")
+    parser.add_argument("pairs", nargs="*",
                         help="dotted.key=value pairs; value is a scalar or JSON")
     args = parser.parse_args()
+    if not args.pairs and not args.unset:
+        raise SystemExit("nothing to do: pass dotted.key=value pairs and/or --unset DOTTED.KEY")
 
     config = Path(args.config).expanduser()
     if not config.is_file():
@@ -122,6 +147,15 @@ def main() -> int:
         else:
             set_path(data, key, value)
             changed.append(f"{key} = {value!r}")
+
+    for key in args.unset:
+        if not key_present_in_example(example, key):
+            raise SystemExit(f"key {key!r} is not in the example {example_path.name}; "
+                             f"refusing to remove a key this project does not manage")
+        if delete_path(data, key):
+            changed.append(f"unset {key}")
+        else:
+            print(f"  ok       {key} (already absent)")
 
     if not changed:
         print("no change: every requested key already holds its value")

@@ -81,7 +81,9 @@ What the installer does, in order:
 1. **venv** — `~/hermes-voice-bridge/.venv` with `requirements.txt` (faster-whisper, Piper,
    wyoming, silero VAD) plus the Piper voice `en_US-hfc_male-medium` from the catalog (a curated
    external voice is fetched instead by `scripts/fetch-voice.py` with pinned checksums; its
-   speaker is selected by `VOICE_PIPER_SPEAKER`; see `docs/switching-voices.md`).
+   speaker is selected by `VOICE_PIPER_SPEAKER`; see `docs/switching-voices.md`). To change the
+   voice after install, run `scripts/switch-voice.py <voice>` — it updates both the bridge and
+   the Hermes gateway, validates the 22,050 Hz audio contract, and can `--rollback`.
 2. **bridge.env** — from `bridge.env.example`, with the registry link values appended: the listener
    enabled, bound to the reachable address, the TLS certificate paths, and the satellite dial
    (`VOICE_SATELLITE_HOST/PORT`, loopback by default for the old shape).
