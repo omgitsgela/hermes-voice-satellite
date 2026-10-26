@@ -83,6 +83,29 @@ journalctl --user -u hermes-voice-bridge -n 20 | grep -i "loading Piper voice"
 To roll back: set the old values back in `bridge.env` and restart. The old voice files are
 untouched; nothing else references the voice.
 
+## Keeping the Hermes platform voice in step
+
+The satellite and the chat platform deliberately speak with the same voice. Hermes keeps its own
+voice cache (`~/.hermes/cache/piper-voices/`) and its own keys:
+
+```sh
+hermes config set tts.piper.voice <name>
+hermes config set tts.piper.speaker_id <numeric id>   # Hermes wants the NUMBER, the bridge the NAME
+```
+
+For a **catalog** voice that is the whole story: Hermes downloads it on first use. For a
+**curated external** voice like `clean100`, Hermes' downloader does not know the name either, so
+seed its cache with the same audited fetcher before the first synthesis (an unseeded cache means
+every TTS call logs a failed download and nothing speaks):
+
+```sh
+.venv/bin/python scripts/fetch-voice.py clean100 --download-dir ~/.hermes/cache/piper-voices
+```
+
+Hermes resolves a cache hit before it ever tries to download, so a seeded voice loads exactly like
+a catalog one. The live pair right now: `clean100` / `VOICE_PIPER_SPEAKER=6209` on the bridge and
+`tts.piper.voice: clean100` / `tts.piper.speaker_id: 0` on Hermes (0 is what `6209` resolves to).
+
 ## Multi-speaker voices: why a speaker id is mandatory in practice
 
 `clean100` carries **245 speakers** and `en_US-libritts-high` carries **904**. Piper silently
