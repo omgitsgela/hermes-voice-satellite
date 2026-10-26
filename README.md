@@ -114,8 +114,8 @@ webrtcvad fallback). Hermes Agent is installed separately; the bridge calls its 
 and does not need the `hermes-agent` Python distribution in its virtual environment.
 The Piper voice `clean100` (78 MB, 245 speakers, not committed
 here) is hosted by its author (brycebeattie.com) rather than in the Piper catalog, and is fetched
-by `scripts/fetch-voice.py` with pinned checksums; `VOICE_PIPER_SPEAKER=6209` selects its speaker
-(the male voice in the author's own sample), and `docs/switching-voices.md` covers changing either. The custom wake model is a community TFLite file, see
+by `scripts/fetch-voice.py` with pinned checksums; `VOICE_PIPER_SPEAKER=78` selects its speaker
+(numeric Piper id 36 — the author's sample `36.wav`), and `docs/switching-voices.md` covers changing either. The custom wake model is a community TFLite file, see
 `docs/switching-wake-words.md`.
 
 ## Install

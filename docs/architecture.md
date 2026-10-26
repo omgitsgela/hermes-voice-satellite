@@ -38,7 +38,7 @@ SPEAKING                                            →  the device hears a wake
   6  think  gateway.py ──► Hermes API server :8642 ── route "voice-fast" ──► deepseek-flash           │
         │        (plus bridge-local commands and the timers path, which answer without a model)       │
         │                                                                                            │
-  7  speak  tts.py ──► Piper  (voices/clean100.onnx, speaker 6209)                                    │
+  7  speak  tts.py ──► Piper  (voices/clean100.onnx, speaker 78)                                       │
         │                                                                                            │
   8  play  ──► back down the same TCP link ──► the device's aplay ──► the HAT's speaker               │
         └────────────────────────────────────────────────────────────────────────────────────────────┘
@@ -119,7 +119,7 @@ transport to the firmware and to the bridge; the endpoint shape needs no further
 | 6 think | `gateway.py` over the Runs API | bridge | **written by us** | ours |
 | 6 think | Hermes agent + API server at `http://127.0.0.1:8642` | bridge host | Hermes Agent | platform |
 | 6 think | route `voice-fast` → `deepseek-flash` | bridge host | configured | ours (config) |
-| 7 speak | `tts.py` + Piper `clean100` (`VOICE_PIPER_SPEAKER=6209`) | bridge | Piper | ours + model file |
+| 7 speak | `tts.py` + Piper `clean100` (`VOICE_PIPER_SPEAKER=78`) | bridge | Piper | ours + model file |
 | 8 play | `aplay` on the device's HAT | device | ALSA | config |
 | — | `announce.py`, `registry.py`, `lease.py`, `timers.py`, `volume.py`, `config_plane.py` | bridge | **written by us** | ours |
 | — | `hermes/plugins/voice_satellite`, `hermes_timers` | bridge host | **written by us** | ours |

@@ -58,7 +58,7 @@ check("default voice is the configured installation voice",
       cfg["PIPER_VOICE_NAME"] == "clean100")
 check("VOICE_PIPER_SPEAKER is read as configuration", "PIPER_SPEAKER_SETTING" in cfg)
 check("default speaker names the chosen speaker",
-      cfg.get("PIPER_SPEAKER_SETTING") == "6209")
+      cfg.get("PIPER_SPEAKER_SETTING") == "78")
 check("VOICE_PIPER_LENGTH_SCALE is read as configuration", "PIPER_LENGTH_SCALE" in cfg)
 
 cfg = load_config({"VOICE_PIPER_VOICE": "en_US-amy-medium", "VOICE_PIPER_SPEAKER": ""})
@@ -78,12 +78,15 @@ with tempfile.TemporaryDirectory() as td:
     fake = Path(td) / "fake.onnx.json"
     fake.write_text(json.dumps({
         "audio": {"sample_rate": 22050, "quality": "high"},
-        "num_speakers": 3,
-        "speaker_id_map": {"p3922": 0, "p2769": 16, "p64": 2},
+        "num_speakers": 245,
+        "speaker_id_map": {"p3922": 0, "p2769": 16, "p64": 2, "78": 36},
     }))
 
     check("speaker name resolves through the voice's own map",
           tts.resolve_speaker_id("p2769", fake) == 16)
+    check("a name that LOOKS numeric still resolves through the map first (clean100's '78' -> 36, "
+          "not numeric id 78)",
+          tts.resolve_speaker_id("78", fake) == 36)
     check("numeric index passes through", tts.resolve_speaker_id("2", fake) == 2)
     check("zero is a valid id, not 'unset'", tts.resolve_speaker_id("0", fake) == 0)
     check("empty setting means no override", tts.resolve_speaker_id("", fake) is None)
