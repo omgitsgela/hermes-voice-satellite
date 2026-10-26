@@ -112,10 +112,11 @@ Software: Python 3.11 is the tested bridge runtime. Use a dedicated virtual envi
 with `requirements.txt` (faster-whisper, piper-tts, wyoming, aiohttp, silero VAD,
 webrtcvad fallback). Hermes Agent is installed separately; the bridge calls its HTTP API
 and does not need the `hermes-agent` Python distribution in its virtual environment.
-The Piper voice `clean100` (78 MB, 245 speakers, not committed
-here) is hosted by its author (brycebeattie.com) rather than in the Piper catalog, and is fetched
-by `scripts/fetch-voice.py` with pinned checksums; `VOICE_PIPER_SPEAKER=78` selects its speaker
-(numeric Piper id 36 — the author's sample `36.wav`), and `docs/switching-voices.md` covers changing either. The custom wake model is a community TFLite file, see
+The Piper voice `en_US-hfc_male-medium` (63 MB, single speaker, not committed
+here) is in the Piper catalog and is fetched by `piper.download_voices` — or, for the curated
+external voices this host has auditioned, by `scripts/fetch-voice.py` with pinned checksums.
+`VOICE_PIPER_SPEAKER` selects a speaker for multi-speaker voices and is left unset here;
+`docs/switching-voices.md` covers changing either. The custom wake model is a community TFLite file, see
 `docs/switching-wake-words.md`.
 
 ## Install
@@ -138,7 +139,7 @@ cd ~/hermes-voice-bridge
 python3.11 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m pip check
-.venv/bin/python scripts/fetch-voice.py clean100 --download-dir voices
+.venv/bin/python -m piper.download_voices --download-dir voices en_US-hfc_male-medium
 cp bridge.env.example bridge.env
 ```
 
