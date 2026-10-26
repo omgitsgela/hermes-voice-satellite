@@ -28,7 +28,51 @@ installation downloads its own voice, and the terms of some voices do not allow 
 catalog voices through `piper.download_voices`, curated external voices through
 `scripts/fetch-voice.py` (below).
 
-## The procedure
+## The one command
+
+```sh
+scripts/switch-voice.py --list                            # what is installed, and what is live
+scripts/switch-voice.py en_US-lessac-medium               # switch both surfaces
+scripts/switch-voice.py clean100 --speaker 78             # multi-speaker: bridge gets the NAME, Hermes the id
+scripts/switch-voice.py en_US-amy-medium --scope gateway  # chat only, leave the satellite alone
+scripts/switch-voice.py --rollback                        # undo the last switch
+scripts/switch-voice.py <voice> --dry-run                 # show the plan, change nothing
+```
+
+It does the four things that are easy to get wrong by hand, in one pass:
+
+1. **fetches the voice** if it is not installed (the curated list first via
+   `scripts/fetch-voice.py`, then the Piper catalog) and **refuses anything that is not
+   22,050 Hz** before it writes a single file.
+2. **installs it twice** — `voices/` for the bridge and `~/.hermes/cache/piper-voices/` for
+   Hermes, which never downloads a name it does not recognise and otherwise fails quietly at
+   synthesis time rather than at switch time.
+3. **writes the two shapes of the same setting**: `bridge.env` gets the speaker NAME from the
+   voice's own map, Hermes gets the numeric ID that name resolves to, and a single-speaker voice
+   has `speaker_id` *removed* rather than set to 0.
+4. **backs up both files, restarts the bridge, then verifies** that the service is active and the
+   running process really carries the new `VOICE_PIPER_VOICE`, recording what it did in
+   `state/voice/state.json` so `--rollback` needs no notes and no `/tmp`.
+
+## A preference change is not a code change
+
+Two separate decisions, deliberately kept apart:
+
+| Decision | Where it lives | How to change it |
+|---|---|---|
+| Which voice **this installation** speaks with | `bridge.env` + Hermes `config.yaml` (both git-ignored) | `scripts/switch-voice.py <voice>` |
+| Which voice a **fresh clone** defaults to | `PIPER_VOICE_NAME` in `bridge/config.py`, mirrored in `bridge.env.example` | a code change, with docs |
+
+Changing what you listen to should never need a pull request, a test update, or a re-read of this
+document. The tests pin the *contract* — a plausible catalog-style default that agrees with
+`bridge.env.example` — rather than one particular favourite voice, so a preference change cannot
+break CI.
+
+## Doing it by hand (what the command automates)
+
+The rest of this section is the manual equivalent. It is kept because it documents exactly which
+files a switch touches, and because some installations cannot run the command (no systemd, or a
+bridge on a different host from the Hermes gateway).
 
 ```sh
 cd ~/hermes-voice-bridge
@@ -85,8 +129,24 @@ journalctl --user -u hermes-voice-bridge -n 20 | grep -i "loading Piper voice"
 #    no lag before the first words (see Latency below).
 ```
 
-To roll back: set the old values back in `bridge.env` and restart. The old voice files are
-untouched; nothing else references the voice.
+To roll back by hand: set the old values back in `bridge.env` and restart. The old voice files are
+untouched; nothing else references the voice. `scripts/switch-voice.py --rollback` does the same
+thing from the recorded state, including the Hermes side.
+
+## Voices auditioned on this installation
+
+Measured on an i5-12500 CPU-only host, same sentence, median F0 over voiced frames. Worth reading
+before spending an evening re-auditioning: pitch and speed do not drift between sessions.
+
+| Voice | Speakers | F0 | Speed | Licence | Verdict |
+|---|---|---|---|---|---|
+| `en_US-hfc_male-medium` | 1 | ~120 Hz | ~19-20x realtime | dataset CC BY-NC-SA | the shipped default; kept |
+| `en_US-libritts-high` | 904 | `p2769` 109 Hz | ~4.4x | LibriTTS, CC BY 4.0 | rejected on sound; still installed |
+| `clean100` (external) | 245 | sp0 118 Hz, sp36 (`78`) 100 Hz | ~20-25x | CC BY 4.0 | rejected on sound; still installed |
+| `en_US-OptimusPrime-medium` (external, unofficial) | 1 | ~92 Hz | ~21-29x | CC BY-NC 4.0 plus rights caveats | fun; installation-local only |
+| Qwen3-TTS 0.6B GGUF (not a Piper voice) | 9 baked | — | ~0.45x | Apache-2.0 | far too slow for the satellite loop |
+
+An audition can legitimately end in "none of these" — that is why the switch is a one-liner now.
 
 ## Keeping the Hermes platform voice in step
 
@@ -181,5 +241,14 @@ of these is redistributed in this repository, which is why `voices/` is git-igno
 - a synthesis path stops passing the resolved speaker config,
 - this document stops existing or stops naming the real knob names.
 
-`scripts/test_bridge_env.py` pins the configured defaults, so changing the installation voice
-means updating that assertion in the same commit.
+`scripts/test_bridge_env.py` pins that the voice keys are populated from the defaults; it no longer
+pins a specific voice, so an installation (or a future maintainer) can change the shipped default
+without collateral test edits — but `test_piper_voice_config.py` still requires the code default
+and `bridge.env.example` to name the same voice, so the two cannot drift apart.
+
+`scripts/test_switch_voice.py` covers the switcher as a black box against a throwaway repo and a
+throwaway Hermes config: both surfaces updated by default, each `--scope` honoured, the 22,050 Hz
+contract enforced *before* any write, a multi-speaker voice refused without `--speaker`, the
+speaker stored as a NAME on the bridge and an ID in Hermes, `bridge.env` comments preserved, a
+backup and a state record written per switch, `--dry-run` writing nothing, and `--rollback`
+restoring both surfaces.

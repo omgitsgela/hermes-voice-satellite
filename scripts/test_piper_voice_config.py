@@ -13,6 +13,10 @@ memory exercise. This pins:
    bridge at import time; resolution happens when the voice loads.
 4. `docs/switching-voices.md` exists, names its stage, and names the real knobs and
    the real speaker-listing tool, so the procedure is findable from the map.
+5. The SHIPPED default is pinned as a contract, not as a favourite voice: it must be a
+   plausible catalog-style name that agrees with `bridge.env.example`. Which voice this
+   installation actually speaks with is a config decision made with
+   `scripts/switch-voice.py`, and changing it must never require editing this file.
 
     .venv/bin/python scripts/test_piper_voice_config.py
 """
@@ -22,6 +26,7 @@ import dataclasses
 import inspect
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -54,13 +59,23 @@ def load_config(env: dict | None = None):
 # --- 1. configuration surface -------------------------------------------------
 
 cfg = load_config()
-check("default voice is the configured installation voice",
-      cfg["PIPER_VOICE_NAME"] == "en_US-hfc_male-medium")
+check("default voice is a plausible Piper catalog name",
+      bool(re.fullmatch(r"(en_[A-Z]{2}-[A-Za-z0-9_]+-(low|medium|high))|([a-z0-9][a-z0-9_.-]*)",
+                        cfg["PIPER_VOICE_NAME"])),
+      )
+# The shipped default is a code decision (what a fresh clone gets). The voice this installation
+# actually speaks with lives in bridge.env and changes with scripts/switch-voice.py, so this test
+# must not encode anyone's current preference. It pins the pairing instead: whatever the code
+# default is, bridge.env.example documents the same name.
+_example = (ROOT / "bridge.env.example").read_text()
+_doc_default = re.search(r"^#\s*VOICE_PIPER_VOICE=(\S+)", _example, re.M)
+check("bridge.env.example documents the code default",
+      _doc_default is not None and _doc_default.group(1) == cfg["PIPER_VOICE_NAME"])
 check("VOICE_PIPER_SPEAKER is read as configuration", "PIPER_SPEAKER_SETTING" in cfg)
-# The shipped default voice has a single speaker, so its default is deliberately no override.
-# (A multi-speaker default would have to name a speaker or Piper silently picks one from the
-# corpus; test_piper_voice_config's multi-speaker checks below pin that behaviour.)
-check("default speaker is no override, because the default voice is single-speaker",
+# A multi-speaker default would have to name a speaker, or Piper silently picks one from the
+# corpus. The shipped default is single-speaker, so "no override" is its correct default; the
+# multi-speaker behaviour itself is pinned below.
+check("the shipped default voice needs no speaker override",
       cfg.get("PIPER_SPEAKER_SETTING") == "")
 check("VOICE_PIPER_LENGTH_SCALE is read as configuration", "PIPER_LENGTH_SCALE" in cfg)
 

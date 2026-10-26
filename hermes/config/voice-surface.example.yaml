@@ -35,8 +35,16 @@ gateway:
     # configuration pinned DeepSeek Flash here, which is no longer how it runs.
 
 # Hermes' own TTS/STT, for other platforms. The voice bridge runs its own Piper and
-# faster-whisper inside its own virtualenv and ignores these.
+# faster-whisper inside its own virtualenv and ignores these — but keeping the two on the same
+# voice is what makes the chat surface and the satellite sound alike, so `scripts/switch-voice.py`
+# writes both in one step.
 tts:
   provider: piper
+  piper:
+    voice: en_US-hfc_male-medium
+    # Multi-speaker voices ONLY, and it is a numeric id here even though the bridge stores the
+    # speaker NAME from the voice's own map. Leave it out entirely for a single-speaker voice;
+    # `scripts/switch-voice.py --speaker <name>` resolves one to the other.
+    speaker_id:
 stt:
   provider: local

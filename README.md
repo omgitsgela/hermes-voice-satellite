@@ -116,7 +116,9 @@ The Piper voice `en_US-hfc_male-medium` (63 MB, single speaker, not committed
 here) is in the Piper catalog and is fetched by `piper.download_voices` — or, for the curated
 external voices this host has auditioned, by `scripts/fetch-voice.py` with pinned checksums.
 `VOICE_PIPER_SPEAKER` selects a speaker for multi-speaker voices and is left unset here;
-`docs/switching-voices.md` covers changing either. The custom wake model is a community TFLite file, see
+`docs/switching-voices.md` covers changing either. To change the voice later, one command handles
+both surfaces (bridge and the Hermes gateway), the download, the speaker mapping and the rollback:
+`scripts/switch-voice.py --list`, then `scripts/switch-voice.py <voice>`. The custom wake model is a community TFLite file, see
 `docs/switching-wake-words.md`.
 
 ## Install
