@@ -292,8 +292,10 @@ int audio_capture_start(void *session, void *user,
      * capture task is the sole reader of the decimator, and a task START is the moment a new
      * stream begins. Resetting it per wake or from another task would corrupt a live stream. */
     audio_capture_reset_decimator();
-    if (xTaskCreate(capture_task_fn, "aud_cap", CAPTURE_TASK_STACK, NULL,
-                    CAPTURE_TASK_PRIORITY, &capture.task) != pdPASS || !capture.task) {
+    /* Pinned to core 1. WiFi, lwIP and TLS all run on core 0, and the capture task must not
+     * compete with them for the same core: a late I2S read is an unrecoverable lost sample. */
+    if (xTaskCreatePinnedToCore(capture_task_fn, "aud_cap", CAPTURE_TASK_STACK, NULL,
+                    CAPTURE_TASK_PRIORITY, &capture.task, 1) != pdPASS || !capture.task) {
         capture.task = NULL;
         i2s_channel_disable(capture.rx);
         i2s_del_channel(capture.rx);

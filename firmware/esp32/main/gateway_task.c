@@ -28,7 +28,17 @@
  * networks on a later reconnect is a refinement, not the boot path. */
 
 #define GATEWAY_TASK_STACK 10240
-#define GATEWAY_TASK_PRIORITY 1
+/* The gateway task is the one that READS THE TLS STREAM, parses each audio chunk, up-samples it
+ * 22050 -> 48000 and appends it to the playback ring. It used to run at priority 1 -- below
+ * capture (6) and playback (5) -- and it is therefore the task that loses every scheduling
+ * contest on a busy device.
+ *
+ * Measured consequence: the bridge paces playback at 2x realtime, but the device appended only
+ * ~92% of what the 48 kHz clock consumed (arrival 44140-45407 frames/s against 48000 needed, max
+ * gap 100 ms, zero ring drops). A producer below the consumption rate starves the ring no matter
+ * how large the buffer is, which is the chopping. Nothing about this is the WiFi: the link was
+ * delivering, the local reader was not being scheduled enough to take it. */
+#define GATEWAY_TASK_PRIORITY 5
 #define GATEWAY_DIAL_TIMEOUT_MS 8000
 #define GATEWAY_REGISTER_BUDGET_MS 25000  /* the register exchange, the same budget the one-shot run uses */
 #define GATEWAY_BACKOFF_BASE_US 2000000LL   /* 2 s: a bridge that just restarted is often back in seconds */

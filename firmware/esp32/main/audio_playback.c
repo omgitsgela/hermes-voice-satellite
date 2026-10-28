@@ -911,8 +911,10 @@ int audio_playback_start(void) {
      * says an answer is playing, so starting the channel early (at registration, before the
      * first wake) is what makes the first answer start clean: the DMA is already primed. */
     stopping = 0;
-    if (xTaskCreate(playback_task_fn, "plb_task", PLAYBACK_TASK_STACK, NULL,
-                    PLAYBACK_TASK_PRIORITY, &task) != pdPASS) {
+    /* Core 1 with capture, away from WiFi/lwIP/TLS on core 0: the pump must not be descheduled
+     * by network work, or the DMA runs dry and plays the zeros it already holds. */
+    if (xTaskCreatePinnedToCore(playback_task_fn, "plb_task", PLAYBACK_TASK_STACK, NULL,
+                    PLAYBACK_TASK_PRIORITY, &task, 1) != pdPASS) {
         i2s_channel_disable(tx);
         i2s_del_channel(tx);
         tx = NULL;

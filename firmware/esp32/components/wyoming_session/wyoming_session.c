@@ -109,6 +109,12 @@ static void playback_ring_lock_give(void) {
  * keeps the link (and the conversion) moving instead of wedging on a full ring. The caller
  * already holds the ring lock (it is taken in the payload path, which also protects the
  * conversion scratch this call reads from). */
+/* Frames thrown away because the ring was FULL. The append drops the oldest frame to keep the
+ * link moving, which is the right policy, but until this counter existed nothing anywhere recorded
+ * that audio had been SKIPPED -- so "the ring was never empty" and "no writes were abandoned"
+ * could both be true while the speaker was losing whole frames. */
+static uint32_t plb_dropped;
+
 static void playback_ring_append_locked(wy_session *session, const int32_t *frames, size_t n) {
     size_t cap = session->ring_capacity / 4;
     if (!session->ring || cap == 0 || n == 0) return;
@@ -123,6 +129,7 @@ static void playback_ring_append_locked(wy_session *session, const int32_t *fram
         while ((session->ring_tail + 2) % cap == session->ring_head
                || (session->ring_tail + 1) % cap == session->ring_head) {
             session->ring_head = (session->ring_head + 2) % cap;   /* full: drop the oldest FRAME */
+            plb_dropped++;
         }
         session->ring[session->ring_tail] = frames[i];
         session->ring_tail = (session->ring_tail + 1) % cap;
@@ -163,6 +170,41 @@ int wy_session_set_playback_volume(wy_session *session, int volume) {
     session->playback_volume = volume;
     playback_ring_lock_give();
     return WY_OK;
+}
+
+/* ---- arrival telemetry ------------------------------------------------------------------
+ *
+ * "Is the producer keeping up, and is it bursty?" decides where a playback stall lives: in the
+ * transport (arrival slower or spikier than the 48 kHz clock), or in the pump. Frames per second
+ * is the answer -- 48000 frames/s of stereo-32 is exactly realtime, and the bridge paces at 2x, so
+ * a healthy stream should read ~96000 frames/s here.
+ *
+ * The max gap matters as much as the average: a stream that averages 2x realtime but stalls for
+ * 300 ms will empty ANY small buffer, which is why a pre-roll only helps if the long gaps are
+ * bounded.
+ */
+static uint32_t plb_in_frames;          /* frames appended since the last report */
+static uint32_t plb_in_appends;         /* append calls since the last report */
+static TickType_t plb_in_last;          /* tick of the previous append */
+static TickType_t plb_in_max_gap;       /* largest inter-append gap, ticks */
+static TickType_t plb_in_window;        /* window start */
+
+static void plb_in_report(void) {
+    TickType_t now = xTaskGetTickCount();
+    if (!plb_in_window) { plb_in_window = now; return; }
+    TickType_t elapsed = now - plb_in_window;
+    if (elapsed < configTICK_RATE_HZ) return;
+    if (plb_in_frames || plb_in_appends) {
+        uint32_t ms = (uint32_t)(elapsed * 1000u / configTICK_RATE_HZ);
+        uint32_t frames_s = ms ? (uint32_t)(((uint64_t)plb_in_frames * 1000u) / ms) : 0u;
+        uint32_t gap_ms = (uint32_t)(plb_in_max_gap * 1000u / configTICK_RATE_HZ);
+        ESP_LOGI("plbin", "arrival: %u frames/s (%u%% of realtime), %u appends, max gap %u ms, "
+                          "%u frames DROPPED (ring full)",
+                 (unsigned)frames_s, (unsigned)((frames_s * 100u) / 48000u),
+                 (unsigned)plb_in_appends, (unsigned)gap_ms, (unsigned)plb_dropped);
+    }
+    plb_in_frames = 0; plb_in_appends = 0; plb_in_max_gap = 0;
+    plb_in_window = now;
 }
 
 int wy_session_local_play(wy_session *session, const int16_t *mono, size_t n) {
@@ -611,6 +653,18 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
                                             playback_frame_scratch, WY_PLAYBACK_FRAME_MAX);
                         playback_ring_append_locked(session, playback_frame_scratch, frame_n);
                         playback_ring_lock_give();
+                        /* Where the audio actually lands, measured. See plb_in_report(). */
+                        plb_in_frames += (uint32_t)frame_n;
+                        plb_in_appends++;
+                        {
+                            TickType_t now_t = xTaskGetTickCount();
+                            if (plb_in_last) {
+                                TickType_t gap = now_t - plb_in_last;
+                                if (gap > plb_in_max_gap) plb_in_max_gap = gap;
+                            }
+                            plb_in_last = now_t;
+                        }
+                        plb_in_report();
                         src += take;
                         samples -= take;
                     }
