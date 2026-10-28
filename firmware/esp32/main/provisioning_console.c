@@ -5,6 +5,7 @@
 #include "wifi_station.h"
 #include "audio_bringup.h"
 #include "audio_playback.h"
+#include "wyoming_audio.h"   /* the scalar-control frame encoders (wy_control_f32/i32_command) */
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -784,6 +785,45 @@ void provisioning_console_run(void) {
                             used += snprintf(response + used, sizeof(response) - (size_t)used,
                                              " %02x", reply[i]);
                     }
+                }
+            } else if (!strncmp(line.data, "XVF_SET32 ", 10) || !strncmp(line.data, "XVF_SETF ", 9)) {
+                /* "XVF_SET32 <resid> <cmd> <value>"  -> int32 scalar
+                 * "XVF_SETF  <resid> <cmd> <value>"  -> IEEE-754 float scalar
+                 *
+                 * Both send [resid, cmd, 1, b0, b1, b2, b3]: ONE value, FOUR bytes. That count
+                 * field is what the chip requires for its float and int32 parameters, and it is
+                 * exactly what XVF_WRITE cannot produce (it always sets count = the number of
+                 * bytes supplied), so until now these controls were unreachable from the console.
+                 *
+                 * The PP Servicer (ResID 17) holds the co-processor's own AGC, which this
+                 * firmware has never enabled. Measured on this board, speech arrives at RMS
+                 * ~220-700 while the room floor is ~300 -- quieter than the room -- which is why
+                 * the wake word only fires sometimes. The live levers:
+                 *   XVF_SET32 17 10 1       AGC on
+                 *   XVF_SETF  17 11 30.0    AGC max gain  [1.0 .. 1000.0]
+                 *   XVF_SETF  17 12 0.001   AGC target power [1e-8 .. 1.0]
+                 * Audio Manager mic gain is the same shape:
+                 *   XVF_SETF  35 0 4.0
+                 * The reply echoes the bytes actually sent, so a malformed frame is visible. */
+                unsigned r = 0, cm = 0;
+                double v = 0.0;
+                int is_float = !strncmp(line.data, "XVF_SETF ", 9);
+                int got = is_float ? sscanf(line.data, "XVF_SETF %u %u %lf", &r, &cm, &v)
+                                   : sscanf(line.data, "XVF_SET32 %u %u %lf", &r, &cm, &v);
+                if (got != 3 || r > 255 || cm > 255) {
+                    snprintf(response, sizeof(response), "ERR usage: %s <resid> <cmd> <value>",
+                             is_float ? "XVF_SETF" : "XVF_SET32");
+                } else {
+                    uint8_t frame[XVF_I2C_SET32_CMD_LEN];
+                    if (is_float)
+                        wy_control_f32_command(frame, (uint8_t)r, (uint8_t)cm, (float)v);
+                    else
+                        wy_control_i32_command(frame, (uint8_t)r, (uint8_t)cm, (int32_t)v);
+                    int rc = audio_xvf_write_frame(frame, sizeof(frame));
+                    snprintf(response, sizeof(response),
+                             "%s %s %u/%u = %g  [%02x %02x %02x %02x %02x %02x %02x]",
+                             rc == 0 ? "OK" : "ERR", is_float ? "SETF" : "SET32", r, cm, v,
+                             frame[0], frame[1], frame[2], frame[3], frame[4], frame[5], frame[6]);
                 }
             } else if (!strncmp(line.data, "XVF_WRITE ", 10)) {
                 /* "XVF_WRITE <resid> <cmd> <p0> [p1 ...]" -- probe any XVF3800 control.

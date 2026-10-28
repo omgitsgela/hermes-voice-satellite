@@ -230,6 +230,17 @@ int audio_xvf_write(uint8_t resid, uint8_t cmd, const uint8_t *params, size_t np
     return xvf_control_write_at(XVF_I2C_ADDRESS, buf, 3 + nparams, "xvf write");
 }
 
+/* Send a frame that is already in the chip's wire format.
+ *
+ * The scalar controls need [resid, cmd, 1, b0, b1, b2, b3]: one value, four bytes. The
+ * convenience wrapper above cannot produce that shape, because it derives count from the payload
+ * length. Keeping this separate means the odd count field is explicit at the call site instead of
+ * being a special case hidden inside a function whose name promises "n params". */
+int audio_xvf_write_frame(const uint8_t *frame, size_t len) {
+    if (!frame || len < 3 || len > 19) return -1;
+    return xvf_control_write_at(XVF_I2C_ADDRESS, frame, len, "xvf write32");
+}
+
 /* Read an arbitrary XVF3800 control register. The caller sends the command bytes already
  * marked as a read (cmd | 0x80) and sized; the reply is [status, ...data]. This is the same
  * shape the bring-up probe uses for VERSION, which is the verified part of the pattern. Used

@@ -165,6 +165,31 @@ void wy_output_route_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int right, int ca
 void wy_output_upsample_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int left_upsample,
                                 int right_upsample);
 
+/* ---- scalar (4-byte) controls: mic gain, AGC, limiter -------------------------------
+ *
+ * The XVF3800's float and int32 parameters take ONE value of FOUR bytes, so the I2C frame's
+ * count field is 1 while the payload is four bytes: [resid, cmd, 1, b0, b1, b2, b3]. That is
+ * NOT the shape of the byte-pair controls above, where every value is one byte and count equals
+ * the payload length. Getting it wrong is silent -- the write is ACKed and nothing changes --
+ * which is a very likely reason `mic_gain` has never actually moved the microphone.
+ *
+ * The PP Servicer (ResID 17) holds the co-processor's own AGC. It has never been touched by this
+ * firmware. At normal speaking distance the far-field array's output sits far below what the wake
+ * model wants, and the bridge's own measurement says so: speech RMS ~220-700 while the room floor
+ * is ~300. Enabling AGC is the lever that fixes level without touching the link at all. */
+#define XVF_I2C_SET32_CMD_LEN   7    /* [resid, cmd, 1, b0, b1, b2, b3] */
+#define XVF_I2C_RESID_PP        17   /* PP Servicer (AGC / noise / echo) */
+#define XVF_I2C_CMD_PP_AGCONOFF      10  /* int32: AGC switch (0,1) */
+#define XVF_I2C_CMD_PP_AGCMAXGAIN    11  /* float: AGC max gain [1.0 .. 1000.0] */
+#define XVF_I2C_CMD_PP_AGCDESIREDLEVEL 12 /* float: AGC target power [1e-8 .. 1.0] */
+#define XVF_I2C_CMD_PP_AGCGAIN       13  /* float: AGC current gain (read-back) */
+
+/* Little-endian 32-bit scalar as the chip expects; the float form is IEEE-754. */
+void wy_control_i32_command(uint8_t out[XVF_I2C_SET32_CMD_LEN], uint8_t resid, uint8_t cmd,
+                            int32_t value);
+void wy_control_f32_command(uint8_t out[XVF_I2C_SET32_CMD_LEN], uint8_t resid, uint8_t cmd,
+                            float value);
+
 /* Serialize the audio-chunk data field for the given format into buffer (capacity bytes,
  * NUL-terminated on success). Returns the number of bytes written (excluding the NUL), or a
  * negative value when the format is not one this device can emit (rate out of range, not

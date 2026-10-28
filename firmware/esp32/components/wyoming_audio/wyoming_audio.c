@@ -349,6 +349,40 @@ void wy_output_upsample_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int left_upsam
     out[4] = (uint8_t)(right_upsample ? 1 : 0);
 }
 
+/* Scalar (4-byte) control frames.
+ *
+ * The count field is 1 -- ONE VALUE -- while the payload is four bytes. That asymmetry is the
+ * whole point: byte-valued controls above pass count = number of payload bytes because each
+ * value occupies one byte, but a float or int32 value is four bytes wide. A writer that always
+ * sets count = payload length therefore cannot express these at all, and the chip's reaction to
+ * the malformed frame is to ACK it and change nothing. That is indistinguishable from success at
+ * the call site, which is how `mic_gain` has been a no-op. */
+static void wy_control_le32(uint8_t out[XVF_I2C_SET32_CMD_LEN], uint8_t resid, uint8_t cmd,
+                            uint32_t bits) {
+    if (!out) return;
+    out[0] = resid;
+    out[1] = cmd;
+    out[2] = 1;                              /* one 32-bit value, not four bytes worth of values */
+    out[3] = (uint8_t)(bits & 0xFFu);
+    out[4] = (uint8_t)((bits >> 8) & 0xFFu);
+    out[5] = (uint8_t)((bits >> 16) & 0xFFu);
+    out[6] = (uint8_t)((bits >> 24) & 0xFFu);
+}
+
+void wy_control_i32_command(uint8_t out[XVF_I2C_SET32_CMD_LEN], uint8_t resid, uint8_t cmd,
+                            int32_t value) {
+    wy_control_le32(out, resid, cmd, (uint32_t)value);
+}
+
+void wy_control_f32_command(uint8_t out[XVF_I2C_SET32_CMD_LEN], uint8_t resid, uint8_t cmd,
+                            float value) {
+    /* A union rather than memcpy so this stays free of <string.h> and the bit pattern is exact:
+     * the chip reads IEEE-754 single precision, and a float cast through int would truncate. */
+    union { float f; uint32_t u; } bits;
+    bits.f = value;
+    wy_control_le32(out, resid, cmd, bits.u);
+}
+
 void wy_amp_gpo_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int enabled) {
     if (!out) return;
     /* The XVF3800 I2C GPO write form: [resid, cmd, count, p0, p1] in one transaction. The amp

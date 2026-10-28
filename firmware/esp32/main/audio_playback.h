@@ -58,6 +58,13 @@ int audio_dac_read(uint8_t reg, uint8_t *value);
 /* Write an arbitrary XVF3800 control register. */
 int audio_xvf_write(uint8_t resid, uint8_t cmd, const uint8_t *params, size_t nparams);
 
+/* Write a PRE-BUILT XVF control frame verbatim: [resid, cmd, count, payload...].
+ *
+ * Needed for the scalar controls, whose count field is 1 while the payload is four bytes.
+ * audio_xvf_write() always sets count = payload length, so it cannot express those at all --
+ * which is why a 4-byte value written through it is acknowledged and silently ignored. */
+int audio_xvf_write_frame(const uint8_t *frame, size_t len);
+
 /* Read an arbitrary XVF3800 control register. The caller marks the command as a read (cmd|0x80)
  * and sizes the reply; byte 0 of the reply is the status. */
 int audio_xvf_read(const uint8_t *cmd, size_t cmdlen, uint8_t *reply, size_t replylen);

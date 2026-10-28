@@ -374,6 +374,29 @@ int audio_dac_write(uint8_t reg, uint8_t value) { (void)reg; (void)value; return
 int audio_xvf_write(uint8_t resid, uint8_t cmd, const uint8_t *params, size_t nparams) {
     (void)resid; (void)cmd; (void)params; (void)nparams; return 0;
 }
+/* The scalar-control path sends a pre-built frame, because its count field is 1 while the
+ * payload is four bytes -- a shape audio_xvf_write() cannot express. */
+int audio_xvf_write_frame(const uint8_t *frame, size_t len) {
+    (void)frame; (void)len; return 0;
+}
+/* Same encoding the firmware's wyoming_audio.c uses, so the console's echoed frame is
+ * meaningful here. Byte-exactness of the encoders themselves is pinned against the real
+ * implementation in test_esp32_audio.py; this harness proves parsing and dispatch. */
+static void harness_le32(uint8_t out[7], uint8_t resid, uint8_t cmd, uint32_t bits) {
+    out[0] = resid; out[1] = cmd; out[2] = 1;
+    out[3] = (uint8_t)(bits & 0xFFu);
+    out[4] = (uint8_t)((bits >> 8) & 0xFFu);
+    out[5] = (uint8_t)((bits >> 16) & 0xFFu);
+    out[6] = (uint8_t)((bits >> 24) & 0xFFu);
+}
+void wy_control_i32_command(uint8_t out[7], uint8_t resid, uint8_t cmd, int32_t value) {
+    harness_le32(out, resid, cmd, (uint32_t)value);
+}
+void wy_control_f32_command(uint8_t out[7], uint8_t resid, uint8_t cmd, float value) {
+    union { float f; uint32_t u; } bits;
+    bits.f = value;
+    harness_le32(out, resid, cmd, bits.u);
+}
 int wake_detector_play_chime(void) { return 0; }
 int audio_playback_amp(int enabled) { (void)enabled; return 0; }
 void audio_playback_amp_lock(int locked) { (void)locked; }
@@ -537,6 +560,7 @@ int usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);
         executable = tmp / 'console'
         compiled = subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror',
                                    '-I' + str(tmp), '-I' + str(CORE), '-I' + str(MAIN),
+                                   '-I' + str(ROOT / 'firmware/esp32/components/wyoming_audio'),
                                    '-I' + str(ROOT / 'firmware/esp32/components/audio_report'),
                                    '-I' + str(ROOT / 'firmware/esp32/components/report_tail'),
                                    str(tmp / 'runner.c'), str(MAIN / 'provisioning_console.c'),
@@ -572,6 +596,28 @@ int usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);
                                       **{flag: '1'})
                 self.assertIn('PROVISION ERR STORAGE', output)
                 self.assertNotIn('OK SAVED', output)
+
+    def test_scalar_control_console_commands_emit_count_one(self):
+        """XVF_SET32 / XVF_SETF exist because the co-processor's float and int32 parameters take
+        ONE value of FOUR bytes: the frame is [resid, cmd, 1, b0..b3].
+
+        The reply echoes the bytes actually emitted, and that is the assertion -- a writer that
+        set count=4 for a 4-byte payload would put 04 in byte 3 and the chip would ACK it and
+        change nothing, which is exactly how `mic_gain` stayed a no-op. Pinned for an int32
+        (AGC on) and a float (mic gain 1.0 = 00 00 80 3f)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = self.build(tmp)
+            output = self.console(executable, 'XVF_SET32 17 10 1\nXVF_SETF 35 0 1.0\n')
+            # ResID 17 prints as 0x11: the echo is the frame as bytes, not as decimal fields.
+            self.assertIn('[11 0a 01 01 00 00 00]', output,
+                          'int32 scalar: count byte must be 01, value little-endian')
+            self.assertIn('[23 00 01 00 00 80 3f]', output,
+                          'float scalar must be IEEE-754 little-endian, not an int cast')
+            self.assertIn('OK SET32 17/10', output)
+            self.assertIn('OK SETF 35/0', output)
+            # a bad line must not emit a frame
+            bad = self.console(executable, 'XVF_SETF 35\n')
+            self.assertIn('ERR usage', bad)
 
     def test_wifi_credentials_stage_through_the_console(self):
         with tempfile.TemporaryDirectory() as tmp:

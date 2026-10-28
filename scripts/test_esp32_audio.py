@@ -14,6 +14,7 @@ import ctypes as C
 import io
 import json
 import re
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -386,6 +387,45 @@ class AudioTests(unittest.TestCase):
         self.assertEqual(off[4], 1, 'disabled -> level 1 (HIGH)')
         # everything else about the command is identical
         self.assertEqual(list(on[:4]), list(off[:4]))
+
+    def scalar_encoder(self):
+        lib = self.library()
+        lib.wy_control_i32_command.argtypes = [C.POINTER(C.c_uint8), C.c_uint8, C.c_uint8,
+                                               C.c_int32]
+        lib.wy_control_i32_command.restype = None
+        lib.wy_control_f32_command.argtypes = [C.POINTER(C.c_uint8), C.c_uint8, C.c_uint8,
+                                               C.c_float]
+        lib.wy_control_f32_command.restype = None
+        return lib
+
+    def test_scalar_control_count_is_one_not_four(self):
+        """A float or int32 parameter is ONE value occupying FOUR bytes, so the frame's count
+        field must be 1 while the payload is four bytes: [resid, cmd, 1, b0..b3].
+
+        This is the shape audio_xvf_write() cannot produce, because it derives count from the
+        payload length and would send count=4 for a 4-byte payload. The chip ACKs that and
+        changes nothing, which is indistinguishable from success at the call site -- and is the
+        reason `mic_gain` has never actually moved the microphone and the co-processor's AGC was
+        never reachable at all."""
+        lib = self.scalar_encoder()
+        buf = (C.c_uint8 * 7)()
+        lib.wy_control_i32_command(buf, 17, 10, 1)      # PP_AGCONOFF = on
+        self.assertEqual(list(buf), [17, 10, 1, 1, 0, 0, 0],
+                         'count must be 1 and the value little-endian')
+        lib.wy_control_i32_command(buf, 17, 10, 0)      # off
+        self.assertEqual(list(buf), [17, 10, 1, 0, 0, 0, 0])
+
+    def test_scalar_float_is_ieee754_little_endian(self):
+        """1.0f is 0x3F800000, so the bytes on the wire are 00 00 80 3F. Casting the value
+        through an integer instead would put 01 00 00 00 on the wire and set a completely
+        different number -- a mistake that looks like a successful write."""
+        lib = self.scalar_encoder()
+        buf = (C.c_uint8 * 7)()
+        lib.wy_control_f32_command(buf, 35, 0, 1.0)
+        self.assertEqual(list(buf), [35, 0, 1, 0x00, 0x00, 0x80, 0x3F])
+        lib.wy_control_f32_command(buf, 17, 11, 30.0)
+        got = struct.unpack('<f', bytes(buf[3:7]))[0]
+        self.assertAlmostEqual(got, 30.0, places=4, msg='AGC max gain round-trips exactly')
 
     def route_encoder(self):
         lib = self.library()
