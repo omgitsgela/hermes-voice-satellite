@@ -540,6 +540,39 @@ class AudioTests(unittest.TestCase):
                       'the config apply path must actually write the gain to the co-processor')
         self.assertIn('"mic_gain"', src)
 
+    def test_i2s_dma_depth_covers_a_scheduling_hiccup(self):
+        """At 48 kHz stereo 32-bit one frame is 8 bytes, so the SDK's default DMA (6 x 240 frames)
+        is only about 11 ms of slack -- less than a single WiFi or TLS burst.
+
+        The measured symptom this guards: microphone accounting read exactly 16000 samples/s idle
+        and 15,200-15,920 whenever playback ran, returning to 16000 when it stopped. A dropped
+        microphone sample is unrecoverable (the DMA has already overwritten it), so both
+        directions have to carry real depth rather than the default."""
+        for name, fname in (('capture', 'audio_capture.c'), ('playback', 'audio_playback.c')):
+            src = (ROOT / 'firmware/esp32/main' / fname).read_text()
+            desc = int(re.search(r'channel\.dma_desc_num\s*=\s*(\d+)', src).group(1))
+            frames = int(re.search(r'channel\.dma_frame_num\s*=\s*(\d+)', src).group(1))
+            millis = desc * frames * 8 / 48000.0 * 1000.0
+            self.assertGreaterEqual(millis, 30.0,
+                                    '%s DMA is only %.0f ms at 48 kHz; a scheduling hiccup will '
+                                    'overwrite audio' % (name, millis))
+
+    def test_audio_tasks_outrank_cosmetic_work(self):
+        """Priority order is the contract: capture > playback > LED.
+
+        A dropped microphone sample is unrecoverable, a late playback write only costs latency, and
+        an LED animation is cosmetic. The LED worker used to sit ABOVE both audio tasks."""
+        def priority(fname, macro):
+            src = (ROOT / 'firmware/esp32/main' / fname).read_text()
+            return int(re.search(r'#define %s\s+(\d+)' % macro, src).group(1))
+
+        cap = priority('audio_capture.c', 'CAPTURE_TASK_PRIORITY')
+        plb = priority('audio_playback.c', 'PLAYBACK_TASK_PRIORITY')
+        led = priority('led_status.c', 'LED_WORKER_PRIORITY')
+        self.assertGreater(cap, plb, 'capture must outrank playback')
+        self.assertGreater(plb, led, 'audio must outrank the LED animation')
+        self.assertGreaterEqual(led, 1)
+
     def test_playback_arms_the_full_band_output_path_at_startup(self):
         """The 48 kHz profile only reaches the speaker if playback actually clears the upsampling
         flags AND selects the native-rate tap. If either write is missing, the chip's defaults

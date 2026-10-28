@@ -67,7 +67,10 @@
 #define XVF_I2C_SCL_PIN   GPIO_NUM_6
 #define XVF_I2C_SCL_HZ    400000
 
-#define PLAYBACK_TASK_PRIORITY  4u   /* the capture task's priority: the two share nothing but time */
+/* Deliberately BELOW capture: a dropped microphone sample is unrecoverable (the DMA has already
+ * overwritten it and the wake model sees a hole), whereas a late playback write only costs a
+ * little latency. Both are above every cosmetic task. */
+#define PLAYBACK_TASK_PRIORITY  5u
 #define PLAYBACK_TASK_STACK     6144u
 #define PLAYBACK_WRITE_MS       20u   /* ~2x the realtime length of a full batch */
 #define PLAYBACK_FRAME_BATCH    256u  /* int32 per I2S write = 128 stereo frames = 8 ms of audio */
@@ -758,6 +761,12 @@ int audio_playback_start(void) {
      * silence -- so any momentary underrun becomes an audible glitch rather than a quiet gap.
      * Underrun protection costs one memset per completed buffer. */
     channel.auto_clear_after_cb = true;
+    /* Same reasoning as capture, on the transmit side: ~38 ms of DMA depth (10 descriptors x 480
+     * frames x 8 bytes) so a scheduling hiccup becomes a slightly late write instead of an audible
+     * gap. With auto_clear on, an underrun that does happen is silence rather than a replayed
+     * stale buffer, which is the difference between a small dropout and a machine-gun glitch. */
+    channel.dma_desc_num = 10;
+    channel.dma_frame_num = 480;
     if (i2s_new_channel(&channel, &tx, NULL) != ESP_OK) {
         /* The usual cause is the capture RX already owning I2S_NUM_0 in a state the driver will
          * not pair with. Silent failure here means an answer is produced, sent, and never played,

@@ -34,7 +34,9 @@ static const char *TAG = "led";
 #define LED_TICK_MS          WY_LED_TICK_MS_DEFAULT
 #define LED_QUEUE_DEPTH      16
 #define LED_WORKER_STACK     4096u
-#define LED_WORKER_PRIORITY  5u
+/* Below both audio tasks, on purpose. The ring is cosmetic; the microphone and the speaker are
+ * not. This used to sit above them, which let an LED animation outrank capture and playback. */
+#define LED_WORKER_PRIORITY  3u
 
 static wy_led *led;
 static SemaphoreHandle_t lock;

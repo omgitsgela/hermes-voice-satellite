@@ -45,7 +45,14 @@
  * registers), the init runs here more often and a 6 KB stack overflowed into a reboot loop
  * (a stack overflow in task aud_cap). 12 KB gives the interpreter build room to breathe. */
 #define CAPTURE_TASK_STACK     12288
-#define CAPTURE_TASK_PRIORITY  4
+/* Capture outranks playback, and both outrank everything cosmetic.
+ *
+ * Measured on this board: with capture and playback both at the same priority, the mic accounting
+ * read exactly 16000 samples/s while idle and then 15,200-15,920 the moment playback started,
+ * returning to exactly 16000 when it stopped. Losing up to 5% of the microphone only while
+ * transmitting is a scheduling symptom, not a clock one -- the RX DMA overruns while the audio
+ * tasks and the TLS/WiFi stack compete for the core. */
+#define CAPTURE_TASK_PRIORITY  6
 #define CAPTURE_READ_TIMEOUT_MS 10   /* 10 ms of silence is a tick, not a fault */
 /* i2s_channel_read takes its timeout in MILLISECONDS and converts to ticks itself, so the
  * call below passes CAPTURE_READ_TIMEOUT_MS (ms), not ticks -- that is already correct. */
@@ -237,6 +244,13 @@ int audio_capture_start(void *session, void *user,
     audio_capture_install_writer_lock(session);
 
     i2s_chan_config_t channel = I2S_CHANNEL_DEFAULT_CONFIG(CAPTURE_I2S_PORT, CAPTURE_I2S_ROLE);
+    /* DMA depth is the real underrun protection, because priority alone cannot beat the WiFi and
+     * TLS tasks (which run well above any application task). The defaults give roughly 11 ms of
+     * slack at 48 kHz stereo 32-bit -- less than one scheduling hiccup. This is ~46 ms:
+     * 12 descriptors x 480 frames x 8 bytes. Dropped microphone samples are permanent (the DMA
+     * has already overwritten them), so headroom here is worth the 46 KB. */
+    channel.dma_desc_num = 12;
+    channel.dma_frame_num = 480;
     if (i2s_new_channel(&channel, NULL, &capture.rx) != ESP_OK) {
         /* The usual cause is the other half of the full-duplex pair still owning the controller
          * (a playback channel that has not finished tearing down). Without this line the
