@@ -540,6 +540,22 @@ class AudioTests(unittest.TestCase):
                       'the config apply path must actually write the gain to the co-processor')
         self.assertIn('"mic_gain"', src)
 
+    def test_playback_reports_underrun_counters(self):
+        """Stutter has several indistinguishable causes by ear: a dry ring, a DMA that refuses
+        writes, or a batch cut short. The pump has to report which, once per answer, or every
+        investigation becomes guesswork. The counters must exist and must be reset per answer,
+        otherwise a number from a previous answer is read as this one's."""
+        src = (ROOT / 'firmware/esp32/main/audio_playback.c').read_text()
+        for counter in ('pump_empty', 'pump_stalled', 'pump_abandoned', 'pump_writes'):
+            self.assertIn(counter, src, '%s counter missing' % counter)
+        self.assertIn('playback stats', src, 'the summary line must be logged')
+        # An empty ring only counts as starvation while a stream is ACTIVE; after the stream ends
+        # the ring draining is normal and would otherwise report a fault on every clean answer.
+        self.assertIn('wy_session_playback_active(s)) pump_empty++', src,
+                      'empty-ring must only count during an active stream')
+        self.assertIn('pump_writes = pump_empty = pump_stalled = pump_abandoned = 0', src,
+                      'counters must reset at the start of each answer')
+
     def test_i2s_dma_depth_covers_a_scheduling_hiccup(self):
         """At 48 kHz stereo 32-bit one frame is 8 bytes, so the SDK's default DMA (6 x 240 frames)
         is only about 11 ms of slack -- less than a single WiFi or TLS burst.

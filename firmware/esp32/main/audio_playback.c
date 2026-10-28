@@ -514,6 +514,21 @@ int audio_playback_amp(int enabled) {
 
 static int pump_logged;
 
+/* Playback health counters, per answer.
+ *
+ * "Stuttering, especially towards the end" is a symptom with several possible mechanisms —
+ * the ring running dry, the DMA refusing writes, or the upsampler falling behind realtime — and
+ * they are indistinguishable by ear. These counters tell them apart in one playback:
+ *
+ *   writes      batches accepted by the DMA
+ *   empty       times the ring had nothing while the stream was still active: STARVATION
+ *   stalled     writes that made no progress (DMA full / channel not accepting): the TX side
+ *   abandoned   batches whose tail was given up on after the idle limit: AUDIBLE LOSS
+ *
+ * A clean answer has empty ~= the count of chunks the bridge had not yet delivered, and
+ * stalled/abandoned at zero. Reported once per answer, at the same moment `played` is sent. */
+static uint32_t pump_writes, pump_empty, pump_stalled, pump_abandoned;
+
 /* Where to report `played`, and whether this answer has already been reported.
  *
  * `played` is the device saying its speaker finished. Without it the bridge waits
@@ -609,6 +624,8 @@ static void playback_task_fn(void *argument) {
         if (wy_session_playback_active(s)) {
             played_reported = 0;
             done_queued = 0;
+            /* A new answer starts from zero, so the summary below describes THIS answer only. */
+            pump_writes = pump_empty = pump_stalled = pump_abandoned = 0;
         } else if (!played_reported && wy_session_playback_ended(s) &&
                    wy_session_playback_bytes(s) == 0 && !done_queued) {
             /* The answer has finished sounding: mark it with the done tone BEFORE saying
@@ -626,6 +643,9 @@ static void playback_task_fn(void *argument) {
             done_queued = 1;
         } else if (!played_reported && done_queued && wy_session_playback_ended(s) &&
                    wy_session_playback_bytes(s) == 0) {
+            ESP_LOGI("plb", "playback stats: %u writes, %u empty-ring, %u stalled, %u abandoned",
+                     (unsigned)pump_writes, (unsigned)pump_empty,
+                     (unsigned)pump_stalled, (unsigned)pump_abandoned);
             if (playback_write &&
                 wy_session_send_played(s, playback_write, playback_user) == WY_OK) {
                 ESP_LOGI("plb", "played: reported to the gateway");
@@ -637,6 +657,10 @@ static void playback_task_fn(void *argument) {
         }
         size_t n = wy_session_playback_read(s, frame, sizeof(frame));   /* bytes, <= sizeof(frame) */
         if (n == 0) {
+            /* An empty ring WHILE A STREAM IS ACTIVE is starvation: the room hears a gap. An
+             * empty ring after the stream ended is just the tail of a finished answer and is
+             * not counted, or every answer would report a false fault. */
+            if (wy_session_playback_active(s)) pump_empty++;
             /* Keepalive: push one batch of real zeros rather than idling the DMA. The write's
              * own timeout is the pacing, so this yields exactly like the delay did. */
             size_t silence_written = 0;
@@ -645,6 +669,7 @@ static void playback_task_fn(void *argument) {
             continue;
         }
         if (!pump_logged) { ESP_LOGI("plb", "pump: first %u frames to I2S", (unsigned)n); pump_logged = 1; }
+        pump_writes++;
         size_t written = 0;
         if (tx) {
             /* The driver converts its timeout_ms to ticks itself (xQueueReceive(pdMS_TO_TICKS
@@ -678,7 +703,9 @@ static void playback_task_fn(void *argument) {
                  * started turn, then "Connection reset by peer" as the board came back up.
                  * Retrying is correct; retrying without a limit is a crash. */
                 if (written == 0) {
+                    pump_stalled++;
                     if (++idle_tries >= PLAYBACK_WRITE_MAX_IDLE) {
+                        pump_abandoned++;
                         ESP_LOGW("plb", "pump: abandoning %u unwritten bytes after %d idle "
                                  "writes (rc=%d); the channel is not accepting data",
                                  (unsigned)(n - off), idle_tries, (int)wrc);
