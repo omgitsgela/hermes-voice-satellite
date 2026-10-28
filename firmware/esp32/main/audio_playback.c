@@ -72,8 +72,20 @@
  * little latency. Both are above every cosmetic task. */
 #define PLAYBACK_TASK_PRIORITY  5u
 #define PLAYBACK_TASK_STACK     6144u
-#define PLAYBACK_WRITE_MS       20u   /* ~2x the realtime length of a full batch */
-#define PLAYBACK_FRAME_BATCH    256u  /* int32 per I2S write = 128 stereo frames = 8 ms of audio */
+#define PLAYBACK_WRITE_MS       20u   /* 2x the realtime length of a full batch (10 ms) */
+/* One I2S write's worth of audio: 960 int32 = 480 STEREO FRAMES = 10 ms at 48 kHz.
+ *
+ * This MUST match the TX DMA descriptor size (channel.dma_frame_num, also 480). A write smaller
+ * than one descriptor delivers part of a descriptor and then waits for the descriptor cycle to
+ * complete, so playback gets paced by the driver's buffering granularity instead of by the audio
+ * clock -- the audio still plays, it just takes longer than it should, with no stall or drop to
+ * show for it.
+ *
+ * The previous value (256 int32 = 128 frames) was sized for a 16 kHz link, where 128 frames is
+ * 8 ms. At 48 kHz those same 128 frames are only 2.67 ms, a third of a descriptor. Measured with
+ * it: a local 3.000 s tone took 6.10 s to drain (2.03x slow) while the pump counters reported
+ * 0 stalled and 0 abandoned -- pacing, not loss. */
+#define PLAYBACK_FRAME_BATCH    960u
 
 /* With CONFIG_FREERTOS_HZ=100 a sub-10 ms delay rounds to 0 ticks, and vTaskDelay(0) is
  * "just forces a reschedule" -- it does not block. A polling loop that relied on it would

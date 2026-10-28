@@ -540,6 +540,26 @@ class AudioTests(unittest.TestCase):
                       'the config apply path must actually write the gain to the co-processor')
         self.assertIn('"mic_gain"', src)
 
+    def test_playback_batch_matches_the_tx_dma_descriptor(self):
+        """A write SMALLER than one TX DMA descriptor gets paced by the descriptor cycle rather
+        than by the audio clock: the audio still plays, but slower than realtime, and no counter
+        records a stall or a drop because nothing was lost.
+
+        Measured with the old 128-frame batch (sized for 16 kHz, where it is 8 ms, but only
+        2.67 ms at 48 kHz): a local 3.000 s tone took 6.10 s to drain -- 2.03x slow with
+        0 stalled / 0 abandoned. The batch and dma_frame_num must therefore agree, and the batch
+        must be a sensible duration at 48 kHz."""
+        src = (ROOT / 'firmware/esp32/main/audio_playback.c').read_text()
+        batch_int32 = int(re.search(r'#define PLAYBACK_FRAME_BATCH\s+(\d+)', src).group(1))
+        frames = batch_int32 // 2          # two int32 per stereo frame
+        dma = int(re.search(r'channel\.dma_frame_num\s*=\s*(\d+)', src).group(1))
+        self.assertEqual(frames, dma,
+                         'the write batch (%d frames) must equal one TX DMA descriptor (%d)'
+                         % (frames, dma))
+        millis = frames / 48000.0 * 1000.0
+        self.assertGreaterEqual(millis, 8.0,
+                                'a %.1f ms batch is too short at 48 kHz' % millis)
+
     def test_playback_reports_underrun_counters(self):
         """Stutter has several indistinguishable causes by ear: a dry ring, a DMA that refuses
         writes, or a batch cut short. The pump has to report which, once per answer, or every
