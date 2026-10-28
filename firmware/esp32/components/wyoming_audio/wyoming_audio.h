@@ -146,14 +146,24 @@ void wy_amp_gpo_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int enabled);
  * MICROPHONE signal to the speaker, not what the host sends; the host's own playback is
  * "far end (reference) data" = category 4, source 0. Framing matches the GPO write above. */
 #define XVF_I2C_RESID_AUDIO_MGR 35   /* Audio Manager */
-#define XVF_I2C_CMD_OP_L        15   /* AUDIO_MGR_OP_L: left channel category + source */
-#define XVF_I2C_CMD_OP_R        19   /* AUDIO_MGR_OP_R: right channel category + source */
-#define XVF_I2C_CAT_FAR_END     4    /* far end (reference) data received over I2S */
+#define XVF_I2C_CMD_OP_L        15   /* AUDIO_MGR_OP_L: L channel category + source */
+#define XVF_I2C_CMD_OP_R        19   /* AUDIO_MGR_OP_R: R channel category + source */
+#define XVF_I2C_CMD_OP_UPSAMPLE 14   /* AUDIO_MGR_OP_UPSAMPLE: L/R output upsampling flags */
+#define XVF_I2C_CAT_FAR_END     4    /* far end (reference) data, post rate conversion to 16 kHz */
+#define XVF_I2C_CAT_FAR_END_NATIVE 10 /* far end AT NATIVE INTERFACE RATE (no conversion) */
 #define XVF_I2C_CAT_USER_CH     8    /* user chosen channels (the beamformed output) */
 
 /* Fill out[XVF_I2C_GPO_CMD_LEN] with an AUDIO_MGR_OP_L/R write. right selects OP_R instead of
  * OP_L. The DAC plays the left channel on both outputs, so OP_L is usually all that is needed. */
 void wy_output_route_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int right, int category, int source);
+
+/* Fill out[XVF_I2C_GPO_CMD_LEN] with an AUDIO_MGR_OP_UPSAMPLE write: one upsampling flag per
+ * output channel, payload [L, R]. In a 48 kHz interface configuration the chip defaults these
+ * flags to ON, which rate-converts a native-48 kHz far-end signal down to 16 kHz and back before
+ * it reaches the speaker. Clearing them, together with selecting category 10 (far end at native
+ * rate), is what makes the 48 kHz link actually deliver 48 kHz audio. */
+void wy_output_upsample_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int left_upsample,
+                                int right_upsample);
 
 /* Serialize the audio-chunk data field for the given format into buffer (capacity bytes,
  * NUL-terminated on success). Returns the number of bytes written (excluding the NUL), or a

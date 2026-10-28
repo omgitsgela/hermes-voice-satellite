@@ -381,6 +381,32 @@ int audio_xvf_route_output(int right, int category, int source) {
     (void)right; (void)category; (void)source; return 0;
 }
 
+/* Records what the console's diagnostic writes actually asked for, so a test can prove the
+ * upsampling flags are CLEARED (0 0) rather than merely "some write happened", and that a read
+ * request is framed with the read bit set. Same rationale as the other stubs above: the console's
+ * dispatch and framing are what this harness proves. */
+static int xvf_upsample_calls, xvf_upsample_l, xvf_upsample_r;
+int audio_xvf_output_upsample(int left_on, int right_on) {
+    xvf_upsample_calls += 1; xvf_upsample_l = left_on; xvf_upsample_r = right_on;
+    const char *record = getenv("XVF_UPSAMPLE_RECORD");
+    if (record) {
+        FILE *log = fopen(record, "w");
+        if (log) { fprintf(log, "calls=%d l=%d r=%d\n", xvf_upsample_calls, left_on, right_on); fclose(log); }
+    }
+    return 0;
+}
+static int xvf_read_calls, xvf_read_resid, xvf_read_cmd;
+int audio_xvf_read(const uint8_t *cmd, size_t cmdlen, uint8_t *reply, size_t replylen) {
+    xvf_read_calls += 1;
+    if (cmdlen >= 2) { xvf_read_resid = cmd[0]; xvf_read_cmd = cmd[1]; }
+    /* A plausible reply: status 0 then data, so the framing test sees real-shaped bytes. */
+    if (reply && replylen > 0) {
+        reply[0] = 0;
+        for (size_t i = 1; i < replylen; ++i) reply[i] = (uint8_t)(0x10 + i);
+    }
+    return 0;
+}
+
 static int wake_force_fired;
 void wake_detector_force_fire(void) {
     wake_force_fired += 1;

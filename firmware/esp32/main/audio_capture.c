@@ -24,6 +24,16 @@
  * contracts, so audio_capture_send_chunk decimates 3:1 after the downmix; everything downstream
  * of that point is unchanged and still speaks 16 kHz. */
 #define CAPTURE_I2S_RATE_HZ    48000
+/* CLOCK ROLE: SLAVE. The link rate is not ours to declare -- the XMOS co-processor owns it.
+ * Upstream's I2S variants run either as an I2S MASTER at 48 kHz or an I2S SLAVE at 16 kHz, and
+ * the two sides "must use complementary roles: connecting two masters causes clock contention,
+ * while connecting two slaves leaves the bus without a clock source"
+ * (reSpeaker_XVF3800_USB_4MIC_ARRAY, xmos_firmwares/i2s/readme.md). Driving 48 kHz from the
+ * ESP32 while the co-processor still held its pre-48 kHz image left the satellite registered,
+ * armed and sampling, yet structurally deaf (docs/audio-fidelity.md, open hardware unknown #1).
+ * So the ESP32 takes its bit clock and word select FROM the co-processor and only matches its
+ * rate. */
+#define CAPTURE_I2S_ROLE       I2S_ROLE_SLAVE
 /* Same MCLK as the playback side: capture and playback share one I2S port in
  * full-duplex, so there is one master clock for both. */
 #define CAPTURE_I2S_MCLK_PIN   GPIO_NUM_9
@@ -226,7 +236,7 @@ int audio_capture_start(void *session, void *user,
     }
     audio_capture_install_writer_lock(session);
 
-    i2s_chan_config_t channel = I2S_CHANNEL_DEFAULT_CONFIG(CAPTURE_I2S_PORT, I2S_ROLE_MASTER);
+    i2s_chan_config_t channel = I2S_CHANNEL_DEFAULT_CONFIG(CAPTURE_I2S_PORT, CAPTURE_I2S_ROLE);
     if (i2s_new_channel(&channel, NULL, &capture.rx) != ESP_OK) {
         /* The usual cause is the other half of the full-duplex pair still owning the controller
          * (a playback channel that has not finished tearing down). Without this line the

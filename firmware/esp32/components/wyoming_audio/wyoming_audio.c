@@ -325,6 +325,30 @@ void wy_output_route_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int right, int ca
     out[4] = (uint8_t)source;
 }
 
+void wy_output_upsample_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int left_upsample,
+                                int right_upsample) {
+    if (!out) return;
+    /* AUDIO_MGR_OP_UPSAMPLE: [resid 35, cmd 14, count 2, L, R] -- one flag per output channel.
+     *
+     * This is the control that decides whether the 48 kHz profile ever delivers 48 kHz to the
+     * speaker. The XMOS Programming Guide is explicit that in a 48 kHz configuration these flags
+     * are "set to 1 by default", and the guide's own host->device->host loopback test clears them
+     * first: "AUDIO_MGR_OP_UPSAMPLE 0 0 ... As the signals produced here are by definition at the
+     * I2S or USB sample rate, they do not require the use of the upsampler in the case of a 48 kHz
+     * connection, and therefore we explicitly unset the AUDIO_MGR_OP_UPSAMPLE flags."
+     *
+     * Left at the default 1, a 48 kHz far-end signal we carefully up-sampled from the bridge's
+     * 22050 Hz is resampled down to the 16 kHz voice-DSP rate and back up to 48 kHz on its way to
+     * the DAC -- band-limiting it to 8 kHz, which destroys the entire reason for the 48 kHz
+     * profile. Clearing the flags and selecting category 10 (far end AT NATIVE RATE) is what keeps
+     * the full band on the wire all the way to the speaker. */
+    out[0] = XVF_I2C_RESID_AUDIO_MGR;
+    out[1] = XVF_I2C_CMD_OP_UPSAMPLE;
+    out[2] = 2;
+    out[3] = (uint8_t)(left_upsample ? 1 : 0);
+    out[4] = (uint8_t)(right_upsample ? 1 : 0);
+}
+
 void wy_amp_gpo_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int enabled) {
     if (!out) return;
     /* The XVF3800 I2C GPO write form: [resid, cmd, count, p0, p1] in one transaction. The amp

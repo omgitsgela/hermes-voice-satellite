@@ -46,6 +46,9 @@ int audio_playback_amp(int enabled);
 /* Set the XVF3800 output mux (which signal the DAC plays). Returns 0 on success. */
 int audio_xvf_route_output(int right, int category, int source);
 
+/* Clear/set the Audio Manager's per-channel output upsampling flags (AUDIO_MGR_OP_UPSAMPLE). */
+int audio_xvf_output_upsample(int left_on, int right_on);
+
 /* Power up and unmute the AIC3104 codec driving the 3.5 mm jack. */
 int audio_dac_init(void);
 

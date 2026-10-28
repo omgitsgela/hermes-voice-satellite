@@ -51,6 +51,11 @@
  * 22050 Hz is now UP-sampled to 48 kHz instead of being low-passed at 7400 Hz and crushed into
  * 16 kHz. The voice keeps its full bandwidth. */
 #define PLAYBACK_I2S_RATE_HZ   48000
+/* CLOCK ROLE: SLAVE, matching the capture RX. Both directions must agree: the SDK pairs them into
+ * one full-duplex controller when the frame timing and BCLK/WS settings match, and a mix of roles
+ * on the same pins means one side drives the clock the other is trying to receive. The
+ * co-processor is the clock owner; we match its rate and consume its BCLK/WS. */
+#define PLAYBACK_I2S_ROLE      I2S_ROLE_SLAVE
 /* MCLK feeds the XVF3800 and, through it, the AIC3104: GPIO9 on the XIAO ESP32S3.
  * Seeed publishes this pin as part of the board's I2S pin map. */
 #define PLAYBACK_I2S_MCLK_PIN  GPIO_NUM_9
@@ -265,6 +270,12 @@ int audio_xvf_route_output(int right, int category, int source) {
     uint8_t cmd[XVF_I2C_GPO_CMD_LEN];
     wy_output_route_command(cmd, right, category, source);
     return xvf_control_write_at(XVF_I2C_ADDRESS, cmd, sizeof(cmd), right ? "route R" : "route L");
+}
+
+int audio_xvf_output_upsample(int left_on, int right_on) {
+    uint8_t cmd[XVF_I2C_GPO_CMD_LEN];
+    wy_output_upsample_command(cmd, left_on, right_on);
+    return xvf_control_write_at(XVF_I2C_ADDRESS, cmd, sizeof(cmd), "route upsample");
 }
 
 static int aic_write(uint8_t reg, uint8_t val) {
@@ -634,7 +645,49 @@ int audio_playback_start(void) {
     /* The codec that drives the 3.5 mm jack powers up muted. Bring it up before anything plays,
      * or every answer is silent regardless of the routing and the ring state. */
     audio_dac_init();
-    i2s_chan_config_t channel = I2S_CHANNEL_DEFAULT_CONFIG(PLAYBACK_I2S_PORT, I2S_ROLE_MASTER);
+
+    /* ---- Arm the full-band playback path: upsampler OFF, far end at its NATIVE rate. ----
+     *
+     * These two settings are ONE decision and the order matters.
+     *
+     * The XMOS Programming Guide's own host-to-host loopback test is explicit about the pairing: it
+     * runs `AUDIO_MGR_OP_UPSAMPLE 0 0` first, then routes category 10, explaining that the signals
+     * "are by definition at the I2S or USB sample rate, [so] they do not require the use of the
+     * upsampler in the case of a 48 kHz connection, and therefore we explicitly unset the
+     * AUDIO_MGR_OP_UPSAMPLE flags (set to 1 by default in a 48 kHz configuration)". Category 10 is
+     * the same idea on the mux side: far-end data passed straight out of the I2S logical core, and
+     * "all sources carry useful data if the external interface rate is 48 kHz".
+     *
+     * Left at the defaults, our careful 22050 -> 48000 up-sample is undone on the way to the DAC:
+     * the far end is rate-converted down to the 16 kHz voice-DSP rate and back up again,
+     * band-limiting every answer to 8 kHz. That quietly cancels the entire reason the 48 kHz profile
+     * exists, and nothing in the log would ever show it.
+     *
+     * The pair is atomic for a reason: category 4 is the far end AFTER conversion to 16 kHz, so a
+     * category-4 tap with the upsampler cleared would hand a 16 kHz signal to a 48 kHz output stage
+     * and play it at a third of the right speed. The safe fallback therefore restores the flags to
+     * their default before selecting the converted tap, rather than mixing one half of each. */
+    int up_rc = audio_xvf_output_upsample(0, 0);
+    if (up_rc == 0) {
+        int native_rc = audio_xvf_route_output(0, XVF_I2C_CAT_FAR_END_NATIVE, 0);
+        if (native_rc != 0) {
+            /* The native tap was not accepted: put the upsampler back before choosing the converted
+             * tap, because the converted tap is a 16 kHz signal and needs re-upsampling to reach a
+             * 48 kHz output at the right speed. */
+            ESP_LOGW("plb", "playback: native-rate far end rejected (%d); restoring the upsampler "
+                            "and falling back to the rate-converted far end (answers band-limited "
+                            "to 8 kHz)", native_rc);
+            audio_xvf_output_upsample(1, 1);
+            audio_xvf_route_output(0, XVF_I2C_CAT_FAR_END, 0);
+        }
+    } else {
+        /* Flags could not be cleared, so the converted tap is the consistent choice. */
+        ESP_LOGW("plb", "playback: could not clear the output upsampling flags (%d); "
+                        "selecting the rate-converted far end, so answers stay band-limited to "
+                        "8 kHz even on the 48 kHz link", up_rc);
+        audio_xvf_route_output(0, XVF_I2C_CAT_FAR_END, 0);
+    }
+    i2s_chan_config_t channel = I2S_CHANNEL_DEFAULT_CONFIG(PLAYBACK_I2S_PORT, PLAYBACK_I2S_ROLE);
     /* Clear each TX DMA buffer as soon as it has been played. The SDK default leaves this OFF,
      * which means a buffer that is replayed without being refilled repeats STALE audio instead of
      * silence -- so any momentary underrun becomes an audible glitch rather than a quiet gap.

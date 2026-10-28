@@ -13,6 +13,7 @@ symbol, not here.
 import ctypes as C
 import io
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -385,6 +386,128 @@ class AudioTests(unittest.TestCase):
         self.assertEqual(off[4], 1, 'disabled -> level 1 (HIGH)')
         # everything else about the command is identical
         self.assertEqual(list(on[:4]), list(off[:4]))
+
+    def route_encoder(self):
+        lib = self.library()
+        lib.wy_output_route_command.argtypes = [C.POINTER(C.c_uint8), C.c_int, C.c_int, C.c_int]
+        lib.wy_output_route_command.restype = None
+        lib.wy_output_upsample_command.argtypes = [C.POINTER(C.c_uint8), C.c_int, C.c_int]
+        lib.wy_output_upsample_command.restype = None
+        return lib
+
+    def test_output_route_command_is_byte_exact(self):
+        """The DAC plays whatever the co-processor's output mux selects, so the routing bytes ARE
+        the audible source. AUDIO_MGR_OP_L = ResID 35 / CmdID 15, OP_R = CmdID 19, payload
+        [category, source], one 5-byte transaction. Pinned for the two paths playback uses."""
+        lib = self.route_encoder()
+        buf = (C.c_uint8 * 5)()
+        lib.wy_output_route_command(buf, 0, 4, 0)     # left, rate-converted far end
+        self.assertEqual(list(buf), [35, 15, 2, 4, 0], 'OP_L: [35,15,count=2,cat,src]')
+        lib.wy_output_route_command(buf, 1, 10, 0)    # right, native-rate far end
+        self.assertEqual(list(buf), [35, 19, 2, 10, 0], 'OP_R selects CmdID 19, not 15')
+        lib.wy_output_route_command(buf, 0, 10, 0)    # left, native-rate far end
+        self.assertEqual(list(buf), [35, 15, 2, 10, 0], 'native-rate category is 10')
+
+    def test_output_upsample_command_clears_both_flags(self):
+        """AUDIO_MGR_OP_UPSAMPLE is ResID 35 / CmdID 14 with payload [L, R], and in a 48 kHz
+        interface configuration the chip DEFAULTS both flags to 1 -- which rate-converts our
+        already-48 kHz playback down to 16 kHz and back before it reaches the DAC, band-limiting
+        answers to 8 kHz and cancelling the entire reason the 48 kHz profile exists.
+
+        So the command the firmware must send is specifically the one that CLEARS both flags, and
+        the byte that says so is payload bytes 3 and 4. A test that only checked 'a write happened'
+        would pass with the flags left on, which is the bug."""
+        lib = self.route_encoder()
+        cleared = (C.c_uint8 * 5)()
+        lib.wy_output_upsample_command(cleared, 0, 0)
+        self.assertEqual(list(cleared), [35, 14, 2, 0, 0],
+                         'the full-band setting is [35,14,count=2,L=0,R=0]')
+        default = (C.c_uint8 * 5)()
+        lib.wy_output_upsample_command(default, 1, 1)
+        self.assertEqual(list(default), [35, 14, 2, 1, 1],
+                         'the chip default is distinguishable from our setting only in payload')
+        # the two differ ONLY in the two flag bytes -- proof that a wrong flag is silent, not loud
+        self.assertEqual(list(cleared[:3]), list(default[:3]),
+                         'framing is identical; only the flags carry the whole difference')
+
+    def test_native_rate_category_differs_from_converted_category(self):
+        """Category 4 (far end, post rate conversion to 16 kHz) and category 10 (far end at the
+        native interface rate) are different mux taps and must not be conflated: 4 is the
+        band-limited path, 10 is the full-band path on a 48 kHz link.
+
+        This asserts on the CONSTANTS THE FIRMWARE ACTUALLY USES, not on literals passed into the
+        encoder. An earlier version of this test called the encoder with hard-coded 4 and 10 and
+        therefore passed even when the header's category constant was changed to something else --
+        it tested the encoder's arithmetic and not the value the device sends."""
+        import re
+        header = (COMP / 'wyoming_audio/wyoming_audio.h').read_text()
+        def macro(name):
+            m = re.search(rf'^\s*#define\s+{name}\s+(\d+)', header, re.M)
+            if m is None:
+                self.fail(f'{name} is not defined in wyoming_audio.h')
+            return int(m.group(1))
+        self.assertEqual(macro('XVF_I2C_CAT_FAR_END'), 4, 'far end, rate-converted tap')
+        self.assertEqual(macro('XVF_I2C_CAT_FAR_END_NATIVE'), 10,
+                         'native-rate far end tap: 10 is the full-band one on a 48 kHz link')
+        self.assertEqual(macro('XVF_I2C_CMD_OP_UPSAMPLE'), 14, 'AUDIO_MGR_OP_UPSAMPLE CmdID')
+        self.assertEqual(macro('XVF_I2C_CMD_OP_L'), 15, 'AUDIO_MGR_OP_L CmdID')
+        self.assertEqual(macro('XVF_I2C_CMD_OP_R'), 19, 'AUDIO_MGR_OP_R CmdID')
+        self.assertEqual(macro('XVF_I2C_RESID_AUDIO_MGR'), 35, 'Audio Manager ResID')
+
+    def test_playback_arms_the_full_band_output_path_at_startup(self):
+        """The 48 kHz profile only reaches the speaker if playback actually clears the upsampling
+        flags AND selects the native-rate tap. If either write is missing, the chip's defaults
+        quietly band-limit every answer to 8 kHz and nothing in the log says so. Asserted against
+        the real adapter source so a future refactor cannot drop one half of the pair."""
+        src = (ROOT / 'firmware/esp32/main/audio_playback.c').read_text()
+        self.assertIn('audio_xvf_output_upsample(0, 0)', src,
+                      'playback must CLEAR both upsampling flags (0, 0), not leave them at the '
+                      'chip default of 1')
+        self.assertIn('XVF_I2C_CAT_FAR_END_NATIVE', src,
+                      'playback must select the native-rate far end, not only the converted one')
+
+    def test_the_coprocessor_owns_the_clock_in_every_i2s_direction(self):
+        """The link rate belongs to the co-processor, not to us. Upstream's I2S variants are either
+        a 48 kHz MASTER (it drives BCLK/WS) or a 16 kHz SLAVE (the host drives them), and the
+        readme is explicit that "the two devices must use complementary roles. Connecting two
+        masters causes clock contention, while connecting two slaves leaves the bus without a clock
+        source."
+
+        With the co-processor holding a 48 kHz master image, a MASTER role on ANY ESP32 direction
+        means two chips driving the same BCLK/WS lines: the failure is not silence, it is contention
+        on shared pins, and it can present as corrupted audio rather than an obvious error. All three
+        channel creations (capture RX, playback TX, and the bring-up probe) must agree, because the
+        SDK pairs RX and TX into one full-duplex controller and only demotes a master when BOTH
+        directions are master -- so a lone MASTER half is exactly the case the driver will not fix.
+        """
+        files = {
+            'capture RX': ROOT / 'firmware/esp32/main/audio_capture.c',
+            'playback TX': ROOT / 'firmware/esp32/main/audio_playback.c',
+            'bring-up probe': ROOT / 'firmware/esp32/main/audio_bringup.c',
+        }
+        for label, path in files.items():
+            src = path.read_text()
+            masters = [ln.strip() for ln in src.splitlines()
+                       if 'I2S_CHANNEL_DEFAULT_CONFIG' in ln and 'I2S_ROLE_MASTER' in ln]
+            self.assertEqual(masters, [],
+                             f'{label}: I2S_CHANNEL_DEFAULT_CONFIG(..., I2S_ROLE_MASTER) puts a '
+                             f'clock driver on lines the co-processor is already driving: {masters}')
+            chan_lines = [ln for ln in src.splitlines() if 'I2S_CHANNEL_DEFAULT_CONFIG' in ln]
+            self.assertTrue(chan_lines, f'{label}: no channel creation found, test shape is stale')
+            for ln in chan_lines:
+                self.assertIn('_ROLE', ln,
+                              f'{label}: channel role must come from the named ROLE constant so it '
+                              f'is greppable and reviewable: {ln.strip()}')
+        # the role constants themselves, pinned explicitly
+        for label, name, path in (
+                ('capture RX', 'CAPTURE_I2S_ROLE', files['capture RX']),
+                ('playback TX', 'PLAYBACK_I2S_ROLE', files['playback TX']),
+                ('bring-up probe', 'XVF_I2S_ROLE_PROBE', files['bring-up probe'])):
+            m = re.search(rf'^\s*#define\s+{name}\s+(\w+)', path.read_text(), re.M)
+            if m is None:
+                self.fail(f'{name} is not defined in {label}')
+            self.assertEqual(m.group(1), 'I2S_ROLE_SLAVE',
+                             f'{label} must be a clock SLAVE: the co-processor is the master')
 
 
 if __name__ == '__main__':

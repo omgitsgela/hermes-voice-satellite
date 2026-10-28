@@ -732,6 +732,59 @@ void provisioning_console_run(void) {
                     snprintf(response, sizeof(response), "OK DEVICE_ID %s", device_id);
                 else
                     snprintf(response, sizeof(response), "ERR DEVICE_ID UNREADABLE");
+            } else if (!strncmp(line.data, "XVF_UPSAMPLE ", 13)) {
+                /* "XVF_UPSAMPLE <L> <R>" -- set the Audio Manager's per-channel output upsampling
+                 * flags. In a 48 kHz interface configuration the chip defaults these to 1, which
+                 * rate-converts our already-48 kHz playback down to 16 kHz and back before it
+                 * reaches the speaker, band-limiting answers to 8 kHz. Try:
+                 *   XVF_UPSAMPLE 1 1   (the chip's default)
+                 *   XVF_UPSAMPLE 0 0   (keep the native 48 kHz all the way to the DAC)
+                 * paired with "XVF_OP 4 0" versus "XVF_OP 10 0", and compare the tone test by ear:
+                 * the difference between the two pairs is the top octave of the voice. */
+                int lo = 0, ro = 0;
+                if (sscanf(line.data, "XVF_UPSAMPLE %d %d", &lo, &ro) != 2 ||
+                    (lo != 0 && lo != 1) || (ro != 0 && ro != 1)) {
+                    snprintf(response, sizeof(response),
+                             "ERR XVF_UPSAMPLE usage: XVF_UPSAMPLE <0|1> <0|1>");
+                } else {
+                    int rc = audio_xvf_output_upsample(lo, ro);
+                    snprintf(response, sizeof(response), "%s XVF_UPSAMPLE L=%d R=%d",
+                             rc == 0 ? "OK" : "ERR", lo, ro);
+                }
+            } else if (!strncmp(line.data, "XVF_READ ", 9)) {
+                /* "XVF_READ <resid> <cmd> [bytes]" -- query any XVF3800 control and print the
+                 * raw reply. Byte 0 of the reply is the status (0 = ok, 64 = the chip asked to be
+                 * retried). Two reads matter for the 48 kHz work:
+                 *   XVF_READ 35 24 1   -> I2S_INACTIVE: 0 = the co-processor's I2S path is ALIVE,
+                 *                         1 = inactive. This is the direct answer to "is the link
+                 *                         running at all", with no logic analyzer involved.
+                 *   XVF_READ 20 18 4   -> DOA_VALUE: DOA angle (0-359) plus a speech-detection
+                 *                         flag, computed by the co-processor from its own microphones.
+                 *                         If it reports speech while our wake scorer never crosses its
+                 *                         cutoff, the fault is in the link or the samples; if it reports
+                 *                         silence, the microphone front end is the suspect.
+                 * Command IDs 18/24 are version-dependent (DOA_VALUE and LED_RING_COLOR swapped at
+                 * image v1.0.8), so read the version first: XVF_READ 48 0 4. */
+                unsigned r = 0, cm = 0, nbytes = 1;
+                int got = sscanf(line.data, "XVF_READ %u %u %u", &r, &cm, &nbytes);
+                if (got < 2 || nbytes < 1 || nbytes > 16) {
+                    snprintf(response, sizeof(response),
+                             "ERR XVF_READ usage: XVF_READ <resid> <cmd> [bytes 1-16]");
+                } else {
+                    uint8_t cmd[3] = { (uint8_t)r, (uint8_t)(cm | 0x80), (uint8_t)nbytes };
+                    uint8_t reply[17] = {0};
+                    int rc = audio_xvf_read(cmd, sizeof(cmd), reply, (size_t)nbytes + 1u);
+                    if (rc != 0) {
+                        snprintf(response, sizeof(response), "ERR XVF_READ %u %u bus=%d", r, cm, rc);
+                    } else {
+                        /* Status first, then the data, so a retry (64) is not misread as a value. */
+                        int used = snprintf(response, sizeof(response), "OK XVF %u/%u st=%u",
+                                            r, cm, reply[0]);
+                        for (int i = 1; i <= (int)nbytes && used < (int)sizeof(response) - 4; ++i)
+                            used += snprintf(response + used, sizeof(response) - (size_t)used,
+                                             " %02x", reply[i]);
+                    }
+                }
             } else if (!strncmp(line.data, "XVF_WRITE ", 10)) {
                 /* "XVF_WRITE <resid> <cmd> <p0> [p1 ...]" -- probe any XVF3800 control.
                  * ResID 35 (Audio Manager) cmd 27 is I2S_DAC_DSP_ENABLE, the switch that
