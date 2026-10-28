@@ -540,6 +540,17 @@ static int pump_logged;
  * A clean answer has empty ~= the count of chunks the bridge had not yet delivered, and
  * stalled/abandoned at zero. Reported once per answer, at the same moment `played` is sent. */
 static uint32_t pump_writes, pump_empty, pump_stalled, pump_abandoned;
+/* Frames actually removed from the ring, and when the first/last of them went out.
+ *
+ * This is the number that settles "is playback chopping": frames removed divided by the elapsed
+ * time is the EFFECTIVE consumption rate. At a true 48 kHz link it must come out at ~48000 Hz.
+ * Anything lower means the pump was not feeding the DMA at the clock rate -- the DMA keeps
+ * shifting regardless, transmitting zeros it was given, so no write ever fails and no counter
+ * above moves. A downstream fault (codec, co-processor) cannot produce this: I2S has no
+ * backpressure, so nothing downstream can slow the ring drain. */
+static uint32_t pump_frames;
+static TickType_t pump_first_tick, pump_last_tick;
+static int pump_active_prev;   /* for the rising-edge reset above */
 
 /* Where to report `played`, and whether this answer has already been reported.
  *
@@ -633,11 +644,21 @@ static void playback_task_fn(void *argument) {
         /* A stream that has ENDED and a ring that has DRAINED means the speaker is
          * finished: say so exactly once. Re-armed by the rising edge of the bridge's
          * playback flag, so the next answer is reported too. */
-        if (wy_session_playback_active(s)) {
+        /* Edge-triggered, deliberately. This block used to run on EVERY iteration while the stream
+         * was active, which reset the counters continuously: the summary then described the last
+         * loop pass rather than the answer, and reported 31 writes / 210 ms for a 16 s clip. A
+         * measurement that silently describes the wrong window is worse than no measurement. */
+        int active_now = wy_session_playback_active(s) ? 1 : 0;
+        if (active_now && !pump_active_prev) {
             played_reported = 0;
             done_queued = 0;
-            /* A new answer starts from zero, so the summary below describes THIS answer only. */
             pump_writes = pump_empty = pump_stalled = pump_abandoned = 0;
+            pump_frames = 0;
+            pump_first_tick = pump_last_tick = 0;
+            pump_logged = 0;
+        }
+        pump_active_prev = active_now;
+        if (active_now) {
         } else if (!played_reported && wy_session_playback_ended(s) &&
                    wy_session_playback_bytes(s) == 0 && !done_queued) {
             /* The answer has finished sounding: mark it with the done tone BEFORE saying
@@ -655,9 +676,21 @@ static void playback_task_fn(void *argument) {
             done_queued = 1;
         } else if (!played_reported && done_queued && wy_session_playback_ended(s) &&
                    wy_session_playback_bytes(s) == 0) {
-            ESP_LOGI("plb", "playback stats: %u writes, %u empty-ring, %u stalled, %u abandoned",
-                     (unsigned)pump_writes, (unsigned)pump_empty,
-                     (unsigned)pump_stalled, (unsigned)pump_abandoned);
+            {
+                /* The decisive figure: frames removed / elapsed. A true 48 kHz link must show
+                 * ~48000 Hz here. Lower means the pump was late and the DMA played zeros in the
+                 * meantime -- which no write-failure counter can see. */
+                unsigned elapsed_ms = 0;
+                if (pump_last_tick > pump_first_tick)
+                    elapsed_ms = (unsigned)((pump_last_tick - pump_first_tick) * 1000u
+                                            / configTICK_RATE_HZ);
+                unsigned rate = elapsed_ms ? (unsigned)(((uint64_t)pump_frames * 1000u) / elapsed_ms)
+                                           : 0u;
+                ESP_LOGI("plb", "playback stats: %u writes, %u frames, %u ms, effective %u Hz "
+                                 "(48 kHz expected), %u empty-ring, %u stalled, %u abandoned",
+                         (unsigned)pump_writes, (unsigned)pump_frames, elapsed_ms, rate,
+                         (unsigned)pump_empty, (unsigned)pump_stalled, (unsigned)pump_abandoned);
+            }
             if (playback_write &&
                 wy_session_send_played(s, playback_write, playback_user) == WY_OK) {
                 ESP_LOGI("plb", "played: reported to the gateway");
@@ -702,6 +735,11 @@ static void playback_task_fn(void *argument) {
                 written = 0;
                 esp_err_t wrc = i2s_channel_write(tx, (const uint8_t *)frame + off, n - off,
                                                  &written, PLAYBACK_WRITE_MS);
+                /* 8 bytes per stereo-32 frame: this is the only place that counts what the
+                 * speaker actually consumed, as opposed to what was queued. */
+                pump_frames += (uint32_t)(written / 8u);
+                if (pump_writes == 1 && pump_first_tick == 0) pump_first_tick = xTaskGetTickCount();
+                pump_last_tick = xTaskGetTickCount();
                 off += written;
                 /* A zero-progress write means "the DMA is full", NOT "discard the rest".
                  * Breaking there silently deleted the tail of every batch that timed out -- a

@@ -825,6 +825,52 @@ void provisioning_console_run(void) {
                              rc == 0 ? "OK" : "ERR", is_float ? "SETF" : "SET32", r, cm, v,
                              frame[0], frame[1], frame[2], frame[3], frame[4], frame[5], frame[6]);
                 }
+            } else if (!strncmp(line.data, "XVF_BYTES ", 10)) {
+                /* "XVF_BYTES <resid> <cmd> <b0> [b1 ... b15]" -- write a raw byte payload.
+                 *
+                 * Needed for AUDIO_MGR_OP_ALL (ResID 35, CmdID 23, 12 bytes), which is how the
+                 * XMOS native-rate far end is ACTUALLY configured. The Programming Guide's own
+                 * native loopback test sets all six selections at once:
+                 *   XVF_BYTES 35 23 10 0 10 2 10 4 10 1 10 3 10 5
+                 * Setting only OP_L/OP_R changes two of the six; with native-rate output selected
+                 * the untouched selections still carry their old categories, so unrelated or
+                 * stale signals interleave into the output. That is a candidate explanation for
+                 * the native 48 kHz tap being far rougher than the band-limited one. */
+                unsigned r = 0, cm = 0;
+                int consumed = 0;
+                if (sscanf(line.data, "XVF_BYTES %u %u%n", &r, &cm, &consumed) != 2 ||
+                    r > 255 || cm > 255) {
+                    snprintf(response, sizeof(response),
+                             "ERR usage: XVF_BYTES <resid> <cmd> <b0> [b1 ... b15]");
+                } else {
+                    uint8_t frame[19];
+                    int nb = 0;
+                    const char *p = line.data + consumed;
+                    while (*p && nb < 16) {
+                        int v = 0, span = 0;
+                        if (sscanf(p, " %d%n", &v, &span) != 1) break;
+                        if (v < 0 || v > 255) break;
+                        frame[3 + nb] = (uint8_t)v;
+                        nb++;
+                        p += span;
+                    }
+                    if (nb == 0) {
+                        snprintf(response, sizeof(response),
+                                 "ERR XVF_BYTES needs at least one payload byte");
+                    } else {
+                        frame[0] = (uint8_t)r;
+                        frame[1] = (uint8_t)cm;
+                        frame[2] = (uint8_t)nb;
+                        int rc = audio_xvf_write_frame(frame, (size_t)(3 + nb));
+                        int used = snprintf(response, sizeof(response),
+                                            "%s XVF_BYTES %u/%u (%d bytes)%s",
+                                            rc == 0 ? "OK" : "ERR", r, cm, nb, nb ? ":" : "");
+                        for (int i = 0; i < nb && used < (int)sizeof(response) - 4; ++i)
+                            used += snprintf(response + used,
+                                             sizeof(response) - (size_t)used, " %02x",
+                                             frame[3 + i]);
+                    }
+                }
             } else if (!strncmp(line.data, "XVF_WRITE ", 10)) {
                 /* "XVF_WRITE <resid> <cmd> <p0> [p1 ...]" -- probe any XVF3800 control.
                  * ResID 35 (Audio Manager) cmd 27 is I2S_DAC_DSP_ENABLE, the switch that

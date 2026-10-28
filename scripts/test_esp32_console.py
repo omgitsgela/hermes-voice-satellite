@@ -619,6 +619,26 @@ int usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);
             bad = self.console(executable, 'XVF_SETF 35\n')
             self.assertIn('ERR usage', bad)
 
+    def test_raw_byte_payload_command_emits_every_byte(self):
+        """AUDIO_MGR_OP_ALL (ResID 35, CmdID 23) is 12 payload bytes and is how the XMOS native-rate
+        far end is actually configured -- the guide's loopback test sets all six selections at once.
+        Setting only OP_L/OP_R leaves four selections on their old categories, which interleave
+        into the output when native rate is selected.
+
+        The command has to carry a count of 12 and all twelve bytes verbatim; anything that
+        truncates at four (as the int-parameter command does) would silently half-configure it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = self.build(tmp)
+            output = self.console(
+                executable, 'XVF_BYTES 35 23 10 0 10 2 10 4 10 1 10 3 10 5\n')
+            self.assertIn('OK XVF_BYTES 35/23 (12 bytes)', output)
+            self.assertIn('0a 00 0a 02 0a 04 0a 01 0a 03 0a 05', output,
+                          'all six (category, source) pairs must reach the wire')
+            bad = self.console(executable, 'XVF_BYTES 35\n')
+            self.assertIn('ERR usage', bad)
+            self.assertIn('ERR XVF_BYTES needs at least one payload byte',
+                          self.console(executable, 'XVF_BYTES 35 23\n'))
+
     def test_wifi_credentials_stage_through_the_console(self):
         with tempfile.TemporaryDirectory() as tmp:
             executable = self.build(tmp)
