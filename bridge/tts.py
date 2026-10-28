@@ -109,13 +109,17 @@ class TtsStream:
     than realtime and aplay buffers the whole answer in a 416 MB board's memory.
     """
 
-    def __init__(self, send, *, pace: float = 2.0, lock=None) -> None:
+    def __init__(self, send, *, pace: float = 2.0, lock=None,
+                 fmt: tuple[int, int, int] | None = None) -> None:
         from wyoming.audio import AudioChunk, AudioChunkConverter, AudioStart, AudioStop
 
         self._AudioChunk = AudioChunk
         self._AudioStart = AudioStart
         self._AudioStop = AudioStop
-        self._converter = AudioChunkConverter(*SND_FORMAT)
+        # What format to send. Default historic 22050 so nothing changes for the Pi satellite;
+        # the board's 48 kHz mode is opted into per device (see SatelliteClient.out_format).
+        self._fmt = fmt or SND_FORMAT
+        self._converter = AudioChunkConverter(*self._fmt)
         self._send = send
         self._pace = pace
         self._seconds_sent = 0.0
@@ -152,8 +156,8 @@ class TtsStream:
         self._holds_lock = True
         self._acquired_lock = lock
         try:
-            await self._send(self._AudioStart(rate=SND_FORMAT[0], width=SND_FORMAT[1],
-                                              channels=SND_FORMAT[2]).event())
+            await self._send(self._AudioStart(rate=self._fmt[0], width=self._fmt[1],
+                                              channels=self._fmt[2]).event())
         except BaseException:
             # `__aexit__` is NOT called when `__aenter__` raises, so the lock has to be handed back
             # here. Without this a failed audio-start (satellite connection gone, or a cancellation

@@ -2078,6 +2078,17 @@ class VoiceLoop:
         if event.type != CONFIG_REPORTED_EVENT:
             return False
         data = dict(event.data or {})
+        # The device states the rate its own audio path runs at. Cache it on the connection so
+        # out_format() can send that rate with no conversion on a device that cannot afford one,
+        # and no change at all for a device that did not report.
+        try:
+            rate = (data.get("actual") or {}).get("snd_rate")
+            if isinstance(rate, int) and rate > 0:
+                for sat in self.leases.values():
+                    if getattr(sat, "device_id", None) == device_id:
+                        sat.snd_rate = rate
+        except Exception:  # noqa: BLE001 - a malformed report must not break the config path
+            pass
         self.config_plane.report(
             device_id,
             generation=data.get("generation"),

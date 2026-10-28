@@ -20,6 +20,14 @@ _DEVICE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _WAKE_WORD = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 DEVICE_SETTING_SCHEMA: dict[str, dict[str, Any]] = {
+    # -- capability, not a setting ------------------------------------------------------------
+    # The rate a device's own audio path runs at, so the gateway can send it audio it can play
+    # as-is. Reported by the device, NEVER sent as desired state: a Pi satellite would report it
+    # as unapplied and go degraded, and there is nothing for it to apply.
+    "snd_rate": {
+        "type": "integer", "minimum": 8000, "maximum": 96000,
+        "default": 22050, "apply": "immediate", "capability": True,
+    },
     "wake_word": {
         "type": "string", "pattern": _WAKE_WORD.pattern,
         "default": "okay_nabu", "apply": "wake_service_restart",
@@ -303,6 +311,7 @@ class ConfigPlane:
         if int(record["generation"]) == 0:
             record["desired"] = {
                 name: spec["default"] for name, spec in DEVICE_SETTING_SCHEMA.items()
+                if not spec.get("capability")
             }
             # Seed the wake word to match the model each installer actually ships, so a
             # freshly enrolled device is healthy on first apply instead of reporting a

@@ -42,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import os
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -277,6 +278,25 @@ class SatelliteClient:
     async def pause(self) -> None:
         await self.send(PauseSatellite().event())
 
+    def out_format(self) -> tuple[int, int, int]:
+        """The rate/width/channels to SEND this device.
+
+        Decided by the DEVICE, not by the gateway. A fleet is one gateway plus any number of
+        satellites in any mix of hardware, so the bridge must never assume a particular host (or
+        that a Raspberry Pi is present anywhere). Each device reports the rate its own audio path
+        runs at (`snd_rate`); that is what it gets sent, and 22050 stays the default for anything
+        that has not said otherwise.
+
+        An ESP32 satellite reports 48000 because its I2S link is a 48 kHz master, and then it
+        needs to do no conversion at all -- the sample rate costs it nothing on a path where its
+        own CPU is the scarce resource. A Pi satellite reports 22050 and keeps receiving Piper's
+        native rate.
+        """
+        rate = getattr(self, "snd_rate", None)
+        if isinstance(rate, int) and rate > 0:
+            return (rate, SND_FORMAT[1], SND_FORMAT[2])
+        return SND_FORMAT
+
     def tts_stream(self, *, pace: float = 2.0):
         """Open a streaming TTS session: `async with sat.tts_stream() as s: await s.say(text)`.
 
@@ -291,7 +311,8 @@ class SatelliteClient:
         from bridge.tts import TtsStream
 
         return TtsStream(self.send, pace=pace,
-                         lock=getattr(self, "_playback_lock_override", None))
+                         lock=getattr(self, "_playback_lock_override", None),
+                         fmt=self.out_format())
 
     # -- playback -----------------------------------------------------------
 
@@ -333,7 +354,7 @@ class SatelliteClient:
         """
         with wave.open(str(wav_path), "rb") as wf:
             src = (wf.getframerate(), wf.getsampwidth(), wf.getnchannels())
-            out = SND_FORMAT if convert_to_snd_format else src
+            out = self.out_format() if convert_to_snd_format else src
             converter = AudioChunkConverter(*out)
             # The device is named here because without it a two-device fleet is indistinguishable
             # from one device being sent the same clip twice -- and the difference matters: a
