@@ -69,6 +69,7 @@ static const cfg_spec SPECS[] = {
     { "mic_gain",         CFG_INT, 0, 100, NULL, 0 },
     { "playback_volume",  CFG_INT, 0, 100, NULL, 0 },
     { "led_brightness",   CFG_INT, 1, 31, NULL, 0 },
+    {"snd_rate",          CFG_INT, 8000, 96000, NULL, 0},   /* reported CAPABILITY, never desired */
     { "locale",           CFG_STR, 0, 0, LOCALES, 1 },
     { "update_channel",   CFG_STR, 0, 0, CHANNELS, 2 },
 };

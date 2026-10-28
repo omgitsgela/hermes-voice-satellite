@@ -142,6 +142,20 @@ static int32_t playback_drain_ms;
  * rests during every gap then the next chunk re-arms it and replays the settling lead-in -- one
  * ~20ms dropout per chunk, which is exactly the choppiness heard in speech. playback_drain_ms is
  * sized to the DMA (a few hundred ms) and is far too short for this. */
+/* How much audio to buffer before the pump starts consuming.
+ *
+ * The bridge paces at 2x realtime, but delivery is uneven by up to ~100 ms and occasionally worse.
+ * Playing the instant the first chunk lands turns every arrival gap into a hole in the audio. Two
+ * seconds of pre-roll absorbs that jitter, and the ring is large enough (6 MB, ~16 s at 48 kHz) that
+ * the cost is latency, not memory.
+ *
+ * The timeout matters as much as the threshold: if the producer is slower than the clock (or the
+ * clip is shorter than the pre-roll) the buffer never fills, and without a deadline the device
+ * would sit in silence forever. Play anyway after waiting this long. */
+#define PLAYBACK_PREROLL_MS      2000u
+#define PLAYBACK_PREROLL_BYTES   ((size_t)PLAYBACK_PREROLL_MS * 48u * 8u / 1000u)
+#define PLAYBACK_PREROLL_MAX_MS  3000u
+
 #define PLAYBACK_AMP_HOLD_MS 1500
 
 void audio_playback_set_session(void *s) { session = s; }
@@ -551,6 +565,9 @@ static uint32_t pump_writes, pump_empty, pump_stalled, pump_abandoned;
 static uint32_t pump_frames;
 static TickType_t pump_first_tick, pump_last_tick;
 static int pump_active_prev;   /* for the rising-edge reset above */
+static int preroll_done;       /* this answer has buffered enough to start */
+static TickType_t preroll_start;
+static size_t preroll_last_bytes;
 
 /* Where to report `played`, and whether this answer has already been reported.
  *
@@ -656,6 +673,9 @@ static void playback_task_fn(void *argument) {
             pump_frames = 0;
             pump_first_tick = pump_last_tick = 0;
             pump_logged = 0;
+            preroll_done = 0;
+            preroll_start = 0;
+            preroll_last_bytes = 0;
         }
         pump_active_prev = active_now;
         if (active_now) {
@@ -699,6 +719,26 @@ static void playback_task_fn(void *argument) {
                          playback_user, (const void *)playback_write);
             }
             played_reported = 1;
+        }
+        /* Pre-roll: buffer before playing, so arrival jitter is absorbed instead of heard. */
+        if (active_now && !preroll_done) {
+            size_t have = wy_session_playback_bytes(s);
+            preroll_last_bytes = have;
+            TickType_t now_tick = xTaskGetTickCount();
+            if (preroll_start == 0) preroll_start = now_tick;
+            unsigned waited_ms = (unsigned)((now_tick - preroll_start) * 1000u / configTICK_RATE_HZ);
+            if (have >= PLAYBACK_PREROLL_BYTES || waited_ms >= PLAYBACK_PREROLL_MAX_MS) {
+                preroll_done = 1;
+                ESP_LOGI("plb", "pre-roll done after %u ms: %u bytes buffered (%.2f s)%s",
+                         waited_ms, (unsigned)have, (double)have / (48000.0 * 8.0),
+                         have < PLAYBACK_PREROLL_BYTES ? " -- TIMED OUT, producer behind the clock" : "");
+            } else {
+                /* Keep the DMA fed with real silence while the buffer fills. */
+                size_t silence_written = 0;
+                i2s_channel_write(tx, playback_silence, sizeof(playback_silence),
+                                  &silence_written, PLAYBACK_WRITE_MS);
+                continue;
+            }
         }
         size_t n = wy_session_playback_read(s, frame, sizeof(frame));   /* bytes, <= sizeof(frame) */
         if (n == 0) {

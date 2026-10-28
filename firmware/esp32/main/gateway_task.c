@@ -310,6 +310,13 @@ static int cfg_apply(void *user, const char *settings_json,
             degraded = 1;   /* a value the live path refused: not applied */
         }
     }
+    /* snd_rate: a CAPABILITY, not a setting. The device states the rate its own audio path runs
+     * at so the gateway can send audio it can play as-is. An ESP32 satellite's I2S link is a
+     * 48 kHz master, and converting 22050 -> 48000 on the microcontroller is work on the machine
+     * with the least headroom; the gateway has room to do it properly. Reported every time so a
+     * fleet mixing boards and Pi satellites gets the right format per device. */
+    cJSON_AddNumberToObject(actual, "snd_rate", (double)WY_AUDIO_I2S_RATE_HZ);
+
     /* wake_threshold / wake_word: staged to NVS for the next increment's detector. They are NOT
      * live-applied (there is no detector yet), so they are never in `actual` -- they land in the
      * agent's pending set. Staging is a side effect; its failure does not change the report. */

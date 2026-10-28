@@ -115,6 +115,14 @@ static void playback_ring_lock_give(void) {
  * could both be true while the speaker was losing whole frames. */
 static uint32_t plb_dropped;
 
+/* The declared rate of the CURRENT inbound stream.
+ *
+ * 48000 means the bridge already produced audio at the link rate and the device must NOT touch it:
+ * up-sampling on the microcontroller costs cycles, adds a cubic interpolation stage that can only
+ * lose information, and is redundant work. 22050 is kept for hosts that still send Piper's native
+ * rate; only then is the ESP32's resampler used. */
+static uint32_t plb_in_rate;
+
 static void playback_ring_append_locked(wy_session *session, const int32_t *frames, size_t n) {
     size_t cap = session->ring_capacity / 4;
     if (!session->ring || cap == 0 || n == 0) return;
@@ -645,9 +653,18 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
                     while (samples) {
                         size_t take = samples < WY_PLAYBACK_IN_MAX ? samples : WY_PLAYBACK_IN_MAX;
                         playback_ring_lock_take();
-                        size_t mono_n = wy_resample_22050_to_48000(&session->playback_rs,
-                                            src, take,
-                                            playback_mono_scratch, WY_PLAYBACK_MONO_MAX);
+                        size_t mono_n;
+                        if (plb_in_rate == (uint32_t)WY_AUDIO_I2S_RATE_HZ) {
+                            /* Native: the bridge already did the conversion, on a CPU with room to
+                             * do it properly. Copy, scale, expand -- no interpolation stage at all. */
+                            if (take > WY_PLAYBACK_MONO_MAX) take = WY_PLAYBACK_MONO_MAX;
+                            memcpy(playback_mono_scratch, src, take * sizeof(int16_t));
+                            mono_n = take;
+                        } else {
+                            mono_n = wy_resample_22050_to_48000(&session->playback_rs,
+                                                src, take,
+                                                playback_mono_scratch, WY_PLAYBACK_MONO_MAX);
+                        }
                         wy_apply_volume(playback_mono_scratch, mono_n, session->playback_volume);
                         size_t frame_n = wy_expand_mono16_to_stereo32(playback_mono_scratch, mono_n,
                                             playback_frame_scratch, WY_PLAYBACK_FRAME_MAX);
@@ -780,10 +797,15 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
         const cJSON *rate = cJSON_GetObjectItemCaseSensitive(data, "rate");
         const cJSON *width = cJSON_GetObjectItemCaseSensitive(data, "width");
         const cJSON *channels = cJSON_GetObjectItemCaseSensitive(data, "channels");
-        if (cJSON_IsNumber(rate) && rate->valuedouble == 22050 &&
+        /* Accept the link rate (nothing to convert) or Piper's 22050 (legacy hosts).
+         * Anything else cannot be played, so it is drained rather than half-armed. */
+        if (cJSON_IsNumber(rate) &&
+            (rate->valuedouble == 22050.0 || rate->valuedouble == (double)WY_AUDIO_I2S_RATE_HZ) &&
             cJSON_IsNumber(width) && width->valuedouble == 2 &&
             cJSON_IsNumber(channels) && channels->valuedouble == 1) {
-            wy_upsampler_reset(&session->playback_rs);
+            plb_in_rate = (uint32_t)rate->valuedouble;
+            if (plb_in_rate != (uint32_t)WY_AUDIO_I2S_RATE_HZ)
+                wy_upsampler_reset(&session->playback_rs);   /* only when actually converting */
             /* Reset the ring under the lock: the playback task may be mid-read (draining the
              * last answer) while the bridge starts the next one, so an unlocked reset would
              * race the reader's head advance. */
