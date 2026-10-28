@@ -149,6 +149,7 @@ void wy_amp_gpo_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int enabled);
 #define XVF_I2C_CMD_OP_L        15   /* AUDIO_MGR_OP_L: L channel category + source */
 #define XVF_I2C_CMD_OP_R        19   /* AUDIO_MGR_OP_R: R channel category + source */
 #define XVF_I2C_CMD_OP_UPSAMPLE 14   /* AUDIO_MGR_OP_UPSAMPLE: L/R output upsampling flags */
+#define XVF_I2C_CMD_MIC_GAIN     0   /* AUDIO_MGR_MIC_GAIN: float, pre-SHF microphone gain */
 #define XVF_I2C_CAT_FAR_END     4    /* far end (reference) data, post rate conversion to 16 kHz */
 #define XVF_I2C_CAT_FAR_END_NATIVE 10 /* far end AT NATIVE INTERFACE RATE (no conversion) */
 #define XVF_I2C_CAT_USER_CH     8    /* user chosen channels (the beamformed output) */
@@ -189,6 +190,16 @@ void wy_control_i32_command(uint8_t out[XVF_I2C_SET32_CMD_LEN], uint8_t resid, u
                             int32_t value);
 void wy_control_f32_command(uint8_t out[XVF_I2C_SET32_CMD_LEN], uint8_t resid, uint8_t cmd,
                             float value);
+
+/* Map the fleet's 0..100 mic_gain percentage onto the co-processor's multiplicative gain.
+ *
+ * Pure arithmetic, kept here so it is testable: the endpoints are the whole contract. A setting of
+ * 0 must NOT produce 0.0 (that would silence the microphone, and a dead microphone is
+ * indistinguishable from a hardware fault), and the top of the range must be the compile-time
+ * maximum rather than something the caller guessed. */
+#define WY_MIC_GAIN_MAX_MULTIPLE 4.0f
+#define WY_MIC_GAIN_MIN_MULTIPLE 0.5f
+float wy_mic_gain_multiple(int percent);
 
 /* Serialize the audio-chunk data field for the given format into buffer (capacity bytes,
  * NUL-terminated on success). Returns the number of bytes written (excluding the NUL), or a

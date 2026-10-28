@@ -494,6 +494,52 @@ class AudioTests(unittest.TestCase):
         self.assertEqual(macro('XVF_I2C_CMD_OP_R'), 19, 'AUDIO_MGR_OP_R CmdID')
         self.assertEqual(macro('XVF_I2C_RESID_AUDIO_MGR'), 35, 'Audio Manager ResID')
 
+    def mic_gain_mapper(self):
+        lib = self.library()
+        lib.wy_mic_gain_multiple.argtypes = [C.c_int]
+        lib.wy_mic_gain_multiple.restype = C.c_float
+        return lib
+
+    def test_mic_gain_percentage_never_silences_the_microphone(self):
+        """The fleet's `mic_gain` is a 0..100 percentage; the chip wants a multiplier.
+
+        0 must NOT map to 0.0. A silenced microphone looks exactly like a hardware fault, which is
+        the worst way for a setting to fail, so the bottom of the range is the quietest usable
+        gain instead. The top of the range must be the documented maximum, and out-of-range values
+        must clamp rather than extrapolate."""
+        lib = self.mic_gain_mapper()
+        self.assertAlmostEqual(lib.wy_mic_gain_multiple(0), 0.5, places=4,
+                               msg='0% must not mute the microphone')
+        self.assertAlmostEqual(lib.wy_mic_gain_multiple(-40), 0.5, places=4)
+        self.assertAlmostEqual(lib.wy_mic_gain_multiple(50), 2.0, places=4)
+        self.assertAlmostEqual(lib.wy_mic_gain_multiple(78), 3.12, places=2,
+                               msg='78 is the fleet default and must stay ~3.1x')
+        self.assertAlmostEqual(lib.wy_mic_gain_multiple(100), 4.0, places=4)
+        self.assertAlmostEqual(lib.wy_mic_gain_multiple(250), 4.0, places=4,
+                               msg='out of range must clamp, not extrapolate')
+
+    def test_front_end_is_re_armed_on_every_boot(self):
+        """AGC and mic gain are VOLATILE co-processor state: a co-processor restart wipes them.
+
+        A co-processor restart happens on every power cycle and on every firmware write, so
+        applying them once at provisioning would leave the device hard of hearing after the first
+        reboot, with nothing in the log to say why. They must be armed from playback start."""
+        src = (ROOT / 'firmware/esp32/main/audio_playback.c').read_text()
+        start = src.index('int audio_playback_start(void)')
+        self.assertIn('audio_xvf_apply_frontend(', src[start:],
+                      'playback start must re-arm the front end on every boot')
+        self.assertIn('XVF_I2C_CMD_PP_AGCONOFF', src, 'AGC must be switched on')
+        self.assertIn('XVF_I2C_CMD_MIC_GAIN', src, 'the fixed gain must be applied too')
+
+    def test_mic_gain_config_reaches_the_chip(self):
+        """`mic_gain` was validated, stored and reported to the fleet while never reaching the
+        chip -- the device echoed a setting it had never applied. An adapter has to exist, and it
+        has to call the real setter."""
+        src = (ROOT / 'firmware/esp32/main/gateway_task.c').read_text()
+        self.assertIn('audio_xvf_set_mic_gain', src,
+                      'the config apply path must actually write the gain to the co-processor')
+        self.assertIn('"mic_gain"', src)
+
     def test_playback_arms_the_full_band_output_path_at_startup(self):
         """The 48 kHz profile only reaches the speaker if playback actually clears the upsampling
         flags AND selects the native-rate tap. If either write is missing, the chip's defaults

@@ -374,6 +374,13 @@ void wy_control_i32_command(uint8_t out[XVF_I2C_SET32_CMD_LEN], uint8_t resid, u
     wy_control_le32(out, resid, cmd, (uint32_t)value);
 }
 
+float wy_mic_gain_multiple(int percent) {
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    float multiple = WY_MIC_GAIN_MAX_MULTIPLE * (float)percent / 100.0f;
+    return multiple < WY_MIC_GAIN_MIN_MULTIPLE ? WY_MIC_GAIN_MIN_MULTIPLE : multiple;
+}
+
 void wy_control_f32_command(uint8_t out[XVF_I2C_SET32_CMD_LEN], uint8_t resid, uint8_t cmd,
                             float value) {
     /* A union rather than memcpy so this stays free of <string.h> and the bit pattern is exact:

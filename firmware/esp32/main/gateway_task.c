@@ -286,6 +286,20 @@ static int cfg_apply(void *user, const char *settings_json,
             degraded = 1;   /* a value the live path refused: not applied */
         }
     }
+    /* mic_gain: NOW a live adapter. It was validated, stored and reported back to the fleet while
+     * never reaching the chip -- the device echoed a setting it had never applied, because the
+     * co-processor's gain is a 4-byte float and our write path could not express one. */
+    const cJSON *gain = cJSON_GetObjectItemCaseSensitive(settings, "mic_gain");
+    if (gain) {
+        if (cJSON_IsNumber(gain) && !cJSON_IsBool(gain) &&
+            gain->valuedouble >= 0 && gain->valuedouble <= XVF_MIC_GAIN_PERCENT_MAX &&
+            gain->valuedouble == (double)(long)gain->valuedouble &&
+            audio_xvf_set_mic_gain((int)gain->valuedouble) == 0) {
+            cJSON_AddNumberToObject(actual, "mic_gain", gain->valuedouble);
+        } else {
+            degraded = 1;   /* a value the live path refused: not applied */
+        }
+    }
     /* wake_threshold / wake_word: staged to NVS for the next increment's detector. They are NOT
      * live-applied (there is no detector yet), so they are never in `actual` -- they land in the
      * agent's pending set. Staging is a side effect; its failure does not change the report. */

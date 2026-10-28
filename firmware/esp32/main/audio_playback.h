@@ -65,6 +65,24 @@ int audio_xvf_write(uint8_t resid, uint8_t cmd, const uint8_t *params, size_t np
  * which is why a 4-byte value written through it is acknowledged and silently ignored. */
 int audio_xvf_write_frame(const uint8_t *frame, size_t len);
 
+/* Bring the co-processor's audio front end up: AGC on, its max gain and target level set, and the
+ * microphone gain applied. These are VOLATILE settings on the chip -- a co-processor restart wipes
+ * them -- so this must run on every boot, not once at provisioning.
+ *
+ * Why it exists: measured on this hardware before it did, speech arrived at RMS ~219 against a room
+ * floor of ~334, i.e. the talker was quieter than the room. The wake model then crossed its cutoff
+ * only intermittently and the bridge's energy gate rejected every speech frame (87 of 87). */
+int audio_xvf_apply_frontend(int mic_gain_percent);
+
+/* Just the microphone gain, for the live config path (fleet `mic_gain`). Same 0..100 scale. */
+int audio_xvf_set_mic_gain(int mic_gain_percent);
+
+/* The gain the AGC alone cannot supply, as a percentage of the compile-time maximum. The fleet
+ * default is 78, which maps to about 3.1x -- close to the 4.0x that measurably improved pickup
+ * on the bench. */
+#define XVF_MIC_GAIN_DEFAULT_PERCENT 78
+#define XVF_MIC_GAIN_PERCENT_MAX     100
+
 /* Read an arbitrary XVF3800 control register. The caller marks the command as a read (cmd|0x80)
  * and sizes the reply; byte 0 of the reply is the status. */
 int audio_xvf_read(const uint8_t *cmd, size_t cmdlen, uint8_t *reply, size_t replylen);

@@ -241,6 +241,56 @@ int audio_xvf_write_frame(const uint8_t *frame, size_t len) {
     return xvf_control_write_at(XVF_I2C_ADDRESS, frame, len, "xvf write32");
 }
 
+/* ---- co-processor audio front end: AGC + microphone gain -------------------------------
+ *
+ * Measured before this existed, on this board: speech RMS ~219 against a room floor of ~334 --
+ * the talker arriving quieter than the room. The wake model crossed its cutoff only intermittently
+ * and the bridge's energy gate rejected every speech frame it saw (87 of 87).
+ *
+ * Both controls live on the co-processor and both were unreachable until the 4-byte scalar
+ * framing was fixed (count = 1 with a four-byte payload); a writer that derived count from the
+ * payload length sent count = 4, which the chip acknowledges and ignores.
+ *
+ * Everything set here is VOLATILE on the chip. A co-processor restart -- every power cycle, every
+ * firmware write -- restores its defaults, so this must run on every boot rather than once at
+ * provisioning, or the device silently reverts to being hard of hearing. */
+#define XVF_AGC_MAX_GAIN   60.0f
+#define XVF_AGC_TARGET     0.003f
+
+static int xvf_scalar_i32(uint8_t resid, uint8_t cmd, int32_t value) {
+    uint8_t frame[XVF_I2C_SET32_CMD_LEN];
+    wy_control_i32_command(frame, resid, cmd, value);
+    return audio_xvf_write_frame(frame, sizeof(frame));
+}
+
+static int xvf_scalar_f32(uint8_t resid, uint8_t cmd, float value) {
+    uint8_t frame[XVF_I2C_SET32_CMD_LEN];
+    wy_control_f32_command(frame, resid, cmd, value);
+    return audio_xvf_write_frame(frame, sizeof(frame));
+}
+
+int audio_xvf_set_mic_gain(int mic_gain_percent) {
+    return xvf_scalar_f32(XVF_I2C_RESID_AUDIO_MGR, XVF_I2C_CMD_MIC_GAIN,
+                          wy_mic_gain_multiple(mic_gain_percent));
+}
+
+int audio_xvf_apply_frontend(int mic_gain_percent) {
+    int rc = 0;
+    /* AGC first: it holds the level usable as the talker moves around, which no fixed gain can do
+     * in a far-field setup. The fixed gain on top sets where AGC starts from. */
+    rc |= xvf_scalar_i32(XVF_I2C_RESID_PP, XVF_I2C_CMD_PP_AGCONOFF, 1);
+    rc |= xvf_scalar_f32(XVF_I2C_RESID_PP, XVF_I2C_CMD_PP_AGCMAXGAIN, XVF_AGC_MAX_GAIN);
+    rc |= xvf_scalar_f32(XVF_I2C_RESID_PP, XVF_I2C_CMD_PP_AGCDESIREDLEVEL, XVF_AGC_TARGET);
+    rc |= audio_xvf_set_mic_gain(mic_gain_percent);
+    if (rc != 0)
+        ESP_LOGW("plb", "front end: co-processor control write failed (%d); the microphone stays "
+                        "quiet and wake detection may only work intermittently", rc);
+    else
+        ESP_LOGI("plb", "front end: AGC on (max gain %.0f, target %.4f), mic gain %.0f%%",
+                 (double)XVF_AGC_MAX_GAIN, (double)XVF_AGC_TARGET, (double)mic_gain_percent);
+    return rc;
+}
+
 /* Read an arbitrary XVF3800 control register. The caller sends the command bytes already
  * marked as a read (cmd | 0x80) and sized; the reply is [status, ...data]. This is the same
  * shape the bring-up probe uses for VERSION, which is the verified part of the pattern. Used
@@ -656,6 +706,10 @@ int audio_playback_start(void) {
     /* The codec that drives the 3.5 mm jack powers up muted. Bring it up before anything plays,
      * or every answer is silent regardless of the routing and the ring state. */
     audio_dac_init();
+    /* The co-processor's AGC and mic gain are volatile chip state: a co-processor restart wipes
+     * them, so they are re-armed here on every boot. Without this the device comes up hard of
+     * hearing and the wake word only fires sometimes, with nothing in the log to say why. */
+    audio_xvf_apply_frontend(XVF_MIC_GAIN_DEFAULT_PERCENT);
 
     /* ---- Arm the full-band playback path: upsampler OFF, far end at its NATIVE rate. ----
      *
