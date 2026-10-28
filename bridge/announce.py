@@ -822,8 +822,22 @@ class Announcer:
         except Exception:  # noqa: BLE001 - a broken view must not lose the announcement
             return None
 
+    @staticmethod
+    def _target_key(sat) -> tuple:
+        """Identity of the PHYSICAL DEVICE a delivery target speaks through.
+
+        Deliberately not `id(sat)`. Two delivery objects can exist for one device -- the loop's own
+        connection and the registry's lease for the same device is exactly that case -- and
+        identity-based dedup lets both through. Because `play_wav` holds the playback lock for the
+        clip's audible duration, the consequence is not a doubled mix but the SAME announcement
+        played twice, back to back, on one speaker. Measured on the board: an 8.48 s clip occupied
+        the amplifier for ~20 s and the room heard the sentence twice.
+        """
+        device = getattr(sat, "device_id", None)
+        return ("device", device) if device else ("object", id(sat))
+
     def _delivery_targets(self) -> list:
-        """The satellites one announcement should play on, deduplicated by identity.
+        """The satellites one announcement should play on, deduplicated by DEVICE.
 
         Fleet mode (issue #111): every armed lease, which includes whichever lease owns the
         conversation — so dedup by identity stops the conversation's device hearing the same
@@ -834,21 +848,24 @@ class Announcer:
         or one that yields nothing) get `[self._sat]`, exactly the historical shape.
         """
         targets: list = []
-        seen: set[int] = set()
+        seen: set[tuple] = set()
         active_owner = self._active_turn_owner()
         satellites = getattr(self, "_satellites", None)
         if satellites is not None:
             try:
                 for sat in satellites():
-                    if sat is None or id(sat) in seen:
+                    if sat is None:
+                        continue
+                    key = self._target_key(sat)
+                    if key in seen:
                         continue
                     if active_owner is not None and getattr(sat, "device_id", None) == active_owner:
                         continue
-                    seen.add(id(sat))
+                    seen.add(key)
                     targets.append(sat)
             except Exception as exc:  # noqa: BLE001 - a broken fleet view must not lose the announcement
                 _LOGGER.warning("fleet satellite lookup failed (%s); announcing on the loop connection", exc)
-        if not targets and self._sat is not None and id(self._sat) not in seen:
+        if not targets and self._sat is not None and self._target_key(self._sat) not in seen:
             # No usable fleet (single device, or the only armed device is mid-conversation
             # and the gate already gave up on a wedged turn): the historical single-
             # connection shape, speaking on the loop's connection.

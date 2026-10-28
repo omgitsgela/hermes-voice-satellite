@@ -335,9 +335,13 @@ class SatelliteClient:
             src = (wf.getframerate(), wf.getsampwidth(), wf.getnchannels())
             out = SND_FORMAT if convert_to_snd_format else src
             converter = AudioChunkConverter(*out)
-            _LOGGER.info("playing %s (%s Hz/%sch -> %s Hz/%sch, %.2f s)",
+            # The device is named here because without it a two-device fleet is indistinguishable
+            # from one device being sent the same clip twice -- and the difference matters: a
+            # duplicate on one speaker is a bug, one clip per speaker is correct behaviour.
+            _LOGGER.info("playing %s (%s Hz/%sch -> %s Hz/%sch, %.2f s) on %s",
                          wav_path.name, src[0], src[2], out[0], out[2],
-                         wf.getnframes() / max(src[0], 1))
+                         wf.getnframes() / max(src[0], 1),
+                         getattr(self, "device_id", None) or "unknown-device")
             # The satellite ignores audio-start/stop for playback (only AudioChunk reaches
             # aplay) but it uses them for its tts-start/stop events, so send them properly.
             await self.send(AudioStart(rate=out[0], width=out[1], channels=out[2]).event())
