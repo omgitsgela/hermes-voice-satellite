@@ -311,18 +311,25 @@ int audio_xvf_set_mic_gain(int mic_gain_percent) {
 
 int audio_xvf_apply_frontend(int mic_gain_percent) {
     int rc = 0;
-    /* AGC first: it holds the level usable as the talker moves around, which no fixed gain can do
-     * in a far-field setup. The fixed gain on top sets where AGC starts from. */
-    rc |= xvf_scalar_i32(XVF_I2C_RESID_PP, XVF_I2C_CMD_PP_AGCONOFF, 1);
-    rc |= xvf_scalar_f32(XVF_I2C_RESID_PP, XVF_I2C_CMD_PP_AGCMAXGAIN, XVF_AGC_MAX_GAIN);
-    rc |= xvf_scalar_f32(XVF_I2C_RESID_PP, XVF_I2C_CMD_PP_AGCDESIREDLEVEL, XVF_AGC_TARGET);
+    /* AGC is OFF, deliberately, and this is a reversal of an earlier decision that measured badly.
+     *
+     * With AGC on, the bridge's level reports decayed across a session -- max 1065, then 704, then
+     * 395 -- because the AGC pulls the gain down after a loud event (the wake chime) and recovers
+     * slowly. Speech then arrived below the bridge's 400 energy gate and was rejected as noise, so
+     * the device "would not latch": it works once, then becomes progressively more deaf.
+     *
+     * A fixed gain is predictable and is the right primitive here: the level is set once from the
+     * fleet's mic_gain, and nothing adapts underneath the wake model or the endpointing gate.
+     * XVF_AGC_MAX_GAIN / XVF_AGC_TARGET are kept because the console can still enable AGC for a
+     * deliberate experiment (XVF_SET32 17 10 1). */
+    rc |= xvf_scalar_i32(XVF_I2C_RESID_PP, XVF_I2C_CMD_PP_AGCONOFF, 0);
     rc |= audio_xvf_set_mic_gain(mic_gain_percent);
     if (rc != 0)
         ESP_LOGW("plb", "front end: co-processor control write failed (%d); the microphone stays "
                         "quiet and wake detection may only work intermittently", rc);
     else
-        ESP_LOGI("plb", "front end: AGC on (max gain %.0f, target %.4f), mic gain %.0f%%",
-                 (double)XVF_AGC_MAX_GAIN, (double)XVF_AGC_TARGET, (double)mic_gain_percent);
+        ESP_LOGI("plb", "front end: AGC off (fixed gain, predictable level), mic gain %.0f%% = %.2fx",
+                 (double)mic_gain_percent, (double)wy_mic_gain_multiple(mic_gain_percent));
     return rc;
 }
 
