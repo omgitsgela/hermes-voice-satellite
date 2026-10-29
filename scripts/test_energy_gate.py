@@ -192,8 +192,15 @@ def main() -> int:
     # pair must put the threshold above the fan's 191 median and below the person's 317 median.
     check("the shipped ratio clears the fan's median",
           shipped["ratio"] * LEARNED_FLOOR > 191, True)
-    check("and the floor clamp still leaves the person above the gate",
-          317 / max(shipped["threshold_min"], shipped["ratio"] * 60.0) > 1.0, True)
+    # Measured with a WORKING gain (2026-10-29, after the co-processor count-byte fix):
+    # room p50 251 at the same moment speech measured median 1103.
+    ROOM_WORKING_GAIN = 251
+    SPEECH_WORKING_GAIN = 1103
+    effective = max(shipped["threshold_min"], shipped["ratio"] * 60.0)
+    check("the room at working gain stays below the gate",
+          ROOM_WORKING_GAIN < effective, True)
+    check("and the person at working gain clears it with headroom",
+          SPEECH_WORKING_GAIN / effective >= 2.0, True)
     # A video is explicitly NOT the gate's job: its loudest frame (871) sits just over that threshold,
     # and a louder video would put more frames over it. What has to hold is that a leaked frame cannot
     # become a turn - that is the 0.25 s minimum doing the work, so one frame is at worst a blip.

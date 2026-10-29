@@ -372,8 +372,12 @@ VOICE_ENERGY_GATE = {
     # are acknowledged and both are inert on the stream we capture. So the level cannot be lifted
     # from this side, and the threshold is the only lever left.
     #
-    # 60 * 4.0 = 240, held to the 250 floor, puts the threshold ABOVE the fan's 191 median and BELOW
-    # her 317 median. This deliberately gives up rejecting the fan's PEAKS by level alone: on this
+    # 2026-10-29, later the same hour: 250 was correct ONLY while the microphone was broken. Once
+    # AEC_ASROUTGAIN actually applied (see the count-byte fix in the firmware), the same room reads
+    # p50 251 against speech at median 1103 -- the gap the hardware is supposed to provide. 250 was
+    # then sitting exactly ON the room's noise, so it was passing noise and would have kept the mic
+    # open on nothing. The floor is back at 500: above the measured room (251), comfortably below
+    # the measured speech (1103), leaving roughly 2x headroom for a quieter voice. This deliberately gives up rejecting the fan's PEAKS by level alone: on this
     # device her voice is only 1.7x the fan's median, so no level exists that separates them. Peak
     # rejection is the 0.25 s minimum speech duration and the detector's job instead - which is why
     # that minimum is not tuning to be relaxed.
@@ -383,7 +387,7 @@ VOICE_ENERGY_GATE = {
     "floor_max": 1000.0,
     "window_frames": 1500,   # 30 s at 20 ms frames
     "min_samples": 40,       # 0.8 s of non-speech before the floor is taken from the window
-    "threshold_min": 250.0,
+    "threshold_min": 500.0,
     # The gate must never climb above the person it is listening for. Without this the threshold is
     # purely a property of the ROOM, so a busy office (floor ~540 there, against 142-190 at home)
     # produced 3240 and went deaf to a speaker sitting at 1040. Measured speech is 1026 at home and
