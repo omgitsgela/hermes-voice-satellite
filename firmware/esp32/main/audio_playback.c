@@ -152,9 +152,9 @@ static int32_t playback_drain_ms;
  * The timeout matters as much as the threshold: if the producer is slower than the clock (or the
  * clip is shorter than the pre-roll) the buffer never fills, and without a deadline the device
  * would sit in silence forever. Play anyway after waiting this long. */
-#define PLAYBACK_PREROLL_MS      2000u
+#define PLAYBACK_PREROLL_MS      400u
 #define PLAYBACK_PREROLL_BYTES   ((size_t)PLAYBACK_PREROLL_MS * 48u * 8u / 1000u)
-#define PLAYBACK_PREROLL_MAX_MS  3000u
+#define PLAYBACK_PREROLL_MAX_MS  1200u
 
 #define PLAYBACK_AMP_HOLD_MS 1500
 

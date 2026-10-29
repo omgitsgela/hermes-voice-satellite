@@ -823,10 +823,18 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
             /* Reset the ring under the lock: the playback task may be mid-read (draining the
              * last answer) while the bridge starts the next one, so an unlocked reset would
              * race the reader's head advance. */
-            ESP_LOGW("audstart", "audio-start: before ring reset");
             playback_ring_lock_take();
-            session->ring_head = 0;
-            session->ring_tail = 0;
+            /* Do NOT clear a pending device tone. The wake chime is queued by the capture task at
+             * the instant of detection, and the bridge's first audio-start arrives milliseconds
+             * later; resetting here deleted the chime before it was ever played, which is heard as
+             * "the chime is extremely laggy" (in fact it was dropped, and the prompt tone that
+             * followed started from silence). Only stale STREAM audio is discarded. */
+            if (!wy_session_local_pending(session)) {
+                session->ring_head = 0;
+                session->ring_tail = 0;
+            } else {
+                ESP_LOGI("audstart", "audio-start: a device tone is still queued; keeping the ring");
+            }
             playback_ring_lock_give();
             ESP_LOGW("audstart", "audio-start: ring reset done, arming playback");
             session->playback_active = 1;
