@@ -621,16 +621,20 @@ class AudioTests(unittest.TestCase):
 
         self.assertEqual(core_of('audio_capture.c', 'capture_task_fn'), 1,
                          'capture must own the audio core')
-        self.assertEqual(core_of('audio_playback.c', 'playback_task_fn'), 1,
-                         'the pump must own the audio core')
+        # The pump must NOT share the capture core: capture runs wake-model inference every 10 ms at
+        # priority 6, and a pump below it there starved playback to ~7% of realtime.
+        self.assertEqual(core_of('audio_playback.c', 'playback_task_fn'), 0,
+                         'the pump must not share the inference core')
+        self.assertGreaterEqual(priority('audio_playback.c', 'PLAYBACK_TASK_PRIORITY'),
+                                priority('gateway_task.c', 'GATEWAY_TASK_PRIORITY'),
+                                'the pump must not be starved by TLS work on its core')
         self.assertEqual(core_of('gateway_task.c', 'gateway_task_fn'), 0,
                          'the TLS reader must stay off the audio core')
         self.assertEqual(core_of('led_status.c', 'led_worker'), 0,
                          'the LED worker must stay off the audio core')
 
-        self.assertGreater(priority('audio_capture.c', 'CAPTURE_TASK_PRIORITY'),
-                           priority('audio_playback.c', 'PLAYBACK_TASK_PRIORITY'),
-                           'capture must outrank playback on the audio core')
+        # Capture and the pump are on DIFFERENT cores, so their priorities are not comparable;
+        # what matters is that neither shares a core with the other's workload.
         self.assertGreaterEqual(priority('led_status.c', 'LED_WORKER_PRIORITY'),
                                 priority('gateway_task.c', 'GATEWAY_TASK_PRIORITY'),
                                 'wake feedback must not be starved by network work')

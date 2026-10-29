@@ -67,10 +67,9 @@
 #define XVF_I2C_SCL_PIN   GPIO_NUM_6
 #define XVF_I2C_SCL_HZ    400000
 
-/* Deliberately BELOW capture: a dropped microphone sample is unrecoverable (the DMA has already
- * overwritten it and the wake model sees a hole), whereas a late playback write only costs a
- * little latency. Both are above every cosmetic task. */
-#define PLAYBACK_TASK_PRIORITY  5u
+/* Above the gateway task on the shared core 0, so a TLS burst cannot starve the pump; capture
+ * remains above it in importance but lives on the other core, so the two never compete. */
+#define PLAYBACK_TASK_PRIORITY  6u
 #define PLAYBACK_TASK_STACK     6144u
 #define PLAYBACK_WRITE_MS       20u   /* 2x the realtime length of a full batch (10 ms) */
 /* One I2S write's worth of audio: 960 int32 = 480 STEREO FRAMES = 10 ms at 48 kHz.
@@ -962,10 +961,18 @@ int audio_playback_start(void) {
      * says an answer is playing, so starting the channel early (at registration, before the
      * first wake) is what makes the first answer start clean: the DMA is already primed. */
     stopping = 0;
-    /* Core 1 with capture, away from WiFi/lwIP/TLS on core 0: the pump must not be descheduled
-     * by network work, or the DMA runs dry and plays the zeros it already holds. */
+    /* Core 0, NOT the capture core.
+     *
+     * The capture task runs the wake-model inference on every 10 ms frame at priority 6. Pinning the
+     * pump to the same core (priority 5, i.e. below it) starved playback catastrophically: a 0.31 s
+     * chime took 4.6 s to drain, about 7% of realtime, heard as a chime arriving late and then
+     * stuttering. The two must not share a core.
+     *
+     * So: capture + inference own core 1; the pump joins the network/UI core at a priority above the
+     * gateway task, so a TLS burst cannot starve it either. The pump blocks on the DMA most of its
+     * life, so sharing with the radio costs the radio little. */
     if (xTaskCreatePinnedToCore(playback_task_fn, "plb_task", PLAYBACK_TASK_STACK, NULL,
-                    PLAYBACK_TASK_PRIORITY, &task, 1) != pdPASS) {
+                    PLAYBACK_TASK_PRIORITY, &task, 0) != pdPASS) {
         i2s_channel_disable(tx);
         i2s_del_channel(tx);
         tx = NULL;
