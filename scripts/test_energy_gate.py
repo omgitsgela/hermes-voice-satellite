@@ -122,8 +122,15 @@ def main() -> int:
     ep = build([False] * 200)
     feed(ep, FAN_RMS, 100)
     threshold = ep.gate.threshold
-    check("threshold is above the loudest fan frame", threshold > 422, True)
-    check("threshold is above the loudest video frame", threshold > VIDEO_RMS, True)
+    # Retuned 2026-10-29. These used to assert the threshold cleared the fan's PEAKS (422) and the
+    # loudest video frame (871). On the ESP32 satellite the person's speech measures median 317 --
+    # BELOW both -- and no device-side gain exists to raise it (AUDIO_MGR_MIC_GAIN and the PP AGC
+    # are both acknowledged and inert, measured). Insisting on clearing the peaks therefore meant
+    # rejecting the person, which is the failure mode this file exists to prevent.
+    #
+    # So the gate now clears the fan's MEDIAN, and peak rejection is duration's job: one leaked
+    # frame is 0.02 s against a 0.25 s minimum. That trade is asserted at the video case below.
+    check("threshold is above the fan's median", threshold > 191, True)
     check("speech clears the threshold at the floor it learns",
           SPEECH_RMS / (142 * ratio) >= 2.0, True)
     check("speech clears the threshold at the default floor",
@@ -141,7 +148,7 @@ def main() -> int:
     # A silent room must not drive the floor to zero and the threshold with it.
     ep = build([False] * 100)
     feed(ep, 0, 100)
-    check("a dead-silent room leaves a sane threshold", ep.gate.threshold >= 400, True)
+    check("a dead-silent room leaves a sane threshold", ep.gate.threshold >= 200, True)
 
     # ---------------------------------------------------------------- a busy office
     # Measured from three samples on 2026-09-25, a computer centre with a fan and other
@@ -181,10 +188,12 @@ def main() -> int:
     LEARNED_FLOOR = 142     # what the gate actually learns from this room's fan audio
     check("the shipped default floor is the measured fan level",
           round(shipped["floor_default"]), 190)
-    # The requirement is the fan, and the fan must be cleared with real margin: at ratio 6 the
-    # threshold is 852 against a fan peak of 422, which is 2x.
-    check("the shipped ratio clears the loudest fan frame by 2x",
-          shipped["ratio"] * LEARNED_FLOOR >= 422 * 2.0, True)
+    # The requirement is the fan's ordinary level, not its peaks (see the note above): the shipped
+    # pair must put the threshold above the fan's 191 median and below the person's 317 median.
+    check("the shipped ratio clears the fan's median",
+          shipped["ratio"] * LEARNED_FLOOR > 191, True)
+    check("and the floor clamp still leaves the person above the gate",
+          317 / max(shipped["threshold_min"], shipped["ratio"] * 60.0) > 1.0, True)
     # A video is explicitly NOT the gate's job: its loudest frame (871) sits just over that threshold,
     # and a louder video would put more frames over it. What has to hold is that a leaked frame cannot
     # become a turn - that is the 0.25 s minimum doing the work, so one frame is at worst a blip.

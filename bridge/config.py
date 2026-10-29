@@ -355,13 +355,35 @@ ENDPOINTING_PROFILES = {
 # already accepted. A quiet speaker who is being gated out needs this ratio lowered, and the honest
 # first move is to measure them the way the numbers above were measured.
 VOICE_ENERGY_GATE = {
-    "ratio": 6.0,
+    # Retuned 2026-10-29 against a measured person on the ESP32 satellite, after the shipped pair
+    # rejected her every time. Measured on a live link (20 ms frames):
+    #
+    #     room     p20 56-58   p50 73-77   p90 109-119   fan peaks up to 422, one-off spikes to 1072
+    #     her      speech median 317        peaks 732-1243
+    #
+    # At ratio 6.0 and threshold_min 400 the gate sat at 400: ABOVE her median, so 19 of her 28
+    # speech frames were vetoed, the 700 ms trailing-silence timer filled while she was still
+    # talking, and the turn ended 0.66 s in. She heard the chime, said a sentence, and the device
+    # behaved as though the room were empty.
+    #
+    # The obvious alternative - make her louder - was MEASURED and is not available on this
+    # hardware: AUDIO_MGR_MIC_GAIN (35/0) at 12.48 vs 1.0 moved the room level from 77 to 75 (3%),
+    # and the PP AGC (17/10..12) at max gain 60 / target 0.05 moved it from 75 to 73. Both writes
+    # are acknowledged and both are inert on the stream we capture. So the level cannot be lifted
+    # from this side, and the threshold is the only lever left.
+    #
+    # 60 * 4.0 = 240, held to the 250 floor, puts the threshold ABOVE the fan's 191 median and BELOW
+    # her 317 median. This deliberately gives up rejecting the fan's PEAKS by level alone: on this
+    # device her voice is only 1.7x the fan's median, so no level exists that separates them. Peak
+    # rejection is the 0.25 s minimum speech duration and the detector's job instead - which is why
+    # that minimum is not tuning to be relaxed.
+    "ratio": 4.0,
     "floor_default": 190.0,
     "floor_min": 60.0,
     "floor_max": 1000.0,
     "window_frames": 1500,   # 30 s at 20 ms frames
     "min_samples": 40,       # 0.8 s of non-speech before the floor is taken from the window
-    "threshold_min": 400.0,
+    "threshold_min": 250.0,
     # The gate must never climb above the person it is listening for. Without this the threshold is
     # purely a property of the ROOM, so a busy office (floor ~540 there, against 142-190 at home)
     # produced 3240 and went deaf to a speaker sitting at 1040. Measured speech is 1026 at home and
