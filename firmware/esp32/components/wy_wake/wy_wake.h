@@ -73,6 +73,18 @@ void wy_wake_set_seams(wy_wake *w, wy_wake_score_fn score, wy_wake_load_fn load,
  * an init failure: the core comes up armed-but-mute (see the header). */
 int wy_wake_init(wy_wake *w, double threshold, unsigned cooldown_ms, const char *model_name);
 
+/* Change the detection threshold at runtime. The config plane allows a per-device
+ * wake_threshold and the gateway expects a setting it can change without a reboot, so the core
+ * accepts it live: the threshold is a single comparison against each scored frame, and swapping it
+ * mid-stream is a scalar write with no model, no buffer and no clock involved.
+ *
+ * Accepted range is [0, 1]; anything else (including NaN) is refused and the current value is
+ * kept. Returns WY_WAKE_OK, or -1 for a bad argument or a NULL core. */
+int wy_wake_set_threshold(wy_wake *w, double threshold);
+
+/* Read the threshold the core is actually using (useful for a truthful settings report). */
+double wy_wake_threshold(const wy_wake *w);
+
 /* Reset the model flags. The core owns no model memory (the loader does), so
  * destroy frees nothing. */
 void wy_wake_destroy(wy_wake *w);

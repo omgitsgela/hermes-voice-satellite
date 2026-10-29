@@ -9,6 +9,7 @@
 #include "device_identity.h"
 #include "audio_capture.h"
 #include "audio_playback.h"
+#include "wake_detector.h"
 #include "wyoming_audio.h"   /* WY_VOLUME_DEFAULT_PERCENT: the device's conservative default level */
 #include "wyoming_session.h"
 #include "wyoming_config.h"  /* the config-plane agent the session transports */
@@ -317,15 +318,31 @@ static int cfg_apply(void *user, const char *settings_json,
      * fleet mixing boards and Pi satellites gets the right format per device. */
     cJSON_AddNumberToObject(actual, "snd_rate", (double)WY_AUDIO_I2S_RATE_HZ);
 
-    /* wake_threshold / wake_word: staged to NVS for the next increment's detector. They are NOT
-     * live-applied (there is no detector yet), so they are never in `actual` -- they land in the
-     * agent's pending set. Staging is a side effect; its failure does not change the report. */
+    /* wake_threshold: NOW a live adapter. It used to be staged to NVS with a comment saying
+     * "there is no detector yet" -- written before the TFLM detector existed and stale ever since,
+     * so a per-device sensitivity change silently waited for a reboot the device never got. The
+     * running core takes it immediately (one comparison per frame).
+     *
+     * The value is persisted as well, because the detector reads it from NVS at boot; without that
+     * the setting would survive until the next power cycle and then quietly revert. Only a value the
+     * LIVE path accepted is reported in `actual`, so the fleet can tell applied from ignored. */
     const cJSON *threshold = cJSON_GetObjectItemCaseSensitive(settings, "wake_threshold");
-    if (threshold && cJSON_IsNumber(threshold) && !cJSON_IsBool(threshold)) {
-        char buf[24];
-        snprintf(buf, sizeof(buf), "%.6f", threshold->valuedouble);
-        cfg_stage_wake("wake_threshold", buf);
+    if (threshold) {
+        if (cJSON_IsNumber(threshold) && !cJSON_IsBool(threshold) &&
+            threshold->valuedouble >= 0.05 && threshold->valuedouble <= 0.99 &&
+            wake_detector_set_threshold(threshold->valuedouble) == 0) {
+            char buf[24];
+            snprintf(buf, sizeof(buf), "%.6f", threshold->valuedouble);
+            cfg_stage_wake("wake_threshold", buf);
+            cJSON_AddNumberToObject(actual, "wake_threshold", threshold->valuedouble);
+        } else {
+            degraded = 1;
+        }
     }
+    /* wake_word: still STAGED, and deliberately reported as such. The word is a model SELECTOR,
+     * and switching it live means tearing down and reloading the TFLM scorer mid-stream; that is
+     * not a scalar write and is not done here. It persists to NVS and takes effect on the next
+     * boot, which is why it stays out of `actual` and the device honestly reports a partial apply. */
     const cJSON *word = cJSON_GetObjectItemCaseSensitive(settings, "wake_word");
     if (word && cJSON_IsString(word) && word->valuestring)
         cfg_stage_wake("wake_word", word->valuestring);

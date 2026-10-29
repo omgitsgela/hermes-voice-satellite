@@ -124,8 +124,20 @@ int wy_wake_init(wy_wake *w, double threshold, unsigned cooldown_ms, const char 
     return 0;
 }
 
-void wy_wake_destroy(wy_wake *w)
-{
+int wy_wake_set_threshold(wy_wake *w, double threshold) {
+    if (!w) return -1;
+    /* NaN fails both comparisons, which is exactly the behaviour we want: an unusable value is
+     * refused rather than silently making the detector deaf or hair-trigger. */
+    if (!(threshold >= 0.0) || !(threshold <= 1.0)) return -1;
+    w->threshold = threshold;
+    return WY_WAKE_OK;
+}
+
+double wy_wake_threshold(const wy_wake *w) {
+    return w ? w->threshold : 0.0;
+}
+
+void wy_wake_destroy(wy_wake *w) {
     if (w == NULL)
         return;
     /* The core owns no model memory (the loader does); the flags reset only. */

@@ -55,6 +55,17 @@ void wake_detector_force_fire(void);
 /* A one-line status for the provisioning console: model/deaf/force state. */
 void wake_detector_status(char *out, size_t cap);
 
+/* Apply wake_threshold LIVE. Returns 0 when the running detector accepted it, -1 otherwise.
+ *
+ * The threshold is the second gate on every scored frame, so it can change while audio is flowing;
+ * a per-device value that only landed after a reboot would mean the fleet could not tune one
+ * device's sensitivity without restarting it, and the person holding the device gets no feedback
+ * that anything happened. Persisting is the caller's business (see the config apply path). */
+int wake_detector_set_threshold(double threshold);
+
+/* The threshold the detector is ACTUALLY using, so a settings report can be truthful. */
+double wake_detector_get_threshold(void);
+
 #endif
 
 /* Play the chime directly, bypassing the wake detector. Diagnostics: separates an audio-path

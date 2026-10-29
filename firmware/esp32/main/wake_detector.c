@@ -261,6 +261,15 @@ static int chime_play(void *user) {
  * machine. The two must be tested separately.
  *
  * Returns 0 on a queued chime, -1 otherwise. */
+int wake_detector_set_threshold(double threshold) {
+    if (!wd.core) return -1;
+    return wy_wake_set_threshold(wd.core, threshold) == WY_WAKE_OK ? 0 : -1;
+}
+
+double wake_detector_get_threshold(void) {
+    return wd.core ? wy_wake_threshold(wd.core) : WAKE_DEFAULT_THRESHOLD;
+}
+
 int wake_detector_play_chime(void) {
     return chime_play(NULL);
 }
