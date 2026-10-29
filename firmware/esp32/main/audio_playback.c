@@ -346,12 +346,20 @@ int audio_xvf_apply_frontend(int mic_gain_percent) {
     if (asr_gain < 1.0f) asr_gain = 1.0f;
     rc |= xvf_scalar_i32(XVF_I2C_RESID_AEC, XVF_I2C_CMD_ASR_OUT_ONOFF, 1);
     rc |= xvf_scalar_f32(XVF_I2C_RESID_AEC, XVF_I2C_CMD_ASR_OUT_GAIN, asr_gain);
-    rc |= xvf_scalar_f32(XVF_I2C_RESID_AUDIO_MGR, XVF_I2C_CMD_MIC_GAIN, 1.0f);
+    /* AUDIO_MGR_MIC_GAIN (pre-SHF) is deliberately NOT written.
+     *
+     * It was briefly written as 1.0 "for unity", on the theory that a second gain ahead of the
+     * beamformer only buys clipping. With the count byte still broken that write was inert and
+     * harmless. The moment the count byte was fixed it took effect -- and the microphone went from
+     * a working level to near-silence (speech gone, room p50 76 -> 5), because the image's own
+     * pre-SHF default is far above 1.0. Writing unity to a control whose default is high is not a
+     * neutral act. The chip's default is the right value; leave it alone. */
     if (rc != 0)
         ESP_LOGW("plb", "front end: co-processor control write failed (%d); the microphone stays "
                         "quiet and wake detection may only work intermittently", rc);
     else
-        ESP_LOGI("plb", "front end: ASR tap on, fixed ASR gain %.2fx (mic_gain %.0f%%), pre-SHF unity",
+        ESP_LOGI("plb", "front end: ASR tap on, fixed ASR gain %.2fx (mic_gain %.0f%%), "
+                        "pre-SHF gain left at the image default",
                  (double)asr_gain, (double)mic_gain_percent);
     return rc;
 }
