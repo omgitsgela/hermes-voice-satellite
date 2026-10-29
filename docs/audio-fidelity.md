@@ -50,8 +50,11 @@ interpolation, do not add the 7400 Hz low-pass back.
                     │                            FIR at 7.5 kHz)   │
                     └────────────────────────────────────────────┘
 
-   bridge TTS ──22050 Hz──► cubic up-sample ──48 kHz──► volume ──► stereo-32 ──► ring ──► I2S TX
-   local tones ──16 kHz───► cubic up-sample ──48 kHz──┘
+   gateway ──48000 Hz──► (no conversion) ──► volume ──► stereo-32 ──► ring ──► I2S TX
+   (native)             copy → scale → expand
+   gateway ──22050 Hz──► cubic up-sample ──48 kHz──► volume ──► stereo-32 ──► ring ──► I2S TX
+   (legacy host)                                        ▲
+   local tones ──16 kHz──► cubic up-sample ──48 kHz──────┘  (never pre-rolled: they are complete)
 ```
 
 Three rates, deliberately:
@@ -100,19 +103,44 @@ treat "the sizes match" as necessary, not sufficient.
 
 ## The hardware unknowns
 
-**1. Does the XVF3800's firmware image follow a 48 kHz clock?** The ESP32 is the I2S clock
-**master** and the XVF3800 PLLs its own MCLK from BCLK, so the rate is ours to set — but if the
-image on the board is a 16 kHz-only build, driving 48 kHz will stop the mic pipeline (the symptom
-noted in `audio_playback.c` when the clock was corrupted: the LED beam display goes dead and the
-DAC clicks).
+**1. Does the XVF3800's firmware image follow a 48 kHz clock?** **RESOLVED — it depends on the
+image, and the clock ROLE moves with it.**
 
-**2. Is the AIC3104 still inside its valid fs(ref) range?** The codec's PLL is fed from BCLK and
-its rates scale with it, which is why the register sequence is unchanged. But `Register 7 D7`
-declares fs(ref) as nominally 48 kHz, and tripling BCLK triples that. If playback is flaky at
-48 kHz but clean at 16 kHz, this is the first suspect. (Separately: an older comment in
-`audio_playback.c` claimed these registers set `J = 48`. The datasheet says the J field is
-Register 4 bits D7-D2, so `0x30` is **J = 12**. The values work; the comment did not describe
-them. Do not "fix" the register to match the old comment.)
+Upstream ships two complementary I2S images: a 48 kHz **master** and a 16 kHz **slave**. The
+roles are clock ownership only, and they must be complementary — two masters contend on shared
+pins, two slaves leave the bus with no clock at all. The board originally carried the stock v1.0.4
+16 kHz-interface image, which is why driving it at 48 kHz left the microphone pipeline dead: a
+16 kHz interface being clocked at 48 kHz. The fix is a matched pair, not a rate constant:
+
+| Co-processor image | ESP32 role | Link |
+|---|---|---|
+| `respeaker_xvf3800_i2s_master_v1.0.9_48k.bin` | **slave** | 48 kHz |
+| `respeaker_xvf3800_i2s_slave_v1.0.9_16k.bin` | master | 16 kHz |
+
+Note that the ESP32 being the clock *slave* changes what the sample counters mean: while it drove
+its own clock, the mic accounting was self-fulfilling; as a slave it cannot advance its I2S RX
+without the co-processor driving BCLK and WS, so the count becomes real evidence about the link.
+
+**2. Is the AIC3104 still inside its valid fs(ref) range?** Not a factor in practice. Register 2
+(the fs divider) does not set the interface frame rate — WS does — so changing it cannot change
+playout speed, and it did not. The register sequence below is unchanged and correct at 48 kHz.
+(Separately: an older comment in `audio_playback.c` claimed these registers set `J = 48`. The
+datasheet says the J field is Register 4 bits D7-D2, so `0x30` is **J = 12**. The values work; the
+comment did not describe them. Do not "fix" the register to match the old comment.)
+
+### The device may not need to convert at all
+
+The rate a satellite should be *sent* belongs to the satellite, not to the gateway: a fleet is one
+gateway plus any number of satellites in any mix of hardware. A device reports `snd_rate` as a
+capability and the gateway converts to that rate for it. The ESP32 reports 48000, so its stream
+arrives at the link rate and the sample path is copy -> scale -> expand with **no interpolation
+stage at all**; a Pi satellite reports 22050 and keeps receiving Piper's native rate.
+
+Where the conversion happens is a real trade, not a preference: doing it on the gateway makes the
+wire payload ~2.18x larger, and the ESP32's TLS receive path is a measured bottleneck. On this
+hardware arrival still sat at 190-220% of realtime, so it was affordable — but measure it rather
+than assuming either way. Upsampling itself is not lossy; it cannot add information and discards
+none. Downsampling is the lossy direction.
 
 ### Reverting is NOT one constant — do not be misled
 
@@ -142,7 +170,9 @@ clocks, both conversions, the chunk size, the buffer sizing and the codec regist
 | Capture decimation | `audio_capture.c` → `audio_capture_send_chunk`, `capture_decim` |
 | Playback up-sample | `wyoming_session.c` → `playback_rs`, `WY_PLAYBACK_IN_MAX` |
 | Local tone up-sample | `wyoming_session.c` → `wy_session_local_play` |
-| Host tests | `scripts/test_48k_resample.py` |
+| Rate negotiation | device reports `snd_rate` (`gateway_task.c`); gateway picks it in `bridge/satellite.py` → `out_format` |
+| Pre-roll (jitter buffer) | `audio_playback.c` → `PLAYBACK_PREROLL_MS`, skipped for local tones |
+| Host tests | `scripts/test_48k_resample.py`, `scripts/test_esp32_audio.py` |
 
 The 16 kHz down-sampler `wy_resample_22050_to_16000` and its FIR are **kept**: they are still the
 correct tool for a 16 kHz link, and if the hardware turns out not to support 48 kHz, reverting is
