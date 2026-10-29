@@ -77,9 +77,13 @@ int audio_xvf_apply_frontend(int mic_gain_percent);
 /* Just the microphone gain, for the live config path (fleet `mic_gain`). Same 0..100 scale. */
 int audio_xvf_set_mic_gain(int mic_gain_percent);
 
-/* The gain the AGC alone cannot supply, as a percentage of the compile-time maximum. The fleet
- * default is 78, which maps to about 3.1x -- close to the 4.0x that measurably improved pickup
- * on the bench. */
+/* Ceiling on the ASR output gain actually applied (AEC_ASROUTGAIN). The register allows up to
+ * 1000x, which would only clip; 8x is +18 dB, ample for a far-field talker and well inside the
+ * limiter. */
+#define XVF_ASR_GAIN_MAX 8.0f
+
+/* The gain the microphone path needs, as a percentage of the compile-time maximum. The fleet
+ * default is 78, which maps to about 12.5x before the ASR ceiling clamps it to 8x. */
 #define XVF_MIC_GAIN_DEFAULT_PERCENT 78
 #define XVF_MIC_GAIN_PERCENT_MAX     100
 

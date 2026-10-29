@@ -179,6 +179,19 @@ void wy_output_upsample_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int left_upsam
  * model wants, and the bridge's own measurement says so: speech RMS ~220-700 while the room floor
  * is ~300. Enabling AGC is the lever that fixes level without touching the link at all. */
 #define XVF_I2C_SET32_CMD_LEN   7    /* [resid, cmd, 1, b0, b1, b2, b3] */
+#define XVF_I2C_RESID_AEC       33   /* AEC Servicer: beamformer output taps */
+#define XVF_I2C_CMD_ASR_OUT_ONOFF 35 /* AEC_ASROUTONOFF: int32. 0 = AEC residuals (one channel per
+                                      * MICROPHONE, unprocessed) 1 = beamformed ASR output (one
+                                      * channel per BEAM). Seeed's I2S images route BOTH default
+                                      * I2S output channels to ASR beam 0, and XMOS documents that
+                                      * this tap is taken AFTER the beamformer and is NOT fed
+                                      * through the post-processor -- which is why the PP AGC has
+                                      * no effect on the audio we capture. */
+#define XVF_I2C_CMD_ASR_OUT_GAIN 36  /* AEC_ASROUTGAIN: float, 0.0-1000.0 linear, applied only
+                                      * when ASR_OUT_ONOFF is 1. This is the "configurable fixed
+                                      * gain" the datasheet describes for the ASR output, and it is
+                                      * the only gain that reaches the stream we capture. */
+
 #define XVF_I2C_RESID_PP        17   /* PP Servicer (AGC / noise / echo) */
 #define XVF_I2C_CMD_PP_AGCONOFF      10  /* int32: AGC switch (0,1) */
 #define XVF_I2C_CMD_PP_AGCMAXGAIN    11  /* float: AGC max gain [1.0 .. 1000.0] */

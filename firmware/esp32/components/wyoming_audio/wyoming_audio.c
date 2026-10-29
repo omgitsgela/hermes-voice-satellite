@@ -362,7 +362,15 @@ static void wy_control_le32(uint8_t out[XVF_I2C_SET32_CMD_LEN], uint8_t resid, u
     if (!out) return;
     out[0] = resid;
     out[1] = cmd;
-    out[2] = 1;                              /* one 32-bit value, not four bytes worth of values */
+    /* The count field is the PAYLOAD LENGTH IN BYTES, so a 32-bit value sends 4, not 1.
+     *
+     * Measured on the board on 2026-10-29: with count=1 the co-processor ACKs the frame and applies
+     * nothing -- every scalar control (mic gain, ASR gain, AGC) was silently inert for as long as
+     * this said 1. With count=4 the same value takes effect immediately: AEC_ASROUTGAIN 1.0 -> 32.0
+     * moved the measured room level from p90 58 to p90 1140 (a 30-40x jump, matching the requested
+     * 32x). An ACK is only a bus acknowledgement; XMOS requires a status query afterwards before a
+     * write can be considered applied, so this byte has to be right. */
+    out[2] = 4;
     out[3] = (uint8_t)(bits & 0xFFu);
     out[4] = (uint8_t)((bits >> 8) & 0xFFu);
     out[5] = (uint8_t)((bits >> 16) & 0xFFu);

@@ -305,31 +305,54 @@ static int xvf_scalar_f32(uint8_t resid, uint8_t cmd, float value) {
 }
 
 int audio_xvf_set_mic_gain(int mic_gain_percent) {
-    return xvf_scalar_f32(XVF_I2C_RESID_AUDIO_MGR, XVF_I2C_CMD_MIC_GAIN,
-                          wy_mic_gain_multiple(mic_gain_percent));
+    /* The fleet's mic_gain drives the ASR output gain, because that is the only gain with a
+     * measured effect on the stream we capture (see audio_xvf_apply_frontend). Someone changing
+     * mic_gain in the fleet config therefore changes the thing that actually happens. */
+    float multiple = wy_mic_gain_multiple(mic_gain_percent);
+    if (multiple > XVF_ASR_GAIN_MAX) multiple = XVF_ASR_GAIN_MAX;
+    if (multiple < 1.0f) multiple = 1.0f;
+    int rc = xvf_scalar_i32(XVF_I2C_RESID_AEC, XVF_I2C_CMD_ASR_OUT_ONOFF, 1);
+    rc |= xvf_scalar_f32(XVF_I2C_RESID_AEC, XVF_I2C_CMD_ASR_OUT_GAIN, multiple);
+    return rc;
 }
 
 int audio_xvf_apply_frontend(int mic_gain_percent) {
     int rc = 0;
-    /* AGC is OFF, deliberately, and this is a reversal of an earlier decision that measured badly.
+    /* Level control on the tap we actually capture: the AEC Servicer's ASR output.
      *
-     * With AGC on, the bridge's level reports decayed across a session -- max 1065, then 704, then
-     * 395 -- because the AGC pulls the gain down after a loud event (the wake chime) and recovers
-     * slowly. Speech then arrived below the bridge's 400 energy gate and was rejected as noise, so
-     * the device "would not latch": it works once, then becomes progressively more deaf.
+     * Two findings drive this, both from the XMOS documentation and both verified on the board:
      *
-     * A fixed gain is predictable and is the right primitive here: the level is set once from the
-     * fleet's mic_gain, and nothing adapts underneath the wake model or the endpointing gate.
-     * XVF_AGC_MAX_GAIN / XVF_AGC_TARGET are kept because the console can still enable AGC for a
-     * deliberate experiment (XVF_SET32 17 10 1). */
-    rc |= xvf_scalar_i32(XVF_I2C_RESID_PP, XVF_I2C_CMD_PP_AGCONOFF, 0);
-    rc |= audio_xvf_set_mic_gain(mic_gain_percent);
+     * 1. Seeed's I2S images route BOTH default I2S output channels to ASR beam 0, and XMOS states
+     *    that "the ASR audio is extracted after the beamformer, and it is not fed into the post
+     *    processor". The post-processor is where the noise suppression and the PP AGC live, so the
+     *    PP AGC cannot change this stream -- which is exactly what the board showed: enabling it
+     *    with max gain 60 and target 0.05 left the room level at 73-75 where it had been 75-77.
+     *    Writing it was harmless but pointless, so it is no longer written.
+     *
+     * 2. The ASR tap has its OWN documented fixed gain, AEC_ASROUTGAIN (33/36, 0.0-1000.0 linear,
+     *    applied only while ASR_OUT_ONOFF is 1). Measured: 1.0 -> 32.0 moved the room from p90 58
+     *    to p90 1140, a 30-40x jump matching the 32x requested. This is the only gain that reaches
+     *    the audio we capture, so the fleet's mic_gain now drives THIS, not AUDIO_MGR_MIC_GAIN.
+     *
+     * AUDIO_MGR_MIC_GAIN (pre-SHF) is held at unity: it sits upstream of the beamformer, and a
+     * second, unrelated gain in front of a beamformer that is already being fed a clean signal only
+     * buys clipping. The ASR gain is the one knob with a measured effect at the point of capture.
+     *
+     * The gain is fixed rather than adaptive on purpose: the wake model and the gateway's energy
+     * gate both want a predictable level, and an adaptive stage underneath them made the same voice
+     * pass and fail from one minute to the next. */
+    float asr_gain = wy_mic_gain_multiple(mic_gain_percent);
+    if (asr_gain > XVF_ASR_GAIN_MAX) asr_gain = XVF_ASR_GAIN_MAX;
+    if (asr_gain < 1.0f) asr_gain = 1.0f;
+    rc |= xvf_scalar_i32(XVF_I2C_RESID_AEC, XVF_I2C_CMD_ASR_OUT_ONOFF, 1);
+    rc |= xvf_scalar_f32(XVF_I2C_RESID_AEC, XVF_I2C_CMD_ASR_OUT_GAIN, asr_gain);
+    rc |= xvf_scalar_f32(XVF_I2C_RESID_AUDIO_MGR, XVF_I2C_CMD_MIC_GAIN, 1.0f);
     if (rc != 0)
         ESP_LOGW("plb", "front end: co-processor control write failed (%d); the microphone stays "
                         "quiet and wake detection may only work intermittently", rc);
     else
-        ESP_LOGI("plb", "front end: AGC off (fixed gain, predictable level), mic gain %.0f%% = %.2fx",
-                 (double)mic_gain_percent, (double)wy_mic_gain_multiple(mic_gain_percent));
+        ESP_LOGI("plb", "front end: ASR tap on, fixed ASR gain %.2fx (mic_gain %.0f%%), pre-SHF unity",
+                 (double)asr_gain, (double)mic_gain_percent);
     return rc;
 }
 

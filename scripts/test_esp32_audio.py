@@ -398,22 +398,24 @@ class AudioTests(unittest.TestCase):
         lib.wy_control_f32_command.restype = None
         return lib
 
-    def test_scalar_control_count_is_one_not_four(self):
-        """A float or int32 parameter is ONE value occupying FOUR bytes, so the frame's count
-        field must be 1 while the payload is four bytes: [resid, cmd, 1, b0..b3].
+    def test_scalar_control_count_is_the_payload_length(self):
+        """The count field is the PAYLOAD LENGTH IN BYTES, so a 32-bit value sends 4.
 
-        This is the shape audio_xvf_write() cannot produce, because it derives count from the
-        payload length and would send count=4 for a 4-byte payload. The chip ACKs that and
-        changes nothing, which is indistinguishable from success at the call site -- and is the
-        reason `mic_gain` has never actually moved the microphone and the co-processor's AGC was
-        never reachable at all."""
+        This test previously asserted count=1 and was WRONG, in confident prose. Measured on the
+        board on 2026-10-29 with count=1: the co-processor ACKs and applies nothing. Every scalar
+        control was silently inert for as long as this said 1 -- mic gain, ASR gain, and the PP AGC
+        alike -- which is why "the gain controls do nothing" looked like a hardware limitation.
+
+        With count=4 the same value takes effect immediately: AEC_ASROUTGAIN 1.0 -> 32.0 moved the
+        measured room level from p90 58 to p90 1140, a 30-40x jump that matches the 32x requested.
+        An ACK is only a bus acknowledgement, so the count byte has to be right."""
         lib = self.scalar_encoder()
         buf = (C.c_uint8 * 7)()
-        lib.wy_control_i32_command(buf, 17, 10, 1)      # PP_AGCONOFF = on
-        self.assertEqual(list(buf), [17, 10, 1, 1, 0, 0, 0],
-                         'count must be 1 and the value little-endian')
-        lib.wy_control_i32_command(buf, 17, 10, 0)      # off
-        self.assertEqual(list(buf), [17, 10, 1, 0, 0, 0, 0])
+        lib.wy_control_i32_command(buf, 33, 35, 1)      # AEC_ASROUTONOFF = ASR tap
+        self.assertEqual(list(buf), [33, 35, 4, 1, 0, 0, 0],
+                         'count must be the payload length (4) and the value little-endian')
+        lib.wy_control_i32_command(buf, 33, 35, 0)
+        self.assertEqual(list(buf), [33, 35, 4, 0, 0, 0, 0])
 
     def test_scalar_float_is_ieee754_little_endian(self):
         """1.0f is 0x3F800000, so the bytes on the wire are 00 00 80 3F. Casting the value
@@ -421,8 +423,8 @@ class AudioTests(unittest.TestCase):
         different number -- a mistake that looks like a successful write."""
         lib = self.scalar_encoder()
         buf = (C.c_uint8 * 7)()
-        lib.wy_control_f32_command(buf, 35, 0, 1.0)
-        self.assertEqual(list(buf), [35, 0, 1, 0x00, 0x00, 0x80, 0x3F])
+        lib.wy_control_f32_command(buf, 33, 36, 1.0)      # AEC_ASROUTGAIN
+        self.assertEqual(list(buf), [33, 36, 4, 0x00, 0x00, 0x80, 0x3F])
         lib.wy_control_f32_command(buf, 17, 11, 30.0)
         got = struct.unpack('<f', bytes(buf[3:7]))[0]
         self.assertAlmostEqual(got, 30.0, places=4, msg='AGC max gain round-trips exactly')
@@ -529,8 +531,14 @@ class AudioTests(unittest.TestCase):
         start = src.index('int audio_playback_start(void)')
         self.assertIn('audio_xvf_apply_frontend(', src[start:],
                       'playback start must re-arm the front end on every boot')
-        self.assertIn('XVF_I2C_CMD_PP_AGCONOFF', src, 'AGC must be switched on')
-        self.assertIn('XVF_I2C_CMD_MIC_GAIN', src, 'the fixed gain must be applied too')
+        # The level must be armed on the tap we actually capture. Seeed routes both I2S output
+        # channels to ASR beam 0, and XMOS does not feed that tap through the post-processor, so
+        # the PP AGC cannot change this stream (measured: enabling it left the room at 73-75 where
+        # it had been 75-77). The ASR tap and its own fixed gain are the controls that do.
+        self.assertIn('XVF_I2C_CMD_ASR_OUT_ONOFF', src, 'the ASR output tap must be selected')
+        self.assertIn('XVF_I2C_CMD_ASR_OUT_GAIN', src, 'the ASR fixed gain must be applied')
+        self.assertNotIn('XVF_I2C_CMD_PP_AGCONOFF, 1', src,
+                         'the PP AGC cannot affect the ASR tap and must not be presented as if it can')
 
     def test_mic_gain_config_reaches_the_chip(self):
         """`mic_gain` was validated, stored and reported to the fleet while never reaching the
