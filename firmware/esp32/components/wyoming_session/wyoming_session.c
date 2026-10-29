@@ -191,21 +191,37 @@ int wy_session_set_playback_volume(wy_session *session, int volume) {
  * 300 ms will empty ANY small buffer, which is why a pre-roll only helps if the long gaps are
  * bounded.
  */
+/* Portable tick source. This component is compiled for the HOST by the test harnesses, where
+ * FreeRTOS does not exist -- using TickType_t directly here broke eight of them at compile time.
+ * On the device the counts are real; on the host they are zero, and the telemetry is simply inert
+ * (the harnesses assert protocol behaviour, not timing). */
+#ifdef ESP_PLATFORM
+static uint32_t plb_ticks(void) { return (uint32_t)xTaskGetTickCount(); }
+static uint32_t plb_ticks_per_s(void) { return (uint32_t)configTICK_RATE_HZ; }
+#else
+static uint32_t plb_ticks(void) { return 0u; }
+static uint32_t plb_ticks_per_s(void) { return 1000u; }
+#endif
+
 static uint32_t plb_in_frames;          /* frames appended since the last report */
 static uint32_t plb_in_appends;         /* append calls since the last report */
-static TickType_t plb_in_last;          /* tick of the previous append */
-static TickType_t plb_in_max_gap;       /* largest inter-append gap, ticks */
-static TickType_t plb_in_window;        /* window start */
+static uint32_t plb_in_last;            /* tick of the previous append */
+static uint32_t plb_in_max_gap;         /* largest inter-append gap, ticks */
+static uint32_t plb_in_window;          /* window start */
 
 static void plb_in_report(void) {
-    TickType_t now = xTaskGetTickCount();
+    uint32_t now = plb_ticks();
     if (!plb_in_window) { plb_in_window = now; return; }
-    TickType_t elapsed = now - plb_in_window;
-    if (elapsed < configTICK_RATE_HZ) return;
+    uint32_t elapsed = now - plb_in_window;
+    if (elapsed < plb_ticks_per_s()) return;
     if (plb_in_frames || plb_in_appends) {
-        uint32_t ms = (uint32_t)(elapsed * 1000u / configTICK_RATE_HZ);
+        uint32_t ms = (uint32_t)(elapsed * 1000u / plb_ticks_per_s());
         uint32_t frames_s = ms ? (uint32_t)(((uint64_t)plb_in_frames * 1000u) / ms) : 0u;
-        uint32_t gap_ms = (uint32_t)(plb_in_max_gap * 1000u / configTICK_RATE_HZ);
+        uint32_t gap_ms = (uint32_t)(plb_in_max_gap * 1000u / plb_ticks_per_s());
+        /* ESP_LOGI compiles to nothing on the host harnesses, which would leave these "unused"
+         * under -Werror. Consume them explicitly so the same source builds for device and host. */
+        (void)frames_s;
+        (void)gap_ms;
         ESP_LOGI("plbin", "arrival: %u frames/s (%u%% of realtime), %u appends, max gap %u ms, "
                           "%u frames DROPPED (ring full)",
                  (unsigned)frames_s, (unsigned)((frames_s * 100u) / 48000u),
@@ -688,9 +704,9 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
                         plb_in_frames += (uint32_t)frame_n;
                         plb_in_appends++;
                         {
-                            TickType_t now_t = xTaskGetTickCount();
+                            uint32_t now_t = plb_ticks();
                             if (plb_in_last) {
-                                TickType_t gap = now_t - plb_in_last;
+                                uint32_t gap = now_t - plb_in_last;
                                 if (gap > plb_in_max_gap) plb_in_max_gap = gap;
                             }
                             plb_in_last = now_t;
