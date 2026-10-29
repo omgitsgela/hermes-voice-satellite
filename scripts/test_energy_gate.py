@@ -26,7 +26,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import bridge.config as config_module  # noqa: E402
-from bridge.endpointing import Endpointer  # noqa: E402
+from bridge.endpointing import Endpointer, EnergyGate  # noqa: E402
 
 checks = 0
 failures: list[str] = []
@@ -199,6 +199,33 @@ def main() -> int:
           SPEECH_RMS / (LEARNED_FLOOR * shipped["ratio"]) >= 3.0, True)
     check("speech clears the threshold at the default floor by 2.5x",
           SPEECH_RMS / (shipped["floor_default"] * shipped["ratio"]) >= 2.5, True)
+
+    # ------------------------------------------------------------------ warmup
+    # Regression, found on a live device on 2026-10-29. The gate starts from `floor_default`
+    # because it has not measured this room yet. With the shipped numbers that default times the
+    # ratio (190 * 6 = 1140) lands ABOVE `threshold_max`, so the ceiling pinned the gate to 1000 --
+    # its loudest possible setting -- for the first `min_samples` frames of every stream (0.8 s).
+    # That is exactly the window in which someone says "hello": the log recorded speech at median
+    # RMS 628 rejected 35 frames out of 37 and the turn abandoned as "nothing said after the wake
+    # word". A default is not a measurement and must not be able to raise the gate.
+    cold = EnergyGate(**shipped)
+    for _ in range(shipped["min_samples"] - 5):
+        cold.observe(frame_at(200), detector_says_speech=False)
+    check("an unmeasured floor cannot push the gate to its ceiling",
+          cold.threshold, shipped["threshold_min"])
+    check("the gate reports that the floor is not yet measured",
+          cold.stats()["floor_measured"], False)
+    check("speech at 628 RMS passes before the floor is measured",
+          cold.passes_rms(628.0), True)
+
+    # Once the room IS measured, a noisy room still raises the gate toward the ceiling: the fix must
+    # bound the warmup, not disarm the gate.
+    warm = EnergyGate(**shipped)
+    for _ in range(shipped["min_samples"] + 20):
+        warm.observe(frame_at(540), detector_says_speech=False)
+    check("a measured noisy room still raises the gate", warm.threshold > shipped["threshold_min"], True)
+    check("a measured room reports its floor as measured", warm.stats()["floor_measured"], True)
+    check("the ceiling still bounds a measured room", warm.threshold <= shipped["threshold_max"], True)
 
     print(f"energy gate checks: {checks - len(failures)}/{checks} passed")
     for failure in failures:

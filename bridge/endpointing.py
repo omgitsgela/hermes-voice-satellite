@@ -98,6 +98,10 @@ class EnergyGate:
         self.threshold_max = threshold_max
         self.percentile = percentile
         self.floor = floor_default
+        # Until enough non-speech frames have been seen, `floor` is only the DEFAULT, not a
+        # measurement of this room. That distinction has to be tracked, because the default
+        # multiplied by the ratio lands ABOVE the ceiling and pins the gate to it (see threshold).
+        self._floor_measured = False
         self._window: Deque[float] = collections.deque(maxlen=window_frames)
 
     @property
@@ -118,6 +122,18 @@ class EnergyGate:
         gate clamped itself to its loudest cap. The low percentile plus a fixed ceiling keeps the
         room estimate robust and bounds the failure at a number a person can be measured against.
         """
+        if not self._floor_measured:
+            # The warmup case, and it was a real, reproducible failure rather than a tidy-up. Before
+            # the floor is measured the gate used `floor_default` (190) * ratio (6) = 1140, which the
+            # ceiling turns into 1000 -- the gate's absolute maximum -- for the first `min_samples`
+            # frames of every stream (0.8 s). That is exactly the window in which a person says
+            # "hello": measured 2026-10-29, speech at median RMS 628 was rejected 35 frames out of 37
+            # and the turn died as "nothing said after the wake word", i.e. the assistant was deaf
+            # at the moment it was addressed.
+            #
+            # A default is not a measurement, so it must not be able to raise the gate at all: before
+            # the room is known, only the fixed floor applies.
+            return self.threshold_min
         return min(self.threshold_max, max(self.threshold_min, self.floor * self.ratio))
 
     def observe(self, frame: bytes, detector_says_speech: bool) -> float:
@@ -134,6 +150,7 @@ class EnergyGate:
         ordered = sorted(self._window)
         index = max(0, min(len(ordered) - 1, int(len(ordered) * self.percentile) - 1))
         self.floor = min(self.floor_max, max(self.floor_min, ordered[index]))
+        self._floor_measured = True
 
     def passes_rms(self, level: float) -> bool:
         return level > self.threshold
@@ -164,6 +181,7 @@ class EnergyGate:
 
         return {
             "floor": self.floor,
+            "floor_measured": self._floor_measured,
             "threshold": self.threshold,
             "samples": len(window),
             "p20": pct(0.20),
