@@ -283,8 +283,15 @@ int audio_xvf_write_frame(const uint8_t *frame, size_t len) {
  * Everything set here is VOLATILE on the chip. A co-processor restart -- every power cycle, every
  * firmware write -- restores its defaults, so this must run on every boot rather than once at
  * provisioning, or the device silently reverts to being hard of hearing. */
+/* AGC max gain: how far it may lift a quiet talker.
+ *
+ * AGC TARGET POWER, not gain: 0.003 aimed at about -25 dBFS and the measured result was the
+ * opposite of the intent -- the bridge's room floor fell from 334 to 67 and speech medians came in
+ * around 275 against a gate threshold of 400, so every utterance was rejected as too quiet. A
+ * target that low makes the AGC ATTENUATE towards it rather than lift speech. 0.05 sits near
+ * -13 dBFS, which is a normal speech level for this gate. */
 #define XVF_AGC_MAX_GAIN   60.0f
-#define XVF_AGC_TARGET     0.003f
+#define XVF_AGC_TARGET     0.05f
 
 static int xvf_scalar_i32(uint8_t resid, uint8_t cmd, int32_t value) {
     uint8_t frame[XVF_I2C_SET32_CMD_LEN];

@@ -197,7 +197,7 @@ void wy_control_f32_command(uint8_t out[XVF_I2C_SET32_CMD_LEN], uint8_t resid, u
  * 0 must NOT produce 0.0 (that would silence the microphone, and a dead microphone is
  * indistinguishable from a hardware fault), and the top of the range must be the compile-time
  * maximum rather than something the caller guessed. */
-#define WY_MIC_GAIN_MAX_MULTIPLE 4.0f
+#define WY_MIC_GAIN_MAX_MULTIPLE 16.0f
 #define WY_MIC_GAIN_MIN_MULTIPLE 0.5f
 float wy_mic_gain_multiple(int percent);
 

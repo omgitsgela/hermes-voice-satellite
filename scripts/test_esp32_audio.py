@@ -511,11 +511,12 @@ class AudioTests(unittest.TestCase):
         self.assertAlmostEqual(lib.wy_mic_gain_multiple(0), 0.5, places=4,
                                msg='0% must not mute the microphone')
         self.assertAlmostEqual(lib.wy_mic_gain_multiple(-40), 0.5, places=4)
-        self.assertAlmostEqual(lib.wy_mic_gain_multiple(50), 2.0, places=4)
-        self.assertAlmostEqual(lib.wy_mic_gain_multiple(78), 3.12, places=2,
-                               msg='78 is the fleet default and must stay ~3.1x')
-        self.assertAlmostEqual(lib.wy_mic_gain_multiple(100), 4.0, places=4)
-        self.assertAlmostEqual(lib.wy_mic_gain_multiple(250), 4.0, places=4,
+        self.assertAlmostEqual(lib.wy_mic_gain_multiple(50), 8.0, places=4)
+        self.assertAlmostEqual(lib.wy_mic_gain_multiple(78), 12.48, places=2,
+                               msg='78 is the fleet default; the ceiling was raised after the '
+                                   'bridge measured speech below its energy gate')
+        self.assertAlmostEqual(lib.wy_mic_gain_multiple(100), 16.0, places=4)
+        self.assertAlmostEqual(lib.wy_mic_gain_multiple(250), 16.0, places=4,
                                msg='out of range must clamp, not extrapolate')
 
     def test_front_end_is_re_armed_on_every_boot(self):
