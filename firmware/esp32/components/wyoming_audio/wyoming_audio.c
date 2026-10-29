@@ -280,8 +280,19 @@ size_t wy_decimate_48000_to_16000(wy_decimator *d, const int16_t *in, size_t n,
     return written;
 }
 
+int wy_volume_user_to_gain_percent(int user) {
+    /* USER 1 -> the audible floor, USER 100 -> full scale, every step in between distinct. */
+    if (user < 1) user = 1;
+    if (user > 100) user = 100;
+    int span = 100 - WY_VOLUME_FLOOR_PERCENT;
+    return WY_VOLUME_FLOOR_PERCENT + (int)llround((double)(user - 1) * (double)span / 99.0);
+}
+
 size_t wy_apply_volume(int16_t *pcm, size_t n, int percent) {
     if (!pcm || n == 0) return 0;
+    /* `percent` arrives on the USER scale; convert ONCE to the gain actually applied, so the whole
+     * user range is reachable instead of everything below the floor collapsing together. */
+    percent = wy_volume_user_to_gain_percent(percent);
     if (percent < WY_VOLUME_FLOOR_PERCENT) percent = WY_VOLUME_FLOOR_PERCENT;
     if (percent > 100) percent = 100;
     for (size_t i = 0; i < n; ++i) {

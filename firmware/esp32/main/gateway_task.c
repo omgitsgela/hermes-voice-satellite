@@ -361,8 +361,17 @@ static int cfg_apply(void *user, const char *settings_json,
             degraded = 1;
         }
     }
-    /* Any desired key that did not land in `actual` makes this a partial apply. */
-    if (!cJSON_Compare(actual, settings, 1)) degraded = 1;
+    /* A desired key that did not land in `actual` makes this a partial apply -- compared KEY BY
+     * KEY, because `actual` legitimately carries entries that are not settings at all. The clearest
+     * case is `snd_rate`, a CAPABILITY the device always reports; whole-object comparison therefore
+     * found it "extra", marked every otherwise-perfect apply as degraded, and left the health field
+     * saying degraded permanently. A standing warning that is always on is one people learn to
+     * ignore, which is the same as having no health field. */
+    for (const cJSON *key = settings->child; key != NULL; key = key->next) {
+        if (!key->string) continue;
+        const cJSON *got = cJSON_GetObjectItemCaseSensitive(actual, key->string);
+        if (!got || !cJSON_Compare(got, key, 1)) degraded = 1;
+    }
     *out_health = degraded ? WY_CFG_HEALTH_DEGRADED : WY_CFG_HEALTH_HEALTHY;
     /* Serialize `actual` into the out buffer (NUL-terminated, capped). */
     char *text = cJSON_PrintUnformatted(actual);

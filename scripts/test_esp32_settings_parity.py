@@ -113,8 +113,19 @@ def main() -> int:
     # 5) A device that cannot apply a setting must say so rather than claim success.
     check("an unapplied setting marks the report degraded",
           "degraded = 1" in gateway)
-    check("the report is compared against what was asked for",
-          "cJSON_Compare(actual, settings, 1)" in gateway)
+    check("the report is compared against what was asked for key by key",
+          "cJSON_GetObjectItemCaseSensitive(actual, key->string)" in gateway)
+    # Whole-object comparison is a standing lie: `actual` always carries capabilities that are not
+    # settings (snd_rate), so an otherwise perfect apply was reported degraded for ever.
+    check("whole-object comparison is NOT used",
+          "cJSON_Compare(actual, settings, 1)" not in gateway)
+
+    # The volume control must be a USER scale spread over the usable range, not a raw gain, or the
+    # bottom of the scale is a dead zone (measured: 5, 10, 20 and 25 were the same loudness).
+    audio_h = code_only(ROOT / "firmware/esp32/components/wyoming_audio/wyoming_audio.h")
+    audio_c = code_only(ROOT / "firmware/esp32/components/wyoming_audio/wyoming_audio.c")
+    check("the user->gain volume curve exists", "wy_volume_user_to_gain_percent" in audio_h)
+    check("and the sample path uses it", "percent = wy_volume_user_to_gain_percent(percent)" in audio_c)
 
     print(f"settings parity checks: {checks - len(failures)}/{checks} passed")
     for failure in failures:

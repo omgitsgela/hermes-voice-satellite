@@ -272,17 +272,49 @@ class AudioTests(unittest.TestCase):
         self.assertEqual(a[0], b[0], '0 and a sub-floor value both become the floor')
         self.assertGreater(a[0], 0)
 
-    def test_volume_100_is_identity_and_50_halves(self):
+    def test_volume_is_a_user_scale_spread_over_the_usable_range(self):
+        """The level is a USER level (1..100), mapped onto the gain range, not a raw gain percent.
+
+        This test used to assert that 50 halved the signal, i.e. that the user number WAS the gain.
+        That was the bug: with a 25 percent floor, every user value at or below 25 collapsed into
+        one identical loudness, so a quarter of the scale did nothing and the numbers a person says
+        did not match the volume they heard. The Pi satellite spreads its user scale over the usable
+        range; the ESP32 now does the same, so a level means the same thing on either device.
+
+        50 maps to 25 + round(49 * 75 / 99) = 62 percent.
+        """
         lib = self.volume()
+        lib.wy_volume_user_to_gain_percent.argtypes = [C.c_int]
+        lib.wy_volume_user_to_gain_percent.restype = C.c_int
         pcm = (C.c_int16 * 3)(32767, -32768, 12345)
         lib.wy_apply_volume(pcm, 3, 100)
-        self.assertEqual(list(pcm), [32767, -32768, 12345], '100 percent is the identity')
+        self.assertEqual(list(pcm), [32767, -32768, 12345], '100 is the identity')
         pcm2 = (C.c_int16 * 3)(32767, -32768, 12345)
         lib.wy_apply_volume(pcm2, 3, 50)
-        # 50 percent halves, rounded half away from zero: 16383.5 -> 16384, 6172.5 -> 6173.
-        self.assertEqual(pcm2[0], 16384, '50 percent halves, rounded half away from zero')
-        self.assertEqual(pcm2[1], -16384)
-        self.assertEqual(pcm2[2], 6173)
+        self.assertEqual(lib.wy_volume_user_to_gain_percent(50), 62)
+        self.assertEqual(pcm2[0], 20316)   # 32767 * 0.62, rounded half away from zero
+        self.assertEqual(pcm2[1], -20316)
+        self.assertEqual(pcm2[2], 7654)
+
+    def test_every_user_step_is_a_real_step(self):
+        """No dead zones: each user level 1..100 must map to a distinct gain, monotonically.
+
+        The failure this pins is subtle and was live on the device: asking for 5, 10, 20 or 25 gave
+        exactly the same loudness, so the lower quarter of the control felt broken.
+        """
+        lib = self.volume()
+        lib.wy_volume_user_to_gain_percent.argtypes = [C.c_int]
+        lib.wy_volume_user_to_gain_percent.restype = C.c_int
+        gains = [lib.wy_volume_user_to_gain_percent(u) for u in range(1, 101)]
+        self.assertEqual(gains[0], 25, 'user 1 is the audible floor')
+        self.assertEqual(gains[-1], 100, 'user 100 is full scale')
+        self.assertEqual(gains, sorted(gains), 'the mapping must never go backwards')
+        # 100 user levels onto 76 integer gains cannot be one-to-one, and pretending otherwise
+        # would be an assertion about arithmetic rather than about the device. What matters is that
+        # the low end is not a dead zone and the scale is finely resolved throughout.
+        self.assertGreaterEqual(len(set(gains)), 70, 'the scale must stay finely resolved')
+        low = [lib.wy_volume_user_to_gain_percent(u) for u in (5, 10, 20, 25)]
+        self.assertEqual(len(set(low)), len(low), '5, 10, 20 and 25 must not be the same loudness')
 
     def test_volume_stays_in_range_and_is_monotonic(self):
         """Full-scale input at any permitted level stays in the int16 range, and a higher level

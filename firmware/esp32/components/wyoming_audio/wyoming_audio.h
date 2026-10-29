@@ -113,6 +113,20 @@ size_t wy_decimate_48000_to_16000(wy_decimator *d, const int16_t *in, size_t n,
 #define WY_VOLUME_DEFAULT_PERCENT 50   /* conservative default, below full */
 #define WY_VOLUME_FLOOR_PERCENT   25   /* never silent: a real, audible minimum */
 
+/* Map a USER level (1..100, where 1 is the quietest this hardware can be) onto the gain actually
+ * applied (floor..100 percent).
+ *
+ * The fleet's playback_volume is on the USER scale, and the Pi satellite spreads that scale across
+ * its whole usable range so every step is a real step. The ESP32 used the number directly as a gain
+ * percent, which silently compressed everything below the 25 percent floor into one identical level:
+ * asking for 5, 10, 20 or 25 produced exactly the same loudness, and the bottom quarter of the user
+ * scale did nothing at all. The number the user says and the number the device applies were only
+ * equal by accident in the upper range.
+ *
+ * This is the same curve the bridge's volume.py applies (FLOOR + (user-1) * span / 99), so a level
+ * means the same thing whichever satellite is being talked to. */
+int wy_volume_user_to_gain_percent(int user);
+
 /* Scale n mono S16 samples by `percent` in place, clamping percent to
  * [WY_VOLUME_FLOOR_PERCENT, 100] first so no input (0, negative, or >100) yields silence.
  * Returns n. Monotonic: a >= b (both clamped) implies |out_a| >= |out_b| per sample. */
