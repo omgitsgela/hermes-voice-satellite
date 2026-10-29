@@ -721,7 +721,9 @@ static void playback_task_fn(void *argument) {
             played_reported = 1;
         }
         /* Pre-roll: buffer before playing, so arrival jitter is absorbed instead of heard. */
-        if (active_now && !preroll_done) {
+        /* Never pre-roll a device-generated tone: it is already complete and in the ring, and
+         * buffering it just delays and chops the feedback the user is listening for. */
+        if (active_now && !preroll_done && !wy_session_local_pending(s)) {
             size_t have = wy_session_playback_bytes(s);
             preroll_last_bytes = have;
             TickType_t now_tick = xTaskGetTickCount();
@@ -742,6 +744,8 @@ static void playback_task_fn(void *argument) {
         }
         size_t n = wy_session_playback_read(s, frame, sizeof(frame));   /* bytes, <= sizeof(frame) */
         if (n == 0) {
+            /* The ring is empty, so no local tone can still be sounding. */
+            wy_session_local_done();
             /* An empty ring WHILE A STREAM IS ACTIVE is starvation: the room hears a gap. An
              * empty ring after the stream ended is just the tail of a finished answer and is
              * not counted, or every answer would report a false fault. */

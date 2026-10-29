@@ -215,6 +215,17 @@ static void plb_in_report(void) {
     plb_in_window = now;
 }
 
+/* Set while device-generated audio (the wake chime, the done tone) is still in the ring.
+ *
+ * These share the playback ring with stream audio, and the pump's pre-roll gate exists only for
+ * STREAM audio -- it buffers until the network has delivered a cushion. Applying it to a local
+ * chime silenced and chopped the very tone that confirms the wake, because the chime is queued at
+ * the instant a stream may also be starting. */
+static volatile int s_local_pending;
+
+int wy_session_local_pending(wy_session *session) { (void)session; return s_local_pending; }
+void wy_session_local_done(void) { s_local_pending = 0; }
+
 int wy_session_local_play(wy_session *session, const int16_t *mono, size_t n) {
     /* Every drop point is reported: a chime that vanishes here is exactly a "no ding" symptom,
      * and "no ring" is the one that looks identical to a broken speaker from outside. */
@@ -229,6 +240,9 @@ int wy_session_local_play(wy_session *session, const int16_t *mono, size_t n) {
     }
     ESP_LOGI("plb_local", "local_play %u samples, ring %u bytes, volume %u",
              (unsigned)n, (unsigned)session->ring_capacity, (unsigned)session->playback_volume);
+    /* Marked BEFORE the appends so the pump's pre-roll gate cannot slip in between and start
+     * buffering network audio in front of this tone. */
+    s_local_pending = 1;
     /* The device's own local tone (the wake chime): the same speaker path as a bridge answer,
      * so the pump task's amplifier policy (armed while the ring is not empty) carries it. The
      * difference from the inbound audio-chunk path is only the source: the chime is rendered at

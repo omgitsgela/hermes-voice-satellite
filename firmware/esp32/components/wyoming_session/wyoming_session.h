@@ -189,6 +189,12 @@ int wy_session_set_playback_volume(wy_session *session, int volume);
  * pcm, or when no ring is configured (local audio has nowhere to go). The pump task's
  * amplifier policy (armed while the ring is not empty) carries it to the speaker. */
 int wy_session_local_play(wy_session *session, const int16_t *mono, size_t n);
+
+/* Is device-generated audio (chime / done tone) still pending in the ring? The playback pump must
+ * not pre-roll it: pre-roll exists to buffer NETWORK audio, and gating a local tone delays and
+ * chops the very feedback that confirms a wake. Cleared when the ring empties. */
+int wy_session_local_pending(wy_session *session);
+void wy_session_local_done(void);
 int wy_session_playback_active(const wy_session *session);
 int wy_session_playback_ended(const wy_session *session);
 size_t wy_session_playback_bytes(const wy_session *session);

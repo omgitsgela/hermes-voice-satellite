@@ -688,8 +688,11 @@ int gateway_task_start(const char *host, unsigned port, int transport,
     }
 
     TaskHandle_t handle = NULL;
-    if (xTaskCreate(gateway_task_fn, "gw_task", GATEWAY_TASK_STACK, NULL,
-                    GATEWAY_TASK_PRIORITY, &handle) != pdPASS || handle == NULL)
+    /* Core 0 with WiFi/lwIP/TLS and the LED worker. The gateway task handles the TLS stream and
+     * therefore uses real CPU in bursts; on the audio core it would delay the playback pump and
+     * stretch the wake response. */
+    if (xTaskCreatePinnedToCore(gateway_task_fn, "gw_task", GATEWAY_TASK_STACK, NULL,
+                    GATEWAY_TASK_PRIORITY, &handle, 0) != pdPASS || handle == NULL)
         return -1;
     active = true;
     if (report && capacity > 0)

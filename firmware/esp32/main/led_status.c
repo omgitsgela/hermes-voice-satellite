@@ -34,9 +34,15 @@ static const char *TAG = "led";
 #define LED_TICK_MS          WY_LED_TICK_MS_DEFAULT
 #define LED_QUEUE_DEPTH      16
 #define LED_WORKER_STACK     4096u
-/* Below both audio tasks, on purpose. The ring is cosmetic; the microphone and the speaker are
- * not. This used to sit above them, which let an LED animation outrank capture and playback. */
-#define LED_WORKER_PRIORITY  3u
+/* Feedback, not decoration: the ring lighting up is how a person knows the device heard them, and
+ * it must be simultaneous with the chime. It runs on core 0 with WiFi/lwIP/TLS and the gateway
+ * task, NOT on the audio core, so it never delays capture or playback however busy the animations
+ * get; within core 0 it sits above the network task so a TLS burst cannot swallow the light show.
+ *
+ * Dropping this to 3 (below the network task) is what made the wake response feel laggy: the LED
+ * update queued immediately but could not be scheduled until the TLS work around the same wake
+ * event had finished. */
+#define LED_WORKER_PRIORITY  5u
 
 static wy_led *led;
 static SemaphoreHandle_t lock;
@@ -243,8 +249,10 @@ int led_status_start(void)
     if (wy_led_init(led, led_emit, NULL) != 0) return -1;
     last_advance_us = esp_timer_get_time();
 
-    if (xTaskCreate(led_worker, "led_worker", LED_WORKER_STACK, NULL,
-                    LED_WORKER_PRIORITY, NULL) != pdPASS) return -1;
+    /* Core 0: WiFi/lwIP/TLS live there, and the ring must never compete with the audio tasks that
+     * own core 1. */
+    if (xTaskCreatePinnedToCore(led_worker, "led_worker", LED_WORKER_STACK, NULL,
+                    LED_WORKER_PRIORITY, NULL, 0) != pdPASS) return -1;
 
     started = 1;
     ESP_LOGI(TAG, "LED ring ready (XVF3800 GPO servicer, I2C 0x%02x)", WY_LED_XVF_ADDR);

@@ -593,21 +593,46 @@ class AudioTests(unittest.TestCase):
                                     '%s DMA is only %.0f ms at 48 kHz; a scheduling hiccup will '
                                     'overwrite audio' % (name, millis))
 
-    def test_audio_tasks_outrank_cosmetic_work(self):
-        """Priority order is the contract: capture > playback > LED.
+    def test_tasks_are_partitioned_by_core_not_just_by_priority(self):
+        """Core placement is the contract, because priority alone cannot protect audio.
 
-        A dropped microphone sample is unrecoverable, a late playback write only costs latency, and
-        an LED animation is cosmetic. The LED worker used to sit ABOVE both audio tasks."""
+        The ESP32-S3 has two cores and the radio/TLS stack runs at a priority no application task
+        can outrank. So the guarantee is spatial: capture and the playback pump own core 1 alone,
+        while WiFi/lwIP/TLS, the gateway task and the LED worker share core 0. Cross-core priority
+        comparisons are meaningless; WITHIN each core there is still an order that matters.
+
+        Within the audio core: capture outranks playback, because a dropped microphone sample is
+        unrecoverable while a late playback write only costs latency. Within the UI/network core:
+        the LED must not be starved by a TLS burst, or the wake feedback lags the wake."""
+        def source(fname):
+            return (ROOT / 'firmware/esp32/main' / fname).read_text()
+
         def priority(fname, macro):
-            src = (ROOT / 'firmware/esp32/main' / fname).read_text()
-            return int(re.search(r'#define %s\s+(\d+)' % macro, src).group(1))
+            return int(re.search(r'#define %s\s+(\d+)' % macro, source(fname)).group(1))
 
-        cap = priority('audio_capture.c', 'CAPTURE_TASK_PRIORITY')
-        plb = priority('audio_playback.c', 'PLAYBACK_TASK_PRIORITY')
-        led = priority('led_status.c', 'LED_WORKER_PRIORITY')
-        self.assertGreater(cap, plb, 'capture must outrank playback')
-        self.assertGreater(plb, led, 'audio must outrank the LED animation')
-        self.assertGreaterEqual(led, 1)
+        def core_of(fname, fn):
+            # the core id is the last argument of xTaskCreatePinnedToCore(...)
+            src = source(fname)
+            m = re.search(r'xTaskCreatePinnedToCore\(\s*' + fn + r'.[^;]*?,\s*(\d)\s*\)', src,
+                          re.S)
+            self.assertIsNotNone(m, '%s must be pinned to a core explicitly' % fn)
+            return int(m.group(1))
+
+        self.assertEqual(core_of('audio_capture.c', 'capture_task_fn'), 1,
+                         'capture must own the audio core')
+        self.assertEqual(core_of('audio_playback.c', 'playback_task_fn'), 1,
+                         'the pump must own the audio core')
+        self.assertEqual(core_of('gateway_task.c', 'gateway_task_fn'), 0,
+                         'the TLS reader must stay off the audio core')
+        self.assertEqual(core_of('led_status.c', 'led_worker'), 0,
+                         'the LED worker must stay off the audio core')
+
+        self.assertGreater(priority('audio_capture.c', 'CAPTURE_TASK_PRIORITY'),
+                           priority('audio_playback.c', 'PLAYBACK_TASK_PRIORITY'),
+                           'capture must outrank playback on the audio core')
+        self.assertGreaterEqual(priority('led_status.c', 'LED_WORKER_PRIORITY'),
+                                priority('gateway_task.c', 'GATEWAY_TASK_PRIORITY'),
+                                'wake feedback must not be starved by network work')
 
     def test_playback_arms_the_full_band_output_path_at_startup(self):
         """The 48 kHz profile only reaches the speaker if playback actually clears the upsampling
