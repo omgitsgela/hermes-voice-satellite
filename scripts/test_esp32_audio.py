@@ -647,17 +647,30 @@ class AudioTests(unittest.TestCase):
                                 priority('gateway_task.c', 'GATEWAY_TASK_PRIORITY'),
                                 'wake feedback must not be starved by network work')
 
-    def test_playback_arms_the_full_band_output_path_at_startup(self):
-        """The 48 kHz profile only reaches the speaker if playback actually clears the upsampling
-        flags AND selects the native-rate tap. If either write is missing, the chip's defaults
-        quietly band-limit every answer to 8 kHz and nothing in the log says so. Asserted against
-        the real adapter source so a future refactor cannot drop one half of the pair."""
+    def test_playback_leaves_the_output_mux_at_the_image_defaults(self):
+        """Playback must NOT clear the upsampling flags or select the category-10 far end.
+
+        This test previously DEMANDED both, on the reading that they are what carry the 48 kHz
+        profile to the speaker. They are in fact the XMOS guide's host-to-host LOOPBACK test ("to
+        loop back any data received"), and category 10 is far-end audio rather than a microphone
+        tap. While the scalar count byte was wrong these writes were inert, so the mistake was
+        invisible; once writes began to apply, the captured voice collapsed to a median RMS of 16
+        because the output carried the silent far end instead of the microphones.
+
+        The premise was also weaker than it looked: the voice pipeline is 16 kHz internally and a
+        48 kHz interface adds a sample-rate converter, so "full band" never applied to the
+        microphone, whose documented range is 80 Hz-8 kHz either way.
+        """
         src = (ROOT / 'firmware/esp32/main/audio_playback.c').read_text()
-        self.assertIn('audio_xvf_output_upsample(0, 0)', src,
-                      'playback must CLEAR both upsampling flags (0, 0), not leave them at the '
-                      'chip default of 1')
-        self.assertIn('XVF_I2C_CAT_FAR_END_NATIVE', src,
-                      'playback must select the native-rate far end, not only the converted one')
+        start = src.index('int audio_playback_start(void)')
+        body = src[start:]
+        code = '\n'.join(line for line in body.splitlines()
+                         if not line.lstrip().startswith(('*', '/*', '//')))
+        self.assertNotIn('audio_xvf_output_upsample(0, 0)', code,
+                         'clearing the upsampling flags is the LOOPBACK test, not a playback setup')
+        self.assertNotIn('audio_xvf_route_output(', code,
+                         'the output mux must stay at the image defaults; category 10 is far-end '
+                         'audio and silences the microphone capture')
 
     def test_the_coprocessor_owns_the_clock_in_every_i2s_direction(self):
         """The link rate belongs to the co-processor, not to us. Upstream's I2S variants are either

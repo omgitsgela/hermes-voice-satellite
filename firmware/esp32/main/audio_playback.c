@@ -879,47 +879,31 @@ int audio_playback_start(void) {
      * hearing and the wake word only fires sometimes, with nothing in the log to say why. */
     audio_xvf_apply_frontend(XVF_MIC_GAIN_DEFAULT_PERCENT);
 
-    /* ---- Arm the full-band playback path: upsampler OFF, far end at its NATIVE rate. ----
+    /* ---- Output routing: LEFT AT THE IMAGE DEFAULTS, deliberately. ----
      *
-     * These two settings are ONE decision and the order matters.
+     * This used to clear AUDIO_MGR_OP_UPSAMPLE (0 0) and route the far end with category 10
+     * "native rate", on a reading of the XMOS Programming Guide's host-to-host loopback test. Two
+     * things were wrong with that, and both are now measured rather than argued:
      *
-     * The XMOS Programming Guide's own host-to-host loopback test is explicit about the pairing: it
-     * runs `AUDIO_MGR_OP_UPSAMPLE 0 0` first, then routes category 10, explaining that the signals
-     * "are by definition at the I2S or USB sample rate, [so] they do not require the use of the
-     * upsampler in the case of a 48 kHz connection, and therefore we explicitly unset the
-     * AUDIO_MGR_OP_UPSAMPLE flags (set to 1 by default in a 48 kHz configuration)". Category 10 is
-     * the same idea on the mux side: far-end data passed straight out of the I2S logical core, and
-     * "all sources carry useful data if the external interface rate is 48 kHz".
+     * 1. Those exact commands ARE the guide's far-end loopback test -- "to loop back any data
+     *    received". Category 10 is FAR-END audio, not a microphone tap. Once the scalar count byte
+     *    was corrected and writes began to take effect, the captured microphone stream collapsed:
+     *    speech RMS fell from ~1100 to a median of 16, because the output was carrying the (silent)
+     *    far end instead of the processed voice.
      *
-     * Left at the defaults, our careful 22050 -> 48000 up-sample is undone on the way to the DAC:
-     * the far end is rate-converted down to the 16 kHz voice-DSP rate and back up again,
-     * band-limiting every answer to 8 kHz. That quietly cancels the entire reason the 48 kHz profile
-     * exists, and nothing in the log would ever show it.
+     * 2. The 48 kHz playback argument also does not survive the datasheet: the voice pipeline runs
+     *    at 16 kHz INTERNALLY and a 48 kHz interface inserts a sample-rate converter, so the
+     *    "full band" premise was about the far end only, while the microphone range is 80 Hz-8 kHz
+     *    either way.
      *
-     * The pair is atomic for a reason: category 4 is the far end AFTER conversion to 16 kHz, so a
-     * category-4 tap with the upsampler cleared would hand a 16 kHz signal to a 48 kHz output stage
-     * and play it at a third of the right speed. The safe fallback therefore restores the flags to
-     * their default before selecting the converted tap, rather than mixing one half of each. */
-    int up_rc = audio_xvf_output_upsample(0, 0);
-    if (up_rc == 0) {
-        int native_rc = audio_xvf_route_output(0, XVF_I2C_CAT_FAR_END_NATIVE, 0);
-        if (native_rc != 0) {
-            /* The native tap was not accepted: put the upsampler back before choosing the converted
-             * tap, because the converted tap is a 16 kHz signal and needs re-upsampling to reach a
-             * 48 kHz output at the right speed. */
-            ESP_LOGW("plb", "playback: native-rate far end rejected (%d); restoring the upsampler "
-                            "and falling back to the rate-converted far end (answers band-limited "
-                            "to 8 kHz)", native_rc);
-            audio_xvf_output_upsample(1, 1);
-            audio_xvf_route_output(0, XVF_I2C_CAT_FAR_END, 0);
-        }
-    } else {
-        /* Flags could not be cleared, so the converted tap is the consistent choice. */
-        ESP_LOGW("plb", "playback: could not clear the output upsampling flags (%d); "
-                        "selecting the rate-converted far end, so answers stay band-limited to "
-                        "8 kHz even on the 48 kHz link", up_rc);
-        audio_xvf_route_output(0, XVF_I2C_CAT_FAR_END, 0);
-    }
+     * The defaults are what the image ships and what the board demonstrably worked with: room
+     * p50 ~250 against speech ~1100 with the ASR gain applied. Nothing here is written unless a
+     * future change can measure an improvement over the default, one control at a time.
+     *
+     * NOTE for anyone tempted to reinstate category 6 (post-processed communications output, which
+     * does include the 25 dB noise suppression): the OP mux feeds the DAC channel as well, so
+     * sending microphone audio there is acoustic feedback. Change the low/high output selects
+     * (35/15, 35/19) only, and measure the room floor before and after. */
     i2s_chan_config_t channel = I2S_CHANNEL_DEFAULT_CONFIG(PLAYBACK_I2S_PORT, PLAYBACK_I2S_ROLE);
     /* Clear each TX DMA buffer as soon as it has been played. The SDK default leaves this OFF,
      * which means a buffer that is replayed without being refilled repeats STALE audio instead of
