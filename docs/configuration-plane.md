@@ -80,6 +80,25 @@ than hidden:
   register is 5 bits and the service refuses anything outside 1-31. The strip's power rail is a GPIO, so
   there is no `0`/"off" level in this setting; 1 is its dimmest.
 
+### What `wake_threshold` does and does not do on a microWakeWord device
+
+On the ESP32 satellite the wake detector runs a microWakeWord model whose scorer gates FIRST: it returns
+a score only when its sliding-window mean crosses the model's own `probability_cutoff` (0.97 in the
+bundled `okay_nabu` manifest), and returns `0.0` at every other frame. The fleet's `wake_threshold` is a
+SECOND gate applied to that score.
+
+The consequence is worth stating plainly, because it makes the setting look more powerful than it is:
+
+- a value **below** the model cutoff (0.15, 0.22, 0.35 …) accepts every crossing the model already
+  produced, so it is acoustically identical to the default — it neither helps nor hurts;
+- a value **above** it can reject a marginal crossing, i.e. it can only make the device LESS sensitive.
+
+So raising sensitivity is not something this setting can do. Real sensitivity control means driving the
+scorer's `probability_cutoff`, which is a scorer parameter rather than a core one, and lowering it trades
+false wakes for reach — a decision that needs real-world testing, not a config change.
+
+On the Pi satellite the same value is handed to the wake service, which applies it to its own detector.
+
 **`playback_volume` is on a USER scale of 1-100, not a raw ALSA percentage.** 1 is the quietest this
 hardware can be and 100 is full volume, so the same number means the same thing on a device with a
 different measured floor. On the current device a floor of raw 50 means user 50% is raw 75 - halfway up
