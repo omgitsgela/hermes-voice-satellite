@@ -285,6 +285,10 @@ class VoiceLoop:
             # write it back, so it goes through the same recorded path as a spoken change.
             volume_get=lambda: self.volume,
             volume_set=self._set_volume,
+            # An alarm fans out to EVERY armed device, so the override has to be per device. The
+            # single pair above addresses whichever device the loop happens to be talking to.
+            volume_get_for=self._volume_for_device,
+            volume_set_for=self._set_volume_for_device,
             # Fleet (issue #111): announcements speak on every armed lease, each over its own
             # registered connection, never a socket of the announcer's own.
             satellites=lambda: list(self.leases.values()),
@@ -593,6 +597,59 @@ class VoiceLoop:
                 "playback_volume %d is recorded but the device has not been told; it will "
                 "converge on reconnect", level,
             )
+        return delivered
+
+    def _volume_for_device(self, device_id: Optional[str]) -> int:
+        """The level recorded for ONE device, for the alarm override.
+
+        Falls back to the loop's own level when no device is named, so a single-satellite
+        deployment answers exactly as before. A device with no record yet answers with the loop's
+        level rather than raising: an alarm must not be blocked by a missing config record.
+        """
+        if not device_id:
+            return int(self.volume)
+        try:
+            record = self.config_plane.get_device(device_id)
+        except Exception:  # noqa: BLE001 - a missing record must not stop an alarm
+            return int(self.volume)
+        stored = (record.get("desired") or {}).get("playback_volume")
+        if isinstance(stored, int) and not isinstance(stored, bool):
+            return stored
+        return int(self.volume)
+
+    async def _set_volume_for_device(self, level: int, device_id: Optional[str]) -> bool:
+        """Record and deliver a level for ONE device (the alarm override), fleet-safe.
+
+        Same order as `_set_volume`: record first so an offline device converges on reconnect, then
+        tell it. Only the loop's own tracked level moves when the device is the one the loop is
+        addressing; another device's level is a config-plane fact, not the loop's.
+        """
+        from bridge.volume import clamp_user
+
+        if not device_id:
+            return await self._set_volume(level)
+
+        level = clamp_user(level)
+        try:
+            self.config_plane.set_desired(
+                device_id, {"playback_volume": level}, expected_generation=None
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.error("could not record playback_volume %d for %s: %s", level, device_id, exc)
+            return False
+
+        if device_id == self.device_id:
+            self.volume = level
+        try:
+            delivered = await self._dispatch_device_config(
+                device_id, self.config_plane.get_device(device_id)
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("could not deliver playback_volume %d to %s: %s", level, device_id, exc)
+            delivered = False
+        if not delivered:
+            _LOGGER.warning("playback_volume %d for %s is recorded but not delivered; it will "
+                            "converge on reconnect", level, device_id)
         return delivered
 
     async def _volume_command(self, transcript: str) -> str:

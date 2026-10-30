@@ -108,6 +108,8 @@ class Announcer:
                  ] = None,
                  volume_get: Optional[Callable[[], int]] = None,
                  volume_set: Optional[Callable[[int], Any]] = None,
+                 volume_get_for: Optional[Callable[[Optional[str]], int]] = None,
+                 volume_set_for: Optional[Callable[[int, Optional[str]], Any]] = None,
                  enrollment: Optional[EnrollmentService] = None,
                  satellites: Optional[Callable[[], Iterable[Any]]] = None,
                  host: str = ANNOUNCE_HOST, port: int = ANNOUNCE_PORT) -> None:
@@ -149,6 +151,14 @@ class Announcer:
         # Announcer built without a volume path still announces.
         self._volume_get: Optional[Callable[[], int]] = volume_get
         self._volume_set: Optional[Callable[[int], Any]] = volume_set
+        # Per-DEVICE volume, for the fleet. The single pair above addresses whichever device the
+        # loop currently has, which is fine for one satellite and wrong for several: an alarm fans
+        # out to every armed device, so raising "the" volume leaves the others at whatever they
+        # were. Measured 2026-10-29: one satellite sat at 1% while the other was correctly raised.
+        # When these are supplied they are used per target; when they are not, the single pair is,
+        # so a one-device deployment behaves exactly as before.
+        self._volume_get_for = volume_get_for
+        self._volume_set_for = volume_set_for
         # Plug-and-play satellite enrolment (2026-10-08) shares this LAN port with announcements:
         # same server, same trusted-network story. Its token is loaded lazily at start().
         self.enrollment = enrollment if enrollment is not None else EnrollmentService()
@@ -882,7 +892,7 @@ class Announcer:
         # An alarm may raise the room first (issue #10): an alarm nobody can hear is not an
         # alarm. The raise is upward-only, and it is held for the clip's own length because
         # play_wav returns when the audio has been SENT, not when it finishes.
-        restore_to = await self._raise_for_alarm(item)
+        restored = await self._raise_for_alarm(item)
         try:
             # Fleet (issue #111): announce on every armed satellite, each over its own leased
             # connection (never a new socket, per #46), each serialized by its own playback
@@ -898,7 +908,7 @@ class Announcer:
                 except Exception as exc:  # noqa: BLE001 - a device that is gone must not kill the rest
                     name = getattr(sat, "device_id", "satellite")
                     failures_here.append(f"{name}: {type(exc).__name__}: {exc}")
-            if restore_to is not None:
+            if restored:
                 await asyncio.sleep(self._volume_hold_seconds(wav))
             if failures_here:
                 _LOGGER.warning("announcement %s skipped on %d device(s): %s",
@@ -906,13 +916,17 @@ class Announcer:
             if spoken_on == 0:
                 raise RuntimeError("no satellite was reachable: " + "; ".join(failures_here))
         finally:
-            if restore_to is not None:
+            # Restore each device to ITS OWN previous level. A failure on one device must not
+            # leave another device raised (or prevent it being put back), so each is attempted
+            # independently and a failure is logged rather than raised.
+            for device_id, level in restored.items():
                 try:
-                    result = self._volume_set(restore_to)
+                    result = self._set_level(level, device_id)
                     if asyncio.iscoroutine(result):
                         await result
                 except Exception as exc:  # noqa: BLE001 - never let tidying up break an announcement
-                    _LOGGER.warning("could not restore the volume to %d: %s", restore_to, exc)
+                    _LOGGER.warning("could not restore the volume on %s to %d: %s",
+                                    device_id or "the satellite", level, exc)
         self.spoken += 1
         self.last_spoken_at = time.time()
         self._prune_audio()
@@ -945,34 +959,64 @@ class Announcer:
         loud enough, a non-alarm sound, or no volume path wired at all.
         """
         if item.sound != "alarm":
-            return None
-        if self._volume_get is None or self._volume_set is None:
+            return {}
+        if not self._have_volume_path():
             _LOGGER.debug("no volume path wired; the alarm plays at the current level")
-            return None
+            return {}
 
         from bridge.volume import alarm_percent
 
-        try:
-            current = int(self._volume_get())
-        except Exception as exc:  # noqa: BLE001 - a bad read must not stop the alarm
-            _LOGGER.warning("could not read the volume for the alarm override: %s", exc)
-            return None
+        # EVERY device the alarm will play on, each at its own level. The old code asked for "the"
+        # volume and set "the" volume, which on a fleet meant only the addressed device moved.
+        restored: dict[Optional[str], int] = {}
+        for sat in self._alarm_targets():
+            device_id = getattr(sat, "device_id", None)
+            try:
+                current = int(self._get_level(device_id))
+            except Exception as exc:  # noqa: BLE001 - a bad read must not stop the alarm
+                _LOGGER.warning("could not read the volume on %s: %s", device_id or "the satellite", exc)
+                continue
 
-        target = alarm_percent(current)
-        if target == current:
-            return None
-        try:
-            result = self._volume_set(target)
-            if asyncio.iscoroutine(result):
-                result = await result
-        except Exception as exc:  # noqa: BLE001 - the alarm still has to play
-            _LOGGER.warning("could not raise the volume for the alarm: %s", exc)
-            return None
-        if result is False:
-            _LOGGER.warning("the volume raise for the alarm was refused; playing at %d%%", current)
-            return None
-        _LOGGER.info("alarm raised the volume from %d%% to %d%%", current, target)
-        return current
+            target = alarm_percent(current)
+            if target == current:
+                continue          # already audible enough: leave it exactly where it is
+            try:
+                result = self._set_level(target, device_id)
+                if asyncio.iscoroutine(result):
+                    result = await result
+            except Exception as exc:  # noqa: BLE001 - the alarm still has to play
+                _LOGGER.warning("could not raise the volume on %s: %s", device_id or "the satellite", exc)
+                continue
+            if result is False:
+                _LOGGER.warning("the volume raise was refused on %s; it plays at %d%%",
+                                device_id or "the satellite", current)
+                continue
+            _LOGGER.info("alarm raised %s from %d%% to %d%%",
+                         device_id or "the satellite", current, target)
+            restored[device_id] = current
+        return restored
+
+    def _have_volume_path(self) -> bool:
+        if self._volume_get_for is not None and self._volume_set_for is not None:
+            return True
+        return self._volume_get is not None and self._volume_set is not None
+
+    def _alarm_targets(self) -> list:
+        """The devices the alarm will actually play on, so the raise matches the fan-out."""
+        targets = self._delivery_targets()
+        if targets:
+            return targets
+        return [self._sat] if self._sat is not None else []
+
+    def _get_level(self, device_id: Optional[str]) -> int:
+        if self._volume_get_for is not None:
+            return self._volume_get_for(device_id)
+        return self._volume_get()   # type: ignore[misc]  # legacy single-device path
+
+    def _set_level(self, level: int, device_id: Optional[str]):
+        if self._volume_set_for is not None:
+            return self._volume_set_for(level, device_id)
+        return self._volume_set(level)   # type: ignore[misc]  # legacy single-device path
 
     @staticmethod
     def _volume_hold_seconds(wav: Path) -> float:
