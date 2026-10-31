@@ -122,7 +122,12 @@ class ModuleStartup(unittest.TestCase):
             (tls / "client-ca.crt").write_text("CA")
             (tls / "server.crt").write_bytes(SERVER_CERT_PEM)
             (tls / "server.key").write_text("KEY")
-            env = {"PYTHONPATH": str(ROOT / "packages" / "gateway" / "src"), "PATH": "/usr/bin:/bin"}
+            import os
+
+            # Inherit the runner's environment (PATH especially) and only add what this needs.
+            env = dict(os.environ)
+            env["PYTHONPATH"] = str(ROOT / "packages" / "gateway" / "src")
+            env.pop("PYTHONHOME", None)
             finished = subprocess.run(
                 [__import__("sys").executable, "-m", "hermes_gateway.pairing_server",
                  "--state", str(state), "--dial", "tls://example:10702", "--check"],

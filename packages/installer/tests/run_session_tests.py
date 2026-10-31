@@ -41,6 +41,12 @@ class MemoryBackend:
         self.data.pop(account, None)
 
 
+#: Device operations run the repository's shell scripts, so a driver refuses on Windows. Tests that
+#: expect a command to be built are POSIX-only; the refusal itself is asserted in the device suite.
+POSIX = sys.platform != "win32"
+posix_only = unittest.skipUnless(POSIX, "device operations run the repository's shell scripts")
+
+
 def build_session(dry_run=True):
     registry = DeviceRegistry()
     registry.register(hermes_device_esp32.PROFILE, hermes_device_esp32.DRIVER)
@@ -80,6 +86,7 @@ class SessionBehaviour(unittest.TestCase):
         result = self.session.install_gateway("192.0.2.10")
         self.assertTrue(result["dry_run"])
 
+    @posix_only
     def test_flash_previews_the_command_for_a_cable_device(self):
         result = self.session.flash(
             "esp32-xvf3800", device_name="kitchen",
@@ -155,6 +162,7 @@ class SessionBehaviour(unittest.TestCase):
         self.assertEqual(called["pair"], 0, "a practice session asked the gateway to enrol")
         self.assertIsNone(build_session(dry_run=True).store.recall("192.0.2.10", 10704))
 
+    @posix_only
     def test_installing_a_device_runs_the_staging_stage_too(self):
         # Flashing alone leaves Wi-Fi and credentials unstaged, which is why the review flagged a
         # device that "installs" and then cannot connect.
@@ -176,7 +184,7 @@ class SessionBehaviour(unittest.TestCase):
         from unittest import mock
 
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.dict(os.environ, {"HOME": tmp}):
+            with mock.patch("pathlib.Path.home", return_value=Path(tmp)):
                 session = build_session(dry_run=False)
                 unit = session._write_pairing_unit("192.0.2.10", 10702)
                 self.assertIsNotNone(unit, "no pairing unit was written")
@@ -275,6 +283,7 @@ class HttpInterface(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("cannot be reached", result["error"])
 
+    @posix_only
     def test_flash_over_http(self):
         result = self.post_json("/api/flash", {
             "device_id": "pi-reSpeaker-2mic", "device_name": "bedroom",

@@ -203,7 +203,12 @@ class CardFlow(unittest.TestCase):
         self.assertIn("Wi-Fi", result.summary)
 
     def test_verify_refuses_a_directory_that_is_not_a_linux_root(self):
-        result = pi.DRIVER.verify(self.request(card_mount="/tmp"), Runner(dry_run=False))
+        # Any directory without an etc/ is the case under test; a hard-coded /tmp was a Linux
+        # assumption that failed on Windows.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as empty:
+            result = pi.DRIVER.verify(self.request(card_mount=empty), Runner(dry_run=False))
         self.assertFalse(result.ok)
         self.assertIn("not the card's root filesystem", result.summary)
 
