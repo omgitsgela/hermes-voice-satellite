@@ -187,8 +187,19 @@ int audio_playback_play_mono(const int16_t *mono, size_t n) {
  * produces nothing at all regardless of what the XVF3800 routes to it. Register meanings and
  * values follow Seeed's own example for this board (XIAO ESP32S3 + XVF3800). */
 /* Codec DAC digital volume: 0.5 dB attenuation steps, 0x00 = 0 dB (max).
- * 0x0C = -6 dB. Raise toward 0x00 for louder, lower for quieter. */
-#define DAC_VOLUME_STEP 0x0C
+ *
+ * 0x00 AT FULL SCALE, chosen by ear on 2026-10-30. It was 0x0C (-6 dB) because at some earlier
+ * point 0 dB "sounded overmodulated" -- but that measurement predates the calibrated input path and
+ * native 48 kHz playback, so it was re-tested rather than trusted:
+ *
+ *   0x0C (-6 dB)  the shipping level
+ *   0x06 (-3 dB)  clearly louder on the internal speaker, clean. Approved.
+ *   0x00 (0 dB)   louder again, still clean on speech with loud syllables. Approved as the ceiling.
+ *
+ * The audible ceiling of this board is now the codec at full scale: the user volume scale tops out
+ * at unity, so 0 dB here means 10/10 is genuinely the loudest the hardware can do through this path.
+ * Anything more has to come from the amplifier stage, which has no gain control on this board. */
+#define DAC_VOLUME_STEP 0x00
 
 #define AIC3104_ADDR            0x18
 #define AIC3104_PAGE_CTRL       0x00
