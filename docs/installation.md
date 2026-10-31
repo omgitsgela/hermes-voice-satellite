@@ -270,7 +270,8 @@ the command. If you need to do it by hand rather than with the script, extract t
 write each offset the manifest lists:
 
 ```sh
-.venv/bin/python scripts/bundle-esp32-flash.py --extract flash.extracted --bundle flash.bundle.bin
+.venv/bin/python scripts/bundle-esp32-flash.py --extract flash.extracted \
+    --bundle flash.bundle.bin --check flash.manifest.txt
 # then, for each line of the manifest, one write_flash of that file at that offset
 ```
 
