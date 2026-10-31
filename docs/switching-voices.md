@@ -61,11 +61,11 @@ Two separate decisions, deliberately kept apart:
 | Decision | Where it lives | How to change it |
 |---|---|---|
 | Which voice **this installation** speaks with | `satellite-gateway.env` + Hermes `config.yaml` (both git-ignored) | `scripts/switch-voice.py <voice>` |
-| Which voice a **fresh clone** defaults to | `PIPER_VOICE_NAME` in `satellite_gateway/config.py`, mirrored in `bridge.env.example` | a code change, with docs |
+| Which voice a **fresh clone** defaults to | `PIPER_VOICE_NAME` in `satellite_gateway/config.py`, mirrored in `satellite-gateway.env.example` | a code change, with docs |
 
 Changing what you listen to should never need a pull request, a test update, or a re-read of this
 document. The tests pin the *contract* — a plausible catalog-style default that agrees with
-`bridge.env.example` — rather than one particular favourite voice, so a preference change cannot
+`satellite-gateway.env.example` — rather than one particular favourite voice, so a preference change cannot
 break CI.
 
 ## Doing it by hand (what the command automates)
@@ -244,7 +244,7 @@ of these is redistributed in this repository, which is why `voices/` is git-igno
 `scripts/test_bridge_env.py` pins that the voice keys are populated from the defaults; it no longer
 pins a specific voice, so an installation (or a future maintainer) can change the shipped default
 without collateral test edits — but `test_piper_voice_config.py` still requires the code default
-and `bridge.env.example` to name the same voice, so the two cannot drift apart.
+and `satellite-gateway.env.example` to name the same voice, so the two cannot drift apart.
 
 `scripts/test_switch_voice.py` covers the switcher as a black box against a throwaway repo and a
 throwaway Hermes config: both surfaces updated by default, each `--scope` honoured, the 22,050 Hz

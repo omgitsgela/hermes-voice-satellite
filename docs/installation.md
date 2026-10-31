@@ -84,7 +84,7 @@ What the installer does, in order:
    speaker is selected by `VOICE_PIPER_SPEAKER`; see `docs/switching-voices.md`). To change the
    voice after install, run `scripts/switch-voice.py <voice>` — it updates both the Satellite Gateway and
    the Hermes gateway, validates the 22,050 Hz audio contract, and can `--rollback`.
-2. **satellite-gateway.env** — from `bridge.env.example`, with the registry link values appended: the listener
+2. **satellite-gateway.env** — from `satellite-gateway.env.example`, with the registry link values appended: the listener
    enabled, bound to the reachable address, the TLS certificate paths, and the satellite dial
    (`VOICE_SATELLITE_HOST/PORT`, loopback by default for the old shape).
 3. **registry TLS** — `scripts/issue-registry-tls.py init` mints the client CA and the Satellite Gateway's
