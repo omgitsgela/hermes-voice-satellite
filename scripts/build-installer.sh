@@ -37,6 +37,17 @@ venv_bin() {
     fi
 }
 
+venv_python() {
+    # Always run tools as `python -m <tool>`: on Windows pip refuses to upgrade pip.exe itself, and
+    # the module form behaves the same on every platform.
+    local dir; dir="$(venv_bin)"
+    [ -n "$dir" ] || return 1
+    for candidate in "$dir/python" "$dir/python.exe"; do
+        [ -x "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+    done
+    return 1
+}
+
 venv_tool() {
     # venv_tool pip -> the pip inside the venv, whatever this platform calls it
     local dir; dir="$(venv_bin)"
@@ -65,16 +76,17 @@ if [ -z "$(venv_bin)" ]; then
 fi
 
 say "installing the packages and PyInstaller"
-"$(venv_tool pip)" install --quiet --upgrade pip
-"$(venv_tool pip)" install --quiet pyinstaller
-"$(venv_tool pip)" install --quiet \
+VENV_PY="$(venv_python)"
+"$VENV_PY" -m pip install --quiet --upgrade pip
+"$VENV_PY" -m pip install --quiet pyinstaller
+"$VENV_PY" -m pip install --quiet \
     "$ROOT/packages/gateway" \
     "$ROOT/packages/device-esp32" \
     "$ROOT/packages/device-pi" \
     "$ROOT/packages/installer"
 
 say "building"
-"$(venv_tool pyinstaller)" --noconfirm \
+"$VENV_PY" -m PyInstaller --noconfirm \
     --distpath "$ROOT/dist" --workpath "$ROOT/build/pyinstaller" \
     "$ROOT/packaging/hermes-installer.spec" >&2
 
