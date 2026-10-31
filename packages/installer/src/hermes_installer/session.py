@@ -12,7 +12,7 @@ from typing import Any, Callable, Mapping
 
 import hermes_gateway as gateway_module
 
-from .driver import DeviceRequest, Runner
+from .driver import DeviceRequest, Runner, UnsupportedOnThisPlatform
 from .pairing import GatewayRef, PairingCancelled, PairingError, pair as pair_with_gateway
 from .registry import DeviceRegistry, RegistryError
 from .secrets import CredentialStore
@@ -263,7 +263,11 @@ class Session:
         step: Callable[..., Any] = getattr(driver, str(name), None)  # type: ignore[assignment]
         if step is None:
             return {"ok": False, "error": f"driver has no step called {name!r}"}
-        result = step(request, runner)
+        try:
+            result = step(request, runner)
+        except UnsupportedOnThisPlatform as exc:
+            # A platform that cannot do this is an answer, not a crash.
+            return {"ok": False, "error": str(exc), "unsupported": True}
         return {
             "ok": result.ok,
             "summary": result.summary,

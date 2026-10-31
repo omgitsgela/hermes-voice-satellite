@@ -95,6 +95,19 @@ class SessionBehaviour(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("USB port", result["summary"])
 
+    def test_a_platform_that_cannot_do_it_is_an_answer_not_a_traceback(self):
+        import sys
+        from unittest import mock
+
+        real = sys.platform
+        with mock.patch.object(sys, "platform", "win32"):
+            result = self.session.flash("esp32-xvf3800", device_name="k",
+                                        dial_address="tls://192.0.2.10:10702",
+                                        port="COM3", dry_run=False)
+        self.assertEqual(sys.platform, real)
+        self.assertFalse(result["ok"])
+        self.assertIn("Linux or macOS", result["error"])
+
     def test_unknown_device_lists_the_known_ones(self):
         result = self.session.flash("nope", device_name="k")
         self.assertFalse(result["ok"])
