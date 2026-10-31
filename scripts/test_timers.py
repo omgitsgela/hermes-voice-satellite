@@ -10,7 +10,7 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from gateway.timers import TimerLimitError, TimerManager, parse_duration  # noqa: E402
+from satellite_gateway.timers import TimerLimitError, TimerManager, parse_duration  # noqa: E402
 
 
 async def main() -> int:

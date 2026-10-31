@@ -47,7 +47,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from gateway.endpointing import Endpointer  # noqa: E402
+from satellite_gateway.endpointing import Endpointer  # noqa: E402
 
 PROJECT = Path(__file__).resolve().parent.parent
 

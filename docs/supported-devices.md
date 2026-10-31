@@ -16,7 +16,7 @@ A unit has to be one of exactly two shapes:
 1. **A Raspberry Pi plus an add-on board (a HAT).** The Pi is the host, the HAT supplies the microphones
    and the control surface, and our own software drives the LEDs over SPI. This is what runs today.
 2. **An integrated ESP32-class device**, with its own processor and flashable firmware. We ship our own
-   firmware on these, speaking the Wyoming protocol directly to the Gateway. Not ESPHome, not Linux Voice
+   firmware on these, speaking the Wyoming protocol directly to the Satellite Gateway. Not ESPHome, not Linux Voice
    Assistant: those are other stacks and we are not adopting them.
 
 **Excluded by rule: USB-only microphones and arrays.** Their audio goes over USB and their lights and

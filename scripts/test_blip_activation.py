@@ -33,9 +33,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import gateway.config as config_module  # noqa: E402
 import gateway.loop as loop_module  # noqa: E402
-from gateway.endpointing import Endpointer  # noqa: E402
-from gateway.endpointing import EndpointResult  # noqa: E402
-from gateway.satellite import SatelliteClient  # noqa: E402
+from satellite_gateway.endpointing import Endpointer  # noqa: E402
+from satellite_gateway.endpointing import EndpointResult  # noqa: E402
+from satellite_gateway.satellite import SatelliteClient  # noqa: E402
 
 
 def blip(speech_seconds: float = 0.08) -> EndpointResult:
@@ -70,7 +70,7 @@ def make_loop(script: list[EndpointResult | None]):
     loop = object.__new__(loop_module.VoiceLoop)
     loop.sat = SatelliteClient("127.0.0.1")
     # capture_after_wake now scopes the no-speech budget on the endpointer, so the stub needs one.
-    from gateway.endpointing import Endpointer
+    from satellite_gateway.endpointing import Endpointer
     loop._ep = Endpointer(silence_ms=700, min_speech_ms=250)
     calls: list[str] = []
 
@@ -143,7 +143,7 @@ async def main() -> int:
     # 5. The fan case (2026-09-24). Blips arriving every 100 ms must close the activation at the
     #    no-speech bound. Before this, each blip restarted the endpointer's own no-speech window, so
     #    an empty activation with a fan in the room ran the full 30 second cap every time.
-    from gateway.config import WAKE_NO_SPEECH_SECONDS as _orig_no_speech
+    from satellite_gateway.config import WAKE_NO_SPEECH_SECONDS as _orig_no_speech
 
     config_module.WAKE_NO_SPEECH_SECONDS = 0.3
     loop_module.CAPTURE_ACTIVATION_SECONDS = 30.0

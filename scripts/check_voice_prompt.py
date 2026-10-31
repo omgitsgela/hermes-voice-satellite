@@ -13,13 +13,13 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from gateway.config import (  # noqa: E402
+from satellite_gateway.config import (  # noqa: E402
     GATEWAY_BASE_URL,
     GATEWAY_ENV_FILE,
     VOICE_INSTRUCTIONS,
     VOICE_ROUTE_ALIAS,
 )
-from gateway.gateway import VoiceGateway, read_api_key  # noqa: E402
+from satellite_gateway.gateway import VoiceGateway, read_api_key  # noqa: E402
 
 BANNED = ("verif", "confirm", "double check", "double-check", "checked", "validated",
           "i can see", "attribute")

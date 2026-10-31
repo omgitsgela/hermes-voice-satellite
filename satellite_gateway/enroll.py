@@ -39,7 +39,7 @@ error body, or a response field.
 
 Minting is NOT implemented here: `POST /enroll` invokes the existing issuer
 (scripts/issue-registry-tls.py) so the fingerprint registered in `device-credentials.json` stays
-byte-identical to what gateway/registry.py's `peer_fingerprint` computes from a live TLS peer.
+byte-identical to what satellite_gateway/registry.py's `peer_fingerprint` computes from a live TLS peer.
 """
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
-from gateway.config import (
+from satellite_gateway.config import (
     ENROLL_CHALLENGE_TTL_SECONDS,
     ENROLL_GLOBAL_RATE_PER_MINUTE,
     ENROLL_RATE_PER_MINUTE,
@@ -75,7 +75,7 @@ from gateway.config import (
     REGISTRY_TLS_CERT_FILE,
 )
 
-_LOGGER = logging.getLogger("gateway.enroll")
+_LOGGER = logging.getLogger("satellite_gateway.enroll")
 
 TOKEN_WORDS = 5          # five dictionary words: ~55 bits from a 2048-entry list, typeable
 CHALLENGE_BYTES = 32     # 64 hex characters
@@ -237,7 +237,7 @@ def _issuer():
 
     cmd_enroll is invoked rather than rewritten so the fingerprint this endpoint registers in
     `device-credentials.json` is computed by the same code the manual flow uses, and stays
-    byte-identical to gateway/registry.py's `peer_fingerprint`.
+    byte-identical to satellite_gateway/registry.py's `peer_fingerprint`.
     """
     global _issuer_module
     if _issuer_module is None:

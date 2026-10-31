@@ -30,9 +30,9 @@ sys.path.insert(0, str(ROOT))
 
 import gateway.config as config_module  # noqa: E402
 import gateway.loop as loop_module  # noqa: E402
-from gateway.endpointing import Endpointer  # noqa: E402
-from gateway.endpointing import EndpointResult  # noqa: E402
-from gateway.satellite import SatelliteClient  # noqa: E402
+from satellite_gateway.endpointing import Endpointer  # noqa: E402
+from satellite_gateway.endpointing import EndpointResult  # noqa: E402
+from satellite_gateway.satellite import SatelliteClient  # noqa: E402
 
 PROBLEMS = 0
 
@@ -142,7 +142,7 @@ async def main() -> int:
         check("...and none of them touched the mode", loop.follow_up is True)
 
     # 2c. "stop" is an ordinary word: only a whole-utterance stop may be intercepted.
-    from gateway.config import STOP_CORES
+    from satellite_gateway.config import STOP_CORES
     loop.stop_requested = False
     for sentence in ("stop the sprinklers", "don't stop the music",
                      "remind me where the bus stop is", "stop by the store later",

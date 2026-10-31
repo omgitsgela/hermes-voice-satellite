@@ -2,7 +2,7 @@
 
 **Wired into the Gateway behind `VOICE_REGISTRY_ENABLED`, off by default.** A registered device is
 leaseable by the voice loop and carries real conversations over the leased connection
-(`gateway/lease.py`, acquired in `gateway/loop.py`). The registry also carries the configuration control
+(`satellite_gateway/lease.py`, acquired in `satellite_gateway/loop.py`). The registry also carries the configuration control
 plane: desired state goes down, reported actual state comes back (`hermes.config.desired` /
 `hermes.config.reported`), and those control events are handled out of band so they never enter the
 audio queue.
@@ -50,9 +50,9 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from wyoming.event import Event, async_write_event
 from wyoming.server import AsyncEventHandler, AsyncTcpServer, HandlerFactory
 
-from gateway.net import enable_tcp_keepalive
+from satellite_gateway.net import enable_tcp_keepalive
 
-log = logging.getLogger("gateway.registry")
+log = logging.getLogger("satellite_gateway.registry")
 
 #: Bumped when the registration contract changes, so an old device is refused clearly instead of
 #: half-working.

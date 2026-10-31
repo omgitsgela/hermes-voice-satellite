@@ -46,7 +46,7 @@ def bridge_with(capture):
     b.capture_utterance = capture
     b._discard_queued_events = _nothing_queued
     # capture_after_wake scopes the no-speech budget on the endpointer, so the stub needs one.
-    from gateway.endpointing import Endpointer
+    from satellite_gateway.endpointing import Endpointer
     b._ep = Endpointer(silence_ms=700, min_speech_ms=250)
     return b
 

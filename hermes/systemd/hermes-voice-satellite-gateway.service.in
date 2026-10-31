@@ -1,5 +1,5 @@
 [Unit]
-Description=Hermes Voice Satellite Gateway
+Description=Hermes Voice Satellite - Satellite Gateway
 After=network-online.target hermes-gateway.service
 Wants=network-online.target
 # The Gateway dials the satellite on its configured port and the Hermes API server on loopback.
@@ -8,17 +8,18 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# %h is the service user's home, so a clone installs as whoever is running it: no path in this
-# file depends on the install location.
-WorkingDirectory=%h/hermes-voice-satellite
-# The host side's one configuration file (gateway.env at the project root, git-ignored; see
-# gateway.env.example). A missing file is not fatal: every value then falls back to its default
+# __BASE__ is the repository checkout the gateway runs from (substituted by install-gateway.sh;
+# the committed hermes-voice-satellite-gateway.service is the same unit pinned to %h/hermes-voice-satellite for
+# the documented clone location).
+WorkingDirectory=__BASE__
+# The host side's one configuration file (satellite-gateway.env at the project root, git-ignored; see
+# satellite-gateway.env.example). A missing file is not fatal: every value then falls back to its default
 # in gateway/config.py, and an unconfigured Gateway dials loopback and says so. systemd
 # EnvironmentFile values override manager/Environment= values; for a service override,
 # use a later EnvironmentFile in a drop-in. Direct Python runs prefer their environment.
-EnvironmentFile=-%h/hermes-voice-satellite/gateway.env
+EnvironmentFile=-__BASE__/satellite-gateway.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=%h/hermes-voice-satellite/.venv/bin/python -m gateway.loop
+ExecStart=__BASE__/.venv/bin/python -m satellite_gateway.loop
 Restart=always
 # A satellite that is switched off cannot be dialled, and every attempt costs about 1.3s of CPU
 # reloading the whisper and Piper models before it fails. At 5s that was ~25% of a core for hours

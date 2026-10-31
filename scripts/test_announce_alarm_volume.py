@@ -30,8 +30,8 @@ from typing import Any
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from gateway.announce import Announcement, Announcer  # noqa: E402
-from gateway.volume import alarm_percent  # noqa: E402
+from satellite_gateway.announce import Announcement, Announcer  # noqa: E402
+from satellite_gateway.volume import alarm_percent  # noqa: E402
 
 checks = 0
 failures: list[str] = []

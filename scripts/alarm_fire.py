@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from gateway.config import ANNOUNCE_MAX_CHARS, ANNOUNCE_PORT  # noqa: E402
+from satellite_gateway.config import ANNOUNCE_MAX_CHARS, ANNOUNCE_PORT  # noqa: E402
 from scripts.announce import read_token  # noqa: E402
 
 

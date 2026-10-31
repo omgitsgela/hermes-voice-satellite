@@ -73,10 +73,10 @@ def main() -> int:
     doc = ARCHITECTURE.read_text()
 
     # ---- facts that live in the code, read back rather than remembered -------------------
-    from gateway.config import (
+    from satellite_gateway.config import (
         GATEWAY_BASE_URL, SILERO_THRESHOLD, VOICE_DETECTOR, VOICE_ROUTE_ALIAS,
     )
-    from gateway.silero_vad import MODEL_PATH
+    from satellite_gateway.silero_vad import MODEL_PATH
 
     check("the doc names the detector actually configured",
           f"`{VOICE_DETECTOR}`" in doc or VOICE_DETECTOR in doc, True)

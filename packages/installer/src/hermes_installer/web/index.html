@@ -114,11 +114,11 @@
 <div class="shell">
   <header><span class="dot" aria-hidden="true"></span><h1>Hermes Voice Satellite</h1></header>
   <p class="lede">Your voice device connects to the computer that runs Hermes. This tool calls that
-    computer the <strong>gateway</strong>, and helps you set one up, add a device to one, or both.</p>
+    computer the <strong>Satellite Gateway</strong>, and helps you set one up, add a device to one, or change a device you already have.</p>
 
   <ol class="progress" id="progress" aria-label="Setup progress">
     <li id="step-tab-1" aria-current="step">1. Start</li>
-    <li id="step-tab-2">2. Gateway</li>
+    <li id="step-tab-2">2. Satellite Gateway</li>
     <li id="step-tab-3">3. Device</li>
   </ol>
 
@@ -132,7 +132,7 @@
       <legend>Choose one to begin</legend>
       <label class="choice">
         <input type="radio" name="role" value="gateway" id="role-gateway" />
-        <span><b>Set up the gateway on this computer</b>
+        <span><b>Set up the Satellite Gateway on this computer</b>
           <span class="detail">Installs the voice service beside Hermes and gives you the details
             your devices will use.</span>
           <span class="detail" id="hermes-line">Checking this computer for Hermes...</span>
@@ -140,8 +140,8 @@
       </label>
       <label class="choice">
         <input type="radio" name="role" value="device" id="role-device" />
-        <span><b>Add a device to an existing gateway</b>
-          <span class="detail">For a gateway you already set up, on this computer or another one.</span>
+        <span><b>Add a device to an existing Satellite Gateway</b>
+          <span class="detail">For a Satellite Gateway you already set up, on this computer or another one.</span>
         </span>
       </label>
       <label class="choice">
@@ -156,12 +156,12 @@
     <div id="platform-note" class="notice warn hidden" style="margin-bottom:12px"></div>
     <div id="hermes-missing" class="notice warn hidden">
       Hermes was not found on this computer. Install Hermes here before setting up a gateway. If
-      Hermes already runs somewhere else, choose "Add a device to an existing gateway" instead.
+      Hermes already runs somewhere else, choose "Add a device to an existing Satellite Gateway" instead.
     </div>
 
     <details id="server-note">
       <summary>Hermes runs on a server without a screen?</summary>
-      <p class="hint" style="margin-top:10px">Set up the gateway there with the console installer
+      <p class="hint" style="margin-top:10px">Set up the Satellite Gateway there with the console installer
         (<code>hermes-installer</code>). Then prepare each device on a computer that has its USB
         cable or card reader, using the gateway details from that server.</p>
     </details>
@@ -183,11 +183,11 @@
 
   <!-- ------------------------------------------------------------------ stage 2 -->
   <section class="card hidden" id="stage2" aria-labelledby="stage2-title">
-    <h2 id="stage2-title" tabindex="-1">Set up the gateway</h2>
+    <h2 id="stage2-title" tabindex="-1">Set up the Satellite Gateway</h2>
     <p class="hint">This computer will keep the voice service running. Devices connect to it, so the
       address below has to be one they can reach.</p>
 
-    <label class="field" for="dial">Gateway address</label>
+    <label class="field" for="dial">Satellite Gateway address</label>
     <input id="dial" type="text" placeholder="192.0.2.10 or gateway.example.com"
            aria-describedby="dial-help" />
     <p class="hint" id="dial-help" style="margin-top:8px">Do not use localhost here if a device on
@@ -204,14 +204,14 @@
     </details>
 
     <div class="actions">
-      <button id="review-gateway">Review gateway setup</button>
-      <button id="install-gateway" class="go" disabled>Install gateway</button>
+      <button id="review-gateway">Review Satellite Gateway setup</button>
+      <button id="install-gateway" class="go" disabled>Install Satellite Gateway</button>
     </div>
 
     <div id="gateway-review" class="hidden">
       <h3>Before we install</h3>
       <dl class="summary">
-        <dt>Gateway address</dt><dd id="review-address"></dd>
+        <dt>Satellite Gateway address</dt><dd id="review-address"></dd>
         <dt>What changes</dt><dd>The voice service is installed beside Hermes, and this computer
           starts keeping the devices' details.</dd>
         <dt>Permission</dt><dd id="review-permission">You may be asked for an administrator
@@ -226,9 +226,9 @@
     <div id="gateway-result" class="hidden">
       <div id="gateway-status"></div>
       <div id="gateway-card" class="hidden">
-        <h3>Keep these gateway details</h3>
+        <h3>Keep these Satellite Gateway details</h3>
         <dl class="summary">
-          <dt>Gateway address</dt><dd id="card-address"></dd>
+          <dt>Satellite Gateway address</dt><dd id="card-address"></dd>
           <dt>Identity code</dt><dd class="code" style="font-size:22px" id="card-code"></dd>
           <dt>Pairing words</dt><dd id="card-words"></dd>
         </dl>
@@ -271,23 +271,23 @@
         card, then put the card in this computer's reader.</p>
     </div>
 
-    <h3 id="connect-title-gateway">Connect to your gateway</h3>
+    <h3 id="connect-title-gateway">Connect to your Satellite Gateway</h3>
     <p class="hint">Type the gateway's address. We will show its identity code so you can check it
       against the one you saved.</p>
     <div class="row">
-      <div><label class="field" for="gwhost">Gateway address</label>
+      <div><label class="field" for="gwhost">Satellite Gateway address</label>
         <input id="gwhost" type="text" placeholder="192.0.2.10" /></div>
       <div><label class="field" for="gwport">Pairing port</label>
         <input id="gwport" type="text" value="10704" aria-describedby="gwport-help" /></div>
     </div>
     <p class="hint" id="gwport-help" style="margin-top:8px">Devices dial the registry port; this
       pairing port is only used while setting one up. The gateway setup prints both.</p>
-    <div class="actions"><button id="check-gateway">Check the gateway</button></div>
+    <div class="actions"><button id="check-gateway">Check the Satellite Gateway</button></div>
     <div id="gateway-check-status" class="busy hidden" aria-live="polite"></div>
 
     <div id="identity" class="hidden">
-      <h3>Check that this is your gateway</h3>
-      <p class="hint">This gateway shows:</p>
+      <h3>Check that this is your Satellite Gateway</h3>
+      <p class="hint">This Satellite Gateway shows:</p>
       <div class="code" id="shown-code">----</div>
       <p class="hint" style="margin-top:12px">Compare this with the identity code you saved during
         gateway setup. Matching codes help you avoid connecting to a different computer.</p>
@@ -392,7 +392,7 @@
     </div>
   </section>
 
-  <footer>This installer runs locally on this computer and connects to your gateway during setup.</footer>
+  <footer>This installer runs locally on this computer and connects to your Satellite Gateway during setup.</footer>
 </div>
 
 <script>
@@ -499,8 +499,8 @@ function selectDevice(event) {
       <li>${card ? "Its microSD card, and a card reader connected to this computer."
                  : "A USB data cable (not a charging-only cable)."}</li>
       <li>Your Wi-Fi network name, if you want it changed.</li>
-      <li>The gateway address, identity code and pairing words from gateway setup.</li>
-      <li>A working connection from this computer to the gateway.</li>
+      <li>The Satellite Satellite Gateway address, identity code and pairing words from its setup.</li>
+      <li>A working connection from this computer to the Satellite Gateway.</li>
     </ul>`;
   updateStartButton();
 }
@@ -602,7 +602,7 @@ $("install-gateway").onclick = async () => {
     dry_run: false
   });
 
-  button.textContent = "Install gateway";
+  button.textContent = "Install Satellite Gateway";
   if (!result.ok) {
     button.disabled = false;
     $("gateway-status").innerHTML =
@@ -616,7 +616,7 @@ $("install-gateway").onclick = async () => {
   $("gateway-status").innerHTML = result.dry_run
     ? `<div class="notice warn">Practice run: the gateway was not installed. This is what would
         have happened.</div>`
-    : `<div class="notice ok">The gateway is installed on this computer.</div>`;
+    : `<div class="notice ok">The Satellite Gateway is installed on this computer.</div>`;
   if (result.pairing_unit) {
     $("gateway-status").insertAdjacentHTML("beforeend",
       `<div class="notice"><strong>One more step to let devices pair.</strong>
@@ -637,7 +637,7 @@ $("install-gateway").onclick = async () => {
 $("copy-card").onclick = async () => {
   if (!state.card) return;
   const text = [
-    "Gateway address: " + state.card.dial_address,
+    "Satellite Gateway address: " + state.card.dial_address,
     "Identity code: " + state.card.identity_code,
     "Pairing words: " + state.card.words
   ].join("\n");
@@ -702,7 +702,7 @@ $("check-gateway").onclick = async () => {
     $("gateway-check-status").classList.remove("hidden");
     $("gateway-check-status").innerHTML = `
       <div class="notice bad">
-        <strong>We couldn't reach the gateway at ${escapeHtml(host)}:${port}.</strong>
+        <strong>We couldn't reach the Satellite Gateway at ${escapeHtml(host)}:${port}.</strong>
         <p style="margin:8px 0 0">Check the address against your saved gateway details. Make sure the
         gateway computer is on and the voice service is running. If it is on another network or a
         server, this computer and your device both need a working route to it.</p>
@@ -721,7 +721,7 @@ $("check-gateway").onclick = async () => {
 
 $("code-match").onclick = () => {
   $("code-verdict").innerHTML =
-    `<div class="notice ok">Thank you. Enter the pairing words from gateway setup.</div>`;
+    `<div class="notice ok">Thank you. Enter the pairing words from Satellite Gateway setup.</div>`;
   $("pair-panel").classList.remove("hidden");
   $("words").focus();
 };
@@ -729,7 +729,7 @@ $("code-match").onclick = () => {
 $("code-mismatch").onclick = () => {
   $("code-verdict").innerHTML = `
     <div class="notice bad"><strong>Don't pair yet.</strong>
-      <p style="margin:8px 0 0">Check the gateway address and compare the code again. If you set the
+      <p style="margin:8px 0 0">Check the Satellite Satellite Gateway address and compare the code again. If you set the
       gateway up again, use the code from the most recent setup.</p></div>`;
   $("pair-panel").classList.add("hidden");
   announce("Codes did not match. Pairing is paused.");
@@ -1058,7 +1058,7 @@ $("review-device").onclick = async () => {
   $("device-summary").innerHTML = `
     <dt>Device</dt><dd>${escapeHtml(state.device.name)}</dd>
     <dt>Name</dt><dd>${escapeHtml(fields.device_name)}</dd>
-    <dt>Gateway</dt><dd>${escapeHtml(fields.dial_address || "the paired gateway")}</dd>
+    <dt>Gateway</dt><dd>${escapeHtml(fields.dial_address || "the paired Satellite Gateway")}</dd>
     <dt>Connection</dt><dd>${state.device.needs_card_reader
       ? "card in a reader" : "USB cable"}</dd>
     <dt>Wi-Fi</dt><dd>${fields.wifi_ssid ? escapeHtml(fields.wifi_ssid)

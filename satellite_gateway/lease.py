@@ -13,7 +13,7 @@ one defect that came from two code paths disagreeing about who owns a socket.
 
 What a lease cannot do is reconnect. A dialled satellite can be re-dialled; a leased one connects when the
 device decides to. So `reconnect()` re-arms the device over the link it already owns, and losing the link
-means waiting for a device to arrive, which `gateway/loop.py` handles.
+means waiting for a device to arrive, which `satellite_gateway/loop.py` handles.
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ from typing import Optional
 from wyoming.audio import AudioChunk
 from wyoming.event import Event
 
-from gateway.registry import SatelliteConnection
-from gateway.satellite import SatelliteClient
+from satellite_gateway.registry import SatelliteConnection
+from satellite_gateway.satellite import SatelliteClient
 
 _LOGGER = logging.getLogger(__name__)
 

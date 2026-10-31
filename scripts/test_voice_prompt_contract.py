@@ -25,7 +25,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from gateway.config import VOICE_INSTRUCTIONS  # noqa: E402
+from satellite_gateway.config import VOICE_INSTRUCTIONS  # noqa: E402
 
 checks = 0
 failures: list[str] = []

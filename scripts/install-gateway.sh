@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Install the voice GATEWAY on a host that already runs Hermes: the gateway virtualenv, the
-# gateway.env, the registry TLS material, the systemd user unit, and the Hermes-side plugin +
+# satellite-gateway.env, the registry TLS material, the systemd user unit, and the Hermes-side plugin +
 # config keys.
 #
 # This is the host-side counterpart of scripts/install-esp32.sh / install-pi.sh. A gateway host
 # becomes a gateway in five steps, each visible and idempotent:
 #
 #   1. venv     -- the Gateway's own virtualenv (faster-whisper, piper, wyoming, ...).
-#   2. env      -- gateway.env from the committed template, with the registry link values filled
+#   2. env      -- satellite-gateway.env from the committed template, with the registry link values filled
 #                  in so the Gateway listens the moment the unit starts.
 #   3. tls      -- the registry's CA + server certificate and the credential file, minted by
 #                  scripts/issue-registry-tls.py (idempotent; an existing CA is never regenerated).
@@ -39,7 +39,7 @@
 # yes/no before writing anything. A non-interactive stdin refuses the guided flow -- pass the
 # flags for automation. --guided --dry-run previews the guided answers without writing.
 #
-# Idempotence: a re-run reports what it already did and changes nothing. The gateway.env's managed
+# Idempotence: a re-run reports what it already did and changes nothing. The satellite-gateway.env's managed
 # registry/satellite keys move in place to the current flag values (the rest of the file is
 # untouched); the Hermes config is backed up before the one edit; and the registry CA is reused,
 # never regenerated, because a regenerated CA strands every enrolled device.
@@ -132,7 +132,7 @@ if [ "$GUIDED" = 1 ]; then
     else
         echo "  host LAN IP:      not detected (type the address a device routes to)"
     fi
-    if [ -d "$REPO_ROOT/bridge" ] && [ -f "$REPO_ROOT/gateway.env.example" ] && [ -f "$REPO_ROOT/requirements.txt" ]; then
+    if [ -d "$REPO_ROOT/bridge" ] && [ -f "$REPO_ROOT/satellite-gateway.env.example" ] && [ -f "$REPO_ROOT/requirements.txt" ]; then
         echo "  checkout:         $REPO_ROOT (looks like this repository)"
     else
         echo "  checkout:         $REPO_ROOT (incomplete; the gateway must run from a full clone)"
@@ -169,7 +169,7 @@ if [ "$GUIDED" = 1 ]; then
     else
         echo "  hermes side:    SKIPPED"
     fi
-    echo "  1. gateway virtualenv   2. gateway.env   3. registry TLS   3b. enrolment token   4. systemd user unit   5. Hermes side"
+    echo "  1. gateway virtualenv   2. satellite-gateway.env   3. registry TLS   3b. enrolment token   4. systemd user unit   5. Hermes side"
     GUIDED_ARGS=(--base "$BASE" --device-reachable-as "$REACHABLE_AS" --registry-port "$REGISTRY_PORT"
                  --tls-port "$TLS_PORT" --registry-bind "$REGISTRY_BIND" --satellite-host "$SATELLITE_HOST")
     if [ "$HERMES_YN" != y ]; then GUIDED_ARGS+=(--skip-hermes); fi
@@ -186,7 +186,7 @@ case "$REACHABLE_AS" in
     127.0.0.1*|::1|localhost*|0.0.0.0*) die "--device-reachable-as must be an address a device can route to, not $REACHABLE_AS (loopback/any never receives a device's dial)" ;;
 esac
 [ "$DRY_RUN" = 1 ] || [ -d "$BASE/bridge" ] || die "no gateway/ under $BASE -- is --base the repository clone?"
-[ -f "$BASE/gateway.env.example" ] || die "no gateway.env.example at $BASE"
+[ -f "$BASE/satellite-gateway.env.example" ] || die "no satellite-gateway.env.example at $BASE"
 [ -f "$BASE/requirements.txt" ] || die "no requirements.txt at $BASE"
 
 TLS_PORT="${TLS_PORT:-$((REGISTRY_PORT + 1))}"
@@ -213,7 +213,7 @@ else
     run "$BASE/.venv/bin/python" -m pip check
     # The Piper voice the Gateway speaks with (not committed; the unit's WorkingDirectory expects
     # voices/ next to gateway/). The name follows the installation's configuration — the same
-    # VOICE_PIPER_VOICE resolution gateway/config.py uses: an existing gateway.env wins, otherwise
+    # VOICE_PIPER_VOICE resolution gateway/config.py uses: an existing satellite-gateway.env wins, otherwise
     # the code default. Changing the voice is docs/switching-voices.md; this line must not grow
     # its own default. gateway/config.py needs only the stdlib, so either interpreter can read it.
     VOICE_PY=""
@@ -235,9 +235,9 @@ print(PIPER_VOICE_NAME)' "$BASE" 2>/dev/null || true)"
     fi
 fi
 
-# ---------------------------------------------------------------- 2. gateway.env
-echo "== 2. gateway.env ($BASE/gateway.env) =="
-ENV="$BASE/gateway.env"
+# ---------------------------------------------------------------- 2. satellite-gateway.env
+echo "== 2. satellite-gateway.env ($BASE/satellite-gateway.env) =="
+ENV="$BASE/satellite-gateway.env"
 # The keys the installer owns, as KEY=VALUE. VOICE_REGISTRY_HOST is the listener's BIND address
 # (REGISTRY_BIND, default 0.0.0.0 -- the address devices route to is the certificate's SAN, not
 # this); it is intentionally NOT $REACHABLE_AS, because binding to one interface would break
@@ -263,11 +263,11 @@ if [ "$DRY_RUN" = 1 ]; then
     if [ -f "$ENV" ]; then
         cp "$ENV" "$ENV_EDIT"
     else
-        cp "$BASE/gateway.env.example" "$ENV_EDIT"
+        cp "$BASE/satellite-gateway.env.example" "$ENV_EDIT"
     fi
 else
     ENV_EDIT="$ENV"
-    [ -f "$ENV_EDIT" ] || cp "$BASE/gateway.env.example" "$ENV_EDIT"
+    [ -f "$ENV_EDIT" ] || cp "$BASE/satellite-gateway.env.example" "$ENV_EDIT"
 fi
 # Set each managed key in place: an existing live KEY=... line is replaced (the rest of the file
 # is untouched, so a tuned file is never clobbered), and a key with no live line is appended. The
@@ -286,7 +286,7 @@ if [ "$DRY_RUN" = 1 ]; then
     sed 's/^/  /' "$ENV_EDIT"
     rm -f "$ENV_EDIT"
 else
-    echo "   gateway.env written: $ENV"
+    echo "   satellite-gateway.env written: $ENV"
 fi
 
 # ---------------------------------------------------------------- 3. registry TLS
@@ -331,32 +331,32 @@ else
 fi
 
 # ---------------------------------------------------------------- 4. systemd user unit
-echo "== 4. systemd user unit (hermes-voice-gateway.service) =="
+echo "== 4. systemd user unit (hermes-voice-satellite-gateway.service) =="
 UNIT_DIR="$HOME/.config/systemd/user"
-UNIT_TEMPLATE="$REPO_ROOT/hermes/systemd/hermes-voice-gateway.service.in"
+UNIT_TEMPLATE="$REPO_ROOT/hermes/systemd/hermes-voice-satellite-gateway.service.in"
 # The unit is rendered from its .in template so its WorkingDirectory / EnvironmentFile / ExecStart
 # all point at $BASE -- wherever the gateway actually runs from -- rather than a hardcoded
-# %h/hermes-voice-satellite. (The committed hermes-voice-gateway.service is the same unit pinned to the
+# %h/hermes-voice-satellite. (The committed hermes-voice-satellite-gateway.service is the same unit pinned to the
 # documented clone location, for a manual install per the README.)
 render_unit() {
     sed "s|__BASE__|$BASE|g" "$UNIT_TEMPLATE"
 }
 if [ "$DRY_RUN" = 1 ]; then
-    echo "DRY-RUN: render $UNIT_TEMPLATE -> $UNIT_DIR/hermes-voice-gateway.service (WorkingDirectory/ExecStart = $BASE)"
-    echo "DRY-RUN: systemctl --user daemon-reload && systemctl --user enable --now hermes-voice-gateway.service"
+    echo "DRY-RUN: render $UNIT_TEMPLATE -> $UNIT_DIR/hermes-voice-satellite-gateway.service (WorkingDirectory/ExecStart = $BASE)"
+    echo "DRY-RUN: systemctl --user daemon-reload && systemctl --user enable --now hermes-voice-satellite-gateway.service"
     echo "DRY-RUN: loginctl enable-linger \$USER (so the unit survives logout)"
 else
-    # The unit reads gateway.env as its EnvironmentFile, so the registry values written in step 2
+    # The unit reads satellite-gateway.env as its EnvironmentFile, so the registry values written in step 2
     # are already visible to the service: no drop-in is needed (and a drop-in with the same values
     # would be a second place to edit, which is how configuration drifts).
     mkdir -p "$UNIT_DIR"
-    render_unit > "$UNIT_DIR/hermes-voice-gateway.service"
-    chmod 644 "$UNIT_DIR/hermes-voice-gateway.service"
+    render_unit > "$UNIT_DIR/hermes-voice-satellite-gateway.service"
+    chmod 644 "$UNIT_DIR/hermes-voice-satellite-gateway.service"
     systemctl --user daemon-reload
-    systemctl --user enable --now hermes-voice-gateway.service
+    systemctl --user enable --now hermes-voice-satellite-gateway.service
     loginctl enable-linger "$USER" 2>/dev/null || echo "   note: enable lingering manually (loginctl enable-linger $USER)"
     echo "   unit status:"
-    systemctl --user --no-pager status hermes-voice-gateway.service | head -6
+    systemctl --user --no-pager status hermes-voice-satellite-gateway.service | head -6
 fi
 
 # ---------------------------------------------------------------- 5. the Hermes side

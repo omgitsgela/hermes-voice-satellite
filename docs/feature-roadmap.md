@@ -33,7 +33,7 @@ That is a workaround, not a fix.
 stream audio to the device.
 **What it would take here:** a player that shares the existing single-playback lock, a source
 (local files or a stream), and a decision about how it yields to a wake word. The lock and the
-queue already exist in the Gateway, so this is more plumbing than invention.
+queue already exist in the Satellite Gateway, so this is more plumbing than invention.
 **Value:** medium. Nothing currently asks for it. It is the capability we would miss first if the
 device became a general house speaker.
 
@@ -76,7 +76,7 @@ already proven.
 ### 7. Timers — already planned, and validated
 
 **Theirs:** timer support built in, server-side.
-**Ours:** speced in `docs/timers-and-alarms.md`, with the Gateway owning countdowns and cron owning
+**Ours:** speced in `docs/timers-and-alarms.md`, with the Satellite Gateway owning countdowns and cron owning
 alarms. Interesting detail found while vendoring: the satellite source ships a
 `sounds/timer_finished.wav`, which we can use as the timer tone for free.
 **Value:** already on the plan, and their doing it confirms it is a normal thing for this class of
@@ -100,7 +100,7 @@ verified.
 
 Theirs is a satellite for Home Assistant. Ours reaches a full Hermes assistant: the voice surface
 currently carries 21 toolsets and 19 direct tools, including household control, calendar, tasks and
-place lookups. Nothing about switching would preserve that without rebuilding the Gateway, which is
+place lookups. Nothing about switching would preserve that without rebuilding the Satellite Gateway, which is
 the strongest practical argument for staying where we are.
 
 ## Why we are not switching
@@ -156,9 +156,9 @@ expectation, 2026-09-23: a feature enhancement belongs on the Issues page, not o
 | [#10](https://github.com/omgitsgela/hermes-voice-satellite/issues/10) | Volume control by voice, with a hard floor that is never zero |
 | [#11](https://github.com/omgitsgela/hermes-voice-satellite/issues/11) | Multi-satellite configuration and management: onboarding, updates, options at fleet scale |
 | [#32](https://github.com/omgitsgela/hermes-voice-satellite/issues/32) | Single-responder arbitration when several satellites hear one wake. Landed in PR #112: the arbitration engine (measured level decides, wake score tiebreaks, arrival order last), ESP32 level emission in the wake core, and Pi-side level measurement in the wake shim, which meters the exact audio it relays and attaches `context.wake_level` to detections. Remaining: level comparability across different microphone chains, and enabling a non-zero claim window in a live fleet |
-| [#111](https://github.com/omgitsgela/hermes-voice-satellite/issues/111) | Registered devices were never armed (the Gateway leased one satellite at a time). Fixed in PR #112: every registered device gets a lease, an arm, and a supervisor reader |
+| [#111](https://github.com/omgitsgela/hermes-voice-satellite/issues/111) | Registered devices were never armed (the Satellite Gateway leased one satellite at a time). Fixed in PR #112: every registered device gets a lease, an arm, and a supervisor reader |
 | [#26](https://github.com/omgitsgela/hermes-voice-satellite/issues/26) | Optional slower-speaking accessibility mode for utterance endpointing |
-| [#61](https://github.com/omgitsgela/hermes-voice-satellite/issues/61) | **Connection inversion: devices dial the Gateway.** The umbrella issue for the registry, the transport decision, enrolment and identity, and the licensing constraint |
+| [#61](https://github.com/omgitsgela/hermes-voice-satellite/issues/61) | **Connection inversion: devices dial the Satellite Gateway.** The umbrella issue for the registry, the transport decision, enrolment and identity, and the licensing constraint |
 
 #10 is a maintainer request rather than a gap against the successor project, and it is filed
 here all the same: this index is the list of what we intend to build, whatever the source of the idea.
@@ -192,7 +192,7 @@ work; details, affected files and safe reproductions live on each issue.
 | [#97](https://github.com/omgitsgela/hermes-voice-satellite/issues/97) | A spoken volume request can change a different device: the assistant picks a device and a value, then reads a repeat as agreement |
 | [#99](https://github.com/omgitsgela/hermes-voice-satellite/issues/99) | The card deploy script omits four device modules, so a closed fix could never be deployed |
 | [#102](https://github.com/omgitsgela/hermes-voice-satellite/issues/102) | A roaming device disconnecting with No route to host logs an unretrieved task exception and a traceback |
-| [#104](https://github.com/omgitsgela/hermes-voice-satellite/issues/104) | The Gateway cannot detect a vanished satellite: nothing sets keepalive on accepted registry sockets |
+| [#104](https://github.com/omgitsgela/hermes-voice-satellite/issues/104) | The Satellite Gateway cannot detect a vanished satellite: nothing sets keepalive on accepted registry sockets |
 | [#105](https://github.com/omgitsgela/hermes-voice-satellite/issues/105) | A recovered link does not say it is listening again, so the journal cannot distinguish recovery from a stall |
 
 Each of these is a defect in behaviour the repository already documents, so none of them needs a design
@@ -210,7 +210,7 @@ them, and the pattern is written down with the contract rather than with the inc
 ## Done
 
 - **48 kHz audio path** — the I2S link now runs at 48 kHz in both directions, matching the Seeed
-  reference profile. Playback keeps the Gateway's full TTS bandwidth instead of being low-passed at
+  reference profile. Playback keeps the Satellite Gateway's full TTS bandwidth instead of being low-passed at
   7400 Hz. See `docs/audio-fidelity.md`. The capture side decimates back to 16 kHz for the wake
   model and the uplink, which are 16 kHz contracts and did not change.
 
@@ -226,7 +226,7 @@ These are design intentions, not commitments. Each needs its own decision note b
   firmware.
 - **48 kHz audio path.** Capture and playback are both 16 kHz today, which caps the audible band at
   8 kHz and is the main remaining quality ceiling. Going higher needs the XVF3800's 48 kHz I2S
-  master build, a coordinated sample-rate change across capture, playback, the Gateway's TTS format
+  master build, a coordinated sample-rate change across capture, playback, the Satellite Gateway's TTS format
   and the wake scorer's input, plus a bandwidth/memory check on the link. It is one migration, not
   a switch: do it as a single coordinated change or not at all. See `prompt-tones.md` for the
   existing rate split, which the migration would collapse.

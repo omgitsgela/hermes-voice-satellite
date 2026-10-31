@@ -1,6 +1,6 @@
 """Voice metadata and speaker resolution, with no Piper/onnxruntime dependency.
 
-`gateway/tts.py` needs the speaker resolution at synthesis time; `scripts/switch-voice.py` needs
+`satellite_gateway/tts.py` needs the speaker resolution at synthesis time; `scripts/switch-voice.py` needs
 the same rules *before* it writes any configuration, and it should not have to load onnxruntime
 to read a JSON file. Keeping the rules here means there is exactly one implementation of
 "what does this speaker setting mean", which is the piece that has gone wrong before:
@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-# The satellite plays 22050 Hz 16-bit mono (see SND_FORMAT in gateway/config.py). Every published
+# The satellite plays 22050 Hz 16-bit mono (see SND_FORMAT in satellite_gateway/config.py). Every published
 # Piper English voice is 22050, so a voice at any other rate is a contract violation, not a
 # preference: nothing resamples on the device.
 VOICE_SAMPLE_RATE = 22050

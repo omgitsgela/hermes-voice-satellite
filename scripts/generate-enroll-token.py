@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from gateway.enroll import generate_token, load_wordlist  # noqa: E402
+from satellite_gateway.enroll import generate_token, load_wordlist  # noqa: E402
 
 
 def main() -> int:

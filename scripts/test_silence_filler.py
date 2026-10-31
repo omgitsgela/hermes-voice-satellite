@@ -21,7 +21,7 @@ import types
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import gateway.loop as loop_module  # noqa: E402
-from gateway.endpointing import EndpointResult  # noqa: E402
+from satellite_gateway.endpointing import EndpointResult  # noqa: E402
 
 Loop = next(obj for obj in vars(loop_module).values()
             if isinstance(obj, type) and hasattr(obj, "_watch_for_interruption"))

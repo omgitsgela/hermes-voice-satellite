@@ -32,7 +32,7 @@ from typing import AsyncIterator, Optional
 
 import aiohttp
 
-_LOGGER = logging.getLogger("gateway.gateway")
+_LOGGER = logging.getLogger("satellite_gateway.gateway")
 
 RunsEvent = dict
 
@@ -278,8 +278,8 @@ class VoiceGateway:
 
 
 async def _smoke() -> int:
-    """Manual preflight: python -m gateway.gateway"""
-    from gateway.config import (GATEWAY_BASE_URL, GATEWAY_ENV_FILE, VOICE_INSTRUCTIONS,
+    """Manual preflight: python -m satellite_gateway.gateway"""
+    from satellite_gateway.config import (GATEWAY_BASE_URL, GATEWAY_ENV_FILE, VOICE_INSTRUCTIONS,
                                VOICE_ROUTE_ALIAS, VOICE_SESSION_ID)
 
     logging.basicConfig(level=logging.INFO,

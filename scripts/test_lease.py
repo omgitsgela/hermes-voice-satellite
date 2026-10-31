@@ -34,8 +34,8 @@ from wyoming.event import Event, async_read_event, async_write_event  # noqa: E4
 from wyoming.info import Attribution, Describe, Info, Satellite  # noqa: E402
 from wyoming.satellite import PauseSatellite, RunSatellite  # noqa: E402
 
-from gateway.lease import LeasedSatellite  # noqa: E402
-from gateway.registry import SatelliteConnection  # noqa: E402
+from satellite_gateway.lease import LeasedSatellite  # noqa: E402
+from satellite_gateway.registry import SatelliteConnection  # noqa: E402
 
 PASSED = 0
 FAILED = 0

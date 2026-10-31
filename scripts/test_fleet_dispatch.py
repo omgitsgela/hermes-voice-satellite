@@ -22,8 +22,8 @@ import time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import gateway.announce as announce  # noqa: E402
-from gateway.announce import Announcer  # noqa: E402
-from gateway.config_plane import ConfigPlane  # noqa: E402
+from satellite_gateway.announce import Announcer  # noqa: E402
+from satellite_gateway.config_plane import ConfigPlane  # noqa: E402
 
 
 class FakeSatellite:

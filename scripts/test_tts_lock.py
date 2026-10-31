@@ -15,8 +15,8 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from gateway.satellite import SatelliteClient  # noqa: E402
-from gateway.tts import TtsStream  # noqa: E402
+from satellite_gateway.satellite import SatelliteClient  # noqa: E402
+from satellite_gateway.tts import TtsStream  # noqa: E402
 
 checks = 0
 failures = []

@@ -38,7 +38,7 @@ from typing import Awaitable, Callable
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from gateway.registry import RegistrationHandler, SatelliteRegistry  # noqa: E402
+from satellite_gateway.registry import RegistrationHandler, SatelliteRegistry  # noqa: E402
 
 TESTS: list[tuple[str, str, Callable[[], Awaitable[None]]]] = []
 

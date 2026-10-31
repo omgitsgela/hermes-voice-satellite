@@ -38,7 +38,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from wyoming.audio import AudioChunk  # noqa: E402
 
-from gateway.loop import VoiceLoop  # noqa: E402
+from satellite_gateway.loop import VoiceLoop  # noqa: E402
 
 RATE = 16000
 BYTES_PER_SECOND = RATE * 2          # mono S16

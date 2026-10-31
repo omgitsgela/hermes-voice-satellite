@@ -17,9 +17,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from gateway import tts  # noqa: E402
-from gateway.config import AUDIO_OUT, SATELLITE_HOST, SATELLITE_PORT  # noqa: E402
-from gateway.satellite import SatelliteClient  # noqa: E402
+from satellite_gateway import tts  # noqa: E402
+from satellite_gateway.config import AUDIO_OUT, SATELLITE_HOST, SATELLITE_PORT  # noqa: E402
+from satellite_gateway.satellite import SatelliteClient  # noqa: E402
 
 CANDIDATES = [
     ("a-warm-fifth", "Option A: four forty, rising to six sixty."),

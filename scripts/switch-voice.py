@@ -5,7 +5,7 @@ The Gateway and Hermes keep their voices in different places and in different sh
 either wrong fails quietly:
 
   * the Gateway reads `voices/<name>.onnx` beside the repo and `VOICE_PIPER_VOICE` +
-    `VOICE_PIPER_SPEAKER` from `gateway.env`;
+    `VOICE_PIPER_SPEAKER` from `satellite-gateway.env`;
   * Hermes reads `~/.hermes/cache/piper-voices/<name>.onnx` and `tts.piper.voice` +
     `tts.piper.speaker_id` from `config.yaml`, and it will NOT download a voice it does not
     recognise — it just fails at synthesis time.
@@ -40,7 +40,7 @@ curated external list (`scripts/fetch-voice.py`, hash-pinned), then the Piper ca
 (`piper.download_voices`). `--no-fetch` refuses the last two, which is what you want on a machine
 with no network or in a test.
 
-Every switch backs up `gateway.env` and the Hermes `config.yaml` under `state/voice/backups/` and
+Every switch backs up `satellite-gateway.env` and the Hermes `config.yaml` under `state/voice/backups/` and
 records what it did in `state/voice/state.json`, so `--rollback` needs no notes and no /tmp.
 """
 from __future__ import annotations
@@ -57,9 +57,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from gateway.voices import VOICE_SAMPLE_RATE, describe_voice, resolve_speaker_id  # noqa: E402
+from satellite_gateway.voices import VOICE_SAMPLE_RATE, describe_voice, resolve_speaker_id  # noqa: E402
 
-BRIDGE_UNIT = "hermes-voice-gateway.service"
+BRIDGE_UNIT = "hermes-voice-satellite-gateway.service"
 HERMES_EXAMPLE = REPO / "hermes" / "config" / "voice-surface.example.yaml"
 ENV_VOICE = "VOICE_PIPER_VOICE"
 ENV_SPEAKER = "VOICE_PIPER_SPEAKER"
@@ -78,7 +78,7 @@ def fail(msg):
     return 1
 
 
-# --- gateway.env editing ------------------------------------------------------
+# --- satellite-gateway.env editing ------------------------------------------------------
 def env_values(text: str) -> dict:
     values = {}
     for line in text.splitlines():
@@ -93,7 +93,7 @@ def env_values(text: str) -> dict:
 def set_env(text: str, key: str, value):
     """Set (or remove, when value is None) one KEY=VALUE line, leaving everything else alone.
 
-    Line-level rather than a parse/re-dump on purpose: gateway.env is hand-written and commented,
+    Line-level rather than a parse/re-dump on purpose: satellite-gateway.env is hand-written and commented,
     and a YAML-style round trip would silently discard those comments.
     """
     lines = text.splitlines()
@@ -373,7 +373,7 @@ def main() -> int:
     parser.add_argument("--scope", choices=["both", "gateway", "hermes"], default="both",
                         help="which surfaces to change (default both)")
     parser.add_argument("--repo", default=str(REPO), help="the Gateway checkout (default: this repo)")
-    parser.add_argument("--bridge-env", default=None, help="gateway.env to edit (default <repo>/gateway.env)")
+    parser.add_argument("--bridge-env", default=None, help="satellite-gateway.env to edit (default <repo>/satellite-gateway.env)")
     parser.add_argument("--hermes-config", default=str(Path.home() / ".hermes" / "config.yaml"),
                         help="Hermes config.yaml (default ~/.hermes/config.yaml)")
     parser.add_argument("--hermes-cache", default=None,
@@ -387,7 +387,7 @@ def main() -> int:
     args = parser.parse_args()
 
     repo = Path(args.repo).expanduser().resolve()
-    bridge_env_path = Path(args.bridge_env).expanduser() if args.bridge_env else repo / "gateway.env"
+    bridge_env_path = Path(args.bridge_env).expanduser() if args.bridge_env else repo / "satellite-gateway.env"
     hermes_cfg = Path(args.hermes_config).expanduser()
     cache_dir = Path(args.hermes_cache).expanduser() if args.hermes_cache else \
         Path.home() / ".hermes" / "cache" / "piper-voices"

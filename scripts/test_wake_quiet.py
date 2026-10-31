@@ -35,7 +35,7 @@ async def main():
     global checks
     gateway = Bridge.__new__(Bridge)
     # capture_after_wake scopes the no-speech budget on the endpointer, so the stub needs one.
-    from gateway.endpointing import Endpointer
+    from satellite_gateway.endpointing import Endpointer
     gateway._ep = Endpointer(silence_ms=700, min_speech_ms=250)
     order = []
 

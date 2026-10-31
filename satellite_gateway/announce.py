@@ -50,8 +50,8 @@ from typing import Any, Awaitable, Callable, Iterable, Optional
 
 from aiohttp import web
 
-from gateway import tts
-from gateway.config import (
+from satellite_gateway import tts
+from satellite_gateway.config import (
     ALARM_VOLUME_HOLD_MARGIN,
     ALARM_VOLUME_HOLD_MAX,
     ANNOUNCE_DEDUP_SECONDS,
@@ -69,14 +69,14 @@ from gateway.config import (
     FLEET_RESTART_DISPATCH_INTERVAL_SECONDS,
     FLEET_DISPATCH_TIMEOUT_SECONDS,
 )
-from gateway.satellite import SatelliteClient
-from gateway.enroll import EnrollmentService
-from gateway.timers import DEFAULT_STATE_PATH, TimerLimitError, TimerManager, parse_duration
-from gateway.config_plane import (
+from satellite_gateway.satellite import SatelliteClient
+from satellite_gateway.enroll import EnrollmentService
+from satellite_gateway.timers import DEFAULT_STATE_PATH, TimerLimitError, TimerManager, parse_duration
+from satellite_gateway.config_plane import (
     ConfigConflict, ConfigPlane, ConfigValidationError, setting_requires_restart,
 )
 
-_LOGGER = logging.getLogger("gateway.announce")
+_LOGGER = logging.getLogger("satellite_gateway.announce")
 
 
 @dataclass
@@ -991,7 +991,7 @@ class Announcer:
             _LOGGER.debug("no volume path wired; the alarm plays at the current level")
             return {}
 
-        from gateway.volume import alarm_percent
+        from satellite_gateway.volume import alarm_percent
 
         # EVERY device the alarm will play on, each at its own level. The old code asked for "the"
         # volume and set "the" volume, which on a fleet meant only the addressed device moved.

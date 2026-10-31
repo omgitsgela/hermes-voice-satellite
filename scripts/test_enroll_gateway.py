@@ -19,7 +19,7 @@ What is pinned:
   9  the per-IP rate limit fires (10/min) and the global one fires across IPs
  10  a REAL round trip over real HTTP: real openssl minting via the existing issuer, an
      independently-implemented client that computes the proof and decrypts the bundle, and the
-     registered fingerprint byte-identical to gateway/registry.py's peer_fingerprint form
+     registered fingerprint byte-identical to satellite_gateway/registry.py's peer_fingerprint form
  11  a re-enrolment with force reissues and supersedes the old credential
  12  the token and the proof never appear in a log record
  13  install-time generation: scripts/generate-enroll-token.py writes 0600 and never overwrites
@@ -57,10 +57,10 @@ from cryptography.hazmat.primitives import hashes  # noqa: E402
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: E402
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF  # noqa: E402
 
-from gateway.enroll import (  # noqa: E402
+from satellite_gateway.enroll import (  # noqa: E402
     EnrollmentService, generate_token, load_token, load_wordlist,
 )
-from gateway.config import ENROLL_TOKEN_FILE  # noqa: E402
+from satellite_gateway.config import ENROLL_TOKEN_FILE  # noqa: E402
 
 WORDS = REPO / "scripts" / "data" / "enroll-words.txt"
 ISSUER = REPO / "scripts" / "issue-registry-tls.py"
@@ -479,7 +479,7 @@ def t_real_round_trip() -> None:
                 assert bundle["cert"] == (h.tls / f"{device_id}.crt").read_text()
                 assert bundle["key"] == (h.tls / f"{device_id}.key").read_text()
 
-                # The registered fingerprint is byte-identical to what gateway/registry.py's
+                # The registered fingerprint is byte-identical to what satellite_gateway/registry.py's
                 # peer_fingerprint computes from a live TLS peer: sha256 over the DER.
                 creds = json.loads(h.credentials.read_text())
                 der_fingerprint = "sha256:" + hashlib.sha256(

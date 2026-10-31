@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT))
 
 
 async def scenario(order):
-    from gateway.loop import VoiceLoop
+    from satellite_gateway.loop import VoiceLoop
     from wyoming.event import Event
 
     class Satellite:

@@ -38,7 +38,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from wyoming.event import Event, async_read_event, async_write_event  # noqa: E402
 
-from gateway.registry import (  # noqa: E402
+from satellite_gateway.registry import (  # noqa: E402
     CONFIG_REPORTED_EVENT,
     PROTOCOL_VERSION,
     REGISTER_EVENT,
@@ -407,7 +407,7 @@ async def t_protocol_version() -> None:
 async def t_credential_file() -> None:
     import json
     import tempfile
-    from gateway.registry import CredentialConfigError, load_credential_lookup
+    from satellite_gateway.registry import CredentialConfigError, load_credential_lookup
 
     with tempfile.TemporaryDirectory() as tmp:
         path = pathlib.Path(tmp) / "device-credentials.json"
@@ -493,7 +493,7 @@ async def t_credential_reload() -> None:
     the service -- which breaks plug-and-play at exactly the moment a new satellite first appears."""
     import json
     import tempfile
-    from gateway.registry import load_credential_lookup
+    from satellite_gateway.registry import load_credential_lookup
 
     with tempfile.TemporaryDirectory() as tmp:
         path = pathlib.Path(tmp) / "device-credentials.json"

@@ -16,7 +16,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import gateway.loop as loop_module  # noqa: E402
-from gateway.satellite import SatelliteClient  # noqa: E402
+from satellite_gateway.satellite import SatelliteClient  # noqa: E402
 from wyoming.audio import AudioChunk  # noqa: E402
 
 Loop = next(obj for obj in vars(loop_module).values()

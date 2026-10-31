@@ -115,15 +115,15 @@ both stay host-testable, and `scripts/test_esp32_phase.py` asserts the exact seq
 over, including that thinking is announced **before** the answer starts. A glow that appeared after
 the first word would claim the device is thinking while it is talking.
 
-The Gateway's own `led-busy` / `led-idle` / `led-followup` commands are honoured too. `led-idle` in
-particular is how the Gateway cleans up after aborted work and an expired follow-up window, which is
+The Satellite Gateway's own `led-busy` / `led-idle` / `led-followup` commands are honoured too. `led-idle` in
+particular is how the Satellite Gateway cleans up after aborted work and an expired follow-up window, which is
 exactly what the device cannot work out for itself: a silent window closed by `run-satellite` now
 goes dark instead of leaving the direction marker lit for a query that is not happening.
 
 `WY_PHASE_LISTENING` is the one phase the session does not announce — the wake animation reaches it
 on its own, and `scripts/test_esp32_led.py` covers that transition instead.
 
-**One honest caveat on the tail.** Idle is announced at `audio-stop`, when the Gateway stops sending,
+**One honest caveat on the tail.** Idle is announced at `audio-stop`, when the Satellite Gateway stops sending,
 not when the speaker falls silent: the playback ring still has to drain. The light therefore goes
 dark a moment before the audio does. Announcing from the playback pump would be exact but would put
 I2C work back on the realtime audio path, which was deliberately removed.

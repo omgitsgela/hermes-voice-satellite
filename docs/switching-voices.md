@@ -2,7 +2,7 @@
 
 **Where this sits:** stage 7 speak of the voice pipeline. The end-to-end map, and every other stage, is in `docs/architecture.md`.
 
-The satellite speaks with a Piper voice synthesized on the Gateway host. Changing it is a
+The satellite speaks with a Piper voice synthesized on the Satellite Gateway host. Changing it is a
 configuration change plus a model download; nothing in the audio contract needs to change as
 long as the new voice is 22,050 Hz, which every published Piper English voice is
 (`docs/audio-fidelity.md` explains why that rate is load-bearing).
@@ -12,8 +12,8 @@ voices, licensing, what to verify — are exactly where a voice change goes wron
 
 ## The three knobs
 
-All live in `gateway.env` (environment variable first, then this file, then the code default in
-`gateway/config.py`):
+All live in `satellite-gateway.env` (environment variable first, then this file, then the code default in
+`satellite_gateway/config.py`):
 
 | Key | Meaning | Default |
 |---|---|---|
@@ -44,13 +44,13 @@ It does the four things that are easy to get wrong by hand, in one pass:
 1. **fetches the voice** if it is not installed (the curated list first via
    `scripts/fetch-voice.py`, then the Piper catalog) and **refuses anything that is not
    22,050 Hz** before it writes a single file.
-2. **installs it twice** — `voices/` for the Gateway and `~/.hermes/cache/piper-voices/` for
+2. **installs it twice** — `voices/` for the Satellite Gateway and `~/.hermes/cache/piper-voices/` for
    Hermes, which never downloads a name it does not recognise and otherwise fails quietly at
    synthesis time rather than at switch time.
-3. **writes the two shapes of the same setting**: `gateway.env` gets the speaker NAME from the
+3. **writes the two shapes of the same setting**: `satellite-gateway.env` gets the speaker NAME from the
    voice's own map, Hermes gets the numeric ID that name resolves to, and a single-speaker voice
    has `speaker_id` *removed* rather than set to 0.
-4. **backs up both files, restarts the Gateway, then verifies** that the service is active and the
+4. **backs up both files, restarts the Satellite Gateway, then verifies** that the service is active and the
    running process really carries the new `VOICE_PIPER_VOICE`, recording what it did in
    `state/voice/state.json` so `--rollback` needs no notes and no `/tmp`.
 
@@ -60,8 +60,8 @@ Two separate decisions, deliberately kept apart:
 
 | Decision | Where it lives | How to change it |
 |---|---|---|
-| Which voice **this installation** speaks with | `gateway.env` + Hermes `config.yaml` (both git-ignored) | `scripts/switch-voice.py <voice>` |
-| Which voice a **fresh clone** defaults to | `PIPER_VOICE_NAME` in `gateway/config.py`, mirrored in `bridge.env.example` | a code change, with docs |
+| Which voice **this installation** speaks with | `satellite-gateway.env` + Hermes `config.yaml` (both git-ignored) | `scripts/switch-voice.py <voice>` |
+| Which voice a **fresh clone** defaults to | `PIPER_VOICE_NAME` in `satellite_gateway/config.py`, mirrored in `bridge.env.example` | a code change, with docs |
 
 Changing what you listen to should never need a pull request, a test update, or a re-read of this
 document. The tests pin the *contract* — a plausible catalog-style default that agrees with
@@ -100,7 +100,7 @@ cd ~/hermes-voice-satellite
 .venv/bin/python scripts/list-piper-speakers.py --voice clean100 --search 78
 #    -> "78 -> 36" (the substring search also shows 7800, 6078, ...; use the exact name)
 # 4. (Optional, recommended) Listen to candidates offline before restarting anything:
-#    synthesize the same sentence through each setting and compare the WAVs. The Gateway's own
+#    synthesize the same sentence through each setting and compare the WAVs. The Satellite Gateway's own
 #    code path is the honest way to preview it:
 .venv/bin/python - <<'PY'
 import sys; sys.path.insert(0, '.')
@@ -114,14 +114,14 @@ with wave.open('/tmp/try-this-voice.wav', 'wb') as w:
                      syn_config=sc)
 PY
 
-# 5. Point the Gateway at it in gateway.env:
+# 5. Point the Satellite Gateway at it in satellite-gateway.env:
 #      VOICE_PIPER_VOICE=clean100
 #      VOICE_PIPER_SPEAKER=78
 #    (a catalog single-speaker voice needs only VOICE_PIPER_VOICE; leave the speaker empty)
 #    (VOICE_PIPER_LENGTH_SCALE only if the voice speaks too fast or too slow.)
 
-# 6. Restart the Gateway and verify the new voice is the one that loaded:
-systemctl --user restart hermes-voice-gateway.service
+# 6. Restart the Satellite Gateway and verify the new voice is the one that loaded:
+systemctl --user restart hermes-voice-satellite-gateway.service
 journalctl --user -u hermes-voice-satellite -n 20 | grep -i "loading Piper voice"
 #    -> "loading Piper voice clean100.onnx"
 
@@ -129,7 +129,7 @@ journalctl --user -u hermes-voice-satellite -n 20 | grep -i "loading Piper voice
 #    no lag before the first words (see Latency below).
 ```
 
-To roll back by hand: set the old values back in `gateway.env` and restart. The old voice files are
+To roll back by hand: set the old values back in `satellite-gateway.env` and restart. The old voice files are
 untouched; nothing else references the voice. `scripts/switch-voice.py --rollback` does the same
 thing from the recorded state, including the Hermes side.
 
@@ -155,7 +155,7 @@ voice cache (`~/.hermes/cache/piper-voices/`) and its own keys:
 
 ```sh
 hermes config set tts.piper.voice <name>
-hermes config set tts.piper.speaker_id <numeric id>   # Hermes wants the NUMBER, the Gateway the NAME
+hermes config set tts.piper.speaker_id <numeric id>   # Hermes wants the NUMBER, the Satellite Gateway the NAME
 ```
 
 For a **catalog** voice that is the whole story: Hermes downloads it on first use. For a
@@ -169,7 +169,7 @@ every TTS call logs a failed download and nothing speaks):
 
 Hermes resolves a cache hit before it ever tries to download, so a seeded voice loads exactly like
 a catalog one. The live pair right now: `en_US-hfc_male-medium` with `VOICE_PIPER_SPEAKER` unset
-on the Gateway, and `tts.piper.voice: en_US-hfc_male-medium` on Hermes with no `speaker_id` (a
+on the Satellite Gateway, and `tts.piper.voice: en_US-hfc_male-medium` on Hermes with no `speaker_id` (a
 single-speaker voice needs none). The clean100 pair — `VOICE_PIPER_SPEAKER=78` and
 `tts.piper.speaker_id: 36` — is what that looked like while clean100 was installed, and is the
 example to follow for any multi-speaker voice.
@@ -178,7 +178,7 @@ example to follow for any multi-speaker voice.
 
 `clean100` carries **245 speakers** and `en_US-libritts-high` carries **904**. Piper silently
 falls to the voice's default speaker when none is asked for, so an unset `VOICE_PIPER_SPEAKER`
-means "somebody from the corpus", not a choice. The Gateway resolves the setting through the
+means "somebody from the corpus", not a choice. The Satellite Gateway resolves the setting through the
 voice's own `speaker_id_map` and **refuses** a name that is not in it (`ValueError` in the
 gateway log at the first synthesis, not a wrong voice). Prefer the name (`78`) over the number:
 published voices have been re-released with speaker lists in a different order, so a name cannot
@@ -214,7 +214,7 @@ audible to the device faster than it can be spoken by any of these except a GPU 
 Both stay comfortably ahead of the playback pace (`TtsStream` sends at 2x realtime) and the
 first-chunk delay stays under the silence window the wake behaviour allows. But if a host is
 much weaker than this, or busy running a local LLM, a `medium` voice is the fallback: the swap
-is one line in `gateway.env`. Re-measure with the step-4 preview if you suspect a regression —
+is one line in `satellite-gateway.env`. Re-measure with the step-4 preview if you suspect a regression —
 the voice is never the slow part of a turn (the model is), so a slow-sounding answer is not
 evidence the voice is wrong.
 
@@ -249,6 +249,6 @@ and `bridge.env.example` to name the same voice, so the two cannot drift apart.
 `scripts/test_switch_voice.py` covers the switcher as a black box against a throwaway repo and a
 throwaway Hermes config: both surfaces updated by default, each `--scope` honoured, the 22,050 Hz
 contract enforced *before* any write, a multi-speaker voice refused without `--speaker`, the
-speaker stored as a NAME on the Gateway and an ID in Hermes, `gateway.env` comments preserved, a
+speaker stored as a NAME on the Satellite Gateway and an ID in Hermes, `satellite-gateway.env` comments preserved, a
 backup and a state record written per switch, `--dry-run` writing nothing, and `--rollback`
 restoring both surfaces.

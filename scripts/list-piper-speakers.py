@@ -26,7 +26,7 @@ sys.path.insert(0, str(ROOT))
 
 def resolve_config_path(voice: str | None) -> Path:
     if voice is None:
-        from gateway.config import VOICE_CONFIG
+        from satellite_gateway.config import VOICE_CONFIG
 
         return VOICE_CONFIG
     p = Path(voice).expanduser()
@@ -38,7 +38,7 @@ def resolve_config_path(voice: str | None) -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser(description="List Piper voice speakers (name -> id).")
     parser.add_argument("--voice", help="Voice name (in voices/) or a path to a .onnx.json. "
-                                        "Default: the voice configured in gateway.env.")
+                                        "Default: the voice configured in satellite-gateway.env.")
     parser.add_argument("--search", help="Only names containing this substring.")
     parser.add_argument("--limit", type=int, default=0, help="Show at most N speakers.")
     args = parser.parse_args()

@@ -30,7 +30,7 @@ import logging
 import socket
 from typing import Optional
 
-_LOGGER = logging.getLogger("gateway.net")
+_LOGGER = logging.getLogger("satellite_gateway.net")
 
 # 15 s idle, then three probes 5 s apart: roughly 30 s to notice a dead peer.
 KEEPALIVE_IDLE_SECONDS = 15

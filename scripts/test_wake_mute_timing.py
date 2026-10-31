@@ -43,7 +43,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from gateway.config import WAKE_QUIET_SECONDS  # noqa: E402
+from satellite_gateway.config import WAKE_QUIET_SECONDS  # noqa: E402
 
 # Measured-good total from 2026-09-22, with a little room for a deliberate retune. 408 ms gave a
 # natural onset; 708 ms clipped it on 2026-09-29. Nothing may push the window back over this.

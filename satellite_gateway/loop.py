@@ -77,15 +77,15 @@ WAKE_NOW = "wake-now"
 LED_BUSY = "led-busy"
 LED_IDLE = "led-idle"
 
-from gateway.config import (CAPTURE_ACTIVATION_SECONDS, GATEWAY_BASE_URL, GATEWAY_ENV_FILE,
+from satellite_gateway.config import (CAPTURE_ACTIVATION_SECONDS, GATEWAY_BASE_URL, GATEWAY_ENV_FILE,
                            GATEWAY_API_KEY_VAR, SATELLITE_HOST, SATELLITE_PORT,
                            VOICE_INSTRUCTIONS, VOICE_ROUTE_ALIAS, VOICE_SESSION_ID,
                            WAKE_CLAIM_WINDOW_S)
-from gateway.endpointing import Endpointer, EndpointResult
-from gateway.gateway import VoiceGateway, VoiceGatewayError, read_api_key
-from gateway.satellite import SatelliteClient
+from satellite_gateway.endpointing import Endpointer, EndpointResult
+from satellite_gateway.gateway import VoiceGateway, VoiceGatewayError, read_api_key
+from satellite_gateway.satellite import SatelliteClient
 
-_LOGGER = logging.getLogger("gateway.loop")
+_LOGGER = logging.getLogger("satellite_gateway.loop")
 
 # How long after our own playback a wake word may still be dismissed as our own echo. Beyond
 # this a wake is a genuine one no matter what any flag says.
@@ -207,7 +207,7 @@ class VoiceLoop:
         # device X, and today's global flag would wrongly suppress device Y's independent wake.
         self._speaking_at_device: dict = {}
         # Wakes from every armed device queue here, FIFO, and exactly one is claimed per turn.
-        from gateway.wake_router import WakeRouter
+        from satellite_gateway.wake_router import WakeRouter
         self.wake_router = WakeRouter(suppress_check=self._is_self_trigger,
                                       claim_window_s=WAKE_CLAIM_WINDOW_S)
         self.registry = None
@@ -248,9 +248,9 @@ class VoiceLoop:
         # dies mid-flight cannot wedge announcements forever.
         self.turn_started_at: Optional[float] = None
 
-        from gateway.announce import Announcer
-        from gateway.config import FLEET_CONFIG_STATE_FILE
-        from gateway.config_plane import ConfigPlane
+        from satellite_gateway.announce import Announcer
+        from satellite_gateway.config import FLEET_CONFIG_STATE_FILE
+        from satellite_gateway.config_plane import ConfigPlane
 
         self.config_plane = ConfigPlane(FLEET_CONFIG_STATE_FILE)
         # The device the configuration plane addresses. Empty until a device registers, at
@@ -265,7 +265,7 @@ class VoiceLoop:
         self.volume = 0
         self._load_volume(self)
 
-        # Shares the loop's satellite connection: see gateway/announce.py for why it does not open
+        # Shares the loop's satellite connection: see satellite_gateway/announce.py for why it does not open
         # its own.
         self.announcer = Announcer(
             sat=self.sat,
@@ -384,7 +384,7 @@ class VoiceLoop:
 
     def _load_endpointing_profile(self) -> str:
         """Read the persisted profile, failing safely to the standard timing."""
-        from gateway.config import ENDPOINTING_PROFILES, ENDPOINTING_PROFILE_STATE_FILE
+        from satellite_gateway.config import ENDPOINTING_PROFILES, ENDPOINTING_PROFILE_STATE_FILE
 
         try:
             saved = ENDPOINTING_PROFILE_STATE_FILE.read_text().strip()
@@ -400,7 +400,7 @@ class VoiceLoop:
 
     def _profiled_endpointing_kwargs(self, profile: str) -> dict:
         """Overlay one validated profile onto the installation's base endpointer settings."""
-        from gateway.config import ENDPOINTING_PROFILES
+        from satellite_gateway.config import ENDPOINTING_PROFILES
 
         if profile not in ENDPOINTING_PROFILES:
             raise ValueError(f"unknown endpointing profile: {profile}")
@@ -410,7 +410,7 @@ class VoiceLoop:
 
     def set_endpointing_profile(self, profile: str) -> str:
         """Select and persist a bounded endpointing profile, then apply it to all capture paths."""
-        from gateway.config import ENDPOINTING_PROFILE_STATE_FILE
+        from satellite_gateway.config import ENDPOINTING_PROFILE_STATE_FILE
 
         kwargs = self._profiled_endpointing_kwargs(profile)
         replacement = Endpointer(**kwargs)
@@ -432,7 +432,7 @@ class VoiceLoop:
 
     def _load_follow_up(self) -> bool:
         """Read the persisted follow-up flag. Off unless the state file says on."""
-        from gateway.config import FOLLOW_UP_STATE_FILE
+        from satellite_gateway.config import FOLLOW_UP_STATE_FILE
 
         try:
             return FOLLOW_UP_STATE_FILE.read_text().strip().lower() in ("on", "1", "true", "yes")
@@ -444,7 +444,7 @@ class VoiceLoop:
 
     def set_follow_up(self, on: bool) -> bool:
         """Turn follow-up mode on or off and persist it. Returns the new state."""
-        from gateway.config import FOLLOW_UP_STATE_FILE
+        from satellite_gateway.config import FOLLOW_UP_STATE_FILE
 
         self.follow_up = bool(on)
         try:
@@ -472,7 +472,7 @@ class VoiceLoop:
         Handled here rather than by the assistant so they are instant and keep working when the
         gateway is unreachable. Returns the line to speak, or "" when this is not a control.
         """
-        from gateway.config import (FOLLOW_UP_OFF_PHRASES, FOLLOW_UP_ON_PHRASES,
+        from satellite_gateway.config import (FOLLOW_UP_OFF_PHRASES, FOLLOW_UP_ON_PHRASES,
                                    FOLLOW_UP_STATUS_PHRASES, STOP_CORES, STOP_PREFIXES)
 
         heard = normalise(transcript)
@@ -522,7 +522,7 @@ class VoiceLoop:
         (50 here) up to it, so a stored 30 came back as 50 and the bottom half of the
         scale was unreachable from a restart.
         """
-        from gateway.volume import USER_MIN, clamp_user
+        from satellite_gateway.volume import USER_MIN, clamp_user
 
         level = USER_MIN
         if not self.device_id:
@@ -577,7 +577,7 @@ class VoiceLoop:
         the raw clamp() would push every quiet level up to the raw floor and make the
         bottom of the user's scale unreachable - the bug this comment exists to prevent.
         """
-        from gateway.volume import clamp_user
+        from satellite_gateway.volume import clamp_user
 
         level = clamp_user(level)
         try:
@@ -628,7 +628,7 @@ class VoiceLoop:
         tell it. Only the loop's own tracked level moves when the device is the one the loop is
         addressing; another device's level is a config-plane fact, not the loop's.
         """
-        from gateway.volume import clamp_user
+        from satellite_gateway.volume import clamp_user
 
         if not device_id:
             return await self._set_volume(level)
@@ -662,7 +662,7 @@ class VoiceLoop:
         Returns the line to speak, or "" when this is not a volume request. Set and step
         both change the device; a query never does.
         """
-        from gateway.volume import parse_volume_command, resolve
+        from satellite_gateway.volume import parse_volume_command, resolve
 
         intent = parse_volume_command(transcript)
         if intent is None:
@@ -712,7 +712,7 @@ class VoiceLoop:
         if not os.environ.get("VOICE_DUMP_UTTERANCES"):
             return
         try:
-            from gateway.config import AUDIO_OUT
+            from satellite_gateway.config import AUDIO_OUT
 
             AUDIO_OUT.mkdir(parents=True, exist_ok=True)
             path = AUDIO_OUT / f"utterance-{int(time.time() * 1000)}.wav"
@@ -780,8 +780,8 @@ class VoiceLoop:
         if not hasattr(self, "_speaking_at_device"):
             self._speaking_at_device = {}
         if not hasattr(self, "wake_router"):
-            from gateway.config import WAKE_CLAIM_WINDOW_S
-            from gateway.wake_router import WakeRouter
+            from satellite_gateway.config import WAKE_CLAIM_WINDOW_S
+            from satellite_gateway.wake_router import WakeRouter
             self.wake_router = WakeRouter(suppress_check=self._is_self_trigger,
                                           claim_window_s=WAKE_CLAIM_WINDOW_S)
         return self.leases
@@ -801,7 +801,7 @@ class VoiceLoop:
         (decided 2026-10-23), so claiming sends the device nothing at all. With the registry off
         the dialled-satellite queue path is unchanged.
         """
-        from gateway.config import WAKE_WAIT_SECONDS
+        from satellite_gateway.config import WAKE_WAIT_SECONDS
 
         # A fresh wake begins a fresh claim: whatever owned the previous turn releases its
         # socket now, so every supervisor resumes reading its device (issue #111). Follow-up
@@ -1000,7 +1000,7 @@ class VoiceLoop:
         of this object on purpose, so scripts/test_interrupt.py can drive it with stubs instead of
         a satellite, a gateway and a microphone.
         """
-        from gateway.config import INTERRUPT_ENABLED, INTERRUPT_MIN_CHARS
+        from satellite_gateway.config import INTERRUPT_ENABLED, INTERRUPT_MIN_CHARS
 
         if not getattr(self, "interrupt_enabled", INTERRUPT_ENABLED):
             return "ignored"
@@ -1064,7 +1064,7 @@ class VoiceLoop:
         A wake-word satellite only streams audio after a detection, so a detection arriving here
         means someone deliberately woke the device mid-task. What follows decides the outcome.
         """
-        from gateway.config import INTERRUPT_CAPTURE_SECONDS
+        from satellite_gateway.config import INTERRUPT_CAPTURE_SECONDS
 
         while not state.done:
             # Replay belongs to the turn, never to the watcher that populated it.
@@ -1230,7 +1230,7 @@ class VoiceLoop:
         # started a turn. Ignore the opening moment and drop what is already queued, the way the
         # follow-up window does. The device-side mute across the tone is the real fix; this is the
         # Gateway's own share of it (issue #47).
-        from gateway.config import WAKE_NO_SPEECH_SECONDS, WAKE_QUIET_SECONDS
+        from satellite_gateway.config import WAKE_NO_SPEECH_SECONDS, WAKE_QUIET_SECONDS
 
         await asyncio.sleep(WAKE_QUIET_SECONDS)
         # Bounded by the chime's own length, NOT "everything queued": the queue can hold seconds of
@@ -1290,7 +1290,7 @@ class VoiceLoop:
 
     async def _reinforce_wake_now(self) -> None:
         """Ask a second time for the microphone, for a window that did not get one."""
-        from gateway.config import FOLLOW_UP_WAKE_RETRY_SECONDS
+        from satellite_gateway.config import FOLLOW_UP_WAKE_RETRY_SECONDS
 
         try:
             await asyncio.sleep(FOLLOW_UP_WAKE_RETRY_SECONDS)
@@ -1367,7 +1367,7 @@ class VoiceLoop:
         picked up by the open mic and answered by the device, which is a feedback loop rather than
         a feature.
         """
-        from gateway.config import FOLLOW_UP_LED, FOLLOW_UP_SECONDS
+        from satellite_gateway.config import FOLLOW_UP_LED, FOLLOW_UP_SECONDS
 
         self.turn_started_at = time.monotonic()
         # Ask for the microphone first. Without this the window is silent by construction: the
@@ -1383,7 +1383,7 @@ class VoiceLoop:
         # Stay deaf while the device's own wake chime and its room echo are in the room, or the window
         # answers its own boop (2026-09-22). See FOLLOW_UP_QUIET_SECONDS. The window's own
         # timing starts after this, so the person still gets the full listening time.
-        from gateway.config import FOLLOW_UP_QUIET_SECONDS
+        from satellite_gateway.config import FOLLOW_UP_QUIET_SECONDS
 
         await asyncio.sleep(FOLLOW_UP_QUIET_SECONDS)
         # The chime has finished, but its samples are still queued. Sleep only delayed reading them,
@@ -1447,7 +1447,7 @@ class VoiceLoop:
         Bounded by FOLLOW_UP_MAX_TURNS, because a chain that never ends is a bug rather than a
         conversation, and it stops the moment a spoken command turns the mode off.
         """
-        from gateway.config import FOLLOW_UP_MAX_TURNS, FOLLOW_UP_SETTLE_SECONDS
+        from satellite_gateway.config import FOLLOW_UP_MAX_TURNS, FOLLOW_UP_SETTLE_SECONDS
 
         extra = 0
         while self.follow_up and extra < FOLLOW_UP_MAX_TURNS:
@@ -1536,7 +1536,7 @@ class VoiceLoop:
         #
         # Silent on purpose: the incident's harm was that it replied out loud. A whole-utterance match,
         # so "beep the horn" is still a question.
-        from gateway.config import NON_WORD_TRANSCRIPTS
+        from satellite_gateway.config import NON_WORD_TRANSCRIPTS
 
         if normalise(transcript) in {normalise(w) for w in NON_WORD_TRANSCRIPTS}:
             stats.note = "non-word transcript"
@@ -1752,7 +1752,7 @@ class VoiceLoop:
         # reached by dialling IN. Both used to sit behind the connect below, which is why the whole
         # Gateway went down with the satellite and nothing was listening on 8765 or 10701 while it was
         # away: a device could not have registered even if it tried.
-        from gateway.config import (DIRECT_DIAL_FALLBACK, REGISTRY_ALLOW_UNAUTHENTICATED,
+        from satellite_gateway.config import (DIRECT_DIAL_FALLBACK, REGISTRY_ALLOW_UNAUTHENTICATED,
                                    REGISTRY_CREDENTIALS_FILE, REGISTRY_DUPLICATE_POLICY, REGISTRY_ENABLED,
                                    REGISTRY_HOST, REGISTRY_LEGACY_PLAINTEXT, REGISTRY_PORT,
                                    REGISTRY_TLS_CERT_FILE, REGISTRY_TLS_CLIENT_CA_FILE,
@@ -1763,7 +1763,7 @@ class VoiceLoop:
         self.legacy_registry_server = None
         if REGISTRY_ENABLED:
             try:
-                from gateway.registry import (CredentialConfigError, RegistryServer, SatelliteRegistry,
+                from satellite_gateway.registry import (CredentialConfigError, RegistryServer, SatelliteRegistry,
                                              TlsConfigError, load_credential_lookup,
                                              load_server_tls_context)
 
@@ -1873,7 +1873,7 @@ class VoiceLoop:
 
         # Pre-warm the slow parts, off the event loop, so the first real turn is not noticeably
         # slower than the rest (Whisper model load is seconds, Piper's ~1 s).
-        from gateway.tts import load_voice
+        from satellite_gateway.tts import load_voice
 
         await asyncio.to_thread(self._model)
         await asyncio.to_thread(load_voice)
@@ -1901,7 +1901,7 @@ class VoiceLoop:
     def _use_satellite(self, satellite, *, leased: bool) -> None:
         """Point the loop, and everything that speaks on its connection, at this satellite.
 
-        The announcer holds the conversation's connection by reference (see gateway/announce.py), so swapping
+        The announcer holds the conversation's connection by reference (see satellite_gateway/announce.py), so swapping
         the satellite under the loop has to reach it too, or announcements keep talking into a socket that a
         lease has replaced.
         """
@@ -1936,7 +1936,7 @@ class VoiceLoop:
         Generation-safe the same way the registry is: a stale connection object must never
         replace its own successor's lease.
         """
-        from gateway.registry import SatelliteConnection
+        from satellite_gateway.registry import SatelliteConnection
 
         leases = getattr(self, "leases", None)
         if leases is None or not isinstance(connection, SatelliteConnection):
@@ -1954,7 +1954,7 @@ class VoiceLoop:
             if existing is not self.sat:
                 asyncio.ensure_future(existing.close())
             self.leases.pop(connection.device_id, None)
-        from gateway.lease import LeasedSatellite
+        from satellite_gateway.lease import LeasedSatellite
 
         lease = LeasedSatellite(connection, log_events=self._log_events)
         leases[connection.device_id] = lease
@@ -2090,7 +2090,7 @@ class VoiceLoop:
         after its grace period. When leases already exist (a re-acquire after a partial loss),
         it arms the whole fleet rather than waiting.
         """
-        from gateway.config import (DIRECT_DIAL_FALLBACK, REGISTRY_LEASE_WAIT_SECONDS,
+        from satellite_gateway.config import (DIRECT_DIAL_FALLBACK, REGISTRY_LEASE_WAIT_SECONDS,
                                    REGISTRY_WAIT_RETRY_SECONDS, SATELLITE_HOST, SATELLITE_PORT)
 
         waited = 0.0
@@ -2136,8 +2136,8 @@ class VoiceLoop:
         Fleet shape (issue #111): a lost lease is dropped individually; the other leases keep their arms
         and supervisors untouched. Only when there is no fleet at all does the dialled fallback path run.
         """
-        from gateway.config import SATELLITE_HOST, SATELLITE_PORT
-        from gateway.satellite import SatelliteClient
+        from satellite_gateway.config import SATELLITE_HOST, SATELLITE_PORT
+        from satellite_gateway.satellite import SatelliteClient
 
         lost_device = getattr(self.sat, "device_id", None)
         if self._ensure_fleet():
@@ -2186,7 +2186,7 @@ class VoiceLoop:
         connection = getattr(slot, "connection", None) if slot is not None else None
         if connection is None:
             return False
-        from gateway.registry import CONFIG_DESIRED_EVENT
+        from satellite_gateway.registry import CONFIG_DESIRED_EVENT
 
         return await connection.send(Event(type=CONFIG_DESIRED_EVENT, data={
             "schema_version": 1,
@@ -2197,7 +2197,7 @@ class VoiceLoop:
 
     async def _on_device_control_event(self, device_id: str, event: Event) -> bool:
         """Persist a device's reported configuration without putting it in the audio queue."""
-        from gateway.registry import CONFIG_REPORTED_EVENT
+        from satellite_gateway.registry import CONFIG_REPORTED_EVENT
 
         if event.type != CONFIG_REPORTED_EVENT:
             return False
@@ -2275,7 +2275,7 @@ class VoiceLoop:
         restart this process, so the tone played all night long. A restart of this service, or a
         reconnection, is now silent; a real reboot of this host still says hello.
         """
-        from gateway.config import CONNECTED_TONE, CONNECTED_TONE_BOOT_MARKER
+        from satellite_gateway.config import CONNECTED_TONE, CONNECTED_TONE_BOOT_MARKER
 
         boot = _boot_id()
         if boot and CONNECTED_TONE_BOOT_MARKER.is_file():
@@ -2347,7 +2347,7 @@ class VoiceLoop:
                 continue
             except (ConnectionError, TimeoutError) as exc:
                 _LOGGER.error("connection problem: %s", exc)
-                from gateway.config import REGISTRY_ENABLED
+                from satellite_gateway.config import REGISTRY_ENABLED
                 if not REGISTRY_ENABLED:
                     # The long-standing shape: exit and let systemd start a fresh process, with the connect
                     # tone and the model reload that go with it. Unchanged for the dialled path.

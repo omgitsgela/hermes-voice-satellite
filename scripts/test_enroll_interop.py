@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT))
 
 from aiohttp import web  # noqa: E402
 
-from gateway.enroll import EnrollmentService  # noqa: E402
+from satellite_gateway.enroll import EnrollmentService  # noqa: E402
 
 PY = sys.executable
 ENROLL = ROOT / "scripts" / "enroll_device.py"

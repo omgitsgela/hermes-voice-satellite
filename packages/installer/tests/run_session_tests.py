@@ -274,12 +274,12 @@ class SessionBehaviour(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 repo = Path(tmp)
-                (repo / "gateway.env").write_text("VOICE_PIPER_VOICE=en_US-hfc_female-medium\nKEEP=me\n")
+                (repo / "satellite-gateway.env").write_text("VOICE_PIPER_VOICE=en_US-hfc_female-medium\nKEEP=me\n")
                 session = build_session(dry_run=False)
                 session.repo_root = repo
                 with mock_home(str(repo / "home")):
                     result = session.download_voice("en_US-amy-medium", apply=True)
-                text = (repo / "gateway.env").read_text()
+                text = (repo / "satellite-gateway.env").read_text()
         finally:
             catalogue.download = original
 
@@ -317,14 +317,14 @@ class SessionBehaviour(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / "repo"
             (repo / "voices").mkdir(parents=True)
-            (repo / "gateway.env").write_text("VOICE_PIPER_VOICE=old\nKEEP=me\n")
+            (repo / "satellite-gateway.env").write_text("VOICE_PIPER_VOICE=old\nKEEP=me\n")
             model = Path(tmp) / "my_voice.onnx"
             model.write_bytes(b"model")
             Path(str(model) + ".json").write_text('{"audio": {}}')
             session = build_session(dry_run=False)
             session.repo_root = repo
             result = session.install_voice_file(str(model))
-            env = (repo / "gateway.env").read_text()
+            env = (repo / "satellite-gateway.env").read_text()
             model_copied = (repo / "voices" / "my_voice.onnx").exists()
             config_copied = (repo / "voices" / "my_voice.onnx.json").exists()
         self.assertTrue(result["ok"], result)

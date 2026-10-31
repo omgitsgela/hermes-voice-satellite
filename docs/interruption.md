@@ -16,10 +16,10 @@ nowhere to land and the task ran to completion.
 
 While a task is running, the satellite is still listening for its wake word, because a wake-word
 satellite never streams audio without one. So a wake detection arriving mid-task means somebody
-deliberately woke the device. The Gateway watches for exactly that, and what the person says next
+deliberately woke the device. The Satellite Gateway watches for exactly that, and what the person says next
 decides the outcome:
 
-| Said | Outcome | What the Gateway does |
+| Said | Outcome | What the Satellite Gateway does |
 |---|---|---|
 | New information | `steered` | Hands the text to the run that is already going, via `POST /v1/runs/{id}/steer` |
 | A stop phrase | `stopped` | Calls `POST /v1/runs/{id}/stop`, abandons the rest of the answer, says "Stopped." |
@@ -37,7 +37,7 @@ command to it, and it is passed through as such.
 
 ## Configuration
 
-In `gateway/config.py`:
+In `satellite_gateway/config.py`:
 
 - `INTERRUPT_ENABLED` (default `True`)
 - `INTERRUPT_MIN_CHARS` (default `5`) applies to the steer path only, never to a stop
@@ -56,9 +56,9 @@ In `gateway/config.py`:
 
 - **Verified:** 44 offline checks in `scripts/test_interrupt.py` covering all four outcomes, the
   stop forms, the sentences that must *not* count as stops, the noise cases, and the disabled flag.
-  They run without a device, a model or a side effect on real state. The Gateway restarts clean.
+  They run without a device, a model or a side effect on real state. The Satellite Gateway restarts clean.
 - **Verified from source, not exercised live:** the steer and stop endpoints. The routes exist in
-  the API server's route table, the handler contracts were read directly, and the Gateway
+  the API server's route table, the handler contracts were read directly, and the Satellite Gateway
   authenticates against the same gateway for every turn it already serves. A scripted probe was
   attempted twice and blocked by credential extraction on the command line, so it was dropped
   rather than fiddled with.

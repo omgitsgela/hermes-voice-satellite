@@ -21,9 +21,9 @@ network beyond the Pi:
 
 With `--vad` absent the answer is zero. With `--vad` present, the speech should start a stream.
 
-    systemctl --user stop hermes-voice-gateway.service
+    systemctl --user stop hermes-voice-satellite-gateway.service
     .venv/bin/python scripts/diag_followup_stream.py
-    systemctl --user start hermes-voice-gateway.service
+    systemctl --user start hermes-voice-satellite-gateway.service
 """
 
 from __future__ import annotations
@@ -38,8 +38,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from wyoming.asr import Transcript  # noqa: E402
 from wyoming.audio import AudioChunk  # noqa: E402
 
-from gateway.config import SATELLITE_HOST, SATELLITE_PORT  # noqa: E402
-from gateway.satellite import SatelliteClient  # noqa: E402
+from satellite_gateway.config import SATELLITE_HOST, SATELLITE_PORT  # noqa: E402
+from satellite_gateway.satellite import SatelliteClient  # noqa: E402
 
 SPOKEN_WAV = Path.home() / "hermes-voice-satellite" / "audio" / "announce-an-074311-3467-full.wav"
 LISTEN_SECONDS = 14.0

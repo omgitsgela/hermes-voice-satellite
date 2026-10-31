@@ -25,7 +25,7 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from gateway.loop import VoiceLoop  # noqa: E402
+from satellite_gateway.loop import VoiceLoop  # noqa: E402
 
 
 class HeldWakeTests(unittest.IsolatedAsyncioTestCase):
@@ -54,7 +54,7 @@ class HeldWakeTests(unittest.IsolatedAsyncioTestCase):
         # The capture finds no speech: the exact branch that discarded the wake.
         loop.capture_utterance = AsyncMock(return_value=None)
 
-        with patch('gateway.loop.Detection') as Detection:
+        with patch('satellite_gateway.loop.Detection') as Detection:
             Detection.is_type.return_value = True
             Detection.from_event.return_value = type('D', (), {'name': 'hey-hermes'})()
             await asyncio.wait_for(loop._watch_for_interruption(state), timeout=3.0)
@@ -90,7 +90,7 @@ class HeldWakeTests(unittest.IsolatedAsyncioTestCase):
             return type('E', (), {'type': 'detection'})()
 
         loop.sat.next_event = next_event
-        with patch('gateway.loop.Detection') as Detection:
+        with patch('satellite_gateway.loop.Detection') as Detection:
             Detection.is_type.return_value = True
             Detection.from_event.return_value = type('D', (), {'name': 'hey-hermes'})()
             finished = await asyncio.wait_for(loop.wait_for_played(timeout=5.0),
@@ -120,7 +120,7 @@ class HeldWakeTests(unittest.IsolatedAsyncioTestCase):
         loop.self_trigger_count = 0
         loop.sat = AsyncMock()
         loop.sat.eof = False
-        with patch('gateway.loop.Detection') as Detection:
+        with patch('satellite_gateway.loop.Detection') as Detection:
             Detection.is_type.return_value = True
             Detection.from_event.return_value = type('D', (), {'name': 'hey-hermes'})()
             loop.sat.next_event = AsyncMock(return_value=type(

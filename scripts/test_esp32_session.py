@@ -876,7 +876,7 @@ class SessionTests(unittest.TestCase):
 
     def test_real_registry_over_loopback_tcp(self):
         sys.path.insert(0, str(ROOT))
-        from gateway.registry import RegistryServer, SatelliteRegistry
+        from satellite_gateway.registry import RegistryServer, SatelliteRegistry
         lib = self.library()
 
         async def fixture():

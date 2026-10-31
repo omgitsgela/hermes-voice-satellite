@@ -43,19 +43,19 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from wyoming.event import Event, async_read_event, async_write_event  # noqa: E402
 
-from gateway.net import (  # noqa: E402
+from satellite_gateway.net import (  # noqa: E402
     KEEPALIVE_IDLE_SECONDS,
     KEEPALIVE_INTERVAL_SECONDS,
     KEEPALIVE_PROBES,
     enable_tcp_keepalive,
 )
-from gateway.registry import (  # noqa: E402
+from satellite_gateway.registry import (  # noqa: E402
     PROTOCOL_VERSION,
     REGISTER_EVENT,
     RegistryServer,
     SatelliteRegistry,
 )
-from gateway.satellite import SatelliteClient  # noqa: E402
+from satellite_gateway.satellite import SatelliteClient  # noqa: E402
 
 TIMEOUT = 10.0
 

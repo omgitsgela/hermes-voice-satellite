@@ -46,3 +46,4 @@ build/
 packages/*/build/
 *.egg-info/
 packages/*/*.egg-info/
+satellite-gateway.env

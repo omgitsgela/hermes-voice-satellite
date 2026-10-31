@@ -44,7 +44,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from wyoming.event import async_read_event  # noqa: E402
 
-from gateway.registry import (  # noqa: E402
+from satellite_gateway.registry import (  # noqa: E402
     REGISTER_OK_EVENT,
     REGISTER_REFUSED_EVENT,
     RegistryServer,

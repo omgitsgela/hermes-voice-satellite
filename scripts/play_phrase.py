@@ -21,9 +21,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from gateway import tts  # noqa: E402
-from gateway.config import AUDIO_OUT, SATELLITE_HOST, SATELLITE_PORT  # noqa: E402
-from gateway.satellite import SatelliteClient  # noqa: E402
+from satellite_gateway import tts  # noqa: E402
+from satellite_gateway.config import AUDIO_OUT, SATELLITE_HOST, SATELLITE_PORT  # noqa: E402
+from satellite_gateway.satellite import SatelliteClient  # noqa: E402
 
 DEFAULT_TEXT = (
     "Hermes here. This is the voice Gateway test. "
@@ -86,7 +86,7 @@ async def main() -> int:
         # Arm it the way the Gateway and scripts/diag_followup_stream.py do. A satellite that is still
         # streaming can ignore the first message it receives, so playback sent without RunSatellite is
         # not reliably heard. This script is the sole connection, so arming here carries none of the
-        # second-connection risk that keeps gateway/announce.py from sending it (issue #37).
+        # second-connection risk that keeps satellite_gateway/announce.py from sending it (issue #37).
         await sat.run()
         try:
             played = await asyncio.wait_for(sat.play_wav(wav_path), timeout=45.0)

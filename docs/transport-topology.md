@@ -34,12 +34,12 @@ transport later needs no vocabulary change.
 ## Status, stated plainly
 
 **Network is carried end to end.** The link's transport enum has `PROVISION_TRANSPORT_TCP` and
-`PROVISION_TRANSPORT_TLS` today; the firmware dials the registry and the Gateway accepts it.
+`PROVISION_TRANSPORT_TLS` today; the firmware dials the registry and the Satellite Gateway accepts it.
 
 **USB is half built.** The device side is real: `firmware/esp32/main/usb_wyoming.c` is a working
 Wyoming-over-USB adapter on the same serial channel the provisioning console uses, entered with the
 console command `START_WYOMING`, and `scripts/test_esp32_usb_link.py` exercises it against SDK
-shims (control registration over a fragmented adapter). The **host side is missing**: the Gateway has
+shims (control registration over a fragmented adapter). The **host side is missing**: the Satellite Gateway has
 no USB acceptor, so nothing listens for a cabled satellite. The endpoint vocabulary also had no
 `usb://` shape, so a cabled satellite could not even be described.
 

@@ -2,7 +2,7 @@
 
 This is the protocol, not the transport, and the distinction matters: `connect()` dials a
 device, but the device now dials US. The direction change did not fork the protocol -
-`gateway/lease.py` subclasses `SatelliteClient` and overrides only the connection lifecycle
+`satellite_gateway/lease.py` subclasses `SatelliteClient` and overrides only the connection lifecycle
 and the two I/O primitives (`send`, `next_event`), so this session logic runs unchanged over
 a connection that arrived instead of one that was dialled. The older dial-out shape stays
 reachable for rollback; see `docs/outbound-link.md` and `docs/architecture.md`.
@@ -69,11 +69,11 @@ from wyoming.satellite import (
 from wyoming.snd import Played
 from wyoming.wake import Detection
 
-from gateway.net import enable_tcp_keepalive
+from satellite_gateway.net import enable_tcp_keepalive
 
-from gateway.config import SND_FORMAT
+from satellite_gateway.config import SND_FORMAT
 
-_LOGGER = logging.getLogger("gateway.satellite")
+_LOGGER = logging.getLogger("satellite_gateway.satellite")
 
 # Sentinel pushed on the queue when the connection ends, so consumers never hang.
 _EOF = object()
@@ -308,7 +308,7 @@ class SatelliteClient:
         shares the process-wide class lock exactly as before; a satellite lease overrides it
         with its own, so two devices' answers never serialize behind each other.
         """
-        from gateway.tts import TtsStream
+        from satellite_gateway.tts import TtsStream
 
         return TtsStream(self.send, pace=pace,
                          lock=getattr(self, "_playback_lock_override", None),

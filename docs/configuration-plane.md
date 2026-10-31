@@ -12,7 +12,7 @@ the code, not from an intention: `gateway/config_plane.py` (state and validation
 
 ## 1. What this is
 
-One authenticated HTTP endpoint on the Gateway host, plus a control pair of Wyoming events over the
+One authenticated HTTP endpoint on the Satellite Gateway host, plus a control pair of Wyoming events over the
 connection a device already holds.
 
 - **Host side** owns the truth. Desired state is durable, versioned and validated here.
@@ -62,7 +62,7 @@ requires a service bounce. A client that batches settings should group by `apply
 every restart-class change.
 
 `playback_volume` is the setting with the strongest device-side guarantee, and it carries one extra
-guarantee the schema cannot express: **it can never be silent.** The Gateway clamps it to an audible floor
+guarantee the schema cannot express: **it can never be silent.** The Satellite Gateway clamps it to an audible floor
 and the device clamps it independently, so a `0` written here lands as the floor rather than as a deaf
 device. Writing `0` is not an error; it is recorded and reported, and the applied value comes back higher
 than the requested one, with the reason in `last_error`. See `docs/volume.md`.
@@ -231,7 +231,7 @@ rejected fleet write changes nothing.
 
 A fleet write is then dispatched like a per-device write: if every targeted device is connected the new
 generation reaches it immediately. If the patch touches any **restart-class** setting
-(`wake_word`, `wake_threshold`, `led_brightness`) the dispatch is **paced**: the Gateway spaces out the
+(`wake_word`, `wake_threshold`, `led_brightness`) the dispatch is **paced**: the Satellite Gateway spaces out the
 per-device restart-class restarts by `VOICE_FLEET_RESTART_DISPATCH_INTERVAL` seconds (default 8) rather
 than bouncing every room's audio stack in the same instant. Immediate-class settings are dispatched
 without delay.
@@ -243,7 +243,7 @@ connection stopped consuming output cannot hold the fleet's pacing slot: every d
 `VOICE_FLEET_DISPATCH_TIMEOUT` (default 30 s), and a timeout is logged rather than fatal, because the
 write is durable and the device takes the generation on its next registration. Pending paced dispatches
 are cancelled and awaited by `Announcer.stop()`, in a `finally` that runs even when an earlier shutdown
-step raises, so a shutdown cannot leave a restart firing after the Gateway is down.
+step raises, so a shutdown cannot leave a restart firing after the Satellite Gateway is down.
 
 The configuration page (`GET /configure`, served from `gateway/static/settings.html`) sends **only the
 settings the operator selected** on a fleet apply: each fleet field is checkbox-gated, and an
@@ -394,7 +394,7 @@ Two plugin tools already drive these surfaces over the gateway.
 **`hermes_timers`** (`hermes/plugins/hermes_timers/`) — `set`, `list`, `cancel` on the timer surface, plus
 `alarms`, which lists cron-backed alarms whose name begins with `alarm:`. Those alarms fire through
 `scripts/alarm_fire.py`, which calls the authenticated announcement endpoint with the `alarm` sound. So
-relative timers live in the Gateway and absolute wall-clock alarms live in Hermes cron, with one honest
+relative timers live in the Satellite Gateway and absolute wall-clock alarms live in Hermes cron, with one honest
 list per kind rather than one API pretending to do both.
 
 **`voice_satellite`** (`hermes/plugins/voice_satellite/`) — two families of action, split by intent:
@@ -417,8 +417,8 @@ guard is honoured rather than bypassed: it cannot clobber a change it did not ob
 setting names locally so a typo produces a useful message instead of an opaque `400`, and it reports
 `dispatched` separately from `accepted`, because those genuinely differ when a device is away.
 
-Both read the bearer token from the Gateway state directory or `VOICE_ANNOUNCE_TOKEN`, and both **read the
-value back** after writing, so the reply the assistant speaks is the Gateway's state rather than an
+Both read the bearer token from the Satellite Gateway state directory or `VOICE_ANNOUNCE_TOKEN`, and both **read the
+value back** after writing, so the reply the assistant speaks is the Satellite Gateway's state rather than an
 assumption. A client integrating the same way should do the same: `202` means recorded, and only a
 follow-up read means applied.
 

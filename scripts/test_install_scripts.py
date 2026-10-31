@@ -29,7 +29,7 @@ What is pinned:
      dial) is a dead device
   10 the issuer (init/enroll/verify) produces a consistent CA + server + device set, and a
      device cert the CA cannot verify is refused at verify
-  11 the gateway --dry-run names every step (venv, gateway.env registry values, TLS init,
+  11 the gateway --dry-run names every step (venv, satellite-gateway.env registry values, TLS init,
      user unit, plugin) and refuses a loopback --device-reachable-as
   12 the hermes-voice-config helper applies keys in one pass, is idempotent, and leaves
      an already-correct file byte-for-byte untouched
@@ -465,7 +465,7 @@ class GatewayInstallerTests(unittest.TestCase):
     def make_base(self, tmp: Path) -> Path:
         base = tmp / 'clone'
         (base / 'gateway').mkdir(parents=True)
-        shutil.copy(ROOT / 'gateway.env.example', base / 'gateway.env.example')
+        shutil.copy(ROOT / 'satellite-gateway.env.example', base / 'satellite-gateway.env.example')
         shutil.copy(ROOT / 'requirements.txt', base / 'requirements.txt')
         return base
 
@@ -482,7 +482,7 @@ class GatewayInstallerTests(unittest.TestCase):
             out = result.stdout
             # The five steps, in order.
             self.assertIn('1. gateway virtualenv', out)
-            self.assertIn('2. gateway.env', out)
+            self.assertIn('2. satellite-gateway.env', out)
             self.assertIn('3. registry TLS material', out)
             self.assertIn('4. systemd user unit', out)
             self.assertIn('5. Hermes side', out)
@@ -503,7 +503,7 @@ class GatewayInstallerTests(unittest.TestCase):
             self.assertNotIn('VOICE_REGISTRY_CREDENTIALS', out)
             # The user unit is rendered from its template with the base path; the plugin is a local
             # tree copied in (hermes plugins install cannot take a path), then enabled by name.
-            self.assertIn('hermes-voice-gateway.service.in', out)
+            self.assertIn('hermes-voice-satellite-gateway.service.in', out)
             self.assertIn('enable --now', out)
             self.assertIn('.hermes/plugins/voice_satellite', out)
             self.assertIn('hermes plugins enable voice_satellite', out)
@@ -850,7 +850,7 @@ class GuidedModeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='gw-guided-') as tmp:
             base = Path(tmp) / 'clone'
             (base / 'gateway').mkdir(parents=True)
-            shutil.copy(ROOT / 'gateway.env.example', base / 'gateway.env.example')
+            shutil.copy(ROOT / 'satellite-gateway.env.example', base / 'satellite-gateway.env.example')
             shutil.copy(ROOT / 'requirements.txt', base / 'requirements.txt')
             answers = [
                 str(base),                           # base (the clone the gateway runs from)
@@ -901,14 +901,14 @@ class GuidedModeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='gw-no-') as tmp:
             base = Path(tmp) / 'clone'
             (base / 'gateway').mkdir(parents=True)
-            shutil.copy(ROOT / 'gateway.env.example', base / 'gateway.env.example')
+            shutil.copy(ROOT / 'satellite-gateway.env.example', base / 'satellite-gateway.env.example')
             shutil.copy(ROOT / 'requirements.txt', base / 'requirements.txt')
             result = self.run_guided(GATEWAY, [str(base), '192.0.2.10', '10701', '10702',
                                                '0.0.0.0', '192.0.2.20:10700', 'y', 'no'])
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('aborted', result.stderr)
             self.assertEqual(self.dry_run_lines(result), [])
-            self.assertFalse((base / 'gateway.env').exists(), 'refusal must not write gateway.env')
+            self.assertFalse((base / 'satellite-gateway.env').exists(), 'refusal must not write satellite-gateway.env')
 
     def test_a_bad_answer_is_reprompted_with_the_flag_rules_reason(self):
         """Guided validation mirrors the flag rules: an ftp:// endpoint is refused with the same
@@ -1004,7 +1004,7 @@ class GuidedModeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='gw-bin-') as tmp:
             base = Path(tmp) / 'clone'
             (base / 'gateway').mkdir(parents=True)
-            shutil.copy(ROOT / 'gateway.env.example', base / 'gateway.env.example')
+            shutil.copy(ROOT / 'satellite-gateway.env.example', base / 'satellite-gateway.env.example')
             shutil.copy(ROOT / 'requirements.txt', base / 'requirements.txt')
             answers = [str(base), '192.0.2.10', '10701', '10702', '0.0.0.0',
                        '192.0.2.20:10700', 'y', 'yes']

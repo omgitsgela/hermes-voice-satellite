@@ -5,7 +5,7 @@ The calibration script runs on the Pi and is deliberately standalone; the two re
 live in different packages on different machines. Nothing but the JSON contract holds
 them together, so this test pins that contract:
 
-  writer (scripts/calibrate-volume.py)  ->  readers (gateway/volume.py, pi/volume_control.py)
+  writer (scripts/calibrate-volume.py)  ->  readers (satellite_gateway/volume.py, pi/volume_control.py)
 
 A drift here would mean a measured floor silently ignored, which reads as "the volume
 feature does not work" rather than "the file format changed".
@@ -40,7 +40,7 @@ script = ROOT / "scripts" / "calibrate-volume.py"
 check("the calibration script exists", script.is_file(), script)
 
 source = script.read_text()
-for forbidden in ("from Gateway", "from pi", "import gateway", "import pi"):
+for forbidden in ("from Gateway", "from pi", "import satellite_gateway", "import pi"):
     check(f"the script does not import the repo ({forbidden!r}), so it can be copied alone",
           forbidden not in source, forbidden)
 

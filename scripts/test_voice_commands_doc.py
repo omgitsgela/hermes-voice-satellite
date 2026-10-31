@@ -15,7 +15,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from gateway.config import (  # noqa: E402
+from satellite_gateway.config import (  # noqa: E402
     FOLLOW_UP_OFF_PHRASES,
     FOLLOW_UP_ON_PHRASES,
     FOLLOW_UP_STATUS_PHRASES,
@@ -23,8 +23,8 @@ from gateway.config import (  # noqa: E402
     STOP_CORES,
     STOP_PREFIXES,
 )
-from gateway.loop import NEW_CONVERSATION_PHRASES, VoiceLoop  # noqa: E402
-from gateway.volume import (  # noqa: E402
+from satellite_gateway.loop import NEW_CONVERSATION_PHRASES, VoiceLoop  # noqa: E402
+from satellite_gateway.volume import (  # noqa: E402
     USER_MIN,
     parse_volume_command,
     resolve,

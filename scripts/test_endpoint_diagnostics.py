@@ -35,7 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from gateway.endpointing import Endpointer  # noqa: E402
+from satellite_gateway.endpointing import Endpointer  # noqa: E402
 
 PROJECT = Path(__file__).resolve().parent.parent
 RECORDING = PROJECT / "audio" / "mic-20260922-060958.wav"
@@ -87,7 +87,7 @@ def totals(lines: list[str]) -> dict:
 
 def run(pcm: bytes, floor: float | None = None) -> tuple[list[str], int]:
     capture = Capture()
-    log = logging.getLogger("gateway.endpointing")
+    log = logging.getLogger("satellite_gateway.endpointing")
     log.addHandler(capture)
     log.setLevel(logging.INFO)
     try:

@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-log = logging.getLogger("gateway.volume")
+log = logging.getLogger("satellite_gateway.volume")
 
 MAX_PERCENT = 100
 MIN_PERCENT = 0

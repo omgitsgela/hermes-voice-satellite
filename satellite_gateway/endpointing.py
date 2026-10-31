@@ -36,7 +36,7 @@ from typing import Deque, Optional
 
 import webrtcvad
 
-_LOGGER = logging.getLogger("gateway.endpointing")
+_LOGGER = logging.getLogger("satellite_gateway.endpointing")
 
 _DEFAULT_RATE = 16000
 _VALID_FRAME_MS = (10, 20, 30)
@@ -225,8 +225,8 @@ class Endpointer:
         # The detector is selectable (see VOICE_DETECTOR in config). Silero is the default because
         # webrtcvad calls a loud room "speech"; `webrtcvad` remains reachable so the two can be
         # compared by configuration rather than by argument.
-        from gateway.config import SILERO_THRESHOLD, VOICE_DETECTOR
-        from gateway.silero_vad import make_vad
+        from satellite_gateway.config import SILERO_THRESHOLD, VOICE_DETECTOR
+        from satellite_gateway.silero_vad import make_vad
 
         self._vad = make_vad(
             VOICE_DETECTOR, rate=rate, aggressiveness=vad_aggressiveness,
@@ -236,7 +236,7 @@ class Endpointer:
         # decides what looks like speech, and the gate decides whether it is loud enough to be a
         # person. Deliberately NOT reset by reset(), which runs after every utterance: the room's
         # floor is a property of the room, not of the utterance.
-        from gateway.config import VOICE_ENERGY_GATE
+        from satellite_gateway.config import VOICE_ENERGY_GATE
 
         self.gate = EnergyGate(**VOICE_ENERGY_GATE)
         self._silence_frames = max(1, silence_ms // frame_ms)

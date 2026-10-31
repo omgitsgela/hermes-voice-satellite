@@ -11,26 +11,26 @@ Verified live, not assumed:
 | Protection | Evidence |
 |---|---|
 | Everything comes back after a host reboot with nobody logged in | `loginctl show-user <your user> -p Linger` is `yes`, and both `hermes-gateway` and `hermes-voice-satellite` are `enabled` |
-| The Gateway survives a gateway restart instead of being dragged down with it | The unit deliberately has no `Requires=hermes-gateway`, only `After=`/`Wants=`, and says so in a comment, because the Gateway retries by itself |
-| The Gateway itself always comes back | `Restart=always`, `RestartSec=60`. Raised from 5 s to 60 s on 2026-09-24, so a satellite that is away overnight costs one restart a minute rather than twelve |
+| The Satellite Gateway survives a gateway restart instead of being dragged down with it | The unit deliberately has no `Requires=hermes-gateway`, only `After=`/`Wants=`, and says so in a comment, because the Satellite Gateway retries by itself |
+| The Satellite Gateway itself always comes back | `Restart=always`, `RestartSec=60`. Raised from 5 s to 60 s on 2026-09-24, so a satellite that is away overnight costs one restart a minute rather than twelve |
 | A crash or a lost satellite cannot leave the system wedged | The main loop re-raises connection errors, so the process exits and systemd re-dials; `start()` reconnects on the next run |
-| A lost satellite does not stop the Gateway | **Not yet true.** With the device away the process exits instead and systemd restarts it every 60 s: 154 restarts measured by 21:54 on 2026-09-24. Issue #61 makes zero devices a normal state, and this row becomes obsolete when it lands |
+| A lost satellite does not stop the Satellite Gateway | **Not yet true.** With the device away the process exits instead and systemd restarts it every 60 s: 154 restarts measured by 21:54 on 2026-09-24. Issue #61 makes zero devices a normal state, and this row becomes obsolete when it lands |
 | Voice capabilities are not inside the Hermes checkout | Plugins live in `~/.hermes/plugins/`, config in `config.yaml`, procedures in `~/.hermes/skills/`; an update cannot revert them |
-| The Gateway cannot drift into Hermes internals | It talks only to `POST /v1/runs` plus SSE on loopback, reads one key from `.env`, and imports nothing from Hermes |
-| The voice persona is ours, not Hermes' | `VOICE_INSTRUCTIONS` lives in `gateway/config.py` and is passed per run as `instructions` |
+| The Satellite Gateway cannot drift into Hermes internals | It talks only to `POST /v1/runs` plus SSE on loopback, reads one key from `.env`, and imports nothing from Hermes |
+| The voice persona is ours, not Hermes' | `VOICE_INSTRUCTIONS` lives in `satellite_gateway/config.py` and is passed per run as `instructions` |
 
 ## Failure model: what happens today
 
 | Event | Today | Wanted |
 |---|---|---|
 | Gateway process dies | systemd restarts it in 5 s; a turn in flight is lost | same, and say so in the room if a turn was lost |
-| Gateway is still starting during gateway/host boot | The Gateway keeps its listeners up and retries Gateway health in-process with capped backoff; it arms the satellite only after the API is ready | same |
-| Gateway restarts while the Gateway is already running | An in-flight or next turn can fail; the startup readiness loop is not re-entered | Detect runtime loss, wait for readiness and optionally retry an interrupted turn once |
+| Gateway is still starting during gateway/host boot | The Satellite Gateway keeps its listeners up and retries Gateway health in-process with capped backoff; it arms the satellite only after the API is ready | same |
+| Gateway restarts while the Satellite Gateway is already running | An in-flight or next turn can fail; the startup readiness loop is not re-entered | Detect runtime loss, wait for readiness and optionally retry an interrupted turn once |
 | `hermes update` runs | **The one remaining core patch is stashed and its fix is lost** (see below) | Patches detected, re-applied and verified automatically |
 | Host reboots | Everything returns unattended | same (verified) |
 | Pi reboots or loses power | Services are enabled and come back; no RTC, so nothing time-based is trusted | same. The gold SD image stays the recovery path |
 | Pi SD card dies | Restore from the gold image, then re-copy `pi/` files | Keep a dated image and a checklist in this repo |
-| API key or announce token rotated | The Gateway keeps the old value until restarted | Re-read per run, or document the restart in the runbook |
+| API key or announce token rotated | The Satellite Gateway keeps the old value until restarted | Re-read per run, or document the restart in the runbook |
 | Wake word or route changed | Correct, but needs a restart of the right component | Already documented; keep it that way |
 
 The update row is the real exposure. One file is now an uncommitted edit in `~/.hermes/hermes-agent`,
@@ -55,7 +55,7 @@ upstream so the carried set shrinks; it is a general bug, not a voice feature.
 
 **B. Move machine-specific values into one config file.**
 `SATELLITE_HOST`, any home-automation base URL you add, the announcement port, the NAS paths and the token paths are
-hardcoded in `gateway/config.py`. One `gateway/config/local.yaml` (git-ignored, with a committed
+hardcoded in `satellite_gateway/config.py`. One `gateway/config/local.yaml` (git-ignored, with a committed
 `local.example.yaml`) turns "deploy on another host" from a code edit into a config edit.
 
 **C. Idempotent installers, one per side.**

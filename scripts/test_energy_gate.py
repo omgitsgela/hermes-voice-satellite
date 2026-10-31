@@ -26,7 +26,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import gateway.config as config_module  # noqa: E402
-from gateway.endpointing import Endpointer, EnergyGate  # noqa: E402
+from satellite_gateway.endpointing import Endpointer, EnergyGate  # noqa: E402
 
 checks = 0
 failures: list[str] = []

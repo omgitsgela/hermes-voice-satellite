@@ -136,7 +136,7 @@ def build_state(root: pathlib.Path) -> pathlib.Path:
     run_issuer(state, "init", "--san", "127.0.0.1")
     run_issuer(state, "enroll", "--new", DEVICE_ID)
 
-    from gateway.config_plane import ConfigPlane
+    from satellite_gateway.config_plane import ConfigPlane
 
     plane = ConfigPlane(state / "fleet-config.json")
     plane.ensure_device(DEVICE_ID, metadata={
@@ -147,8 +147,8 @@ def build_state(root: pathlib.Path) -> pathlib.Path:
 
 
 def write_bridge_log(root: pathlib.Path) -> pathlib.Path:
-    """A Gateway log line in the exact shape gateway/loop.py's registration hook prints."""
-    log = root / "gateway.log"
+    """A Gateway log line in the exact shape satellite_gateway/loop.py's registration hook prints."""
+    log = root / "satellite_gateway.log"
     log.write_text(
         f"INFO gateway.loop: device registered: id={DEVICE_ID} name=field-test area=test-bench "
         f"version=0.0-test protocol=1 capabilities=audio\n"
@@ -166,8 +166,8 @@ def run_verifier(state: pathlib.Path, port: int, log: pathlib.Path,
     )
 
 #: The environment variables that feed the verifier's configuration detection. Pinned
-#: explicitly in every default-resolution run: they outrank gateway.env, so a developer's local
-#: gateway.env or shell exports can never steer a test.
+#: explicitly in every default-resolution run: they outrank satellite-gateway.env, so a developer's local
+#: satellite-gateway.env or shell exports can never steer a test.
 REGISTRY_ENV_NAMES = ("VOICE_REGISTRY_HOST", "VOICE_REGISTRY_PORT", "VOICE_REGISTRY_TLS_PORT")
 
 def probe_env(**overrides: str) -> dict:
@@ -395,12 +395,12 @@ def t_explicit_flags_override_the_live_listener() -> None:
 @check("9", "with no live listener the probe defaults to the configured host, then loopback")
 def t_probe_default_falls_back_to_configuration_then_loopback() -> None:
     """The rest of the order: a silent live source falls through to VOICE_REGISTRY_HOST /
-    gateway.env, and with nothing configured either, to loopback. And when the live source DOES
+    satellite-gateway.env, and with nothing configured either, to loopback. And when the live source DOES
     speak, it wins over the configured host and even picks the port when configuration's is
-    dark (a stale gateway.env)."""
+    dark (a stale satellite-gateway.env)."""
     verify = load_verify()
     with tempfile.TemporaryDirectory(prefix="verify-satellite-resolve.") as tmp:
-        env_file = pathlib.Path(tmp) / "gateway.env"
+        env_file = pathlib.Path(tmp) / "satellite-gateway.env"
         env_file.write_text("VOICE_REGISTRY_HOST=192.0.2.10\nVOICE_REGISTRY_PORT=10701\n"
                             "VOICE_REGISTRY_TLS_PORT=10702\n")
         with cleared_registry_env():
@@ -409,7 +409,7 @@ def t_probe_default_falls_back_to_configuration_then_loopback() -> None:
             live = verify.parse_listeners("LISTEN 0 128 198.51.100.7:10702 0.0.0.0:*\n")
             assert verify.resolve_probe_target(None, None, live, env_file, True) == ("198.51.100.7", 10702)
             # A live listener on the OTHER configured port picks the port too: what is
-            # accepting beats what gateway.env claims.
+            # accepting beats what satellite-gateway.env claims.
             assert verify.resolve_probe_target(None, None, live, env_file, False) == ("198.51.100.7", 10702)
         env_file.write_text("")
         with cleared_registry_env():
@@ -423,7 +423,7 @@ def t_wildcard_listener_falls_through_to_configuration() -> None:
     (or loopback), while the live port still picks the port. Explicit flags still win above all."""
     verify = load_verify()
     with tempfile.TemporaryDirectory(prefix="verify-satellite-wildcard.") as tmp:
-        env_file = pathlib.Path(tmp) / "gateway.env"
+        env_file = pathlib.Path(tmp) / "satellite-gateway.env"
         env_file.write_text("VOICE_REGISTRY_HOST=192.0.2.10\nVOICE_REGISTRY_PORT=10701\n"
                             "VOICE_REGISTRY_TLS_PORT=10702\n")
         with cleared_registry_env():

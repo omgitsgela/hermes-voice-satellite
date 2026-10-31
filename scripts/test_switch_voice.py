@@ -11,7 +11,7 @@ What is pinned here:
   - a multi-speaker voice without --speaker is refused, because Piper would silently pick
     a stranger from the corpus
   - the Gateway stores the speaker NAME and Hermes the numeric ID (the trap that cost a PR)
-  - unrelated gateway.env lines and comments survive
+  - unrelated satellite-gateway.env lines and comments survive
   - every switch is backed up and recorded, and --rollback undoes it
   - --dry-run writes nothing
 """
@@ -79,7 +79,7 @@ BRIDGE_ENV = textwrap.dedent("""\
 
 
 def make_fixture(tmp):
-    """A fake installation: repo, gateway.env, Hermes config, Hermes cache, stub systemctl."""
+    """A fake installation: repo, satellite-gateway.env, Hermes config, Hermes cache, stub systemctl."""
     tmp = Path(tmp)
     repo = tmp / "repo"
     (repo / "voices").mkdir(parents=True)
@@ -91,7 +91,7 @@ def make_fixture(tmp):
     # a model with no config beside it
     (repo / "voices" / "en_US-test-nojson.onnx").write_bytes(b"orphan")
 
-    (repo / "gateway.env").write_text(BRIDGE_ENV)
+    (repo / "satellite-gateway.env").write_text(BRIDGE_ENV)
     (repo / "voices" / "en_US-old-medium.onnx").write_bytes(b"old")
     (repo / "voices" / "en_US-old-medium.onnx.json").write_text(json.dumps(SINGLE))
 
@@ -168,9 +168,9 @@ with tempfile.TemporaryDirectory() as td:
 # --- 2. dry-run writes nothing ----------------------------------------------
 with tempfile.TemporaryDirectory() as td:
     repo, cfg, cache, tmp = make_fixture(td)
-    before = (repo / "gateway.env").read_text()
+    before = (repo / "satellite-gateway.env").read_text()
     p = run(repo, cfg, cache, tmp, "en_US-test-single", "--dry-run")
-    check("--dry-run leaves gateway.env untouched", (repo / "gateway.env").read_text() == before)
+    check("--dry-run leaves satellite-gateway.env untouched", (repo / "satellite-gateway.env").read_text() == before)
     check("--dry-run writes no state file", state_of(repo) is None)
     check("--dry-run writes no Hermes cache files",
           not (Path(cache) / "en_US-test-single.onnx").exists())
@@ -180,14 +180,14 @@ with tempfile.TemporaryDirectory() as td:
 with tempfile.TemporaryDirectory() as td:
     repo, cfg, cache, tmp = make_fixture(td)
     run(repo, cfg, cache, tmp, "en_US-test-single")
-    check("gateway.env points at the new voice",
-          env_value(repo / "gateway.env", "VOICE_PIPER_VOICE") == "en_US-test-single")
+    check("satellite-gateway.env points at the new voice",
+          env_value(repo / "satellite-gateway.env", "VOICE_PIPER_VOICE") == "en_US-test-single")
     check("a single-speaker voice writes no VOICE_PIPER_SPEAKER",
-          env_value(repo / "gateway.env", "VOICE_PIPER_SPEAKER") is None)
-    check("hand-written comments in gateway.env survive",
-          "# The Gateway's environment. Comments here are hand-written" in (repo / "gateway.env").read_text())
-    check("unrelated gateway.env keys survive",
-          env_value(repo / "gateway.env", "VOICE_REGISTRY_ENABLED") == "1")
+          env_value(repo / "satellite-gateway.env", "VOICE_PIPER_SPEAKER") is None)
+    check("hand-written comments in satellite-gateway.env survive",
+          "# The Gateway's environment. Comments here are hand-written" in (repo / "satellite-gateway.env").read_text())
+    check("unrelated satellite-gateway.env keys survive",
+          env_value(repo / "satellite-gateway.env", "VOICE_REGISTRY_ENABLED") == "1")
     check("Hermes tts.piper.voice updated", hermes_piper(cfg).get("voice") == "en_US-test-single")
     check("Hermes speaker_id removed for a single-speaker voice",
           "speaker_id" not in hermes_piper(cfg), hermes_piper(cfg))
@@ -199,41 +199,41 @@ with tempfile.TemporaryDirectory() as td:
     st = state_of(repo)
     check("state records the current voice", st and st["current"]["voice"] == "en_US-test-single", st)
     check("state records the previous voice", st and st["previous"]["voice"] == "en_US-old-medium", st)
-    check("a timestamped backup of gateway.env was written",
-          any((Path(repo) / "state" / "voice" / "backups").glob("*/gateway.env")))
+    check("a timestamped backup of satellite-gateway.env was written",
+          any((Path(repo) / "state" / "voice" / "backups").glob("*/satellite-gateway.env")))
     check("a timestamped backup of the Hermes config was written",
           any((Path(repo) / "state" / "voice" / "backups").glob("*/config.yaml")))
     check("the Gateway service was restarted",
           (Path(tmp) / "systemctl.calls").is_file()
-          and "restart hermes-voice-gateway.service" in (Path(tmp) / "systemctl.calls").read_text())
+          and "restart hermes-voice-satellite-gateway.service" in (Path(tmp) / "systemctl.calls").read_text())
 
 # --- 4. idempotence ---------------------------------------------------------
 with tempfile.TemporaryDirectory() as td:
     repo, cfg, cache, tmp = make_fixture(td)
     run(repo, cfg, cache, tmp, "en_US-test-single")
-    first = (repo / "gateway.env").read_text()
+    first = (repo / "satellite-gateway.env").read_text()
     p = run(repo, cfg, cache, tmp, "en_US-test-single")
-    check("re-applying the same voice is a no-op for gateway.env",
-          (repo / "gateway.env").read_text() == first)
+    check("re-applying the same voice is a no-op for satellite-gateway.env",
+          (repo / "satellite-gateway.env").read_text() == first)
     check("re-applying the same voice says so", "already" in p.stdout.lower(), p.stdout)
 
 # --- 5. multi-speaker safety ------------------------------------------------
 with tempfile.TemporaryDirectory() as td:
     repo, cfg, cache, tmp = make_fixture(td)
-    before = (repo / "gateway.env").read_text()
+    before = (repo / "satellite-gateway.env").read_text()
     p = run(repo, cfg, cache, tmp, "en_US-test-multi", expect=1)
     check("a multi-speaker voice without --speaker is refused",
           "speaker" in (p.stdout + p.stderr).lower())
-    check("the refusal wrote nothing", (repo / "gateway.env").read_text() == before)
+    check("the refusal wrote nothing", (repo / "satellite-gateway.env").read_text() == before)
 
 with tempfile.TemporaryDirectory() as td:
     repo, cfg, cache, tmp = make_fixture(td)
-    before = (repo / "gateway.env").read_text()
+    before = (repo / "satellite-gateway.env").read_text()
     p = run(repo, cfg, cache, tmp, "en_US-test-multi", "--speaker", "99", expect=1)
     check("an out-of-range numeric speaker is refused",
           "range" in (p.stdout + p.stderr).lower(), p.stdout + p.stderr)
     check("the out-of-range refusal wrote nothing",
-          (repo / "gateway.env").read_text() == before)
+          (repo / "satellite-gateway.env").read_text() == before)
 
 with tempfile.TemporaryDirectory() as td:
     repo, cfg, cache, tmp = make_fixture(td)
@@ -246,8 +246,8 @@ with tempfile.TemporaryDirectory() as td:
     repo, cfg, cache, tmp = make_fixture(td)
     run(repo, cfg, cache, tmp, "en_US-test-multi", "--speaker", "readerB")
     check("the Gateway stores the speaker NAME",
-          env_value(repo / "gateway.env", "VOICE_PIPER_SPEAKER") == "readerB",
-          env_value(repo / "gateway.env", "VOICE_PIPER_SPEAKER"))
+          env_value(repo / "satellite-gateway.env", "VOICE_PIPER_SPEAKER") == "readerB",
+          env_value(repo / "satellite-gateway.env", "VOICE_PIPER_SPEAKER"))
     check("Hermes stores the numeric ID that name resolves to",
           hermes_piper(cfg).get("speaker_id") == 3, hermes_piper(cfg))
     check("the switch reports the resolved mapping",
@@ -256,11 +256,11 @@ with tempfile.TemporaryDirectory() as td:
 # --- 7. contract enforcement ------------------------------------------------
 with tempfile.TemporaryDirectory() as td:
     repo, cfg, cache, tmp = make_fixture(td)
-    before = (repo / "gateway.env").read_text()
+    before = (repo / "satellite-gateway.env").read_text()
     p = run(repo, cfg, cache, tmp, "en_US-test-badrate", expect=1)
     check("a non-22050 Hz voice is refused", "22050" in (p.stdout + p.stderr),
           p.stdout + p.stderr)
-    check("the contract refusal wrote nothing", (repo / "gateway.env").read_text() == before)
+    check("the contract refusal wrote nothing", (repo / "satellite-gateway.env").read_text() == before)
     check("the contract refusal copied nothing to the Hermes cache",
           not (Path(cache) / "en_US-test-badrate.onnx").exists())
 
@@ -276,19 +276,19 @@ with tempfile.TemporaryDirectory() as td:
 # ambiguous the moment the service was renamed.
 with tempfile.TemporaryDirectory() as td:
     repo, cfg, cache, tmp = make_fixture(td)
-    before = (repo / "gateway.env").read_text()
+    before = (repo / "satellite-gateway.env").read_text()
     run(repo, cfg, cache, tmp, "en_US-test-single", "--scope", "gateway")
     check("--scope gateway updates the Gateway's environment",
-          (repo / "gateway.env").read_text() != before)
+          (repo / "satellite-gateway.env").read_text() != before)
     check("--scope gateway leaves Hermes alone",
           hermes_piper(cfg).get("voice") == "en_US-old-medium", hermes_piper(cfg))
 
 with tempfile.TemporaryDirectory() as td:
     repo, cfg, cache, tmp = make_fixture(td)
-    before = (repo / "gateway.env").read_text()
+    before = (repo / "satellite-gateway.env").read_text()
     run(repo, cfg, cache, tmp, "en_US-test-single", "--scope", "hermes")
-    check("--scope hermes leaves gateway.env alone",
-          (repo / "gateway.env").read_text() == before)
+    check("--scope hermes leaves satellite-gateway.env alone",
+          (repo / "satellite-gateway.env").read_text() == before)
     check("--scope hermes still updates Hermes",
           hermes_piper(cfg).get("voice") == "en_US-test-single")
 
@@ -297,7 +297,7 @@ with tempfile.TemporaryDirectory() as td:
     missing = Path(td) / "nope" / "config.yaml"
     p = run(repo, missing, cache, tmp, "en_US-test-single")
     check("a missing Hermes config degrades to bridge-only instead of failing",
-          env_value(repo / "gateway.env", "VOICE_PIPER_VOICE") == "en_US-test-single")
+          env_value(repo / "satellite-gateway.env", "VOICE_PIPER_VOICE") == "en_US-test-single")
     check("and says the gateway was skipped", "gateway" in p.stdout.lower(), p.stdout)
 
 # --- 9. rollback ------------------------------------------------------------
@@ -307,8 +307,8 @@ with tempfile.TemporaryDirectory() as td:
     run(repo, cfg, cache, tmp, "en_US-test-multi", "--speaker", "readerA")
     p = run(repo, cfg, cache, tmp, "--rollback")
     check("--rollback restores the previous Gateway voice",
-          env_value(repo / "gateway.env", "VOICE_PIPER_VOICE") == "en_US-test-single",
-          env_value(repo / "gateway.env", "VOICE_PIPER_VOICE"))
+          env_value(repo / "satellite-gateway.env", "VOICE_PIPER_VOICE") == "en_US-test-single",
+          env_value(repo / "satellite-gateway.env", "VOICE_PIPER_VOICE"))
     check("--rollback restores the previous Hermes voice",
           hermes_piper(cfg).get("voice") == "en_US-test-single", hermes_piper(cfg))
     check("--rollback clears the speaker a multi-speaker voice needed",

@@ -18,7 +18,7 @@ from typing import Iterator
 from piper.voice import PiperVoice
 from piper.config import SynthesisConfig
 
-from gateway.config import (
+from satellite_gateway.config import (
     PIPER_LENGTH_SCALE,
     PIPER_SPEAKER_SETTING,
     SND_FORMAT,
@@ -28,10 +28,10 @@ from gateway.config import (
 # The speaker rules live in gateway/voices.py so scripts/switch-voice.py can apply exactly the
 # same resolution before it writes any configuration, without importing onnxruntime. Re-exported
 # here because this module is where callers (and tests) expect to find it.
-from gateway.voices import resolve_speaker_id
+from satellite_gateway.voices import resolve_speaker_id
 import asyncio
 
-_LOGGER = logging.getLogger("gateway.tts")
+_LOGGER = logging.getLogger("satellite_gateway.tts")
 
 # The voice config path resolves against the configured voice name. Module-level so tests can
 # point it at a fixture without a real .onnx.
@@ -142,7 +142,7 @@ class TtsStream:
         # is not visible in another: getting that wrong once meant the release raised NameError
         # inside its own finally, so the lock stayed held forever and every later answer blocked.
         # The device simply looked stuck.
-        from gateway.satellite import SatelliteClient
+        from satellite_gateway.satellite import SatelliteClient
 
         lock = self._lock if self._lock is not None else SatelliteClient.PLAYBACK_LOCK
         try:
@@ -172,7 +172,7 @@ class TtsStream:
         return self
 
     async def __aexit__(self, *exc) -> bool:
-        from gateway.satellite import SatelliteClient
+        from satellite_gateway.satellite import SatelliteClient
 
         try:
             await self._send(self._AudioStop().event())

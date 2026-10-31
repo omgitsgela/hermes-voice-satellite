@@ -602,9 +602,9 @@ class Session:
         The Gateway speaks with one voice today; per-device voices are issue #120. This sets the one it
         has, and says so rather than implying more.
         """
-        env = self.repo_root / "gateway.env"
+        env = self.repo_root / "satellite-gateway.env"
         if not env.exists():
-            return "gateway.env was not found here, so the voice was downloaded but not selected"
+            return "satellite-gateway.env was not found here, so the voice was downloaded but not selected"
         lines = env.read_text().splitlines()
         wanted = {"VOICE_PIPER_VOICE": voice_id, "VOICE_CONFIG": str(model)}
         seen = set()
@@ -620,7 +620,7 @@ class Session:
             if key not in seen:
                 output.append(f"{key}={value}")
         env.write_text("\n".join(output) + "\n")
-        return "gateway.env now selects this voice for the gateway; restart the Gateway to use it"
+        return "satellite-gateway.env now selects this voice for the gateway; restart the Gateway to use it"
 
     def prepare_wake_word(self, fmt: str, model_id: str) -> dict:
         """Make a chosen wake word available locally, verifying any download before it is used."""

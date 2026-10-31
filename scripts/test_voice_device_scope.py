@@ -26,7 +26,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from gateway.config import VOICE_INSTRUCTIONS  # noqa: E402
+from satellite_gateway.config import VOICE_INSTRUCTIONS  # noqa: E402
 
 REQUIRED = (
     "volume request is about this device's own playback level",

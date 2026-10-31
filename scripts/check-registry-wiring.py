@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Check the Gateway's *wired* registry path on this host: config -> credential loader -> listener -> device.
 
-The offline suites drive `gateway/registry.py` and `pi/outbound_satellite.py` directly. This one goes through
-`gateway/config.py` and the same sequence `gateway/loop.py` uses when it starts the listener, so a change to a
+The offline suites drive `satellite_gateway/registry.py` and `pi/outbound_satellite.py` directly. This one goes through
+`satellite_gateway/config.py` and the same sequence `satellite_gateway/loop.py` uses when it starts the listener, so a change to a
 config key, to the credential file format, or to the failure policy shows up here rather than in production.
 
 It binds a temporary port, writes a temporary credentials file, and connects a fake device. It does not touch
@@ -24,7 +24,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from wyoming.event import Event, async_read_event, async_write_event  # noqa: E402
 
-from gateway.config import (  # noqa: E402
+from satellite_gateway.config import (  # noqa: E402
     REGISTRY_ALLOW_UNAUTHENTICATED,
     REGISTRY_CREDENTIALS_FILE,
     REGISTRY_DUPLICATE_POLICY,
@@ -32,7 +32,7 @@ from gateway.config import (  # noqa: E402
     REGISTRY_HOST,
     REGISTRY_PORT,
 )
-from gateway.registry import (  # noqa: E402
+from satellite_gateway.registry import (  # noqa: E402
     REGISTER_EVENT,
     REGISTER_OK_EVENT,
     REGISTER_REFUSED_EVENT,

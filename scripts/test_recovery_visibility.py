@@ -29,7 +29,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from gateway.loop import VoiceLoop  # noqa: E402
+from satellite_gateway.loop import VoiceLoop  # noqa: E402
 
 checks = 0
 failures: list[str] = []
@@ -74,7 +74,7 @@ async def main() -> int:
 
     loop._acquire_a_satellite = fake_acquire
 
-    logger = logging.getLogger("gateway.loop")
+    logger = logging.getLogger("satellite_gateway.loop")
     capture = Capture()
     previous_level = logger.level
     logger.addHandler(capture)

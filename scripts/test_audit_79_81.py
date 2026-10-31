@@ -8,7 +8,7 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from wyoming.event import Event
-from gateway.registry import SatelliteConnection
+from satellite_gateway.registry import SatelliteConnection
 
 
 class BrokenWriter:
@@ -106,14 +106,14 @@ class ConfigPersistenceTests(unittest.TestCase):
         import tempfile
         import stat
         from unittest.mock import patch
-        from gateway.config_plane import ConfigPlane
+        from satellite_gateway.config_plane import ConfigPlane
 
         with tempfile.TemporaryDirectory() as tmp:
             path = pathlib.Path(tmp) / "state.json"
             plane = ConfigPlane(path)
             # The staged inode is already private. A second chmod after replace
             # could report failure after disk has committed the new generation.
-            with patch("gateway.config_plane.os.chmod", side_effect=OSError("chmod unavailable")):
+            with patch("satellite_gateway.config_plane.os.chmod", side_effect=OSError("chmod unavailable")):
                 try:
                     result = plane.set_desired("test-device", {"mic_gain": 50})
                 except OSError:
@@ -126,7 +126,7 @@ class ConfigPersistenceTests(unittest.TestCase):
         import errno
         import tempfile
         from unittest.mock import patch
-        from gateway.config_plane import ConfigPlane
+        from satellite_gateway.config_plane import ConfigPlane
 
         for existing in (False, True):
             with self.subTest(existing=existing), tempfile.TemporaryDirectory() as tmp:
@@ -149,7 +149,7 @@ class ConfigPersistenceTests(unittest.TestCase):
         import errno
         import tempfile
         from unittest.mock import patch
-        from gateway.config_plane import ConfigPlane
+        from satellite_gateway.config_plane import ConfigPlane
 
         for existing in (False, True):
             with self.subTest(existing=existing), tempfile.TemporaryDirectory() as tmp:

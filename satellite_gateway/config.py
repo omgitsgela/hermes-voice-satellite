@@ -9,7 +9,7 @@ who is connected. The listener lives under "the registry listener" below and is 
 the voice loop still dials the satellite.
 
 Installation-specific values (the satellite's address, the gateway's port, the session id, ...) are
-never literals here. They come from the environment first and from `gateway.env` (at the project
+never literals here. They come from the environment first and from `satellite-gateway.env` (at the project
 root, git-ignored, see `bridge.env.example`) second, so a clone on another machine is configured by
 copying the example file rather than by editing source. The host's systemd unit points at the same
 file, so one file is the whole host-side configuration. Same pattern on the device side:
@@ -23,10 +23,10 @@ from pathlib import Path
 # The one place this installation's values live. `KEY=VALUE` lines, `#` comments, optional quotes.
 # Absent is fine: every value falls back to its default below. A real environment variable always
 # wins over the file, so the file holds the durable values and the environment holds experiments.
-LOCAL_ENV_FILE = Path(__file__).resolve().parent.parent / "gateway.env"
+LOCAL_ENV_FILE = Path(__file__).resolve().parent.parent / "satellite-gateway.env"
 #: The name this file had before the Gateway rename. Read only when the new file is absent, so an
 #: installation made before the rename keeps its settings instead of silently reverting to defaults.
-LEGACY_ENV_FILE = LOCAL_ENV_FILE.with_name("bridge.env")
+LEGACY_ENV_FILES = tuple(LOCAL_ENV_FILE.with_name(name) for name in ("satellite-gateway.env", "bridge.env"))
 
 _LOCAL_ENV_CACHE: dict | None = None
 
@@ -79,14 +79,14 @@ def _parse_env(text: str) -> dict[str, str]:
 
 
 def _local_env() -> dict:
-    """Read gateway.env once per process; missing/unreadable files use defaults.
+    """Read satellite-gateway.env once per process; missing/unreadable files use defaults.
 
-    A `bridge.env` left over from before the rename is read when `gateway.env` does not exist, so an
+    A `bridge.env` left over from before the rename is read when `satellite-gateway.env` does not exist, so an
     upgrade does not quietly lose every setting.
     """
     global _LOCAL_ENV_CACHE
     if _LOCAL_ENV_CACHE is None:
-        for candidate in (LOCAL_ENV_FILE, LEGACY_ENV_FILE):
+        for candidate in (LOCAL_ENV_FILE, *LEGACY_ENV_FILES):
             try:
                 _LOCAL_ENV_CACHE = _parse_env(candidate.read_text())
                 break
@@ -98,7 +98,7 @@ def _local_env() -> dict:
 
 
 def _cfg(name: str, default: str = "") -> str:
-    """Environment > gateway.env > default, including explicitly empty values."""
+    """Environment > satellite-gateway.env > default, including explicitly empty values."""
     if name in os.environ:
         return os.environ[name]
     return _local_env().get(name, default)

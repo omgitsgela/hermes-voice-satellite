@@ -28,7 +28,7 @@ from typing import Optional
 
 import numpy as np
 
-_LOGGER = logging.getLogger("gateway.silero_vad")
+_LOGGER = logging.getLogger("satellite_gateway.silero_vad")
 
 MODEL_PATH = pathlib.Path(__file__).resolve().parent / "vendor" / "silero_vad_v6.onnx"
 

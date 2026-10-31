@@ -14,7 +14,7 @@ line each, an overall verdict, and a non-zero exit if any link fails:
                the credential entry names
   registered   the device has really registered: the strongest LIVE evidence wins -- the
                Gateway's own fleet state (state/fleet-config.json, written by the registration
-               hook in gateway/loop.py) and the Gateway log (journalctl, or --bridge-log)
+               hook in satellite_gateway/loop.py) and the Gateway log (journalctl, or --bridge-log)
 
 STRICTLY READ-ONLY. Every command it runs reads state (ss, journalctl, openssl verify); it
 never writes a file, never touches the gateway, never provisions anything. Safe to run on a
@@ -28,7 +28,7 @@ Usage:
 Flags: --host, --port, --state-dir, --device-id (each detected where possible: the LIVE
 listener `ss` sees -- because what is actually accepting beats what any config claims, and a
 Gateway bound to a LAN address is not reachable on loopback -- then the same environment /
-gateway.env the Gateway itself reads, then loopback; the state directory beside the repo, and --
+satellite-gateway.env the Gateway itself reads, then loopback; the state directory beside the repo, and --
 when the credential file lists exactly one device -- that device id). Plus --credentials,
 --tls-dir and --bridge-log for layouts that keep those files elsewhere.
 
@@ -53,10 +53,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = Path(__file__).resolve().parent
 
 #: The Gateway's own systemd user unit (installed by scripts/install-gateway.sh).
-JOURNAL_UNIT = "hermes-voice-gateway.service"
+JOURNAL_UNIT = "hermes-voice-satellite-gateway.service"
 
 #: The two log lines that mean "this device registered", in the two places that print them:
-#: gateway/loop.py `_on_device_registered` and gateway/registry.py `SatelliteRegistry.register`.
+#: satellite_gateway/loop.py `_on_device_registered` and satellite_gateway/registry.py `SatelliteRegistry.register`.
 REGISTERED_PATTERNS = (
     r"device registered: id={id}(?=\s|$)",
     r"device {id} registered \(",
@@ -83,7 +83,7 @@ def load_issuer():
 # ---------------------------------------------------------------- configuration detection
 
 def read_env_file(path: Path) -> dict:
-    """KEY=VALUE lines from gateway.env, the same file the Gateway reads (no shell expansion)."""
+    """KEY=VALUE lines from satellite_gateway.env, the same file the Gateway reads (no shell expansion)."""
     values = {}
     try:
         text = path.read_text()
@@ -99,9 +99,9 @@ def read_env_file(path: Path) -> dict:
 
 
 def detect_setting(name: str, env_file: Path, default: str) -> str:
-    """Flag (decided by the caller) > environment > gateway.env > default.
+    """Flag (decided by the caller) > environment > satellite-gateway.env > default.
 
-    The same precedence gateway/config.py applies, so this tool reports against the values the
+    The same precedence satellite_gateway/config.py applies, so this tool reports against the values the
     Gateway itself would use on this host.
     """
     if name in os.environ:
@@ -163,7 +163,7 @@ def resolve_probe_target(host_arg: str | None, port_arg: int | None,
       1. an explicit --host / --port, per field -- the operator's word wins;
       2. the LIVE listener: a listener bound to a specific address on the chosen port names
          that address, and a live listener on one of the configured ports picks the port;
-      3. VOICE_REGISTRY_HOST / gateway.env -- the configuration the Gateway itself reads;
+      3. VOICE_REGISTRY_HOST / satellite-gateway.env -- the configuration the Gateway itself reads;
       4. loopback.
 
     Without (2) a Gateway that binds a LAN address is probed on loopback and reported as a
@@ -178,7 +178,7 @@ def resolve_probe_target(host_arg: str | None, port_arg: int | None,
     if port_arg is not None:
         port = port_arg
     else:
-        # What is accepting wins over what is configured (a stale gateway.env, or the plain port
+        # What is accepting wins over what is configured (a stale satellite-gateway.env, or the plain port
         # when only the TLS one is up); the configured primary wins ties between candidates.
         port = configured_port
         for candidate in dict.fromkeys((configured_port, tls_port, registry_port)):
@@ -302,7 +302,7 @@ def check_credentials(issuer, credentials: Path, tls_dir: Path, device_id: str) 
 def _registration_evidence(fleet_state: Path, device_id: str) -> list[str]:
     """What state/fleet-config.json proves about this device having registered.
 
-    The record is written by the registration hook (gateway/loop.py `_on_device_registered` ->
+    The record is written by the registration hook (satellite_gateway/loop.py `_on_device_registered` ->
     `ConfigPlane.ensure_device`): `metadata` is only ever filled from a registration payload,
     and `reported_at` is only ever set by a config report from a live registered device.
     """
@@ -386,7 +386,7 @@ def main() -> int:
         else state_dir / "device-credentials.json"
     bridge_log = Path(args.bridge_log).expanduser().resolve() if args.bridge_log else None
 
-    env_file = REPO_ROOT / "gateway.env"
+    env_file = REPO_ROOT / "satellite-gateway.env"
     tls_configured = (tls_dir / "server.crt").is_file() and (tls_dir / "server.key").is_file()
 
     # The probe target, resolved once: an explicit --host/--port wins per field, then the LIVE

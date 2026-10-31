@@ -12,7 +12,7 @@ substitute your own.
 
 ## Setting it up
 
-The Gateway and its satellites are set up by **Hermes Voice Satellite**, the installer in this
+The Satellite Gateway and its satellites are set up by **Hermes Voice Satellite**, the installer in this
 repository: a graphical interface with a console path for headless machines, which installs the
 Gateway beside Hermes, issues the satellites their identities, and writes their cards and boards.
 
@@ -35,7 +35,7 @@ type into. The satellite is for the moments you are not:
   action — work here. Its spoken prompt explicitly routes requested Obsidian writes through the storage and
   vault skills rather than treating the whole microphone channel as read-only.
 - **The house can talk.** A cron job, a home-automation rule, or any other process can POST an
-  announcement to the Gateway, and the satellite speaks it through its own speaker, queued politely
+  announcement to the Satellite Gateway, and the satellite speaks it through its own speaker, queued politely
   behind any conversation in progress. A freezer that crossed a threshold, a door left open, a backup
   that failed: it reaches you in the room instead of as a notification you see days later. The sound
   of that speaker becoming active *is* the signal.
@@ -77,16 +77,16 @@ notification, and the moment your hands are full.
       a small set of core patches, see hermes/patches/
 ```
 
-The device is inert unless the Gateway dials in, and the Gateway is not reachable from the LAN: the API
+The device is inert unless the Satellite Gateway dials in, and the Satellite Gateway is not reachable from the LAN: the API
 server is loopback, the wake shim's control port is loopback, and the announcement endpoint requires a
 token.
 
 **Two connection shapes exist in this design, and the second one is being built.** Today the **device is the
-server**: it listens on 10700 and the Gateway dials it, which is why the device needs a reachable address.
-The decided direction (issue #61) **inverts that**: satellites dial the Gateway, the Gateway runs a Wyoming
+server**: it listens on 10700 and the Satellite Gateway dials it, which is why the device needs a reachable address.
+The decided direction (issue #61) **inverts that**: satellites dial the Satellite Gateway, the Satellite Gateway runs a Wyoming
 server with a registry of connected devices, and nothing has to reach the device at all. The event
 vocabulary is identical either way. A local gateway stays the most private option; a Gateway on a public
-endpoint terminates TLS in the Gateway itself and authenticates each device with its own credential.
+endpoint terminates TLS in the Satellite Gateway itself and authenticates each device with its own credential.
 
 **The satellite's own Wyoming listener is a different matter.** `wyoming-satellite` binds
 `tcp://0.0.0.0:10700`, so any device on the LAN can reach it, and Wyoming has no authentication or
@@ -98,7 +98,7 @@ device and receive its audio. Everything else in the stack is loopback only.
 
 | Path | What it is |
 |---|---|
-| `gateway/` | The Gateway itself: endpointing, STT, TTS, gateway client, satellite client, announcements |
+| `gateway/` | The Satellite Gateway itself: endpointing, STT, TTS, gateway client, satellite client, announcements |
 | `scripts/` | Operational scripts: live checks, tests, chime generation, capture tools |
 | `pi/` | The device side: wake shim, LED service, the systemd units, and the device's configuration template (`pi/systemd/satellite.env`) |
 | `sounds/` | Chimes and tones the device plays |
@@ -107,7 +107,7 @@ device and receive its audio. Everything else in the stack is loopback only.
 | `hermes/plugins/` | The Hermes plugins the voice surface uses, verbatim from a working install |
 | `hermes/patches/` | The one remaining core patch, as a diff, plus a checker |
 | `hermes/config/` | The voice-surface configuration keys, with placeholders instead of secrets |
-| `hermes/systemd/` | The Gateway's user unit |
+| `hermes/systemd/` | The Satellite Gateway's user unit |
 | `docs/` | Operating guides: hardware, restart safety, wake-word changes, timers and device support |
 
 
@@ -118,12 +118,12 @@ Hardware, as built:
 - The wake word is whatever model you install. This build uses `hey_hermes`; see `docs/hardware/`
 - A Raspberry Pi Zero 2 W with a **Seeed ReSpeaker 2-mic HAT** (`plughw:CARD=<your card id>`), WiFi only
 - A host machine that stays on, with enough CPU for `faster-whisper small.en` and Piper. It is reached
-  by SSH and runs the Gateway as a user service.
+  by SSH and runs the Satellite Gateway as a user service.
 - A Hermes Agent install on that host, version current within a release or so
 
 Software: Python 3.11 is the tested gateway runtime. Use a dedicated virtual environment
 with `requirements.txt` (faster-whisper, piper-tts, wyoming, aiohttp, silero VAD,
-webrtcvad fallback). Hermes Agent is installed separately; the Gateway calls its HTTP API
+webrtcvad fallback). Hermes Agent is installed separately; the Satellite Gateway calls its HTTP API
 and does not need the `hermes-agent` Python distribution in its virtual environment.
 The Piper voice `en_US-hfc_male-medium` (63 MB, single speaker, not committed
 here) is in the Piper catalog and is fetched by `piper.download_voices` — or, for the curated
@@ -140,7 +140,7 @@ The end-to-end guide is [`docs/installation.md`](docs/installation.md): Hermes, 
 then a satellite (ESP32 or Pi), and where the prebuilt images fit. It is the order this section
 follows, and the installers it documents.
 
-### The Gateway host
+### The Satellite Gateway host
 
 On Debian/Ubuntu, install Python 3.11 with venv support, Git, `libsndfile1` and
 `libgomp1`. If your Python release lacks wheels for a dependency, compiling it also
@@ -155,11 +155,11 @@ python3.11 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m pip check
 .venv/bin/python -m piper.download_voices --download-dir voices en_US-hfc_male-medium
-cp bridge.env.example gateway.env
+cp bridge.env.example satellite-gateway.env
 ```
 
 Set your host, device identity, session, registry and announcement bind values in
-`gateway.env`. If using a registry-only deployment, enable it, bind it to a trusted
+`satellite-gateway.env`. If using a registry-only deployment, enable it, bind it to a trusted
 interface, and set `VOICE_DIRECT_DIAL_FALLBACK=0`. See `docs/outbound-link.md` for
 credentials and the explicit trusted-network override. Never expose raw Wyoming
 on a public interface. Set `VOICE_ROUTE_ALIAS=` if your Gateway has no named route.
@@ -170,9 +170,9 @@ Install the unmodified user unit after configuring the separate Hermes Gateway:
 
 ```sh
 mkdir -p ~/.config/systemd/user
-cp hermes/systemd/hermes-voice-gateway.service ~/.config/systemd/user/
+cp hermes/systemd/hermes-voice-satellite-gateway.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now hermes-voice-gateway.service
+systemctl --user enable --now hermes-voice-satellite-gateway.service
 ```
 
 The supplied unit expects `~/hermes-voice-satellite`; for a different clone directory,
@@ -191,9 +191,9 @@ synthetic-Gateway and hardware-test boundaries.
 3. Apply the configuration keys from `hermes/config/voice-surface.example.yaml` to
    `~/.hermes/config.yaml`. The surface deliberately has **no** `platform_toolsets.api_server` entry:
    it inherits the default toolset list, which is how it runs at full parity.
-4. Write `gateway.env` at the project root from `bridge.env.example` and set at least
+4. Write `satellite-gateway.env` at the project root from `bridge.env.example` and set at least
    `VOICE_SATELLITE_HOST` to the address of this installation's satellite. This is the host side's one
-   configuration file: `gateway/config.py` reads it (a real environment variable always wins over the
+   configuration file: `satellite_gateway/config.py` reads it (a real environment variable always wins over the
    file, and the file wins over the default in the code), and the user unit points at it too, so one
    file is the whole host-side configuration.
 5. Apply the core patch: see `hermes/patches/README.md`.
@@ -226,7 +226,7 @@ those scripts do, for reference and for a device you want to wire by hand.
 ## Verify
 
 ```bash
-# the Gateway is alive and connected
+# the Satellite Gateway is alive and connected
 systemctl --user status hermes-voice-satellite
 journalctl --user -u hermes-voice-satellite -n 30
 
@@ -292,7 +292,7 @@ Run `hermes/patches/check-patches.sh` after every update; it is read-only and re
 
 A change is not finished when it works on your machine. Four things move together, in one pass:
 
-1. **The code**, committed and pushed here. This repository is authoritative for content: the Gateway,
+1. **The code**, committed and pushed here. This repository is authoritative for content: the Satellite Gateway,
    the device files, the document that covers the job, and one issue per work item.
 2. **The running system**, meaning your device and your host, deployed and restarted as the change
    needs, then verified as running code rather than as a file on disk. A fix that is committed but
@@ -319,14 +319,14 @@ it.
 - [`docs/endpointing-profiles.md`](docs/endpointing-profiles.md) opt-in pause-tolerant listening for hesitant or slower speech
 - [`docs/agent-and-model-routing.md`](docs/agent-and-model-routing.md) choose either a model route alias or a complete named Hermes Bot/profile for every satellite conversation
 - [`docs/wake-word-licensing.md`](docs/wake-word-licensing.md) which wake word models may be used commercially, and the terms attached to each source
-- [`docs/outbound-link.md`](docs/outbound-link.md) the device dials the Gateway: the bootstrap file it carries, installing the service so it dials on boot, and what it does not do yet
+- [`docs/outbound-link.md`](docs/outbound-link.md) the device dials the Satellite Gateway: the bootstrap file it carries, installing the service so it dials on boot, and what it does not do yet
 
 ## Status and known gaps
 
-- **Connection direction is being inverted (issue #61).** Satellites dial the Gateway, which runs a Wyoming
+- **Connection direction is being inverted (issue #61).** Satellites dial the Satellite Gateway, which runs a Wyoming
   server and keeps a device registry, so a device needs no reachable address and no port forwarding anywhere.
   Decided 2026-09-24, reviewed before implementation, and **partly built**: a device can dial in, register and
-  be tracked, the Gateway stays up and keeps listening with no device present instead of exiting for a restart,
+  be tracked, the Satellite Gateway stays up and keeps listening with no device present instead of exiting for a restart,
   and the device-side service that dials on every boot is in `pi/systemd/` with `scripts/deploy-to-card.sh`
   installing it. What is **not** built yet: leasing a registered device, so a device that dials in is tracked
   but carries no audio, and the older dial-in path is still the one that carries a conversation. The migration
@@ -340,8 +340,8 @@ it.
   model, so it inherits the normal fallback chain. Measured 2026-09-24 with this repository's own Verify
   block: **21 toolsets, 19 tools, about 8.4k tokens of tool schema**.
   It is no longer narrowed, and it no longer pins a voice-specific model route.
-- **One satellite only.** The Gateway dials one configured address and the session is a single session.
-- The host side's configuration is `gateway.env` (template `bridge.env.example`); the device side's is
+- **One satellite only.** The Satellite Gateway dials one configured address and the session is a single session.
+- The host side's configuration is `satellite-gateway.env` (template `bridge.env.example`); the device side's is
   `/etc/voice-satellite/satellite.env` (template `pi/systemd/satellite.env`). The repository itself
   carries no installation-specific value: `scripts/check-no-personal-data.sh` fails if one gets back in.
 - `voices/`, `logs/`, `audio/` and `state/` are intentionally not committed.

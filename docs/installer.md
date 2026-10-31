@@ -12,17 +12,17 @@ terminal, a Python install, or any knowledge of what a Wyoming protocol is.
 | **Gateway** | The service the satellites talk to and that talks to the Hermes API. One component with two roles, never two services. "Satellite Gateway" is the same thing, seen from the satellites' side. |
 | **Satellite** | A physical device: an ESP32 with a microphone array, or a Raspberry Pi with a HAT. |
 
-The word "Gateway" was the Gateway's earlier name. It survives in three technical identifiers, which
+The word "Gateway" was the Satellite Gateway's earlier name. It survives in three technical identifiers, which
 are file names rather than the component's name: the package directory `gateway/`, the environment file
-`gateway.env`, and the unit `hermes-voice-gateway.service`. A migration to `gateway/`, `gateway.env` and
-`hermes-voice-gateway.service` is a separate change, because it touches a running service.
+`satellite-gateway.env`, and the unit `hermes-voice-satellite-gateway.service`. A migration to `gateway/`, `satellite-gateway.env` and
+`hermes-voice-satellite-gateway.service` is a separate change, because it touches a running service.
 
 It is also a **configuration tool**: run it again, point it at a gateway you already set up, and
 change what can be changed without a cable.
 
 ## Two roles
 
-- **Gateway**: run where Hermes runs. Installs the Gateway, its environment, the registry TLS
+- **Gateway**: run where Hermes runs. Installs the Satellite Gateway, its environment, the registry TLS
   material, the enrolment words, and the Hermes-side plugin and keys.
 - **Workbench**: run where the physical device is. Flashes a satellite, stages its Wi-Fi and dial
   address, and can change settings later.

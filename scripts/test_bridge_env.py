@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline gateway.env contract: no real config, network or service changes."""
+"""Offline satellite-gateway.env contract: no real config, network or service changes."""
 import os
 from pathlib import Path
 import sys
@@ -7,14 +7,14 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from gateway import config
+from satellite_gateway import config
 
-source = (ROOT / 'gateway/config.py').read_text()
+source = (ROOT / 'satellite_gateway/config.py').read_text()
 
 def load(text, env=None):
-    namespace = {'__file__': str(ROOT / 'gateway/config.py')}
+    namespace = {'__file__': str(ROOT / 'satellite_gateway/config.py')}
     with patch.dict(os.environ, env or {}, clear=True), patch.object(Path, 'read_text', return_value=text):
-        exec(compile(source, 'gateway/config.py', 'exec'), namespace)
+        exec(compile(source, 'satellite_gateway/config.py', 'exec'), namespace)
         return namespace
 
 cfg = load('VOICE_REGISTRY_ENABLED=1\nVOICE_REGISTRY_HOST=10.1.2.3\nVOICE_REGISTRY_PORT=12345\nVOICE_ROUTE_ALIAS=\nVOICE_WAKE_WAIT_SECONDS=42\n')
@@ -57,15 +57,15 @@ assert values['PADDED'] == ' padded '
 with patch.object(Path, 'read_text', side_effect=AssertionError('cache reread')):
     assert cfg['_local_env']() is values
 with patch.dict(os.environ, {}, clear=True), patch.object(Path, 'read_text', side_effect=FileNotFoundError):
-    ns = {'__file__': str(ROOT / 'gateway/config.py')}
-    exec(compile(source, 'gateway/config.py', 'exec'), ns)
+    ns = {'__file__': str(ROOT / 'satellite_gateway/config.py')}
+    exec(compile(source, 'satellite_gateway/config.py', 'exec'), ns)
     assert ns['SATELLITE_HOST'] == '127.0.0.1'
     assert ns['VOICE_SESSION_ID'] == 'voice-satellite'
     assert ns['VOICE_ROUTE_ALIAS'] == 'voice-fast'
     assert isinstance(ns['PIPER_VOICE_NAME'], str) and ns['PIPER_VOICE_NAME'].strip()
     assert ns['REGISTRY_HOST'] == '127.0.0.1'
-from gateway.announce import Announcer
+from satellite_gateway.announce import Announcer
 with patch.dict(os.environ, {}, clear=True), patch.object(config, '_LOCAL_ENV_CACHE', {'VOICE_ANNOUNCE_TOKEN': 'test-token'}):
     with patch.object(Path, 'read_text', side_effect=AssertionError('token file fallback')):
         assert Announcer._load_token(None) == 'test-token'
-print('gateway.env precedence, registry, empty values, quoting, cache, token and defaults: passed')
+print('satellite-gateway.env precedence, registry, empty values, quoting, cache, token and defaults: passed')

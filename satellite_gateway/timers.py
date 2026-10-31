@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
-_LOGGER = logging.getLogger("gateway.timers")
+_LOGGER = logging.getLogger("satellite_gateway.timers")
 DEFAULT_STATE_PATH = Path(__file__).resolve().parent.parent / "state" / "timers.json"
 _DURATION_PART = re.compile(
     r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)",

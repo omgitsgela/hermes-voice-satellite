@@ -46,7 +46,7 @@ any natural wording works:
 > "stop waiting so long after I finish"
 > "are you using the slower listening mode?"
 
-**From the Gateway settings endpoint**, with the same bearer token announcements use:
+**From the Satellite Gateway settings endpoint**, with the same bearer token announcements use:
 
 ```
 GET  /settings

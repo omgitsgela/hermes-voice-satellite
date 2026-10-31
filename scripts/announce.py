@@ -24,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from gateway.config import (  # noqa: E402
+from satellite_gateway.config import (  # noqa: E402
     ANNOUNCE_MAX_CHARS,
     ANNOUNCE_PORT,
     ANNOUNCE_TOKEN_ENV,

@@ -45,7 +45,7 @@ import wave
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from gateway.silero_vad import MODEL_PATH, SileroVad  # noqa: E402
+from satellite_gateway.silero_vad import MODEL_PATH, SileroVad  # noqa: E402
 
 checks = 0
 failures: list[str] = []
