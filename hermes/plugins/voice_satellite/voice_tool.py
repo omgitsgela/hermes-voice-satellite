@@ -42,6 +42,7 @@ _ACTIONS = (
     "endpointing_pause_tolerant",
     "endpointing_standard",
     "endpointing_status",
+    "conversation_reset",
     "fleet_status",
     "config_status",
     "config_set",
@@ -278,6 +279,17 @@ def handle(args: dict) -> str:
                 "restart_pacing": result["restart_pacing"],
                 "devices": result["devices"], "verified": True,
             }, ensure_ascii=False)
+        if action == "conversation_reset":
+            # Start a fresh conversation on a CONFIRMED request. Without this the model could ask
+            # "did you want me to start a new conversation?" and then have nothing to call when the
+            # person said yes -- which is exactly what happened on 2026-10-30 ("I can't reset the
+            # conversation from this side").
+            data = _request("POST", "/settings", {"conversation_reset": True})
+            if not data.get("ok"):
+                raise VoiceControlError(str(data.get("error") or "the bridge refused the reset"))
+            return json.dumps({"ok": True, "action": action,
+                               "conversation": data.get("conversation"), "verified": True},
+                              ensure_ascii=False)
         if action == "follow_up_status":
             state = _settings()
             return json.dumps({"ok": True, "action": action, "follow_up": state,

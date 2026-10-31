@@ -98,6 +98,7 @@ class Announcer:
                  turn_owner: Optional[Callable[[], Optional[str]]] = None,
                  follow_up_get: Optional[Callable[[], bool]] = None,
                  follow_up_set: Optional[Callable[[bool], bool]] = None,
+                 conversation_reset: Optional[Callable[[str], Any]] = None,
                  endpointing_profile_get: Optional[Callable[[], str]] = None,
                  endpointing_profile_set: Optional[Callable[[str], str]] = None,
                  timer_state_path: Path = DEFAULT_STATE_PATH,
@@ -128,6 +129,12 @@ class Announcer:
         # are optional so an Announcer built without a loop still works.
         self._follow_up_get = follow_up_get
         self._follow_up_set = follow_up_set
+        # Starting a new conversation from a VOICE request. The bridge already rotates on the fixed
+        # "new conversation" phrases, but that path can only act on an exact phrase -- so when the
+        # assistant asked "did you want me to start a new conversation?" and the person answered
+        # "yes please", there was nothing for the model to call and it had to say it could not do it.
+        # This gives the confirmed intent somewhere to go.
+        self._conversation_reset = conversation_reset
         self._endpointing_profile_get = endpointing_profile_get
         self._endpointing_profile_set = endpointing_profile_set
         self.host = host
@@ -297,7 +304,8 @@ class Announcer:
         if not self._authorised(request):
             _LOGGER.warning("rejected an unauthorised settings change from %s", request.remote)
             return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
-        if self._follow_up_set is None or self._endpointing_profile_set is None:
+        if (self._follow_up_set is None and self._endpointing_profile_set is None
+                and self._conversation_reset is None):
             return web.json_response({"ok": False, "error": "not wired to the loop"}, status=501)
         try:
             body = await request.json()
@@ -306,7 +314,25 @@ class Announcer:
         if not isinstance(body, dict) or len(body) != 1:
             return web.json_response(
                 {"ok": False,
-                 "error": "expected exactly one of follow_up or endpointing_profile"}, status=400)
+                 "error": "expected exactly one of follow_up, endpointing_profile, "
+                          "or conversation_reset"}, status=400)
+
+        if "conversation_reset" in body:
+            if body["conversation_reset"] is not True:
+                return web.json_response(
+                    {"ok": False, "error": "conversation_reset must be true"}, status=400)
+            if self._conversation_reset is None:
+                return web.json_response({"ok": False, "error": "not wired to the loop"}, status=501)
+            try:
+                result = self._conversation_reset("spoken reset, confirmed by the assistant")
+                if asyncio.iscoroutine(result):
+                    result = await result
+            except Exception as exc:  # noqa: BLE001 - a failed reset must be reported, not fatal
+                _LOGGER.error("could not start a new conversation: %s", exc)
+                return web.json_response(
+                    {"ok": False, "error": "could not start a new conversation"}, status=500)
+            _LOGGER.info("conversation reset over the settings endpoint -> %s", result)
+            return web.json_response({"ok": True, "conversation": str(result)})
 
         if "follow_up" in body:
             wanted = body["follow_up"]
@@ -334,7 +360,8 @@ class Announcer:
             return web.json_response({"ok": True, "endpointing_profile": result})
 
         return web.json_response(
-            {"ok": False, "error": "unknown setting; expected follow_up or endpointing_profile"},
+            {"ok": False, "error": "unknown setting; expected follow_up, endpointing_profile, "
+                                   "or conversation_reset"},
             status=400)
 
     async def _handle_announce(self, request: web.Request) -> web.Response:

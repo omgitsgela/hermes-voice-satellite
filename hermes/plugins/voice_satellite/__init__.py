@@ -33,7 +33,11 @@ _SCHEMA = {
         "'fleet_config_set' writes the same settings to every registered satellite at once, or to a "
         "named subset via device_ids; it is the 'change all the satellites' action, and it reports "
         "when the change is being paced so the rooms do not all go silent at once. "
-        "Use the config_* "
+        "'conversation_reset' starts a NEW conversation: it rotates the session so the next turn has "
+        "no memory of the previous one. Use it when someone asks to start over, start a new "
+        "conversation, forget this conversation, or clears the conversation -- and when they confirm "
+        "after you offer to do it. "
+        "Use the config_*"
         "actions for requests about how a device should be configured from now on, and the "
         "follow_up_*/endpointing_* actions for changes that only matter to the conversation happening "
         "right now."
@@ -54,6 +58,7 @@ _SCHEMA = {
                     "config_status",
                     "config_set",
                     "fleet_config_set",
+                    "conversation_reset",
                 ],
                 "description": "Change or report a device conversation setting.",
             },

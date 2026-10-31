@@ -63,7 +63,12 @@ def main() -> int:
     check("and forbids changing a mode on a guess",
           "never change a mode on a guess" in lowered)
 
-    # 3) the capability helper
+    # 3) starting a new conversation is an ACTION the model can take, not something it has to refuse
+    check("the prompt names the reset action", "conversation_reset" in lowered)
+    check("and forbids claiming it cannot be done",
+          "never say you cannot reset the conversation" in lowered)
+
+    # 4) the capability helper
     check("the prompt covers 'what can I say'", "what they can say" in lowered)
     check("and asks for a short spoken list, not a catalogue", "not a catalogue" in lowered)
 

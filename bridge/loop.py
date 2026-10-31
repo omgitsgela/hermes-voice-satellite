@@ -276,6 +276,10 @@ class VoiceLoop:
             # than a copy, so a change made by voice or by the assistant is visible immediately.
             follow_up_get=lambda: self.follow_up,
             follow_up_set=self.set_follow_up,
+            # A confirmed "yes" to the assistant's own "shall I start a new conversation?" needs
+            # somewhere to go: the fixed-phrase matcher can only fire on an exact phrase, and the
+            # model had no tool, so it had to refuse a request it had just proposed.
+            conversation_reset=self.rotate_session,
             endpointing_profile_get=lambda: self.endpointing_profile,
             endpointing_profile_set=self.set_endpointing_profile,
             config_plane=self.config_plane,

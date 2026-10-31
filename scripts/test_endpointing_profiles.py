@@ -67,6 +67,7 @@ async def check_settings_api(loop: VoiceLoop, failures: list[str]) -> None:
         follow_up_set=loop.set_follow_up,
         endpointing_profile_get=lambda: loop.endpointing_profile,
         endpointing_profile_set=loop.set_endpointing_profile,
+        conversation_reset=loop.rotate_session,
     )
     announcer._token = "test-token"
 
@@ -85,6 +86,20 @@ async def check_settings_api(loop: VoiceLoop, failures: list[str]) -> None:
     response = await announcer._handle_settings_post(Request({"endpointing_profile": "forever"}))
     check(response.status, 400, "unknown settings profile status", failures)
     check(loop.endpointing_profile, "pause_tolerant", "unknown settings profile preserved", failures)
+
+    # Starting a new conversation on a CONFIRMED request. Before this existed the assistant could ask
+    # "did you want me to start a new conversation?", hear "yes please", and have nothing to call --
+    # it answered "I can't reset the conversation from this side" (2026-10-30).
+    before_session = loop.gateway.session_id
+    response = await announcer._handle_settings_post(Request({"conversation_reset": True}))
+    payload = json.loads(response.text)
+    check(response.status, 200, "conversation reset status", failures)
+    check(bool(payload.get("conversation")), True, "conversation reset returns the new id", failures)
+    check(loop.gateway.session_id != before_session, True,
+          "conversation reset actually rotates the session", failures)
+
+    response = await announcer._handle_settings_post(Request({"conversation_reset": False}))
+    check(response.status, 400, "conversation reset requires true", failures)
 
 
 async def check_mid_capture_swap(loop: VoiceLoop, failures: list[str]) -> None:
