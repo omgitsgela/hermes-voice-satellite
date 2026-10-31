@@ -28,6 +28,12 @@ datas = [
     # The engine, not just the front end. Without these the bundle can report what it sees and then
     # has nothing to run: the gateway install, the device flash and the card writer are all scripts.
     (str(ROOT / "scripts"), "scripts"),
+    # The service the install script installs, and the units it installs it as. Without these the
+    # bundle can install a virtualenv and then has no service source to point it at.
+    (str(ROOT / "satellite_gateway"), "satellite_gateway"),
+    (str(ROOT / "hermes"), "hermes"),
+    # TLS provisioning reads the partition table to find where credentials may be written.
+    (str(ROOT / "firmware" / "esp32" / "partitions.csv"), "firmware/esp32"),
     (str(ROOT / "pi"), "pi"),
     (str(ROOT / "firmware" / "esp32" / "models"), "firmware/esp32/models"),
     (str(ROOT / "satellite-gateway.env.example"), "."),

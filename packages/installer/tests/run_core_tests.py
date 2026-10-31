@@ -12,6 +12,7 @@ from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "gateway" / "src"))
 
 from hermes_installer.identity import (  # noqa: E402
     ALPHABET,
@@ -29,6 +30,7 @@ from hermes_installer.pairing import (  # noqa: E402
 from hermes_installer.profile import DeviceProfile, Setting, profile_from_dict  # noqa: E402
 from hermes_installer.registry import DeviceRegistry, RegistryError  # noqa: E402
 from hermes_installer.secrets import Backend, CredentialStore  # noqa: E402
+import hermes_gateway as gateway_module  # noqa: E402
 
 CERT_A = b"\x30\x82\x01\x0a" + bytes(range(256))
 CERT_B = b"\x30\x82\x01\x0a" + bytes(reversed(range(256)))
@@ -465,6 +467,43 @@ class Discovery(unittest.TestCase):
         with self.assertRaises(RegistryError) as caught:
             registry.get("unknown")
         self.assertIn("known", str(caught.exception))
+
+
+class GatewayInstallCommand(unittest.TestCase):
+    """The host install runs the engine that belongs to the checkout being installed.
+
+    A relative `scripts/install-gateway.sh` is resolved against the process's working directory, so
+    launching the installer from a desktop shortcut or a second clone either failed or ran another
+    checkout's script against this checkout's state. Both halves are pinned here: the path, and the
+    working directory the script is executed in.
+    """
+
+    def test_the_script_comes_from_the_selected_checkout(self):
+        commands = gateway_module.install_commands(
+            base="/opt/checkout", device_reachable_as="192.0.2.10"
+        )
+        self.assertEqual(
+            commands[0][0], "/opt/checkout/scripts/install-gateway.sh", commands
+        )
+
+    def test_a_relative_base_still_yields_an_absolute_script(self):
+        commands = gateway_module.install_commands(
+            base=".", device_reachable_as="192.0.2.10"
+        )
+        self.assertTrue(Path(commands[0][0]).is_absolute(), commands[0][0])
+        self.assertTrue(commands[0][0].endswith("/scripts/install-gateway.sh"), commands[0][0])
+
+    def test_commands_run_inside_that_checkout(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            ok, output = gateway_module.run_commands(
+                [(sys.executable, "-c", "import os; print(os.path.realpath(os.getcwd()))")],
+                dry_run=False,
+                cwd=directory,
+            )
+            self.assertTrue(ok, output)
+            self.assertEqual(output.strip(), str(Path(directory).resolve()))
 
 
 if __name__ == "__main__":

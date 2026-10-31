@@ -158,9 +158,14 @@ class Runner:
 
 
 def _subprocess_executor(argv: Sequence[str], cwd: Path | None) -> tuple[int, str]:
+    from .environment import merge
+
     try:
         finished = subprocess.run(
-            list(argv), capture_output=True, text=True, timeout=1800, cwd=str(cwd) if cwd else None
+            list(argv), capture_output=True, text=True, timeout=1800, cwd=str(cwd) if cwd else None,
+            # In a packaged build this carries HERMES_INSTALLER_PY, so the scripts run their Python
+            # helpers on the bundled runtime instead of a python3 the machine may not have.
+            env=merge(),
         )
     except FileNotFoundError as exc:
         return 127, f"could not run {argv[0]}: {exc}"

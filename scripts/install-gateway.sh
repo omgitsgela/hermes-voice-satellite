@@ -132,7 +132,7 @@ if [ "$GUIDED" = 1 ]; then
     else
         echo "  host LAN IP:      not detected (type the address a device routes to)"
     fi
-    if [ -d "$REPO_ROOT/bridge" ] && [ -f "$REPO_ROOT/satellite-gateway.env.example" ] && [ -f "$REPO_ROOT/requirements.txt" ]; then
+    if [ -d "$REPO_ROOT/satellite_gateway" ] && [ -f "$REPO_ROOT/satellite-gateway.env.example" ] && [ -f "$REPO_ROOT/requirements.txt" ]; then
         echo "  checkout:         $REPO_ROOT (looks like this repository)"
     else
         echo "  checkout:         $REPO_ROOT (incomplete; the gateway must run from a full clone)"
@@ -185,7 +185,7 @@ fi
 case "$REACHABLE_AS" in
     127.0.0.1*|::1|localhost*|0.0.0.0*) die "--device-reachable-as must be an address a device can route to, not $REACHABLE_AS (loopback/any never receives a device's dial)" ;;
 esac
-[ "$DRY_RUN" = 1 ] || [ -d "$BASE/bridge" ] || die "no gateway/ under $BASE -- is --base the repository clone?"
+[ "$DRY_RUN" = 1 ] || [ -d "$BASE/satellite_gateway" ] || die "no satellite_gateway/ under $BASE -- is --base the repository clone?"
 [ -f "$BASE/satellite-gateway.env.example" ] || die "no satellite-gateway.env.example at $BASE"
 [ -f "$BASE/requirements.txt" ] || die "no requirements.txt at $BASE"
 
@@ -204,6 +204,12 @@ PY="$BASE/.venv/bin/python"
 
 # ---------------------------------------------------------------- 1. venv
 echo "== 1. gateway virtualenv ($BASE/.venv) =="
+# The Satellite Gateway runs inside its own virtualenv, so this role needs a Python 3 to build one.
+# Checking here turns a mid-install "python3: not found" into one sentence about a prerequisite.
+# Flashing a device does NOT need this: a standalone bundle carries its own runtime for that.
+if [ "$DRY_RUN" = 0 ] && ! command -v python3 >/dev/null 2>&1; then
+    die "installing the Satellite Gateway needs Python 3 on this machine, because the service runs in its own virtualenv. Install python3, or run this step on the machine that will host it."
+fi
 if [ "$DRY_RUN" = 0 ] && [ -x "$BASE/.venv/bin/python" ] && \
    "$BASE/.venv/bin/python" -c 'import wyoming, faster_whisper' 2>/dev/null; then
     echo "   venv already has wyoming + faster-whisper; leaving it alone"
@@ -213,17 +219,17 @@ else
     run "$BASE/.venv/bin/python" -m pip check
     # The Piper voice the Gateway speaks with (not committed; the unit's WorkingDirectory expects
     # voices/ next to gateway/). The name follows the installation's configuration — the same
-    # VOICE_PIPER_VOICE resolution gateway/config.py uses: an existing satellite-gateway.env wins, otherwise
+    # VOICE_PIPER_VOICE resolution satellite_gateway/config.py uses: an existing satellite-gateway.env wins, otherwise
     # the code default. Changing the voice is docs/switching-voices.md; this line must not grow
-    # its own default. gateway/config.py needs only the stdlib, so either interpreter can read it.
+    # its own default. satellite_gateway/config.py needs only the stdlib, so either interpreter can read it.
     VOICE_PY=""
     if [ -x "$BASE/.venv/bin/python" ]; then VOICE_PY="$BASE/.venv/bin/python"; else VOICE_PY="python3"; fi
     PIPER_VOICE_NAME="$("$VOICE_PY" -c '
 import sys; sys.path.insert(0, sys.argv[1])
-from gateway.config import PIPER_VOICE_NAME
+from satellite_gateway.config import PIPER_VOICE_NAME
 print(PIPER_VOICE_NAME)' "$BASE" 2>/dev/null || true)"
     if [ -z "$PIPER_VOICE_NAME" ]; then
-        echo "   could not read the configured voice name from gateway/config.py; skipping the voice download" >&2
+        echo "   could not read the configured voice name from satellite_gateway/config.py; skipping the voice download" >&2
     elif "$VOICE_PY" "$BASE/scripts/fetch-voice.py" --is-external "$PIPER_VOICE_NAME" >/dev/null 2>&1; then
         # Voices outside the Piper catalog (clean100): fetched with pinned sha256 and a
         # 22,050 Hz contract check, because piper.download_voices cannot know them.
@@ -259,7 +265,7 @@ REGISTRY_KEYS=(
 # performs), so the printed file below is exactly what a real run would leave. In a real run it is
 # the live file itself.
 if [ "$DRY_RUN" = 1 ]; then
-    ENV_EDIT="$(mktemp "${TMPDIR:-/tmp}/bridge-env.XXXXXX")"
+    ENV_EDIT="$(mktemp "${TMPDIR:-/tmp}/satellite-gateway-env.XXXXXX")"
     if [ -f "$ENV" ]; then
         cp "$ENV" "$ENV_EDIT"
     else

@@ -23,6 +23,9 @@ from .secrets import CredentialStore
 
 
 #: The parts of the checkout an installation actually runs. A bundle has to carry all of them.
+#: Everything an installation actually reads. The list is deliberately wider than "the scripts":
+#: a bundle that ships the engine but not the service it installs passes a scripts-only check and
+#: then fails on a real install.
 RUNTIME_ASSETS = (
     "scripts/install-gateway.sh",
     "scripts/install-esp32.sh",
@@ -31,6 +34,14 @@ RUNTIME_ASSETS = (
     "scripts/issue-registry-tls.py",
     "scripts/add-wifi-profile-to-card.py",
     "firmware/esp32/models/hey_hermes.tflite",
+    # The service the host install installs, and the unit it registers it as.
+    "satellite_gateway/config.py",
+    "satellite_gateway/loop.py",
+    "hermes/systemd/hermes-voice-satellite-gateway.service.in",
+    # TLS provisioning reads the partition table to know where credentials may be written.
+    "firmware/esp32/partitions.csv",
+    "requirements.txt",
+    "satellite-gateway.env.example",
 )
 
 
@@ -229,7 +240,11 @@ class Session:
         # Session dry-run is a CEILING, not a default: a client asking for a real run cannot
         # override a session that was started in preview mode.
         preview_only = True if self.dry_run else bool(dry_run)
-        ok, output = gateway_module.run_commands(commands, dry_run=preview_only)
+        from .environment import merge
+
+        ok, output = gateway_module.run_commands(
+            commands, dry_run=preview_only, cwd=self.repo_root, env=merge()
+        )
         self.state.log.append(output)
         result = {"ok": ok, "log": output, "commands": [list(c) for c in commands],
                   "dry_run": preview_only}
@@ -256,6 +271,7 @@ class Session:
             written = write_unit(
                 UnitConfig(
                     python=Path(sys.executable),
+                    frozen=bool(getattr(sys, "frozen", False)),
                     state_dir=self.repo_root / "state",
                     dial_address=f"tls://{dial_address}:{tls_port}",
                     working_directory=self.repo_root,

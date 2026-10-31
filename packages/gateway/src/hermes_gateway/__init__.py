@@ -17,6 +17,16 @@ IDENTITY_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 INSTALL_SCRIPT = "scripts/install-gateway.sh"
 
+
+def install_script(base: str | Path) -> Path:
+    """The install script belonging to *this* checkout.
+
+    Resolved against `--base`, never against the process's working directory: launching the installer
+    from a desktop shortcut, another directory, or a second clone must still run the engine that ships
+    with the checkout whose state it is about to change.
+    """
+    return Path(base).expanduser().resolve() / INSTALL_SCRIPT
+
 #: What the installer found on this machine. Desktop and a service install differ in who supervises
 #: the gateway, so the UI says which one it is rather than assuming.
 HERMES_SHAPES = ("desktop", "service", "none")
@@ -137,7 +147,7 @@ def install_commands(
             f"{device_reachable_as} cannot be reached by a device, so it cannot be the dial address"
         )
     argv = [
-        INSTALL_SCRIPT,
+        str(install_script(base)),
         "--base", base,
         "--device-reachable-as", device_reachable_as,
         "--registry-port", str(registry_port),
@@ -152,6 +162,8 @@ def run_commands(
     commands: Sequence[Sequence[str]],
     *,
     dry_run: bool,
+    cwd: str | Path | None = None,
+    env: Mapping[str, str] | None = None,
     executor: Callable[[Sequence[str]], tuple[int, str]] | None = None,
 ) -> tuple[bool, str]:
     if dry_run:
@@ -162,7 +174,11 @@ def run_commands(
             code, output = executor(command)
         else:
             try:
-                finished = subprocess.run(list(command), capture_output=True, text=True)
+                finished = subprocess.run(
+                    list(command), capture_output=True, text=True,
+                    cwd=str(cwd) if cwd is not None else None,
+                    env=dict(env) if env is not None else None,
+                )
             except OSError as exc:
                 # A missing script, or one that Windows cannot execute, is an outcome to report.
                 return False, f"could not run {command[0]}: {exc}"

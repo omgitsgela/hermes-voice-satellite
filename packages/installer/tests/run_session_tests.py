@@ -135,8 +135,9 @@ class SessionBehaviour(unittest.TestCase):
         seen = {}
         original = hermes_gateway.run_commands
 
-        def spy(commands, dry_run=False, executor=None):
+        def spy(commands, dry_run=False, cwd=None, env=None, executor=None):
             seen["dry_run"] = dry_run
+            seen["cwd"] = cwd
             return True, "preview"
 
         hermes_gateway.run_commands = spy
@@ -145,6 +146,9 @@ class SessionBehaviour(unittest.TestCase):
         finally:
             hermes_gateway.run_commands = original
         self.assertIs(seen.get("dry_run"), True, "a preview session asked to execute for real")
+        # The engine also has to run in the checkout being installed, not the launcher's directory.
+        self.assertEqual(Path(str(seen.get("cwd"))).resolve(), Path(seen.get("cwd")).resolve())
+        self.assertIsNotNone(seen.get("cwd"), "the install commands were started without a working directory")
 
     def test_a_practice_session_does_not_enrol_or_store_anything(self):
         import hermes_installer.pairing as pairing_module

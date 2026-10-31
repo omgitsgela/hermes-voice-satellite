@@ -163,6 +163,19 @@ class ServiceUnit(unittest.TestCase):
         self.assertIn("--port 10704", text)
         self.assertIn("Restart=always", text)
 
+    def test_a_packaged_build_asks_for_the_pairing_server_by_name(self):
+        """`sys.executable` is not always a Python.
+
+        In a frozen build it is the installer itself, which has its own argument parser: `-m` would be
+        handed to that parser and the unit would exit instead of serving. The packaged build therefore
+        names the mode.
+        """
+        from hermes_gateway.unit import render_unit
+
+        text = render_unit(self.config(frozen=True))
+        self.assertIn("--pairing-server", text)
+        self.assertNotIn("-m hermes_gateway.pairing_server", text)
+
     def test_a_path_with_a_space_is_quoted_for_systemd(self):
         from hermes_gateway.unit import render_unit
 

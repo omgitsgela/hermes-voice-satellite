@@ -96,6 +96,41 @@ def load_pdt():
 
 
 class InstallScriptTests(unittest.TestCase):
+    def test_the_gateway_installer_recognises_the_current_checkout(self):
+        """The repo-wide rename left this guard testing for a directory that no longer exists.
+
+        `--dry-run` skips the guard, so a preview looked fine while a real install died at validation
+        before doing anything. The test drives the real path with a stand-in checkout: it must get
+        PAST the package guard and stop at the next missing input instead.
+        """
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory) / 'checkout'
+            (base / 'satellite_gateway').mkdir(parents=True)
+            finished = run(GATEWAY, '--base', str(base), '--device-reachable-as', '192.0.2.10')
+            stderr = finished.stderr
+            self.assertNotIn('no satellite_gateway/ under', stderr,
+                             'the checkout guard still rejects the current package directory')
+            self.assertIn('satellite-gateway.env.example', stderr,
+                          'expected the next missing input to be reported instead')
+
+    def test_no_install_script_names_a_removed_directory(self):
+        """A renamed package must not linger in the guards that decide whether an install can run."""
+        import re
+
+        for script in (ESP32, PI, GATEWAY):
+            with self.subTest(script=script.name):
+                text = script.read_text()
+                for stale in ('"$BASE/bridge"', '"$REPO_ROOT/bridge"'):
+                    self.assertNotIn(stale, text, f'{script.name} still refers to {stale}')
+                # `satellite_gateway/config.py` legitimately contains "gateway/config.py", so only
+                # the unqualified path is stale.
+                self.assertIsNone(
+                    re.search(r"(?<!satellite_)gateway/config\.py", text),
+                    f'{script.name} still imports from the removed gateway/ package',
+                )
+
     def test_scripts_exist_and_are_bash(self):
         for script in (ESP32, PI):
             self.assertTrue(script.exists(), f'missing {script}')

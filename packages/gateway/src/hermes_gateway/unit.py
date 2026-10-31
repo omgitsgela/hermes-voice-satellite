@@ -21,7 +21,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 # A separate listener from the device registry: devices dial the registry, workbenches pair here.
-ExecStart={python} -m hermes_gateway.pairing_server --state {state} --dial {dial} --bind {bind} --port {port}
+ExecStart={python}{mode} --state {state} --dial {dial} --bind {bind} --port {port}
 Restart=always
 RestartSec=2
 # The words are read from the state directory, and the certificate authority lives beside them, so
@@ -41,6 +41,10 @@ class UnitConfig:
     working_directory: Path
     bind: str = "0.0.0.0"
     port: int = 10704
+    #: True when `python` is the packaged installer rather than an interpreter. The packaged
+    #: executable is not a Python: `-m` would be handed to its own argument parser and it would exit
+    #: instead of serving, so a frozen build asks it for the pairing server by name.
+    frozen: bool = False
 
 
 def render_unit(config: UnitConfig) -> str:
@@ -51,8 +55,10 @@ def render_unit(config: UnitConfig) -> str:
 
     if not config.dial_address:
         raise ValueError("a dial address is required: it is what a workbench connects to")
+    mode = " --pairing-server" if config.frozen else " -m hermes_gateway.pairing_server"
     return TEMPLATE.format(
         python=quote(config.python),
+        mode=mode,
         state=quote(config.state_dir),
         dial=quote(config.dial_address),
         bind=config.bind,

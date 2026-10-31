@@ -98,6 +98,66 @@ def drive(session, answers):
     return code, prompt, buffer.getvalue()
 
 
+class LauncherDispatch(unittest.TestCase):
+    """The packaged executable has to be able to stand in for Python.
+
+    The install scripts call Python helpers, so a machine with no Python cannot finish a flash unless
+    the bundle runs those helpers itself. These pin the three helper modes and the install-interface
+    fall-through that must survive them.
+    """
+
+    LAUNCH = ROOT / "packaging" / "launch.py"
+
+    def run_launcher(self, *args):
+        import os
+        import subprocess
+
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join(
+            str(ROOT / "packages" / name / "src")
+            for name in ("installer", "gateway", "device-esp32", "device-pi")
+        )
+        return subprocess.run(
+            [sys.executable, str(self.LAUNCH), *args], capture_output=True, text=True, env=env
+        )
+
+    def test_run_code_executes_on_this_runtime(self):
+        finished = self.run_launcher("--run-code", "import sys; print('mode', sys.argv[1])", "x")
+        self.assertEqual(finished.returncode, 0, finished.stderr)
+        self.assertIn("mode x", finished.stdout)
+
+    def test_run_python_executes_a_helper_file(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            helper = Path(directory) / "helper.py"
+            helper.write_text("import sys\nprint('helper', sys.argv[1])\n")
+            finished = self.run_launcher("--run-python", str(helper), "arg")
+            self.assertEqual(finished.returncode, 0, finished.stderr)
+            self.assertIn("helper arg", finished.stdout)
+
+    def test_run_python_reads_a_script_from_stdin(self):
+        import os
+        import subprocess
+
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join(
+            str(ROOT / "packages" / name / "src")
+            for name in ("installer", "gateway", "device-esp32", "device-pi")
+        )
+        finished = subprocess.run(
+            [sys.executable, str(self.LAUNCH), "--run-python", "-"],
+            input="print('from stdin')\n", capture_output=True, text=True, env=env,
+        )
+        self.assertEqual(finished.returncode, 0, finished.stderr)
+        self.assertIn("from stdin", finished.stdout)
+
+    def test_an_unknown_argument_still_reaches_the_installer(self):
+        finished = self.run_launcher("--definitely-not-a-mode")
+        # The CLI owns its own argument errors; the launcher must not swallow them as a dispatch.
+        self.assertNotIn("Traceback", finished.stderr)
+
+
 class DeviceRoute(unittest.TestCase):
     def test_a_workbench_without_hermes_can_still_set_up_a_device(self):
         session = FakeSession(hermes="none")
