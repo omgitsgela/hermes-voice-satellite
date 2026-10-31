@@ -15,7 +15,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import gateway.loop as loop_module  # noqa: E402
+import satellite_gateway.loop as loop_module  # noqa: E402
 from satellite_gateway.satellite import SatelliteClient  # noqa: E402
 from wyoming.audio import AudioChunk  # noqa: E402
 
@@ -73,7 +73,7 @@ async def main() -> int:
     check("real satellite queue empty", b.sat._queue.qsize(), 0)
 
     # 5. the quiet interval actually calls it, since that is the whole point
-    src = (pathlib.Path(__file__).resolve().parent.parent / "Gateway" / "loop.py").read_text()
+    src = (pathlib.Path(__file__).resolve().parent.parent / "satellite_gateway" / "loop.py").read_text()
     quiet = src.index("await asyncio.sleep(FOLLOW_UP_QUIET_SECONDS)")
     check("discard happens after the quiet sleep",
           "_discard_queued_events()" in src[quiet:quiet + 500], True)

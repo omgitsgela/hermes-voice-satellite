@@ -122,7 +122,7 @@ with tempfile.TemporaryDirectory() as tmp:
     check("the device reader picks up the card", card == "seeed2micvoicec", card)
 
     # ---- reader 2: the Gateway side
-    import gateway.volume as bridge_volume
+    import satellite_gateway.volume as bridge_volume
 
     original = bridge_volume.CALIBRATION_FILE
     bridge_volume.CALIBRATION_FILE = target

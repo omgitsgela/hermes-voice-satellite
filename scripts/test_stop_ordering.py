@@ -17,7 +17,7 @@ import types
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import gateway.loop as loop_module
+import satellite_gateway.loop as loop_module
 from satellite_gateway.announce import Announcer
 from wyoming.event import Event
 

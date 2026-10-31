@@ -297,8 +297,9 @@ scripts/build-installer.sh           # build into dist/hermes-installer/
 The result runs with no Python, no virtualenv and no pip on the target machine, and it carries the
 engine it needs: the install scripts, the Pi templates and the firmware model are inside the bundle,
 and a frozen build resolves them from its own directory rather than the current one. `--check-assets`
-verifies exactly that, and CI runs it against every packaged build with the Python environment
-stripped. Sizes with those assets: about **30 MB** locally, 20-21 MB before they were included. Locally, on an interpreter built
+verifies exactly that, and `scripts/check-all.sh --bundle` runs it against a packaged build with the
+Python environment stripped. There is no CI: GitHub holds this project's code and issues, and every
+test runs on the machine that made the change. Sizes with those assets: about **30 MB** locally, 20-21 MB before they were included. Locally, on an interpreter built
 with symbols, the same build was 24 MB stripped and **241 MB unstripped**, which is why the spec sets
 `strip` — and why it is set per platform, because stripping is not supported on Windows and produced a
 binary there that could not load its own Python DLL.

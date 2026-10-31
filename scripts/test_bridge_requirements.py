@@ -14,7 +14,7 @@ assert "hermes-agent" not in names, (
     "The Gateway uses the Hermes HTTP API, not the hermes-agent Python distribution; "
     "install the gateway separately."
 )
-for path in sorted((ROOT / "Gateway").glob("*.py")):
+for path in sorted((ROOT / "satellite_gateway").glob("*.py")):
     tree = ast.parse(path.read_text(), filename=str(path))
     for node in ast.walk(tree):
         imported = []

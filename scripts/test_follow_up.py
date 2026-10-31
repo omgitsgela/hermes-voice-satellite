@@ -28,8 +28,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import gateway.config as config_module  # noqa: E402
-import gateway.loop as loop_module  # noqa: E402
+import satellite_gateway.config as config_module  # noqa: E402
+import satellite_gateway.loop as loop_module  # noqa: E402
 from satellite_gateway.endpointing import Endpointer  # noqa: E402
 from satellite_gateway.endpointing import EndpointResult  # noqa: E402
 from satellite_gateway.satellite import SatelliteClient  # noqa: E402

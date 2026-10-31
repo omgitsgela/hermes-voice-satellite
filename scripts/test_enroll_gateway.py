@@ -226,7 +226,7 @@ def t_token_shape() -> None:
 @check("3", "secrets.choice picks the words, random never does, and the file is 0600")
 def t_entropy_source() -> None:
     words = load_wordlist(WORDS)
-    source = (REPO / "Gateway" / "enroll.py").read_text()
+    source = (REPO / "satellite_gateway" / "enroll.py").read_text()
     assert "import random" not in source and "from random" not in source, \
         "the enrolment token must never be generated from random"
     assert "secrets.choice" in source
@@ -451,7 +451,7 @@ def t_real_round_trip() -> None:
                 def emit(self, record):
                     captured.append(record.getMessage())
 
-            bridge_log = logging.getLogger("Gateway")
+            bridge_log = logging.getLogger("satellite_gateway.enroll")
             previous_level = bridge_log.level
             capture = Capture()
             bridge_log.setLevel(logging.INFO)      # so the enrolment INFO line is observable
@@ -586,11 +586,11 @@ def t_install_gateway_step() -> None:
 
 @check("14", "the routes are registered on the Gateway's existing announce server")
 def t_wiring() -> None:
-    source = (REPO / "Gateway" / "announce.py").read_text()
+    source = (REPO / "satellite_gateway" / "announce.py").read_text()
     assert "self.enrollment.register(app)" in source, \
         "the announce server must register the enrolment routes"
     assert "EnrollmentService()" in source
-    enroll_source = (REPO / "Gateway" / "enroll.py").read_text()
+    enroll_source = (REPO / "satellite_gateway" / "enroll.py").read_text()
     assert 'add_get("/enroll/challenge"' in enroll_source
     assert 'add_post("/enroll"' in enroll_source
 

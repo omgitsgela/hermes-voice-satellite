@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import gateway.config as config  # noqa: E402
+import satellite_gateway.config as config  # noqa: E402
 from satellite_gateway.loop import VoiceLoop  # noqa: E402
 from wyoming.wake import Detection  # noqa: E402
 

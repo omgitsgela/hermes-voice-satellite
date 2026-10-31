@@ -11,7 +11,7 @@ import tempfile
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import gateway.config as config_module  # noqa: E402
+import satellite_gateway.config as config_module  # noqa: E402
 from satellite_gateway.announce import Announcer  # noqa: E402
 from satellite_gateway.endpointing import Endpointer  # noqa: E402
 from satellite_gateway.loop import VoiceLoop  # noqa: E402

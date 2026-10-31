@@ -15,7 +15,7 @@ import types
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import gateway.loop as loop_module
+import satellite_gateway.loop as loop_module
 
 Bridge = next(obj for obj in vars(loop_module).values()
               if isinstance(obj, type) and hasattr(obj, "_watch_for_interruption"))

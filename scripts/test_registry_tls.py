@@ -270,7 +270,7 @@ async def t_config_paths() -> None:
     import subprocess
 
     code = (
-        "import gateway.config as c;"
+        "import satellite_gateway.config as c;"
         "print(c.REGISTRY_TLS_CERT_FILE);print(c.REGISTRY_TLS_KEY_FILE);print(c.REGISTRY_TLS_CLIENT_CA_FILE)"
     )
     env = dict(os.environ)

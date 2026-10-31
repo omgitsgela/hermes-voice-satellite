@@ -24,7 +24,7 @@ import types
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import gateway.loop as loop_module  # noqa: E402
+import satellite_gateway.loop as loop_module  # noqa: E402
 
 Bridge = next(obj for obj in vars(loop_module).values()
               if isinstance(obj, type) and hasattr(obj, "one_turn"))

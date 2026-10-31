@@ -17,7 +17,7 @@ import types
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import gateway.loop as loop_module  # noqa: E402
+import satellite_gateway.loop as loop_module  # noqa: E402
 from wyoming.event import Event  # noqa: E402
 
 # Find the Gateway class rather than naming it: the module holds several classes, and guessing here
