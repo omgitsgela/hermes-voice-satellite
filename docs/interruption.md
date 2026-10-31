@@ -9,17 +9,17 @@ Built 2026-09-23. a real incident, which this exists to fix:
 > agent to stop because I found out it was irrelevant, but it continued working in the background.
 
 The mechanism behind that: a stop phrase was only ever noticed *between* turns. Nothing in the
-bridge ever called the gateway's stop endpoint, so a stop spoken while a task was in flight had
+gateway ever called the gateway's stop endpoint, so a stop spoken while a task was in flight had
 nowhere to land and the task ran to completion.
 
 ## What happens now
 
 While a task is running, the satellite is still listening for its wake word, because a wake-word
 satellite never streams audio without one. So a wake detection arriving mid-task means somebody
-deliberately woke the device. The bridge watches for exactly that, and what the person says next
+deliberately woke the device. The Gateway watches for exactly that, and what the person says next
 decides the outcome:
 
-| Said | Outcome | What the bridge does |
+| Said | Outcome | What the Gateway does |
 |---|---|---|
 | New information | `steered` | Hands the text to the run that is already going, via `POST /v1/runs/{id}/steer` |
 | A stop phrase | `stopped` | Calls `POST /v1/runs/{id}/stop`, abandons the rest of the answer, says "Stopped." |
@@ -56,9 +56,9 @@ In `bridge/config.py`:
 
 - **Verified:** 44 offline checks in `scripts/test_interrupt.py` covering all four outcomes, the
   stop forms, the sentences that must *not* count as stops, the noise cases, and the disabled flag.
-  They run without a device, a model or a side effect on real state. The bridge restarts clean.
+  They run without a device, a model or a side effect on real state. The Gateway restarts clean.
 - **Verified from source, not exercised live:** the steer and stop endpoints. The routes exist in
-  the API server's route table, the handler contracts were read directly, and the bridge
+  the API server's route table, the handler contracts were read directly, and the Gateway
   authenticates against the same gateway for every turn it already serves. A scripted probe was
   attempted twice and blocked by credential extraction on the command line, so it was dropped
   rather than fiddled with.

@@ -95,7 +95,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/previews/"):
             name = self.path.rsplit("/", 1)[-1]
-            previews = Path.home() / ".cache" / "hermes-installer" / "previews"
+            previews = Path.home() / ".cache" / "hermes-voice-satellite" / "previews"
             candidate = previews / name
             if "/" in name or not name.endswith(".wav") or not candidate.exists():
                 self._json({"error": "not found"}, 404)
@@ -245,7 +245,7 @@ def _open_window(url: str) -> bool:
     except Exception:  # noqa: BLE001 - absent, or present without a usable backend
         return False
     try:
-        webview.create_window("Hermes voice installer", url, width=980, height=820)
+        webview.create_window("Hermes Voice Satellite", url, width=980, height=820)
         webview.start()
         return True
     except Exception:  # noqa: BLE001 - a broken backend must not stop the installer

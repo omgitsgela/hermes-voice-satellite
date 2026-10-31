@@ -1,15 +1,28 @@
-# The installer
+# Hermes Voice Satellite installer
 
-A graphical setup tool for the voice gateway and its satellites, with a console path for headless
-Linux, that a person can run without a terminal, a Python install, or any knowledge of what a
-Wyoming protocol is.
+The setup and configuration tool for **Hermes Voice Satellite**: a graphical installer for the
+Gateway and its satellites, with a console path for headless Linux, that a person can run without a
+terminal, a Python install, or any knowledge of what a Wyoming protocol is.
+
+### Vocabulary
+
+| Term | Means |
+|---|---|
+| **Hermes Voice Satellite** | The project, and the name of the installer command: `hermes-voice-satellite`. |
+| **Gateway** | The service the satellites talk to and that talks to the Hermes API. One component with two roles, never two services. "Satellite Gateway" is the same thing, seen from the satellites' side. |
+| **Satellite** | A physical device: an ESP32 with a microphone array, or a Raspberry Pi with a HAT. |
+
+The word "bridge" was the Gateway's earlier name. It survives in three technical identifiers, which
+are file names rather than the component's name: the package directory `bridge/`, the environment file
+`bridge.env`, and the unit `hermes-voice-bridge.service`. A migration to `gateway/`, `gateway.env` and
+`hermes-voice-gateway.service` is a separate change, because it touches a running service.
 
 It is also a **configuration tool**: run it again, point it at a gateway you already set up, and
 change what can be changed without a cable.
 
 ## Two roles
 
-- **Gateway**: run where Hermes runs. Installs the bridge, its environment, the registry TLS
+- **Gateway**: run where Hermes runs. Installs the Gateway, its environment, the registry TLS
   material, the enrolment words, and the Hermes-side plugin and keys.
 - **Workbench**: run where the physical device is. Flashes a satellite, stages its Wi-Fi and dial
   address, and can change settings later.
@@ -301,12 +314,16 @@ whose window is empty; `--status` in a clean environment is the check that catch
 ## Reviewing this
 
 ```sh
-bash scripts/test-installer.sh          # six suites, offline, about 40 seconds
-bash scripts/build-installer.sh         # a standalone bundle in dist/
-python -m hermes_installer.cli --gui     # the interface (dry-run with --dry-run)
-python -m hermes_installer.cli           # the same flow, in a console
+bash scripts/test-installer.sh            # seven suites, offline, about a minute
+bash scripts/build-installer.sh           # a standalone bundle in dist/hermes-voice-satellite/
+hermes-voice-satellite --gui              # the interface (add --dry-run to preview only)
+hermes-voice-satellite                    # the same flow, in a console
+hermes-voice-satellite --status           # what it detects on this machine, as JSON
+python -m hermes_installer.cli            # the same, with no console script installed
 python -m hermes_gateway.pairing_server --help
 ```
+
+`hermes-installer` is still installed as an alias for scripts written against the older command.
 
 Worth looking at specifically, because these are the parts where a wrong decision would be expensive:
 

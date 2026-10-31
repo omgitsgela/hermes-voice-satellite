@@ -77,7 +77,7 @@ jobs:
           # The whole promise is that a person does not install a runtime first. Prove it by running
           # the bundle with an empty environment and no interpreter available.
           env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
-            dist/hermes-installer/hermes-installer --status > "$RUNNER_TEMP/status.json"
+            dist/hermes-voice-satellite/hermes-voice-satellite --status > "$RUNNER_TEMP/status.json"
           python -c "import json; d=json.load(open('$RUNNER_TEMP/status.json')); \
                      assert d['devices'], 'no devices discovered'; print('devices:', [x['id'] for x in d['devices']])"
 
@@ -87,7 +87,7 @@ jobs:
         run: |
           # Same promise, different shell: strip PYTHON* from the environment and run the exe.
           Get-ChildItem env: | Where-Object { $_.Name -like 'PYTHON*' } | Remove-Item
-          & "dist/hermes-installer/hermes-installer.exe" --status | Out-File -Encoding utf8 status.json
+          & "dist/hermes-voice-satellite/hermes-voice-satellite.exe" --status | Out-File -Encoding utf8 status.json
           $devices = (Get-Content status.json -Raw | ConvertFrom-Json).devices
           if (-not $devices) { throw "no devices discovered" }
           Write-Host "devices:" ($devices | ForEach-Object { $_.id })
@@ -99,24 +99,24 @@ jobs:
           # A bundle that can only report what it sees is not an installer: this checks the scripts,
           # the Pi templates and the firmware model are inside it and found without a checkout.
           env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
-            dist/hermes-installer/hermes-installer --check-assets
+            dist/hermes-voice-satellite/hermes-voice-satellite --check-assets
 
       - name: The bundle carries what an installation runs (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           Get-ChildItem env: | Where-Object { $_.Name -like 'PYTHON*' } | Remove-Item
-          & "dist/hermes-installer/hermes-installer.exe" --check-assets
+          & "dist/hermes-voice-satellite/hermes-voice-satellite.exe" --check-assets
           if ($LASTEXITCODE -ne 0) { throw "runtime assets missing from the bundle" }
 
       - name: Record the size
         shell: bash
-        run: du -sh dist/hermes-installer | tee size.txt
+        run: du -sh dist/hermes-voice-satellite | tee size.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: hermes-installer-${{ runner.os }}
+          name: hermes-voice-satellite-${{ runner.os }}
           path: |
-            dist/hermes-installer/
+            dist/hermes-voice-satellite/
             size.txt
           retention-days: 14

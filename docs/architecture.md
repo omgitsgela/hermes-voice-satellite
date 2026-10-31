@@ -12,8 +12,8 @@ Verified against the running system on 2026-09-25. When a stage changes, change 
 A turn is two journeys in opposite directions, and the second one is why the first matters.
 
 ```
-SPEAKING                                            →  the device hears a wake, tunnels audio to the bridge,
-                                                       the bridge decides what was said
+SPEAKING                                            →  the device hears a wake, tunnels audio to the Gateway,
+                                                       the Gateway decides what was said
 
         ┌──────────────────────────── the device (Pi Zero 2 W) ──────────────────────────────────────┐
         │                                                                                             │
@@ -21,15 +21,15 @@ SPEAKING                                            →  the device hears a wake
         │                          (tlv320aic3x codec, seeed-voicecard driver, DKMS)                  │
         │                                                                                             │
   2  wake  ──► wyoming-satellite ──► :10400 wake-shim ──► :10401 wyoming-openwakeword (hey_hermes)      │
-        │      (until a wake fires, audio goes to the wake engine, NOT to the bridge)                 │
+        │      (until a wake fires, audio goes to the wake engine, NOT to the Gateway)                 │
         │                                                                                             │
-  3  stream ──► wyoming-satellite ──► examples/outbound_satellite.py ──► TCP to the bridge :10701      │
+  3  stream ──► wyoming-satellite ──► examples/outbound_satellite.py ──► TCP to the Gateway :10701      │
         │      (the device DIALS OUT; nothing dials in)                                               │
         └─────────────────────────────────────────────────────────────────────────────────────────────┘
                                                     │
                                         Wyoming protocol over TCP
                                                     ▼
-        ┌────────────────────────────── the bridge (bridge host, bridge/loop.py) ────────────────────┐
+        ┌────────────────────────────── the Gateway (Gateway host, bridge/loop.py) ────────────────────┐
         │                                                                                            │
   4  endpoint  endpointing.py ── VAD (silero_vad.py) ── energy gate ──► one trimmed utterance           │
         │                                                                                            │
@@ -47,8 +47,8 @@ ANSWERING   ←  the device speaks, flashes its LEDs, and goes back to listening
 ```
 
 **The single most important structural fact:** the device is a Wyoming **client** that dials the
-bridge, not a server the bridge dials. That decides where configuration lives, what a reconnect
-means, and why the bridge holds a *lease* on the device rather than assuming it is always there.
+gateway, not a server the Gateway dials. That decides where configuration lives, what a reconnect
+means, and why the Gateway holds a *lease* on the device rather than assuming it is always there.
 See `docs/outbound-link.md`.
 
 ## One protocol implementation, two connection shapes
@@ -63,13 +63,13 @@ reading it:
   lifecycle and those two I/O primitives, so the same session logic runs over a connection that
   arrived instead of one that was dialled.
 
-So the bridge can talk to a device either way, and everything above the transport - turn handling,
+So the Gateway can talk to a device either way, and everything above the transport - turn handling,
 announcements, TTS, capture - is written once. `registry.py` decides which connection owns a device
 id; `lease.py` runs a conversation on the one that dialled in.
 
 **The older dial-out shape stays reachable as an explicit rollback path.** In registry mode it is disabled
 by default so it cannot compete with the device's relay. Set `VOICE_DIRECT_DIAL_FALLBACK=1` to restore it;
-even then the bridge waits through the lease grace period before dialling. The code is not dead, and a reader
+even then the Gateway waits through the lease grace period before dialling. The code is not dead, and a reader
 who finds both shapes should not delete one without reading `docs/outbound-link.md` first.
 
 ## The link to the gateway is a transport
@@ -95,7 +95,7 @@ The full topology -- including the decisions to make on purpose when USB and Blu
 Status: the network link is carried today. `usb://` and `bt://` are part of the vocabulary and the
 installers understand them, but nothing carries them yet, so an installer asked for one says so
 plainly rather than producing a satellite that cannot connect. Each becomes real by adding that
-transport to the firmware and to the bridge; the endpoint shape needs no further change.
+transport to the firmware and to the Gateway; the endpoint shape needs no further change.
 
 ## Every component, and who owns it
 
@@ -110,19 +110,19 @@ transport to the firmware and to the bridge; the endpoint shape needs no further
 | 2 wake | `2mic_service.py` + 3 APA102 on SPI | device | upstream example, +343 lines ours | ours |
 | 3 stream | `wyoming-satellite` `13bb024` + our 7-line patch | device | `rhasspy/wyoming-satellite` (**archived**) | vendored, patched |
 | 3 stream | `outbound_satellite.py` | device | **written by us** | ours |
-| 3 stream | `satellite.py` - `SatelliteClient`, the Wyoming protocol session | bridge | **written by us** | ours |
-| 3 stream | `lease.py` - `LeasedSatellite`, the same client over a received connection | bridge | **written by us** | ours |
-| 4 endpoint | `endpointing.py` + frame buffering | bridge | **written by us** | ours |
-| 4 endpoint | **voice detection: Silero v6 ONNX** | bridge | `snakers4/silero-vad`, model **committed** | ours (vendored model) |
-| 4 endpoint | energy gate (level backstop) | bridge | **written by us** | ours |
-| 5 transcribe | `faster-whisper` `small.en`, int8, CPU | bridge | `SYSTRAN/faster-whisper` | dependency |
-| 6 think | `gateway.py` over the Runs API | bridge | **written by us** | ours |
-| 6 think | Hermes agent + API server at `http://127.0.0.1:8642` | bridge host | Hermes Agent | platform |
-| 6 think | route `voice-fast` → `deepseek-flash` | bridge host | configured | ours (config) |
-| 7 speak | `tts.py` + Piper `en_US-hfc_male-medium` | bridge | Piper | ours + model file |
+| 3 stream | `satellite.py` - `SatelliteClient`, the Wyoming protocol session | gateway | **written by us** | ours |
+| 3 stream | `lease.py` - `LeasedSatellite`, the same client over a received connection | gateway | **written by us** | ours |
+| 4 endpoint | `endpointing.py` + frame buffering | gateway | **written by us** | ours |
+| 4 endpoint | **voice detection: Silero v6 ONNX** | gateway | `snakers4/silero-vad`, model **committed** | ours (vendored model) |
+| 4 endpoint | energy gate (level backstop) | gateway | **written by us** | ours |
+| 5 transcribe | `faster-whisper` `small.en`, int8, CPU | gateway | `SYSTRAN/faster-whisper` | dependency |
+| 6 think | `gateway.py` over the Runs API | gateway | **written by us** | ours |
+| 6 think | Hermes agent + API server at `http://127.0.0.1:8642` | Gateway host | Hermes Agent | platform |
+| 6 think | route `voice-fast` → `deepseek-flash` | Gateway host | configured | ours (config) |
+| 7 speak | `tts.py` + Piper `en_US-hfc_male-medium` | gateway | Piper | ours + model file |
 | 8 play | `aplay` on the device's HAT | device | ALSA | config |
-| — | `announce.py`, `registry.py`, `lease.py`, `timers.py`, `volume.py`, `config_plane.py` | bridge | **written by us** | ours |
-| — | `hermes/plugins/voice_satellite`, `hermes_timers` | bridge host | **written by us** | ours |
+| — | `announce.py`, `registry.py`, `lease.py`, `timers.py`, `volume.py`, `config_plane.py` | gateway | **written by us** | ours |
+| — | `hermes/plugins/voice_satellite`, `hermes_timers` | Gateway host | **written by us** | ours |
 
 **Everything in the "ours" column is the point of the project.** The upstream satellite is archived,
 so nothing above it will be fixed for us. `docs/owning-the-satellite-stack.md` covers the device half
@@ -136,10 +136,10 @@ of that in full; `docs/voice-detection.md` covers the detector.
 | detector sensitivity | `bridge/config.py` `SILERO_THRESHOLD` | `0.5` |
 | energy gate: ratio, ceiling, floor clamps | `bridge/config.py` `VOICE_ENERGY_GATE` | see the comment above it |
 | which model the voice surface uses | `~/.hermes/config.yaml` `gateway.api_server.model_routes.voice-fast` | `deepseek` / `deepseek-flash` |
-| that route, selected by the bridge | `bridge/config.py` `VOICE_ROUTE_ALIAS` | `voice-fast` |
+| that route, selected by the Gateway | `bridge/config.py` `VOICE_ROUTE_ALIAS` | `voice-fast` |
 | speech-to-text model | `bridge/loop.py` `stt_model` (a default argument, **not** a config constant) | `small.en`, int8, CPU |
 | text-to-speech voice | `bridge/config.py` `PIPER_VOICE_NAME` (+ `PIPER_SPEAKER_SETTING`, `PIPER_LENGTH_SCALE`) | `en_US-hfc_male-medium` |
-| the gateway the bridge calls | `bridge/config.py` `GATEWAY_BASE_URL` | `http://127.0.0.1:8642` |
+| the gateway the Gateway calls | `bridge/config.py` `GATEWAY_BASE_URL` | `http://127.0.0.1:8642` |
 
 ## What each stage actually decides
 
@@ -149,7 +149,7 @@ Worth reading before debugging, because a symptom at one stage is usually caused
 |---|---|---|
 | capture | is the microphone open, and at the right level | nothing works; wake never fires |
 | wake | is this the wake phrase | the device ignores you (blue LED never comes) |
-| stream | is the microphone being forwarded to the bridge | the bridge sees an empty room |
+| stream | is the microphone being forwarded to the Gateway | the Gateway sees an empty room |
 | endpoint | is this a voice, and is it loud enough | hears nothing, or turns of noise |
 | transcribe | what words were those | answers the wrong question |
 | think | what to do about it | slow, wrong, or no answer |
@@ -163,16 +163,16 @@ before any log does:
 
 | LED | Meaning |
 |---|---|
-| gentle white pulse | booting, until the bridge connects |
+| gentle white pulse | booting, until the Gateway connects |
 | **blue**, 1 s | wake word detected |
 | **yellow** | streaming: you are being listened to |
-| **violet pulse** | the bridge is thinking |
+| **violet pulse** | the Gateway is thinking |
 | **steady dim teal** | follow-up mode: listening without a wake word |
 | dark | the answer started, or the turn ended |
 | green flash x3 | connected |
 | red held | disconnected |
 
-**Violet is the one that matters for triage.** Blue → yellow → dark means the bridge never reached
+**Violet is the one that matters for triage.** Blue → yellow → dark means the Gateway never reached
 the thinking stage, so nothing was transcribed - the fault is at endpoint or transcribe, not think.
 That is exactly how the 2026-09-25 office failure was caught.
 

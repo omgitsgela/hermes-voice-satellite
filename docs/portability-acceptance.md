@@ -1,9 +1,9 @@
 # Fresh-machine portability acceptance
 
 Issue #45 separates source generalisation from proof that another installation
-can actually start. The bridge calls a separately installed Hermes Gateway over
+can actually start. The Gateway calls a separately installed Hermes Gateway over
 HTTP; it does not import or install the `hermes-agent` Python distribution.
-Follow the bridge-host installation steps in `README.md`.
+Follow the Gateway-host installation steps in `README.md`.
 
 ## Acceptance recorded for the clean-install change
 
@@ -14,7 +14,7 @@ private calibration were copied. The existing reference satellite was untouched.
 
 Verified:
 
-- Dependencies installed on Python 3.11.15 with the bridge-only manifest.
+- Dependencies installed on Python 3.11.15 with the Gateway-only manifest.
 - The repository's user systemd unit ran from the new user's home without editing
   its source or the unit. Configuration selected non-default loopback ports for
   the Gateway fixture, registry and announcement endpoint, and a new session ID.
@@ -28,7 +28,7 @@ Verified:
   "The fresh machine portability test is successful."
 - All 69 standalone offline scripts exited successfully in an unconfigured source
   checkout. Three scripts reported skipped private recording checks. This count
-  includes the bridge-dependency guard added by this change.
+  includes the Gateway-dependency guard added by this change.
 - Restoring the hard-coded announcement bind or the Hermes distribution dependency
   made the corresponding regression checks fail.
 
@@ -42,7 +42,7 @@ reference installation's private calibration.
 
 The Gateway was a **synthetic health fixture**, not a model-backed Hermes agent.
 The satellite was a **synthetic Wyoming speaker**, not a microphone or physical
-speaker. This proves bridge installation, service startup, independent configuration,
+speaker. This proves gateway installation, service startup, independent configuration,
 registration, authentication and real synthesis/transport/transcription, not a full
 spoken model/tool interaction, wake-word performance or physical-device playback.
 Those require their own integration and acoustic acceptance.

@@ -66,7 +66,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="hermes-installer",
+    name="hermes-voice-satellite",
     debug=False,
     strip=STRIP,
     upx=False,
@@ -80,5 +80,5 @@ coll = COLLECT(
     a.datas,
     strip=STRIP,
     upx=False,
-    name="hermes-installer",
+    name="hermes-voice-satellite",
 )

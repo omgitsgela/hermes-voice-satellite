@@ -17,12 +17,12 @@ That is enforced in three independent places, deliberately:
 
 | Where | What it does |
 |---|---|
-| `bridge/volume.py` `clamp()` | the bridge's choke point; raises anything below the floor |
+| `bridge/volume.py` `clamp()` | the Gateway's choke point; raises anything below the floor |
 | `pi/volume_control.py` `AlsaVolume.clamp()` | the device's own choke point, so a bug or a bad desired value on the host still cannot produce a deaf device |
 | `scripts/calibrate-volume.py` | refuses to record a floor of 0, and validates on read |
 
 Each of the three is pinned by its own tests. Three is not redundancy for its own sake: the
-bridge and the device are different machines with different failure modes, and the cost of
+gateway and the device are different machines with different failure modes, and the cost of
 the extra clamp is a comparison.
 
 ## Voice forms
@@ -49,7 +49,7 @@ issue is about. So the scale is stretched over `[floor, 100]`, not `[10, 100]`.
 ### Deliberately not matched
 
 Bare **"turn it up"** and **"turn it down"** are not volume commands, even though they
-probably mean the device. "It" could be music playing on the same device, and the bridge
+probably mean the device. "It" could be music playing on the same device, and the Gateway
 cannot tell the difference. These requests go to the assistant instead. A mis-heard
 bridge-local command that changes the room is worse than the assistant taking an extra
 second. `turn the volume up` and `volume up` both work, because neither leaves the object
@@ -194,7 +194,7 @@ measurement.
 
 | Where | Path |
 |---|---|
-| Bridge | `state/volume-calibration.json` |
+| Gateway | `state/volume-calibration.json` |
 | Device | `~/.local/state/hermes-voice-satellite/volume.json` (the device user's home) |
 
 Pin `VOICE_VOLUME_CALIBRATION` on the device so both resolve the same file (see above).
@@ -246,7 +246,7 @@ measurement and `root` can read it.
 
 The calibrated values are module constants, because `clamp()` is on the hot path for every
 announcement, timer and alarm and must not stat the filesystem to decide whether it is
-allowed to be silent. So a calibration change takes effect through **either** a bridge
+allowed to be silent. So a calibration change takes effect through **either** a Gateway
 restart **or** `bridge.volume.reload_calibration()`.
 
 Doing neither leaves the measured floor on disk being ignored, which looks exactly like the
@@ -255,7 +255,7 @@ a measurement real.
 
 ## Where the level lives
 
-Speech is rendered on the bridge, but **playback happens on the satellite**, so the number
+Speech is rendered on the Gateway, but **playback happens on the satellite**, so the number
 that matters is the Pi's ALSA level for the output card. Our own TTS, the connected tone,
 the done tone and announcements all take that one path, which is why one control governs
 everything.
@@ -308,7 +308,7 @@ Every one of those is on the calibration script, and none of it is claimed here.
 | `pi/device_apply.py` | the configuration plane's hardware adapter |
 | `scripts/calibrate-volume.py` | the on-device measurement (standalone) |
 | `scripts/test_volume.py` | parsing, scale, floor, replies, the no-silence property |
-| `scripts/test_volume_integration.py` | the bridge path, including a stored zero on load |
+| `scripts/test_volume_integration.py` | the Gateway path, including a stored zero on load |
 | `scripts/test_device_volume.py` | the device `amixer` path |
 | `scripts/test_device_apply.py` | the apply adapter, and its honesty about partial application |
 | `scripts/test_alarm_volume.py` | the alarm override, and its hold duration |

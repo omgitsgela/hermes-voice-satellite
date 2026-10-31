@@ -38,7 +38,7 @@ whole reason the model has these tools at all.
 
 Two paths, deliberately:
 
-- **Exact phrases** ("new conversation", "start over") are matched by the bridge and rotate the session
+- **Exact phrases** ("new conversation", "start over") are matched by the Gateway and rotate the session
   immediately, without a model call.
 - **A confirmed offer** — the assistant asks "did you want me to start a new conversation?", the person
   says "yes please" — goes through the `conversation_reset` action of the `voice_satellite` tool, which
@@ -50,7 +50,7 @@ reset the conversation from this side" after asking the question itself.
 ## Auto-expiry
 
 Hermes' own auto-expiring conversations are disabled, so the satellite would otherwise carry a single
-conversation indefinitely. The bridge rotates on idle instead: `--idle-reset-minutes`, **set to 60** for
+conversation indefinitely. The Gateway rotates on idle instead: `--idle-reset-minutes`, **set to 60** for
 this installation by the drop-in
 `~/.config/systemd/user/hermes-voice-bridge.service.d/20-idle-reset.conf`. The log line to confirm it
 is `resumed conversation is N min old; idle window is 60 min`.

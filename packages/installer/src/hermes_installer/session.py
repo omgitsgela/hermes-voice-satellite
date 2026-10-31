@@ -514,7 +514,7 @@ class Session:
                              "previewed here. It can still be selected."}
         import subprocess
 
-        previews = Path.home() / ".cache" / "hermes-installer" / "previews"
+        previews = Path.home() / ".cache" / "hermes-voice-satellite" / "previews"
         previews.mkdir(parents=True, exist_ok=True)
         target = previews / f"{Path(path).stem}.wav"
         sentence = "The quick brown fox jumps over the lazy dog."
@@ -567,7 +567,7 @@ class Session:
                     "applied": False,
                     "note": f"In a real run this would download {voice.size_mb} MB and select it."}
 
-        cache = Path.home() / ".cache" / "hermes-installer" / "voices"
+        cache = Path.home() / ".cache" / "hermes-voice-satellite" / "voices"
         model = cache / f"{voice.id}.onnx"
         config = cache / f"{voice.id}.onnx.json"
         # The Hugging Face layout is <lang>/<locale>/<name>/<quality>/<name>.onnx, where the folder
@@ -640,7 +640,7 @@ class Session:
                     "note": entry.note or "provided by the device installer"}
 
         suffix = Path(urllib.parse.urlparse(entry.source_url).path).suffix or ".tflite"
-        target = Path.home() / ".cache" / "hermes-installer" / "models" / f"{entry.id}{suffix}"
+        target = Path.home() / ".cache" / "hermes-voice-satellite" / "models" / f"{entry.id}{suffix}"
         if target.exists():
             return {"ok": True, "path": str(target), "word": entry.word, "downloaded": False}
         try:

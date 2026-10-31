@@ -2,7 +2,7 @@
 
 **Where this sits:** stage 6 think of the voice pipeline. The end-to-end map, and every other stage, is in `docs/architecture.md`.
 
-The bridge reaches Hermes through the authenticated Runs API. There are two different routing choices:
+The Gateway reaches Hermes through the authenticated Runs API. There are two different routing choices:
 
 1. **Select a model route** while keeping the same Hermes profile, memory, skills and identity.
 2. **Select a named Hermes Bot/agent profile**, which changes the complete agent environment: model,
@@ -20,7 +20,7 @@ GATEWAY_BASE_URL = "http://127.0.0.1:8642"
 VOICE_ROUTE_ALIAS = ""
 ```
 
-The bridge sends each utterance to the unprefixed `/v1/runs` endpoint and omits the request's `model`
+The Gateway sends each utterance to the unprefixed `/v1/runs` endpoint and omits the request's `model`
 field.
 
 **Current setting (2026-09-25): pinned.** `VOICE_ROUTE_ALIAS = "voice-fast"`, resolved by the default
@@ -31,7 +31,7 @@ required the api_server `extra_body` re-scope patch. That patch is not currently
 2026-09-25 that routed runs succeed against DeepSeek anyway (`session_model_usage` shows
 `deepseek-flash` / `deepseek` at `https://api.deepseek.com/v1`). Set the alias back to `""` to return
 the voice surface to the profile default. Hermes therefore uses the default profile and that profile's normal model and fallback chain.
-Rotating the bridge's session id starts a new conversation but does not change either choice.
+Rotating the Gateway's session id starts a new conversation but does not change either choice.
 
 ## Option 1: pin the voice surface to a model route alias
 
@@ -52,7 +52,7 @@ gateway:
         model: <provider-model-id>
 ```
 
-Then set the bridge to send that alias:
+Then set the Gateway to send that alias:
 
 ```python
 # bridge/config.py
@@ -66,7 +66,7 @@ VOICE_ROUTE_ALIAS = "voice-fast"
 ```
 
 The gateway resolves `voice-fast` from its own `model_routes` map and constructs the agent with the
-configured provider and model. The bridge never needs the provider credential and does not send the
+configured provider and model. The Gateway never needs the provider credential and does not send the
 real model id unless the alias happens to use the same text.
 
 ### Where each setting is saved
@@ -75,10 +75,10 @@ real model id unless the alias happens to use the same text.
 |---|---|---|
 | Alias definition (`model_routes.voice-fast`) | `~/.hermes/config.yaml`, under `gateway.api_server` | Hermes gateway/API server at startup |
 | Alias selected by the satellite (`VOICE_ROUTE_ALIAS`) | this repository's `bridge/config.py` | `VoiceLoop`, then `VoiceGateway` |
-| API-server bearer credential | `API_SERVER_KEY` in the bridge process environment or the selected profile's `.env` | `bridge/gateway.py` |
-| Current voice conversation id | untracked `state/voice-session.txt` | the bridge's session-rotation code |
+| API-server bearer credential | `API_SERVER_KEY` in the Gateway process environment or the selected profile's `.env` | `bridge/gateway.py` |
+| Current voice conversation id | untracked `state/voice-session.txt` | the Gateway's session-rotation code |
 
-Restart the Hermes gateway after changing `model_routes`; restart the bridge after changing
+Restart the Hermes gateway after changing `model_routes`; restart the Gateway after changing
 `VOICE_ROUTE_ALIAS`. Start a fresh voice conversation when validating a routing change so an older
 session selection or conversation history cannot obscure the result.
 
@@ -86,11 +86,11 @@ session selection or conversation history cannot obscure the result.
 
 A route alias changes the provider/model used for the run. It does **not** select another Hermes
 profile and therefore does not change the profile's SOUL, memory, skills, credentials or tool
-configuration. The ordinary fallback chain remains available because the bridge does not request a
+configuration. The ordinary fallback chain remains available because the Gateway does not request a
 strict model lock.
 
 Do not confuse API-server `model_routes` with top-level `model_aliases`. `model_aliases` makes model
-selection convenient inside Hermes; the API server resolves the bridge's `model` field through
+selection convenient inside Hermes; the API server resolves the Gateway's `model` field through
 `gateway.api_server.model_routes`.
 
 ### Cross-provider verification
@@ -124,14 +124,14 @@ To make every satellite conversation use that profile:
 3. Give the named profile its own `API_SERVER_KEY` in
    `~/.hermes/profiles/<profile-slug>/.env`. Hermes rejects the default profile's key on a named
    profile prefix.
-4. Point the bridge at the profile-prefixed base URL:
+4. Point the Gateway at the profile-prefixed base URL:
 
    ```python
    # bridge/config.py
    GATEWAY_BASE_URL = "http://127.0.0.1:8642/p/<profile-slug>"
    ```
 
-5. Supply that profile's API-server key to the bridge process as `API_SERVER_KEY`, restart the bridge,
+5. Supply that profile's API-server key to the Gateway process as `API_SERVER_KEY`, restart the Gateway,
    and run a real test.
 
 `VoiceGateway` appends `/v1/runs`, `/v1/runs/<id>/events`, `/stop` and `/steer` to the configured base
@@ -139,13 +139,13 @@ URL. The fixed `/p/<profile-slug>` prefix therefore keeps the initial run and ev
 inside the same profile. Session-id rotation starts a fresh conversation inside that profile; it never
 falls back to the default profile.
 
-This uses Hermes' supported profile routing and requires no Hermes source patch. It does require bridge
+This uses Hermes' supported profile routing and requires no Hermes source patch. It does require gateway
 configuration because the repository currently keeps `GATEWAY_BASE_URL` in `bridge/config.py` rather
 than exposing it as a command-line option.
 
 ### Combining profile and model routing
 
-A named profile can define its own `gateway.api_server.model_routes` and the bridge can send one of
+A named profile can define its own `gateway.api_server.model_routes` and the Gateway can send one of
 those aliases while using the profile-prefixed URL. Usually this is unnecessary: pin the Bot's normal
 model in that profile and leave `VOICE_ROUTE_ALIAS` empty. Use both only when the Bot should normally
 use one model but the satellite should use another.
@@ -155,7 +155,7 @@ use one model but the satellite should use another.
 After either change:
 
 1. Read back the relevant profile's `config.yaml` and confirm the route or model pin.
-2. Confirm the bridge is using the intended base URL and API key source without printing the key.
+2. Confirm the Gateway is using the intended base URL and API key source without printing the key.
 3. Restart only the components whose startup configuration changed.
 4. Start a fresh voice conversation and complete a real run.
 5. Inspect the gateway log for the resolved provider/model and for fallback activation or provider

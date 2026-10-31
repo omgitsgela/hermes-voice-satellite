@@ -13,7 +13,7 @@ interface sampling rates*. So the DSP — acoustic echo cancellation, beamformin
 noise suppression, AGC — runs at 16 kHz **either way**. Moving the link to 48 kHz does not make
 the microphone hear better, and anyone promising that is selling something.
 
-The win is on **playback**. The bridge's TTS arrives at 22050 Hz. On the 16 kHz link it had to be
+The win is on **playback**. The Gateway's TTS arrives at 22050 Hz. On the 16 kHz link it had to be
 resampled *down*, through a 7400 Hz anti-aliasing low-pass, which threw away everything between
 7.4 kHz and the 11 kHz Piper actually produces. That was the "the voice sounds lower quality than
 it should be" complaint, and it was the resampler doing it, not the speaker.
@@ -50,7 +50,7 @@ interpolation, do not add the 7400 Hz low-pass back.
                     │                            FIR at 7.5 kHz)   │
                     └────────────────────────────────────────────┘
 
-   bridge TTS ──22050 Hz──► cubic up-sample ──48 kHz──► volume ──► stereo-32 ──► ring ──► I2S TX
+   gateway TTS ──22050 Hz──► cubic up-sample ──48 kHz──► volume ──► stereo-32 ──► ring ──► I2S TX
    local tones ──16 kHz───► cubic up-sample ──48 kHz──┘
 ```
 
@@ -59,7 +59,7 @@ Three rates, deliberately:
 - **48 kHz** is the wire. It is set by `WY_AUDIO_I2S_RATE_HZ` in `wyoming_audio.h`, and
   `audio_bringup.c` / `audio_capture.c` / `audio_playback.c` each configure their channel clock
   from it. They must agree.
-- **22050 Hz** is what the bridge sends (Piper's `SND_FORMAT`).
+- **22050 Hz** is what the Gateway sends (Piper's `SND_FORMAT`).
 - **16 kHz** is the wake model's input and the Wyoming mic contract. The device decimates down to
   it so nothing downstream of `audio_capture_send_chunk` had to change.
 

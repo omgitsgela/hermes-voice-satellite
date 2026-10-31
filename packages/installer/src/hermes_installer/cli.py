@@ -302,8 +302,8 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="hermes-installer",
-        description="Set up a Hermes voice gateway and its satellites.",
+        prog="hermes-voice-satellite",
+        description="Hermes Voice Satellite: set up the Gateway and the satellites that talk to it.",
     )
     parser.add_argument("--gui", action="store_true", help="open the graphical installer")
     parser.add_argument("--dry-run", action="store_true", help="show every command, run none of it")

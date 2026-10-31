@@ -11,26 +11,26 @@ Verified live, not assumed:
 | Protection | Evidence |
 |---|---|
 | Everything comes back after a host reboot with nobody logged in | `loginctl show-user <your user> -p Linger` is `yes`, and both `hermes-gateway` and `hermes-voice-bridge` are `enabled` |
-| The bridge survives a gateway restart instead of being dragged down with it | The unit deliberately has no `Requires=hermes-gateway`, only `After=`/`Wants=`, and says so in a comment, because the bridge retries by itself |
-| The bridge itself always comes back | `Restart=always`, `RestartSec=60`. Raised from 5 s to 60 s on 2026-09-24, so a satellite that is away overnight costs one restart a minute rather than twelve |
+| The Gateway survives a gateway restart instead of being dragged down with it | The unit deliberately has no `Requires=hermes-gateway`, only `After=`/`Wants=`, and says so in a comment, because the Gateway retries by itself |
+| The Gateway itself always comes back | `Restart=always`, `RestartSec=60`. Raised from 5 s to 60 s on 2026-09-24, so a satellite that is away overnight costs one restart a minute rather than twelve |
 | A crash or a lost satellite cannot leave the system wedged | The main loop re-raises connection errors, so the process exits and systemd re-dials; `start()` reconnects on the next run |
-| A lost satellite does not stop the bridge | **Not yet true.** With the device away the process exits instead and systemd restarts it every 60 s: 154 restarts measured by 21:54 on 2026-09-24. Issue #61 makes zero devices a normal state, and this row becomes obsolete when it lands |
+| A lost satellite does not stop the Gateway | **Not yet true.** With the device away the process exits instead and systemd restarts it every 60 s: 154 restarts measured by 21:54 on 2026-09-24. Issue #61 makes zero devices a normal state, and this row becomes obsolete when it lands |
 | Voice capabilities are not inside the Hermes checkout | Plugins live in `~/.hermes/plugins/`, config in `config.yaml`, procedures in `~/.hermes/skills/`; an update cannot revert them |
-| The bridge cannot drift into Hermes internals | It talks only to `POST /v1/runs` plus SSE on loopback, reads one key from `.env`, and imports nothing from Hermes |
+| The Gateway cannot drift into Hermes internals | It talks only to `POST /v1/runs` plus SSE on loopback, reads one key from `.env`, and imports nothing from Hermes |
 | The voice persona is ours, not Hermes' | `VOICE_INSTRUCTIONS` lives in `bridge/config.py` and is passed per run as `instructions` |
 
 ## Failure model: what happens today
 
 | Event | Today | Wanted |
 |---|---|---|
-| Bridge process dies | systemd restarts it in 5 s; a turn in flight is lost | same, and say so in the room if a turn was lost |
-| Gateway is still starting during bridge/host boot | The bridge keeps its listeners up and retries Gateway health in-process with capped backoff; it arms the satellite only after the API is ready | same |
-| Gateway restarts while the bridge is already running | An in-flight or next turn can fail; the startup readiness loop is not re-entered | Detect runtime loss, wait for readiness and optionally retry an interrupted turn once |
+| Gateway process dies | systemd restarts it in 5 s; a turn in flight is lost | same, and say so in the room if a turn was lost |
+| Gateway is still starting during bridge/host boot | The Gateway keeps its listeners up and retries Gateway health in-process with capped backoff; it arms the satellite only after the API is ready | same |
+| Gateway restarts while the Gateway is already running | An in-flight or next turn can fail; the startup readiness loop is not re-entered | Detect runtime loss, wait for readiness and optionally retry an interrupted turn once |
 | `hermes update` runs | **The one remaining core patch is stashed and its fix is lost** (see below) | Patches detected, re-applied and verified automatically |
 | Host reboots | Everything returns unattended | same (verified) |
 | Pi reboots or loses power | Services are enabled and come back; no RTC, so nothing time-based is trusted | same. The gold SD image stays the recovery path |
 | Pi SD card dies | Restore from the gold image, then re-copy `pi/` files | Keep a dated image and a checklist in this repo |
-| API key or announce token rotated | The bridge keeps the old value until restarted | Re-read per run, or document the restart in the runbook |
+| API key or announce token rotated | The Gateway keeps the old value until restarted | Re-read per run, or document the restart in the runbook |
 | Wake word or route changed | Correct, but needs a restart of the right component | Already documented; keep it that way |
 
 The update row is the real exposure. One file is now an uncommitted edit in `~/.hermes/hermes-agent`,
@@ -69,13 +69,13 @@ run twice, and both should refuse rather than guess.
 Piper voice's source URL so `voices/` can stay out of git (61 MB) while still being reproducible.
 
 **E. Write the voice-surface contract down as a test.**
-The exact toolsets, the expected tool list and the "no `tool_search` bridge" rule should live in one
+The exact toolsets, the expected tool list and the "no `tool_search` gateway" rule should live in one
 command that can be run after any Hermes upgrade. The README's verification block is that check today;
 promote it to `setup/verify-surface.sh` so an upgrade can be validated in one line.
 
 **F. Document extension, and admit the limits.**
 Add `docs/EXTENDING.md` covering: adding a second satellite (currently **not** supported: one
-`SATELLITE_HOST`, one session file), adding a second room by running a second bridge on another port,
+`SATELLITE_HOST`, one session file), adding a second room by running a second gateway on another port,
 adding a new tool (enable the plugin, add its toolset to the platform list the surface inherits, then check the voice prompt still describes the widened surface). The `_HERMES_CORE_TOOLS` and `_DEFAULT_OFF_TOOLSETS` patch lines are gone with the narrow surface: the voice surface now runs at full parity, so there is nothing to widen by hand.
 platform toolset list), and the security posture that a new deployment must preserve (loopback API
 server, token-authenticated announcements, no LAN exposure of the agent surface).

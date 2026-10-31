@@ -76,7 +76,7 @@ The three stages are chained from `wy_led_wake()` rather than driven by three ca
 session announces "the microphone opened" at almost the same instant the animation starts. A naive
 handler truncates the rainbow every single time. That announcement is accepted and politely ignored
 while the chain runs, and it is genuinely needed when a stream opens with **no** wake animation at
-all (a bridge-driven `wake-now`), where it is the only thing that shows.
+all (a Gateway-driven `wake-now`), where it is the only thing that shows.
 
 **The sweep is measured from the moment the tone is queued, not from the moment it is heard.** The
 playback pump has to prime its DMA and settle the amplifier first, which typically costs 50–150 ms,
@@ -101,7 +101,7 @@ a definite refusal from the host shows red at once.
 **The wake is one animation, not three competing callers.** Rainbow, yellow and the direction
 marker are chained from `wy_led_wake()` so the session's "the microphone opened" announcement
 cannot restart or truncate the sweep. That announcement is accepted and politely ignored while the
-chain runs, because a stream can also open without a wake animation (a bridge-driven `wake-now`),
+chain runs, because a stream can also open without a wake animation (a Gateway-driven `wake-now`),
 where it is the only thing that shows.
 
 **Error is not the same as an outage.** Red appears after 30 seconds for a link that has merely
@@ -115,15 +115,15 @@ both stay host-testable, and `scripts/test_esp32_phase.py` asserts the exact seq
 over, including that thinking is announced **before** the answer starts. A glow that appeared after
 the first word would claim the device is thinking while it is talking.
 
-The bridge's own `led-busy` / `led-idle` / `led-followup` commands are honoured too. `led-idle` in
-particular is how the bridge cleans up after aborted work and an expired follow-up window, which is
+The Gateway's own `led-busy` / `led-idle` / `led-followup` commands are honoured too. `led-idle` in
+particular is how the Gateway cleans up after aborted work and an expired follow-up window, which is
 exactly what the device cannot work out for itself: a silent window closed by `run-satellite` now
 goes dark instead of leaving the direction marker lit for a query that is not happening.
 
 `WY_PHASE_LISTENING` is the one phase the session does not announce — the wake animation reaches it
 on its own, and `scripts/test_esp32_led.py` covers that transition instead.
 
-**One honest caveat on the tail.** Idle is announced at `audio-stop`, when the bridge stops sending,
+**One honest caveat on the tail.** Idle is announced at `audio-stop`, when the Gateway stops sending,
 not when the speaker falls silent: the playback ring still has to drain. The light therefore goes
 dark a moment before the audio does. Announcing from the playback pump would be exact but would put
 I2C work back on the realtime audio path, which was deliberately removed.

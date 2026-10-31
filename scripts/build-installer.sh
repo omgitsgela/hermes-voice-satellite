@@ -8,7 +8,7 @@
 #   scripts/build-installer.sh            # build into dist/
 #   scripts/build-installer.sh --check    # report what is missing and stop
 #
-# Output: dist/hermes-installer/ (an executable plus its data). Ship the directory, or wrap it in a
+# Output: dist/hermes-voice-satellite/ (an executable plus its data). Ship the directory, or wrap it in a
 # platform package (tar.gz, AppImage, MSI).
 #
 # Windows note: a venv keeps its binaries in Scripts/, not bin/, the tools carry .exe, and `python3`
@@ -29,7 +29,7 @@ if ! command -v "$PYTHON" >/dev/null 2>&1; then
     PYTHON="python"
 fi
 command -v "$PYTHON" >/dev/null 2>&1 || { say "no python on PATH"; exit 1; }
-[ -f "$ROOT/packaging/hermes-installer.spec" ] || { say "packaging/hermes-installer.spec is missing"; exit 1; }
+[ -f "$ROOT/packaging/hermes-voice-satellite.spec" ] || { say "packaging/hermes-voice-satellite.spec is missing"; exit 1; }
 
 venv_bin() {
     if [ -x "$VENV/bin/python" ]; then printf '%s' "$VENV/bin"
@@ -60,7 +60,7 @@ venv_tool() {
 
 if [ "$CHECK" -eq 1 ]; then
     say "python: $("$PYTHON" --version 2>&1)"
-    say "spec:   packaging/hermes-installer.spec"
+    say "spec:   packaging/hermes-voice-satellite.spec"
     if pyi="$(venv_tool pyinstaller)"; then
         say "pyinstaller: $("$pyi" --version) (in $VENV)"
     else
@@ -88,11 +88,11 @@ VENV_PY="$(venv_python)"
 say "building"
 "$VENV_PY" -m PyInstaller --noconfirm \
     --distpath "$ROOT/dist" --workpath "$ROOT/build/pyinstaller" \
-    "$ROOT/packaging/hermes-installer.spec" >&2
+    "$ROOT/packaging/hermes-voice-satellite.spec" >&2
 
-TARGET="$ROOT/dist/hermes-installer"
-BINARY="$TARGET/hermes-installer"
-[ -x "$BINARY" ] || BINARY="$TARGET/hermes-installer.exe"
+TARGET="$ROOT/dist/hermes-voice-satellite"
+BINARY="$TARGET/hermes-voice-satellite"
+[ -x "$BINARY" ] || BINARY="$TARGET/hermes-voice-satellite.exe"
 if [ ! -x "$BINARY" ]; then
     say "the build finished but no executable is in $TARGET"
     exit 1

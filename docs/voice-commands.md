@@ -5,14 +5,14 @@
 What you can say to the satellite, what happens, and why some things are deliberately not
 matched.
 
-This documents the **bridge-local** commands: the ones the bridge answers itself, instantly,
+This documents the **bridge-local** commands: the ones the Gateway answers itself, instantly,
 without calling a model. Everything else you say goes to the assistant as a normal question.
 
 ## Two classes of command, and why it matters
 
 | | Bridge-local | Everything else |
 |---|---|---|
-| Answered by | the bridge, on the spot | the assistant, over the gateway |
+| Answered by | the Gateway, on the spot | the assistant, over the gateway |
 | Latency | immediate | a second or two |
 | Works when the gateway is down | **yes** | no |
 
@@ -23,14 +23,14 @@ answer a question.
 
 The design rule behind all of them: **a whole-utterance match, never a careless substring.**
 "stop" is an ordinary word, and a loose match would answer "stop the sprinklers" with
-"Stopping." So the bridge only acts when the whole utterance is a command, or matches a
+"Stopping." So the Gateway only acts when the whole utterance is a command, or matches a
 narrowly-anchored pattern. Anything ambiguous falls through to the assistant, which is
 slower but understands context. That trade is deliberate: a mis-heard command that changes
 the room is worse than an extra second of thinking.
 
 ## Volume
 
-Say any of these and the bridge answers immediately with the resulting level.
+Say any of these and the Gateway answers immediately with the resulting level.
 
 | You say | Meaning |
 |---|---|
@@ -150,7 +150,7 @@ These probably do mean the device, but they fall through to the assistant on pur
 
 | Not matched | Why |
 |---|---|
-| "turn it up" / "turn it down" | "it" could be music playing on the same device, and the bridge cannot tell the difference |
+| "turn it up" / "turn it down" | "it" could be music playing on the same device, and the Gateway cannot tell the difference |
 | "volume of the box" | the word "volume" appears, but the intent is not the speaker level |
 | "stop by the store later" | "stop" is an ordinary word; only whole-utterance forms end a conversation |
 
@@ -160,7 +160,7 @@ The test suites pin all of this: `scripts/test_volume.py` and `scripts/test_non_
 
 ## Finding out what the device heard
 
-The bridge logs every turn:
+The Gateway logs every turn:
 
 ```
   heard: set volume to 7
@@ -171,7 +171,7 @@ The bridge logs every turn:
 journalctl --user -u hermes-voice-bridge -f | grep -E "heard|said|local control|volume"
 ```
 
-`local control` and `volume control` in the log mean a bridge-local command was recognised;
+`local control` and `volume control` in the log mean a Gateway-local command was recognised;
 anything else went to the assistant.
 
 ## Adding a command

@@ -18,7 +18,11 @@ import threading
 from pathlib import Path
 from typing import Protocol
 
-SERVICE = "hermes-voice-installer"
+SERVICE = "hermes-voice-satellite"
+
+#: The name this used before the project settled on its own. Read once as a fallback so a saved
+#: credential does not disappear because a string changed.
+LEGACY_SERVICE = "hermes-voice-installer"
 
 
 class StoreError(Exception):
@@ -60,7 +64,13 @@ class KeyringBackend:
         self._keyring.set_password(SERVICE, account, secret)
 
     def load(self, account: str) -> str | None:
-        return self._keyring.get_password(SERVICE, account)
+        found = self._keyring.get_password(SERVICE, account)
+        if found is None:
+            found = self._keyring.get_password(LEGACY_SERVICE, account)
+            if found is not None:
+                # Migrate quietly: read it under the old name, keep it under the new one.
+                self._keyring.set_password(SERVICE, account, found)
+        return found
 
     def forget(self, account: str) -> None:
         """Delete, and say so if the delete failed. Silently swallowing this claimed a success the
@@ -144,7 +154,19 @@ class FileBackend:
 
     def load(self, account: str) -> str | None:
         with _FILE_LOCK:
-            return self._read().get(account)
+            found = self._read().get(account)
+        if found is None:
+            old = legacy_path()
+            if old != self.path and old.exists():
+                try:
+                    import json as _json
+
+                    found = _json.loads(old.read_text()).get(account)
+                except (OSError, ValueError):
+                    found = None
+                if found is not None:
+                    self.save(account, found)
+        return found
 
     def forget(self, account: str) -> None:
         with _FILE_LOCK:
@@ -161,7 +183,12 @@ def default_path() -> Path:
         base = Path.home() / "Library" / "Application Support"
     else:
         base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    return base / "hermes-installer" / "credentials.json"
+    return base / "hermes-voice-satellite" / "credentials.json"
+
+
+def legacy_path() -> Path:
+    """Where the fallback file lived before the rename."""
+    return default_path().parent.parent / "hermes-installer" / "credentials.json"
 
 
 def account_for(host: str, port: int) -> str:

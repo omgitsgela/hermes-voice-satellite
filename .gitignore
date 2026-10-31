@@ -43,3 +43,6 @@ skills/
 dist/
 build/
 .build-venv/
+packages/*/build/
+*.egg-info/
+packages/*/*.egg-info/

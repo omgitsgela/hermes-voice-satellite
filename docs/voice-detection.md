@@ -15,7 +15,7 @@ This document is about the first. The second is in the comment above `VOICE_ENER
 
 Until 2026-09-25 the detector was `webrtcvad` at aggressiveness 2. The report that forced the change: the satellite
 recognising its wake word and then answering nothing, in a busy computer centre office with a fan and
-other people. The bridge log said `nothing said after the wake word` nine times running, each turn
+other people. The Gateway log said `nothing said after the wake word` nine times running, each turn
 carrying `0.52s audio, 0.02s speech` - about 2% of a five-second window.
 
 The instrumented gate showed `vad_speech=46 gate_rejected=26`: the detector was finding her, and the
@@ -91,7 +91,7 @@ level; do not assume it.
 
 When several armed devices hear the *same* utterance, the conversation goes to the device that
 heard it best. A device cannot know how loudly the others heard it, so each device measures its
-own microphone loudness and reports it on the detection; the bridge compares the reports inside
+own microphone loudness and reports it on the detection; the Gateway compares the reports inside
 one claim window. The measurement lives in the wake core (`wy_wake.c`), host-tested in
 `scripts/test_esp32_wake.py` and proven on the wire in `scripts/test_esp32_wake_integration.py`:
 
@@ -109,7 +109,7 @@ one claim window. The measurement lives in the wake core (`wy_wake.c`), host-tes
   across time, never across installations with different mic gains. They are an ordering
   signal, not an absolute loudness.
 
-The bridge side (`bridge/wake_router.py`): level dominates, wake score is the tiebreaker,
+The Gateway side (`bridge/wake_router.py`): level dominates, wake score is the tiebreaker,
 arrival order is the last resort; a measured level always beats an unmeasured one, and two
 unmeasured detections behave exactly like the old first-arrival rule. The claim window is
 `VOICE_WAKE_CLAIM_WINDOW_MS` (0 = first arrival wins, which is also what a fleet of older

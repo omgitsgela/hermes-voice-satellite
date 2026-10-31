@@ -2,8 +2,8 @@
 
 **Where this sits:** stage 1-3 device of the voice pipeline. The end-to-end map, and every other stage, is in `docs/architecture.md`.
 
-**Role change, 2026-09-24 (issue #61).** The satellite stops being a Wyoming *server* that the bridge dials
-and becomes a Wyoming *client* that dials the bridge. Nothing in the vendored stack changes, and the patches
+**Role change, 2026-09-24 (issue #61).** The satellite stops being a Wyoming *server* that the Gateway dials
+and becomes a Wyoming *client* that dials the Gateway. Nothing in the vendored stack changes, and the patches
 below still apply exactly as they are; what changes is the outer transport, which is ours either way. The
 device-side runner is `pi/outbound_satellite.py`, it is not wired into systemd yet, and the older server
 shape stays available for rollback until the new path is proven on hardware.
@@ -16,7 +16,7 @@ stack is now pinned, vendored, or written down here.
 
 **Correction, 2026-09-23.** An earlier version of this file said the repo's copy of the satellite
 core was stale. It was not. A sync script matched files by *filename* instead of by path, so it
-wrote the bridge's client over the repo's copy of the satellite core (1397 lines replaced by 438).
+wrote the Gateway's client over the repo's copy of the satellite core (1397 lines replaced by 438).
 The repo had been correct all along; the damage was self-inflicted by the sync method. Fixed, and
 the lesson is why the live tree is now a git checkout rather than a hand-synced copy: **match paths,
 never filenames.**
