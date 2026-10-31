@@ -11,7 +11,7 @@
  * launches a task that dials the endpoint, drives a session to registered, and pumps it for the
  * life of the link. When the transport ends -- or the Wi-Fi itself drops -- the supervisor backs
  * off and re-dials, and the re-dial re-associates, so a network that was off at boot and comes up
- * later is picked up by the very same backoff that reconnects a dropped bridge. A bridge that
+ * later is picked up by the very same backoff that reconnects a dropped Satellite Gateway. A Satellite Gateway that
  * *refuses* the registration (not authorized) is terminal: the task releases the radio and exits.
  *
  * It returns 0 when the task is running, -1 when there was nothing to do (no task launched). The

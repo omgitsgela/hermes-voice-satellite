@@ -20,18 +20,18 @@ int64_t gateway_millis_left(int64_t deadline_us) {
     return left > 0 ? left : 0;
 }
 
-/* Dead-peer keepalive, matching bridge/net.py (the whole project agrees on these values): probe
+/* Dead-peer keepalive, matching Satellite Gateway/net.py (the whole project agrees on these values): probe
  * after 15 s idle, then three probes 5 s apart, and give up. The device's outbound link needs the
- * same timing as the bridge's accepted sockets, or the two ends discover a dead peer at very
+ * same timing as the Satellite Gateway's accepted sockets, or the two ends discover a dead peer at very
  * different times. */
 #define GATEWAY_KEEPALIVE_IDLE_S   15
 #define GATEWAY_KEEPALIVE_INTERVAL_S 5
 #define GATEWAY_KEEPALIVE_PROBES   3
 
-/* Ask the stack to notice a peer that dies without a FIN or an RST. Without this, a bridge that
+/* Ask the stack to notice a peer that dies without a FIN or an RST. Without this, a Satellite Gateway that
  * loses power, freezes, or is cut off from the AP leaves the device's persistent read blocked for
  * ever and the supervisor's reconnect never runs: this is the fix for that, not a tuning nicety.
- * Both ends set it (bridge/net.py does the same), so the dead peer is discovered by whichever
+ * Both ends set it (Satellite Gateway/net.py does the same), so the dead peer is discovered by whichever
  * side probes first.
  *
  * SO_KEEPALIVE arms the probe timer, and the per-socket TCP_KEEPIDLE/INTVL/CNT dial it to the
@@ -86,7 +86,7 @@ int gateway_socket_write(void *context, const void *data, size_t size) {
 /* A persistent session (the gateway supervisor) has no deadline of its own: neither end sends an
  * application ping, and both ends set SO_KEEPALIVE (see gateway_socket_dial), so a read that blocks
  * for a long time is the normal, healthy state, not a stall. And a peer that dies without a FIN or
- * RST -- a power loss, a frozen VM, a path failure between the AP and the bridge -- still comes
+ * RST -- a power loss, a frozen VM, a path failure between the AP and the Satellite Gateway -- still comes
  * back as a real end of stream, because the stack's keepalive probes stop being answered and it
  * tears the connection down with an RST, which is what unblocks this read. These two block until
  * data or a real end of stream rather than a budget, and they say which end it was: 0 is the peer

@@ -5,13 +5,13 @@
 
 /* Provisioned TLS material for the registry link.
  *
- * The bridge terminates TLS itself and identifies this device by the SHA-256 fingerprint of the
+ * The Satellite Gateway terminates TLS itself and identifies this device by the SHA-256 fingerprint of the
  * client certificate, so on that side the certificate IS the credential. This device has to be able
- * to tell the real bridge from any other certificate its own CA might have signed, and it cannot do
+ * to tell the real Satellite Gateway from any other certificate its own CA might have signed, and it cannot do
  * that by name: it dials an address, and the name check a desktop client performs against an IP
  * subjectAltName is not something to reimplement here. It compares the fingerprint of the
  * certificate the handshake produced with the fingerprint provisioned below, which is the same kind
- * of check the bridge makes on this device. Neither direction trusts a name.
+ * of check the Satellite Gateway makes on this device. Neither direction trusts a name.
  *
  * The blob lives at the head of the `storage` data partition. scripts/provision-device-tls.py writes
  * it and reads it back before it is trusted; nothing here allocates, and every string is validated
@@ -56,7 +56,7 @@ uint32_t tls_crc32(const unsigned char *data, size_t length);
 int tls_clock_is_sane(int64_t unix_seconds);
 
 /* Compare the digest the handshake produced against the provisioned one. This is the check that
- * says "that is really the bridge", and every byte is compared whatever the first ones say. */
+ * says "that is really the Satellite Gateway", and every byte is compared whatever the first ones say. */
 int tls_server_pin_matches(const unsigned char actual[TLS_SERVER_PIN_LEN],
                            const unsigned char expected[TLS_SERVER_PIN_LEN]);
 

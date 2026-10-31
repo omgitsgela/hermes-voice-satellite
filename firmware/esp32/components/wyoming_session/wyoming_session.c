@@ -21,7 +21,7 @@
 #endif
 
 /* The wake word name is WYAKE_WORD_NAME (wyoming_session.h): the local detector and the
- * bridge's wake-now both report it, so the bridge's capture path sees one wake word whether
+ * Satellite Gateway's wake-now both report it, so the Satellite Gateway's capture path sees one wake word whether
  * it was heard or requested. It is the DETECTION name, distinct from the config-plane
  * wake_word (the model selector) -- see the plan's D5. */
 
@@ -117,7 +117,7 @@ static uint32_t plb_dropped;
 
 /* The declared rate of the CURRENT inbound stream.
  *
- * 48000 means the bridge already produced audio at the link rate and the device must NOT touch it:
+ * 48000 means the Satellite Gateway already produced audio at the link rate and the device must NOT touch it:
  * up-sampling on the microcontroller costs cycles, adds a cubic interpolation stage that can only
  * lose information, and is redundant work. 22050 is kept for hosts that still send Piper's native
  * rate; only then is the ESP32's resampler used. */
@@ -173,7 +173,7 @@ int wy_session_set_playback_volume(wy_session *session, int volume) {
      * lock while converting into the ring, so an unlocked write here would race the reader on a
      * two-core device (a torn 32-bit store is the failure mode). The value is stored raw;
      * wy_apply_volume clamps it to the no-silence floor at use, so the setter never silences
-     * the speaker and the bridge's conservative values (25..100) pass through unchanged. */
+     * the speaker and the Satellite Gateway's conservative values (25..100) pass through unchanged. */
     playback_ring_lock_take();
     session->playback_volume = volume;
     playback_ring_lock_give();
@@ -184,7 +184,7 @@ int wy_session_set_playback_volume(wy_session *session, int volume) {
  *
  * "Is the producer keeping up, and is it bursty?" decides where a playback stall lives: in the
  * transport (arrival slower or spikier than the 48 kHz clock), or in the pump. Frames per second
- * is the answer -- 48000 frames/s of stereo-32 is exactly realtime, and the bridge paces at 2x, so
+ * is the answer -- 48000 frames/s of stereo-32 is exactly realtime, and the Satellite Gateway paces at 2x, so
  * a healthy stream should read ~96000 frames/s here.
  *
  * The max gap matters as much as the average: a stream that averages 2x realtime but stalls for
@@ -259,7 +259,7 @@ int wy_session_local_play(wy_session *session, const int16_t *mono, size_t n) {
     /* Marked BEFORE the appends so the pump's pre-roll gate cannot slip in between and start
      * buffering network audio in front of this tone. */
     s_local_pending = 1;
-    /* The device's own local tone (the wake chime): the same speaker path as a bridge answer,
+    /* The device's own local tone (the wake chime): the same speaker path as a Satellite Gateway answer,
      * so the pump task's amplifier policy (armed while the ring is not empty) carries it. The
      * difference from the inbound audio-chunk path is only the source: the chime is rendered at
      * 16 kHz by the same generator the Pi satellite uses, so it is UP-SAMPLED to the link rate here
@@ -384,7 +384,7 @@ static int locked_send(wy_session *session, wy_write_fn write_fn, void *ctx,
     return WY_OK;
 }
 
-/* Stop the mic stream (idempotent) and tell the bridge: this is the reference satellite's
+/* Stop the mic stream (idempotent) and tell the Satellite Gateway: this is the reference satellite's
  * "stop streaming and go back to wake-word listening", shared by transcript, pause and a
  * second run-satellite. */
 static int stop_streaming(wy_session *session, wy_write_fn write_fn, void *ctx) {
@@ -521,8 +521,8 @@ int __attribute__((used)) wy_session_wake(wy_session *session, const char *wake_
      * when the detector measured a level (issue #32). Anything outside the core's 0..100
      * contract (or the scorer's (0,1] for the score) is treated as "no measurement" and sent
      * exactly like the old frame -- a buggy or older caller can never corrupt the detection
-     * the bridge depends on. The score only rides with a level: a level-less wake is the
-     * historical frame, full stop, so an old bridge sees byte-identical output. */
+     * the Satellite Gateway depends on. The score only rides with a level: a level-less wake is the
+     * historical frame, full stop, so an old Satellite Gateway sees byte-identical output. */
     char name[144];
     int length;
     int score_ok = (wake_score > 0.0f && wake_score <= 1.0f);
@@ -538,7 +538,7 @@ int __attribute__((used)) wy_session_wake(wy_session *session, const char *wake_
         length = snprintf(name, sizeof(name), "{\"name\":\"%s\"}", wake_word);
     if (length < 0 || (size_t)length >= sizeof(name)) return WY_INVALID;
 
-    /* The three events go out as one sequence under a single lock hold: the bridge's capture
+    /* The three events go out as one sequence under a single lock hold: the Satellite Gateway's capture
      * reader must never see a mic chunk interleaved between detection and streaming-started,
      * and if the link dies mid-sequence nothing is half-sent as "streaming". */
     int lock_result = writer_lock(session);
@@ -558,15 +558,15 @@ int __attribute__((used)) wy_session_wake(wy_session *session, const char *wake_
     if (result != WY_OK) { session->state = WY_SESSION_FAILED; return result; }
     /* The microphone is open and the query is being captured. The device's wake animation
      * already covers this moment and will usually get here first; the announcement is for the
-     * case where a stream opens without one (a bridge-driven wake-now), and the presentation
+     * case where a stream opens without one (a Satellite Gateway-driven wake-now), and the presentation
      * layer is free to ignore it when it is already showing this phase. */
     announce_phase(session, WY_PHASE_VOICE);
     return WY_OK;
     }
 
-    /* Tell the bridge its speaker has finished.
+    /* Tell the Satellite Gateway its speaker has finished.
  *
- * `played` is the device saying "that answer is done sounding". The bridge waits for
+ * `played` is the device saying "that answer is done sounding". The Satellite Gateway waits for
  * it after every reply, and firmware that never sends it parks the conversation in
  * that wait -- measured at a full 20 s of dead air after every answer. It is one
  * control frame under the writer lock, exactly like every other link write. */
@@ -577,7 +577,7 @@ int wy_session_send_played(wy_session *session, wy_write_fn write_fn, void *ctx)
 
 int wy_session_send_audio(wy_session *session, const void *pcm, size_t length,
                           wy_write_fn write_fn, void *ctx) {
-    /* The mic is open only between a wake and the bridge's transcript; outside that window
+    /* The mic is open only between a wake and the Satellite Gateway's transcript; outside that window
      * the audio is dropped on the device, exactly like the reference's muted path. Nothing is
      * queued: a chunk that cannot go out now is late by the time it could, and a backlog in
      * the session would only grow on a dead link. The streaming check is repeated UNDER the
@@ -587,8 +587,8 @@ int wy_session_send_audio(wy_session *session, const void *pcm, size_t length,
     if (!session || !pcm || !write_fn) return WY_INVALID;
     if (!session->streaming) return WY_INVALID;
     /* An open microphone stream is a promise to someone in the room, and it must not be
-     * open-ended. The bridge ends it with `transcript`; if that never arrives -- a wake the
-     * bridge loses track of, a crash mid-turn -- the device would keep streaming a room
+     * open-ended. The Satellite Gateway ends it with `transcript`; if that never arrives -- a wake the
+     * Satellite Gateway loses track of, a crash mid-turn -- the device would keep streaming a room
      * nobody is listening to. The reference satellite closes its stream at the end of the
      * utterance; this is the same guarantee, enforced from the device side. */
     if (++session->stream_frames >= WY_STREAM_MAX_FRAMES) {
@@ -685,7 +685,7 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
                         playback_ring_lock_take();
                         size_t mono_n;
                         if (plb_in_rate == (uint32_t)WY_AUDIO_I2S_RATE_HZ) {
-                            /* Native: the bridge already did the conversion, on a CPU with room to
+                            /* Native: the Satellite Gateway already did the conversion, on a CPU with room to
                              * do it properly. Copy, scale, expand -- no interpolation stage at all. */
                             if (take > WY_PLAYBACK_MONO_MAX) take = WY_PLAYBACK_MONO_MAX;
                             memcpy(playback_mono_scratch, src, take * sizeof(int16_t));
@@ -788,7 +788,7 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
             if (!result) {
                 session->paused = 0;
                 session->state = WY_SESSION_RUN_REQUESTED;
-                /* The bridge closes a silent window this way: "back to wake-word listening". A
+                /* The Satellite Gateway closes a silent window this way: "back to wake-word listening". A
                  * wake that heard nothing must not leave the ring claiming a query. */
                 if (was_streaming) announce_phase(session, WY_PHASE_IDLE);
             }
@@ -806,7 +806,7 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
             }
         }
     } else if (!strcmp(frame.type, "transcript")) {
-        /* The bridge's stop signal: the utterance is over. End the stream and go back to
+        /* The Satellite Gateway's stop signal: the utterance is over. End the stream and go back to
          * wake-word listening. The state stays where it is (armed or not) -- a transcript does
          * not undo the host's run request, and the next wake must be able to start a new stream
          * immediately, which is what the follow-up window relies on. */
@@ -814,13 +814,13 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
             result = WY_INVALID;
         else
             result = stop_streaming(session, write_fn, ctx);
-        /* The utterance has been captured and handed over. From here the bridge is working out
+        /* The utterance has been captured and handed over. From here the Satellite Gateway is working out
          * the answer, which is exactly the "thinking" the device should be showing: the gap
          * between the person stopping talking and the first word coming back. */
         if (result == WY_OK) announce_phase(session, WY_PHASE_TRANSCRIPT);
     } else if (!strcmp(frame.type, "audio-start")) {
-        /* The bridge's answer begins. The device plays the stream on the board's clock: it must
-         * be the bridge's SND_FORMAT (22050 Hz / 16-bit / mono) -- the one rate this device
+        /* The Satellite Gateway's answer begins. The device plays the stream on the board's clock: it must
+         * be the Satellite Gateway's SND_FORMAT (22050 Hz / 16-bit / mono) -- the one rate this device
          * resamples to its 16 kHz I2S. A start in any other format is not armed: its chunks are
          * drained and its stop ignored, so an unplayable stream cannot wedge the link or leave
          * a half-armed ring. Arming is not a fault either way (well-formed, expected). */
@@ -837,11 +837,11 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
             if (plb_in_rate != (uint32_t)WY_AUDIO_I2S_RATE_HZ)
                 wy_upsampler_reset(&session->playback_rs);   /* only when actually converting */
             /* Reset the ring under the lock: the playback task may be mid-read (draining the
-             * last answer) while the bridge starts the next one, so an unlocked reset would
+             * last answer) while the Satellite Gateway starts the next one, so an unlocked reset would
              * race the reader's head advance. */
             playback_ring_lock_take();
             /* Do NOT clear a pending device tone. The wake chime is queued by the capture task at
-             * the instant of detection, and the bridge's first audio-start arrives milliseconds
+             * the instant of detection, and the Satellite Gateway's first audio-start arrives milliseconds
              * later; resetting here deleted the chime before it was ever played, which is heard as
              * "the chime is extremely laggy" (in fact it was dropped, and the prompt tone that
              * followed started from silence). Only stale STREAM audio is discarded. */
@@ -863,7 +863,7 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
         /* Inbound playback audio: converted into the ring by the payload block above when the
          * stream is armed, drained and discarded when it is not. Either way the link stays
          * usable -- refusing a payload (the old behavior) killed the session the first time the
-         * bridge spoke. */
+         * Satellite Gateway spoke. */
     } else if (!strcmp(frame.type, "audio-stop")) {
         /* The answer is over. The stream ends, but the ring KEEPS whatever has not been played
          * yet: the playback task drains it at realtime, and only when it is empty and the stream
@@ -872,14 +872,14 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
         if (session->playback_active) {
             session->playback_active = 0;
             session->playback_ended = 1;
-            /* Everything the bridge will say has been sent. The ring still drains and the
+            /* Everything the Satellite Gateway will say has been sent. The ring still drains and the
              * speaker still sounds its tail, so the light goes dark a moment early -- chosen
              * deliberately over announcing from the playback pump, which is the realtime path
              * and must not be made to do I2C work. */
             announce_phase(session, WY_PHASE_IDLE);
         }
     } else if (!strcmp(frame.type, "wake-now")) {
-        /* The bridge's "open the microphone" command, for a follow-up window that has no wake
+        /* The Satellite Gateway's "open the microphone" command, for a follow-up window that has no wake
          * word: the reference device's wake shim answers it by injecting a synthetic detection.
          * Here the session core IS the device, so it runs the wake sequence itself, with the
          * device's wake word name. A wake-now that lands while the stream is already running or
@@ -887,21 +887,21 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
          * before the host is ready fails the same way an out-of-order wake would. */
         result = wy_session_wake(session, session_wake_name(session), -1, -1.0f, write_fn, ctx);
         if (result == WY_INVALID) result = WY_OK;   /* a dropped wake-now is not a fault */
-        /* A follow-up window is open: the bridge is listening for more speech with no wake word.
+        /* A follow-up window is open: the Satellite Gateway is listening for more speech with no wake word.
          * This is the moment the reference satellite shows its dim teal, and it is the only
          * signal the device has that the conversation is not over. */
         announce_phase(session, WY_PHASE_FOLLOWUP);
     } else if (!strcmp(frame.type, "led-idle") || !strcmp(frame.type, "led-busy") ||
                !strcmp(frame.type, "led-followup")) {
-        /* The bridge's explicit presentation commands. The reference satellite receives these
+        /* The Satellite Gateway's explicit presentation commands. The reference satellite receives these
          * over its own control socket; here they arrive as ordinary events. They matter because
-         * the bridge uses led-idle to clean up after aborted work and an expired follow-up --
+         * the Satellite Gateway uses led-idle to clean up after aborted work and an expired follow-up --
          * exactly the cases the device cannot work out for itself. */
         if (!strcmp(frame.type, "led-idle")) announce_phase(session, WY_PHASE_IDLE);
         else if (!strcmp(frame.type, "led-busy")) announce_phase(session, WY_PHASE_TRANSCRIPT);
         else announce_phase(session, WY_PHASE_FOLLOWUP);
     } else if (!strcmp(frame.type, "hermes.config.desired")) {
-        /* The bridge's declarative config dispatch, sent right after registration (and on
+        /* The Satellite Gateway's declarative config dispatch, sent right after registration (and on
          * reconnect). The session is only the transport: it NUL-terminates the decoded data
          * (body was read raw, not terminated) and hands it to the injected config handler,
          * which owns all the config logic -- the agent's guard, the apply, the report. The
@@ -916,7 +916,7 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
          * parse body -- by dispatch time the body holds the payload, not the desired. Handing
          * it to the handler would let a payload tail that happens to parse as a desired be
          * silently APPLIED; refusing (the same policy as an unknown-with-payload) is the only
-         * honest answer, and the bridge reconnects and re-dispatches the well-formed desired. */
+         * honest answer, and the Satellite Gateway reconnects and re-dispatches the well-formed desired. */
         if (frame.payload_length) {
             result = WY_INVALID;
         } else if (session->config_handler) {
@@ -938,7 +938,7 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
         /* The protocol expects an answer to a ping; a silent peer looks like a dead device. */
         result = locked_send(session, write_fn, ctx, "pong", NULL, NULL, 0);
     } else {
-        /* A real bridge sends events this device does not implement, starting with desired
+        /* A real Satellite Gateway sends events this device does not implement, starting with desired
          * state immediately after registration. Ignoring a well-formed control event keeps
          * the link usable: the frame already passed the strict decode above. Anything UNKNOWN
          * that carries a payload is still refused -- a payload this device will not consume

@@ -9,7 +9,7 @@
  * delivers into the 16-bit mono chunks the Wyoming mic contract speaks, sending each one
  * through the session's send-audio path (which holds the writer lock for the whole frame).
 
- * The task is started by the armed hook, the moment the bridge's run-satellite makes the
+ * The task is started by the armed hook, the moment the Satellite Gateway's run-satellite makes the
  * session armed, and stopped by the link-down hook. It keeps reading while the stream is
  * closed (the audio is dropped, which also keeps the DMA from wedging) and drops everything
  * still buffered the moment the stream opens, so a fresh utterance never carries the

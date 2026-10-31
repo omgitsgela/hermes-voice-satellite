@@ -115,7 +115,7 @@ void audio_capture_install_writer_lock(void *session) {
 
 /* Accounting for where the microphone audio actually goes.
  *
- * "The device is streaming but the bridge hears nothing" cannot be diagnosed by
+ * "The device is streaming but the Satellite Gateway hears nothing" cannot be diagnosed by
  * looking at either end alone: the chunk can be dropped here (stream closed, a
  * writer-lock timeout, a link error) or lost after it leaves. These counters make
  * the boundary visible, so one wake says which side to look at instead of both. */
@@ -149,12 +149,12 @@ void audio_capture_send_chunk(const int32_t *frames, size_t frame_count) {
     if (!samples) return;   /* fewer than three input samples since the last chunk: nothing yet */
     /* D1 (increment 4): every downmixed chunk feeds the LOCAL wake detector first, always --
      * before the wake the chunk goes only to the detector (the reference's "audio goes to the
-     * wake engine, not to the bridge"). The detector is driven from this task alone (its
+     * wake engine, not to the Satellite Gateway"). The detector is driven from this task alone (its
      * per-chunk sync keeps the deaf guard current). */
     wake_detector_feed(mono, samples);
     /* The session decides whether the microphone is open: a frame sent while the stream is
      * closed is dropped there, which is what keeps the pre-wake chime out of the next
-     * utterance. After a wake opens the stream, the same chunks also go to the bridge. */
+     * utterance. After a wake opens the stream, the same chunks also go to the Satellite Gateway. */
     int sent = wy_session_send_audio(capture.session, mono, samples * 2,
                                      capture.write, capture.user);
     if (sent == WY_OK) {
@@ -189,7 +189,7 @@ static void capture_task_fn(void *argument) {
                  * the I2S port is shared with playback (the TX joins the same controller as a
                  * full-duplex pair when a reply is armed), so a capture read failure at exactly
                  * that moment is a live candidate for the link dying during a reply -- and from
-                 * the bridge all such failures look identical to a device that reset. Report the
+                 * the Satellite Gateway all such failures look identical to a device that reset. Report the
                  * driver error so the two can be told apart. */
                 ESP_LOGW("capio", "capture read failed: %s (0x%x); capture task exiting",
                          esp_err_to_name(result), (unsigned)result);

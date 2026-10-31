@@ -38,7 +38,7 @@ typedef struct {
  * look at the certificate while it still has it. That is the documented way to inspect a peer
  * certificate for one handshake, and it is also the stronger arrangement, because a fingerprint
  * that does not match sets a verification flag and the handshake fails there and then, rather than
- * a wrong bridge being discovered after the session was already established.
+ * a wrong Satellite Gateway being discovered after the session was already established.
  *
  * Certificate depth is counted from the bottom: depth 0 is the peer's own certificate, which is
  * the one the pin is about, and deeper certificates are the chain up to the trusted root.
@@ -238,7 +238,7 @@ int gateway_tls_establish(const char *host, unsigned port, gateway_tls_link *out
             gateway_report_append(report, capacity, "tls=failed reason=config");
             break;
         }
-        /* The bridge's side of this link has a TLS 1.2 floor, and so does this one: an old
+        /* The Satellite Gateway's side of this link has a TLS 1.2 floor, and so does this one: an old
          * negotiation is a downgrade on both ends or on neither. */
         mbedtls_ssl_conf_min_tls_version(&contexts->config, MBEDTLS_SSL_VERSION_TLS1_2);
         mbedtls_ssl_conf_authmode(&contexts->config, MBEDTLS_SSL_VERIFY_REQUIRED);
@@ -256,7 +256,7 @@ int gateway_tls_establish(const char *host, unsigned port, gateway_tls_link *out
             break;
         }
         /* No server name is set, on purpose, and mbedTLS requires that to be said out loud rather
-         * than assumed. A name would be the weaker check here: this bridge is identified by the
+         * than assumed. A name would be the weaker check here: this Satellite Gateway is identified by the
          * fingerprint of its certificate, below, which admits exactly one certificate, where a name
          * would admit any certificate this CA ever signs for that name. */
         if (mbedtls_ssl_set_hostname(&contexts->ssl, NULL) != 0) {
@@ -277,7 +277,7 @@ int gateway_tls_establish(const char *host, unsigned port, gateway_tls_link *out
         if (handshake != 0) {
             /* A pin mismatch fails the handshake, so the interesting question after a failure is
              * whether the certificate was the reason: saying so beats reporting a handshake error
-             * for a bridge this device was simply never provisioned to talk to. */
+             * for a Satellite Gateway this device was simply never provisioned to talk to. */
             if (check.digest_failed) {
                 snprintf(line, sizeof(line), "tls=failed reason=pin_compute");
             } else if (check.leaf_seen && !check.matched) {
@@ -318,7 +318,7 @@ int gateway_tls_establish(const char *host, unsigned port, gateway_tls_link *out
     return established;
 }
 
-/* Close a link established above: best-effort close_notify (bounded, so a gone bridge cannot hold
+/* Close a link established above: best-effort close_notify (bounded, so a gone Satellite Gateway cannot hold
  * the caller), then free the contexts and the socket. Safe on a partially-established link. */
 /* Close the carrier without the TLS farewell: the socket goes, the contexts remain (their
  * free is deferred). This is the persistent path's first teardown step, and the order is the

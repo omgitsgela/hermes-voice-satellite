@@ -31,7 +31,7 @@
  */
 
 #define WY_CFG_SCHEMA_VERSION 1
-#define WY_CFG_ERROR_MAX      256u   /* well under the bridge's 500-char report bound */
+#define WY_CFG_ERROR_MAX      256u   /* well under the Satellite Gateway's 500-char report bound */
 #define WY_CFG_PENDING_MAX    7u
 #define WY_CFG_LOAD_MAX       1024u  /* max persisted blob the load backend fills */
 
@@ -56,7 +56,7 @@ static const char *const HEALTH_NAMES[4] = {
     "unknown", "healthy", "degraded", "error"
 };
 
-/* Schema v1 allowlist, identical to bridge.config_plane DEVICE_SETTING_SCHEMA. */
+/* Schema v1 allowlist, identical to Satellite Gateway.config_plane DEVICE_SETTING_SCHEMA. */
 typedef enum { CFG_INT, CFG_NUM, CFG_STR } cfg_kind;
 typedef struct { const char *name; cfg_kind kind; double lo, hi;
                  const char *const *enum_values; int enum_count; } cfg_spec;
@@ -81,7 +81,7 @@ static const cfg_spec *spec_of(const char *name) {
     return NULL;
 }
 
-/* The device_id grammar, matching the bridge's _DEVICE_ID. */
+/* The device_id grammar, matching the Satellite Gateway's _DEVICE_ID. */
 static int device_id_valid(const char *id, size_t len) {
     if (len < 1 || len > 64) return 0;
     for (size_t i = 0; i < len; ++i) {
@@ -92,7 +92,7 @@ static int device_id_valid(const char *id, size_t len) {
     return 1;
 }
 
-/* The wake_word grammar, matching the bridge's _WAKE_WORD (no dot). */
+/* The wake_word grammar, matching the Satellite Gateway's _WAKE_WORD (no dot). */
 static int wake_word_valid(const char *w, size_t len) {
     if (len < 1 || len > 64) return 0;
     for (size_t i = 0; i < len; ++i) {
@@ -107,7 +107,7 @@ static int wake_word_valid(const char *w, size_t len) {
  * error interpolates the desired key, and the desired key is peer input: a hostile key (control
  * characters) expands under JSON escaping (\u00XX, 6x), which used to push the report past the
  * session's 1024-byte buffer -- the agent then produced no report, the session treated that as
- * a link fault, and the bridge re-dispatched the SAME poisoned frame on every registration: a
+ * a link fault, and the Satellite Gateway re-dispatched the SAME poisoned frame on every registration: a
  * reconnect storm the device could never clear. A non-printable byte is a '?' and anything past
  * 31 chars is dropped (the detail is not the point of the error; the event is still a clean,
  * parseable refusal), so the report's worst case stays far below the buffer at any peer input.
@@ -279,11 +279,11 @@ static int report_json(const wy_config *c, char *out, size_t cap,
  * snapshot), so a failed persist never half-updates the stored state. NOT persisted is
  * `actual`: it describes a live runtime condition (the session's current volume), not a
  * durable fact -- a firmware reboot resets the session, so a persisted "applied" would be a
- * lie after a power cycle. Leaving actual out is what makes the bridge's reconnect
+ * lie after a power cycle. Leaving actual out is what makes the Satellite Gateway's reconnect
  * re-dispatch re-apply the volatile value (on restore, actual is empty and the unapplied
  * check fires). Persisted: schema, generation (the guard), device_id, desired (the
  * same-generation check), pending, health, error. A torn NVS write is caught by restore's
- * schema check and degrades to "no persisted state", which is safe because the bridge
+ * schema check and degrades to "no persisted state", which is safe because the Satellite Gateway
  * re-dispatches the desired on the next registration. */
 static int persist(const wy_config *c, long new_generation, const cJSON *new_desired,
                    int health, const char *new_error, const char *new_device_id,
@@ -373,7 +373,7 @@ fail:
  * boot, so the wedge never clears), and a missing desired would leave c->desired NULL, which
  * makes the same-generation path no-op on EVERYTHING -- no re-apply of the volatile value and
  * a conflicting payload silently accepted. With no valid state the device converges on the
- * bridge's next dispatch.
+ * Satellite Gateway's next dispatch.
  *
  * A VALID blob whose device_id is another device's is adopted (faithful to the reference's
  * state.update): the guard then refuses every desired addressed to the real device -- an
@@ -423,7 +423,7 @@ static int restore(wy_config *c) {
     if (!new_desired) { cJSON_Delete(root); return 0; }
     /* The optional fields default to safe values (unknown health, no pending, empty error);
      * a torn blob that lost them still restores a working guard that converges on the
-     * bridge's next dispatch (the volatile value re-applies because actual is never
+     * Satellite Gateway's next dispatch (the volatile value re-applies because actual is never
      * persisted). */
     int health = WY_CFG_HEALTH_UNKNOWN;
     const cJSON *health_item = cJSON_GetObjectItemCaseSensitive(root, "health");
@@ -450,7 +450,7 @@ static int restore(wy_config *c) {
     /* Commit all-or-nothing: the stored state changes only after every required field
      * validated. `actual` is deliberately NOT restored -- it describes a live runtime
      * condition (the session's current volume) that a reboot resets; starting from an empty
-     * actual is what makes the bridge's reconnect re-dispatch re-apply the volatile value. */
+     * actual is what makes the Satellite Gateway's reconnect re-dispatch re-apply the volatile value. */
     cJSON_Delete(c->desired);
     cJSON_Delete(c->actual);
     c->desired = new_desired;
@@ -571,7 +571,7 @@ int wy_config_step(wy_config *c, const char *desired_json, char *report_out, siz
          * state is not in error and nothing is unapplied. The decision must depend on
          * `actual` (what was applied), never on the persisted health ALONE: after a restore,
          * health survives the blob but actual is deliberately empty (the volatile value is
-         * gone), so a healthy-but-lost state must re-apply on the bridge's reconnect
+         * gone), so a healthy-but-lost state must re-apply on the Satellite Gateway's reconnect
          * re-dispatch -- a no-op keyed on health would leave the speaker at the fresh
          * default for the life of the link. Re-applying the same value is harmless. */
         int unapplied = c->desired ? any_unapplied(c->desired, c->actual) : 0;
@@ -644,7 +644,7 @@ int wy_config_step(wy_config *c, const char *desired_json, char *report_out, siz
      * state. A report claiming a new generation is only produced once that state is on disk
      * (durable persistence before acceptance). If the persist fails, the side effects
      * already ran in RAM (the volume is set), but the stored state is left untouched: the
-     * generation does not advance, so the bridge's redelivery re-applies and retries the
+     * generation does not advance, so the Satellite Gateway's redelivery re-applies and retries the
      * persist once storage recovers. */
     cJSON *new_desired = cJSON_Duplicate(settings, 1);
     if (!new_desired) { cJSON_Delete(new_actual); cJSON_Delete(desired); return WY_INVALID; }

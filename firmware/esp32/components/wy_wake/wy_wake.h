@@ -31,7 +31,7 @@
  *
  * The core's own logic (what increment 4 is, apart from the #110 scorer): the
  * threshold decision, the deaf guard (no detection while the mic is forwarded
- * to the bridge, while a local sound is playing, or during the post-stream
+ * to the Satellite Gateway, while a local sound is playing, or during the post-stream
  * cooldown), the chime-then-wake ordering, and the single-shot state: a fired
  * detection makes the core deaf until the stream ends, so the device cannot
  * re-wake on its own answer (the reference's "deaf lead-in after speech").
@@ -65,7 +65,7 @@ void wy_wake_set_seams(wy_wake *w, wy_wake_score_fn score, wy_wake_load_fn load,
 /* Init the core from the config plane. `threshold` is wake_threshold (the
  * config bounds it to [0.05, 0.99]; the core accepts any value in [0, 1] and
  * rejects anything else, including NaN). `cooldown_ms` is the post-stream deaf
- * window (the bridge's transcript is followed by the device's own "done" tone
+ * window (the Satellite Gateway's transcript is followed by the device's own "done" tone
  * and the tail of an answer; 0 = none). `model_name` is the config wake_word:
  * the model file name in the model partition -- the model SELECTOR, not the
  * detection name (that is the session's WYAKE_WORD_NAME). A NULL name is a bad
@@ -100,7 +100,7 @@ void wy_wake_destroy(wy_wake *w);
 int wy_wake_feed(wy_wake *w, const int16_t *mono, size_t n);
 
 /* The glue reports the stream state: 1 when the microphone is being forwarded
- * to the bridge (the core also sets it itself on a fire, so a fire is
+ * to the Satellite Gateway (the core also sets it itself on a fire, so a fire is
  * single-shot even if the glue is slow), 0 otherwise. */
 void wy_wake_set_streaming(wy_wake *w, int streaming);
 
@@ -110,7 +110,7 @@ void wy_wake_set_streaming(wy_wake *w, int streaming);
  * flag itself -- the glue owns it, because only the glue knows how long a
  * rendered sound lasts. */
 /* Is the device's own output still audible to its microphone?
- * `active` is the bridge's stream flag, `queued_bytes` what the ring still holds,
+ * `active` is the Satellite Gateway's stream flag, `queued_bytes` what the ring still holds,
  * and `frames_since_queue_moved` how many 10 ms feed frames have passed since the
  * ring last SHRANK. A queue that has stopped moving is stalled, not playing: it
  * must not keep the detector deaf. See the definition for why that distinction is
@@ -121,7 +121,7 @@ uint32_t wy_wake_playback_stall_frames(void);
 
 void wy_wake_set_playback_active(wy_wake *w, int active);
 
-/* The stream stopped (the bridge's transcript or a pause). The core leaves
+/* The stream stopped (the Satellite Gateway's transcript or a pause). The core leaves
  * the deaf state and starts the post-stream cooldown, during which high
  * frames are still consumed (the answer's tail and the done tone can land
  * right here). */
@@ -140,7 +140,7 @@ bool wy_wake_has_model(const wy_wake *w);
 /* What the core heard when it fired (issue #32, cross-device wake arbitration).
  * A device that heard the wake word cannot know how loudly the OTHER devices
  * heard it -- so each device reports what IT heard, in a fixed scale, and the
- * bridge compares the reports for one utterance. The core therefore measures
+ * Satellite Gateway compares the reports for one utterance. The core therefore measures
  * the microphone loudness of its armed (actually scored) frames as an
  * exponentially smoothed mean-square, and maps it ONCE at fire time:
  *
@@ -149,10 +149,10 @@ bool wy_wake_has_model(const wy_wake *w);
  * A fixed, installation-independent scale: -60 dBFS floor reads 0, full scale
  * reads 100, silence (or a model-less/muted core that never scored a frame)
  * reads -1 = "no measurement". Levels from two devices are comparable ONLY for
- * the same utterance inside the bridge's claim window -- never across time,
- * never across installations with different mic gains (the bridge treats them
+ * the same utterance inside the Satellite Gateway's claim window -- never across time,
+ * never across installations with different mic gains (the Satellite Gateway treats them
  * as an ordering signal, not an absolute loudness). The core contributes the
- * SCORE it fired on as well (the bridge's arbitration tiebreaker), and both
+ * SCORE it fired on as well (the Satellite Gateway's arbitration tiebreaker), and both
  * values freeze at fire: they describe the detection, not the live state. The
  * measure resets when the stream ends, so the next wake measures fresh room
  * audio; frames consumed while deaf (streaming, playback, cooldown) never

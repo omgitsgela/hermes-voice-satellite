@@ -34,7 +34,7 @@
  * capture (6) and playback (5) -- and it is therefore the task that loses every scheduling
  * contest on a busy device.
  *
- * Measured consequence: the bridge paces playback at 2x realtime, but the device appended only
+ * Measured consequence: the Satellite Gateway paces playback at 2x realtime, but the device appended only
  * ~92% of what the 48 kHz clock consumed (arrival 44140-45407 frames/s against 48000 needed, max
  * gap 100 ms, zero ring drops). A producer below the consumption rate starves the ring no matter
  * how large the buffer is, which is the chopping. Nothing about this is the WiFi: the link was
@@ -42,9 +42,9 @@
 #define GATEWAY_TASK_PRIORITY 5
 #define GATEWAY_DIAL_TIMEOUT_MS 8000
 #define GATEWAY_REGISTER_BUDGET_MS 25000  /* the register exchange, the same budget the one-shot run uses */
-#define GATEWAY_BACKOFF_BASE_US 2000000LL   /* 2 s: a bridge that just restarted is often back in seconds */
+#define GATEWAY_BACKOFF_BASE_US 2000000LL   /* 2 s: a Satellite Gateway that just restarted is often back in seconds */
 #define GATEWAY_BACKOFF_MAX_US 60000000LL   /* 60 s: capped so a satellite never gives up, but never hammers */
-/* The playback ring, sized for the bridge's 2x send pace. Each slot is one int32 (one channel
+/* The playback ring, sized for the Satellite Gateway's 2x send pace. Each slot is one int32 (one channel
  * sample); a stereo-32 frame is two slots. At 2x pace the device receives each second of an
  * answer in 0.5 s and plays it in 1 s, so the ring's lead grows to HALF the answer length at the
  * end of the send, then decays. A 30 s answer therefore needs ~15 s of hold. 16 s of stereo-32
@@ -52,11 +52,11 @@
  * Overflow drops the OLDEST frame (a late sample is unplayable), never the link. */
 /* The ring is sized in SECONDS of audio at the link rate, never in raw slots. It used to be a
  * bare 512000 with a comment saying "16 s at 16 kHz"; when the link went to 48 kHz the constant
- * stayed and the buffer silently shrank to 5.33 s, so a long answer sent at the bridge's 2x pace
+ * stayed and the buffer silently shrank to 5.33 s, so a long answer sent at the Satellite Gateway's 2x pace
  * overflowed and dropped speech with no error anywhere. Deriving it from the rate means the two
  * cannot drift apart again.
  *
- * 16 s is the real requirement, not padding: the bridge sends at 2x pace, so a 30 s answer
+ * 16 s is the real requirement, not padding: the Satellite Gateway sends at 2x pace, so a 30 s answer
  * finishes arriving in 15 s while 30 s of audio still has to drain -- roughly 15 s must be
  * held. At 48 kHz stereo-32 that is 16 * 48000 * 2 = 1536000 slots = 5.86 MiB of PSRAM.
  * See the fallback below for what happens when the 8 MiB XIAO cannot give that. */
@@ -95,7 +95,7 @@ static int32_t *playback_ring;
 /* Establish one link: bring the radio up to the held network (fresh each attempt, which is also
  * how a dropped Wi-Fi link recovers), then dial the endpoint. For TLS the handshake -- and the
  * pin check -- happen inside gateway_tls_establish. The link comes up under a FINITE deadline,
- * not "no deadline": the register exchange is not yet the idle regime, and a bridge whose
+ * not "no deadline": the register exchange is not yet the idle regime, and a Satellite Gateway whose
  * per-connection handler is wedged while its kernel keeps answering must not be able to hold the
  * device in the handshake for ever -- the same rule the one-shot path lives under. The deadline
  * is lifted to "no deadline" by gateway_task_on_registered, once the session is actually
@@ -148,7 +148,7 @@ static int led_have_connected;
 /* Called by the supervisor exactly when a session (re)reaches registered: the handshake regime
  * is over, the idle regime begins, and an idle read is the healthy state. Lifting the deadline
  * to "no deadline" is what makes the persistent read block until a real end of stream instead of
- * erroring at the register budget every time the link idles. The bridge can also SPEAK from this
+ * erroring at the register budget every time the link idles. The Satellite Gateway can also SPEAK from this
  * moment, so the I2S TX and the pump must exist before the first answer: the DMA is primed, and
  * there is no channel bring-up latency on the first chunk of a TTS answer. Idempotent, so a
  * re-registration after a link bounce (which stopped the pump in on_link_down) starts it again. */
@@ -264,7 +264,7 @@ static void cfg_stage_wake(const char *key, const char *value) {
  * wake settings to NVS for the next increment, applies led_brightness to the ring, and is HONEST
  * about the rest: mic_gain / locale / update_channel have no live adapter, so they are never put
  * in `actual`. The health reported is degraded whenever any desired key is not in `actual` (which
- * is always, on this device, because the bridge sends the full 7-key profile). Only what is
+ * is always, on this device, because the Satellite Gateway sends the full 7-key profile). Only what is
  * really applied goes in `actual` -- nothing is claimed that was not. */
 static int cfg_apply(void *user, const char *settings_json,
                      char *out_actual, size_t actual_cap,
@@ -416,7 +416,7 @@ static void gateway_task_on_link_down(void *user) {
     audio_playback_stop();
 }
 
-/* Start the microphone the moment the bridge's run-satellite arms the session, and stop it
+/* Start the microphone the moment the Satellite Gateway's run-satellite arms the session, and stop it
  * when the session leaves the armed state (pause, or the link going down). The capture task
  * itself reads the I2S stream continuously while running and drops its audio unless the
  * session says the stream is open, so starting it at "armed" rather than at "streaming" is
@@ -430,7 +430,7 @@ static void gateway_task_maybe_start_capture(void) {
      * The capture task feeds wake_detector_feed on every frame and lets the session decide
      * whether a frame is sent onward (wy_session_send_audio drops it while the stream is
      * closed), so running capture continuously is exactly what a voice satellite needs and
-     * costs the bridge nothing while idle. Arming only in RUN_REQUESTED left the microphone
+     * costs the Satellite Gateway nothing while idle. Arming only in RUN_REQUESTED left the microphone
      * OFF whenever no conversation was in progress -- so "hey hermes" could never be heard
      * except mid-session, which is precisely why the wake word did nothing when spoken cold.
      * The DMA also stays primed, so the first utterance starts clean. */
@@ -455,7 +455,7 @@ static void gateway_task_maybe_stop_capture(void) {
 }
 
 /* Close the transport a link was established over. The radio is left alone: the next establish
- * re-associates it, so reconnecting a dropped bridge does not need to re-associate Wi-Fi.
+ * re-associates it, so reconnecting a dropped Satellite Gateway does not need to re-associate Wi-Fi.
  *
  * The TLS teardown is three phases, and the order is the safety argument. First the socket
  * closes: an in-flight capture write hits EBADF and unwinds (the persistent write retries only
@@ -486,7 +486,7 @@ static void gateway_task_teardown(void *user, gw_link *link) {
 
 /* The supervisor is step-driven and never sleeps on its own; between WAIT steps the task sleeps
  * the reported backoff. A satellite keeps retrying (max_attempts 0), so the only terminal reason
- * is a bridge that refuses the registration, which is the correct time to stop. */
+ * is a Satellite Gateway that refuses the registration, which is the correct time to stop. */
 static void gateway_task_fn(void *argument) {
     (void)argument;
     int result;
@@ -502,7 +502,7 @@ static void gateway_task_fn(void *argument) {
              * for its wake word: "responsive the moment it registers" is exactly what a
              * multi-satellite house needs, and maybe_stop_capture already treats REGISTERED as
              * the idle listening state (it releases only on REFUSED/FAILED). Arming only on
-             * RUN_REQUESTED left the mic cold until the bridge ran the satellite, so a freshly
+             * RUN_REQUESTED left the mic cold until the Satellite Gateway ran the satellite, so a freshly
              * registered board sat deaf at REGISTERED -- WAKE_STATUS showed model=placeholder
              * scorer=stub threshold_armed=0 even though the model and selector were provisioned.
              * Arming on REGISTERED too is idempotent (the guard inside maybe_start_capture is
@@ -516,7 +516,7 @@ static void gateway_task_fn(void *argument) {
             vTaskDelay(pdMS_TO_TICKS(delay > 0 ? delay / 1000 : 1));
             continue;
         }
-        /* GW_FAILED (only reachable with a finite attempt budget) or GW_REFUSED (the bridge said no). */
+        /* GW_FAILED (only reachable with a finite attempt budget) or GW_REFUSED (the Satellite Gateway said no). */
         gateway_report_append(state.report, sizeof(state.report),
                               (result == GW_REFUSED) ? "gateway=stopped reason=refused"
                                                      : "gateway=stopped reason=failed");
@@ -557,7 +557,7 @@ static void nvs_read_str(const char *key, char *out, size_t cap) {
     nvs_close(handle);
 }
 
-/* Install the device identity on the session: the name / area / firmware_version the bridge
+/* Install the device identity on the session: the name / area / firmware_version the Satellite Gateway
  * and the house know it by, and the detection name (the LOADED MODEL's name, which is what
  * makes the two satellite variants report the same wake word -- the Pi reports whatever model
  * it loaded). Empty values fall back to the session's own defaults. */
@@ -626,7 +626,7 @@ int gateway_task_start(const char *host, unsigned port, int transport,
     wy_session_set_phase_notify((wy_session *)gateway_supervisor_session(&supervisor),
                                 led_status_on_phase, NULL);
 
-    /* The playback ring is a device-lifetime PSRAM buffer: the bridge's answers convert into it
+    /* The playback ring is a device-lifetime PSRAM buffer: the Satellite Gateway's answers convert into it
      * and the pump reads it at realtime. It is owned here (the file-static playback_ring), not
      * in the session -- a gateway restart frees the old session (the supervisor does it on
      * re-init), and the old session's ring pointer is the ONLY reference to the old ring, so
@@ -634,7 +634,7 @@ int gateway_task_start(const char *host, unsigned port, int transport,
      * leaks 2 MiB (and after ~3 restarts the 8 MiB PSRAM is exhausted). The old pump is
      * already stopped by the previous run's terminal path, so the old ring has no reader. The
      * volume is the device's conservative default; the live test calibrates it, and
-     * increment 3's configuration plane can later override it per the bridge's volume command.
+     * increment 3's configuration plane can later override it per the Satellite Gateway's volume command.
      * A failed allocation is not fatal to the link: playback simply has no ring to fill (the
      * session treats a NULL ring as "drain but don't keep"), so the satellite still registers,
      * listens, and streams the mic -- it just does not yet speak. */

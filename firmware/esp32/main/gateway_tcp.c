@@ -3,7 +3,7 @@
 #include "gateway_socket.h"
 #include <stdio.h>
 
-/* The plaintext transport, kept as a first-class local option rather than a legacy path: the bridge
+/* The plaintext transport, kept as a first-class local option rather than a legacy path: the Satellite Gateway
  * serves plain TCP on its own listener for exactly this case, and a development link between a
  * laptop and a device on a trusted segment has nothing to gain from a certificate. It is never a
  * fallback for a tls:// endpoint - that decision belongs to the console, which refuses rather than
@@ -34,7 +34,7 @@ int gateway_tcp_run(const char *host, unsigned port, char *out, size_t capacity)
 
     /* The dial deadline is over: the register exchange is bounded by the session's own budget,
      * not the 8 s dial limit. The dial stored its deadline on the socket, and the bounded
-     * read/write above enforce it -- so without this raise a slow-but-live bridge would be cut
+     * read/write above enforce it -- so without this raise a slow-but-live Satellite Gateway would be cut
      * off mid-registration at 8 s while the run budget (25 s) sits unused. One value for both,
      * so the session's budget is the single source of truth. */
     int64_t run_deadline = gateway_now_us() + (int64_t)GATEWAY_RUN_BUDGET_MS * 1000;

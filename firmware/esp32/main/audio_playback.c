@@ -11,12 +11,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-/* The playback (bridge -> speaker) glue. The session core (the gateway task) converts each
+/* The playback (Satellite Gateway -> speaker) glue. The session core (the gateway task) converts each
  * inbound audio-chunk into the board's I2S format and appends the frames to its bounded ring
  * (wyoming_session.h); this file owns the other half: the I2S TX channel, a task that pumps the
  * ring to the I2S at realtime, and the amplifier's I2C GPO enable. The I2S DMA is the pacer: a
  * bounded blocking write pulls each chunk at exactly the rate the speaker plays it, so the
- * bridge's 2x send pace is absorbed by the ring and the speaker never runs ahead of it.
+ * Satellite Gateway's 2x send pace is absorbed by the ring and the speaker never runs ahead of it.
  *
  * The I2S TX is a channel on the SAME controller (I2S_NUM_0) with the SAME clock as the
  * capture RX: same WS (GPIO7), BCLK (GPIO8), rate (16 kHz), slot width (32-bit stereo). The I2S
@@ -47,7 +47,7 @@
 #define PLAYBACK_I2S_BCLK_PIN  GPIO_NUM_8
 #define PLAYBACK_I2S_WS_PIN    GPIO_NUM_7
 #define PLAYBACK_I2S_TX_PIN    GPIO_NUM_44
-/* 48 kHz I2S, per docs/audio-fidelity.md. This is the profile's real win: the bridge's TTS at
+/* 48 kHz I2S, per docs/audio-fidelity.md. This is the profile's real win: the Satellite Gateway's TTS at
  * 22050 Hz is now UP-sampled to 48 kHz instead of being low-passed at 7400 Hz and crushed into
  * 16 kHz. The voice keeps its full bandwidth. */
 #define PLAYBACK_I2S_RATE_HZ   48000
@@ -143,7 +143,7 @@ static int32_t playback_drain_ms;
  * sized to the DMA (a few hundred ms) and is far too short for this. */
 /* How much audio to buffer before the pump starts consuming.
  *
- * The bridge paces at 2x realtime, but delivery is uneven by up to ~100 ms and occasionally worse.
+ * The Satellite Gateway paces at 2x realtime, but delivery is uneven by up to ~100 ms and occasionally worse.
  * Playing the instant the first chunk lands turns every arrival gap into a hole in the audio. Two
  * seconds of pre-roll absorbs that jitter, and the ring is large enough (6 MB, ~16 s at 48 kHz) that
  * the cost is latency, not memory.
@@ -284,7 +284,7 @@ int audio_xvf_write_frame(const uint8_t *frame, size_t len) {
  *
  * Measured before this existed, on this board: speech RMS ~219 against a room floor of ~334 --
  * the talker arriving quieter than the room. The wake model crossed its cutoff only intermittently
- * and the bridge's energy gate rejected every speech frame it saw (87 of 87).
+ * and the Satellite Gateway's energy gate rejected every speech frame it saw (87 of 87).
  *
  * Both controls live on the co-processor and both were unreachable until the 4-byte scalar
  * framing was fixed (count = 1 with a four-byte payload); a writer that derived count from the
@@ -296,7 +296,7 @@ int audio_xvf_write_frame(const uint8_t *frame, size_t len) {
 /* AGC max gain: how far it may lift a quiet talker.
  *
  * AGC TARGET POWER, not gain: 0.003 aimed at about -25 dBFS and the measured result was the
- * opposite of the intent -- the bridge's room floor fell from 334 to 67 and speech medians came in
+ * opposite of the intent -- the Satellite Gateway's room floor fell from 334 to 67 and speech medians came in
  * around 275 against a gate threshold of 400, so every utterance was rejected as too quiet. A
  * target that low makes the AGC ATTENUATE towards it rather than lift speech. 0.05 sits near
  * -13 dBFS, which is a normal speech level for this gate. */
@@ -606,7 +606,7 @@ static int pump_logged;
  *   stalled     writes that made no progress (DMA full / channel not accepting): the TX side
  *   abandoned   batches whose tail was given up on after the idle limit: AUDIBLE LOSS
  *
- * A clean answer has empty ~= the count of chunks the bridge had not yet delivered, and
+ * A clean answer has empty ~= the count of chunks the Satellite Gateway had not yet delivered, and
  * stalled/abandoned at zero. Reported once per answer, at the same moment `played` is sent. */
 static uint32_t pump_writes, pump_empty, pump_stalled, pump_abandoned;
 /* Frames actually removed from the ring, and when the first/last of them went out.
@@ -626,7 +626,7 @@ static size_t preroll_last_bytes;
 
 /* Where to report `played`, and whether this answer has already been reported.
  *
- * `played` is the device saying its speaker finished. Without it the bridge waits
+ * `played` is the device saying its speaker finished. Without it the Satellite Gateway waits
  * after every reply for an event that never arrives, which measured as ~20 s of
  * dead air per turn. The link pointers are refreshed on every bind, exactly like
  * the capture path: a reconnect hands back the same pump with a new transport. */
@@ -714,7 +714,7 @@ static void playback_task_fn(void *argument) {
              * the keepalive below runs unconditionally. */
         }
         /* A stream that has ENDED and a ring that has DRAINED means the speaker is
-         * finished: say so exactly once. Re-armed by the rising edge of the bridge's
+         * finished: say so exactly once. Re-armed by the rising edge of the Satellite Gateway's
          * playback flag, so the next answer is reported too. */
         /* Edge-triggered, deliberately. This block used to run on EVERY iteration while the stream
          * was active, which reset the counters continuously: the summary then described the last
@@ -737,7 +737,7 @@ static void playback_task_fn(void *argument) {
         } else if (!played_reported && wy_session_playback_ended(s) &&
                    wy_session_playback_bytes(s) == 0 && !done_queued) {
             /* The answer has finished sounding: mark it with the done tone BEFORE saying
-             * `played`, so the bridge's wait ends after the room has heard the closing
+             * `played`, so the Satellite Gateway's wait ends after the room has heard the closing
              * gesture too. One tone per answer, never per chunk. */
             if (!done_tone_samples) {
                 size_t need = wy_done_render(NULL, 0);

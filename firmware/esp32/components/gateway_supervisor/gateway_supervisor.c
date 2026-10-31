@@ -12,7 +12,7 @@
 #endif
 
 /* One wy_session_step per registration attempt may make several reads (describe, then the
- * register.ok). The drive is capped so a bridge that accepts the connection but never completes
+ * register.ok). The drive is capped so a Satellite Gateway that accepts the connection but never completes
  * the handshake cannot spin the device; the cap counts iterations, so it is a second, independent
  * guard on top of the link's own deadline, which is finite until on_registered lifts it -- the
  * first guard against a peer that blocks the read itself. */
@@ -89,7 +89,7 @@ int gateway_supervisor_init(gateway_supervisor *sup, int64_t (*now_us)(void),
     if (strlen(device_id) >= sizeof(sup->device_id) || strlen(boot_id) >= sizeof(sup->boot_id))
         return -1;
     if (report && report_capacity == 0) return -1;
-    /* The device re-initialises its file-static supervisor on every gateway start (after a bridge
+    /* The device re-initialises its file-static supervisor on every gateway start (after a Satellite Gateway
      * refusal ends the previous task), so an already-initialised supervisor must release the
      * session it owns before the fields are overwritten; otherwise every start leaks a whole
      * wy_session on a device that runs for the life of the machine. A fresh or previously-failed
@@ -157,7 +157,7 @@ const char *gateway_supervisor_reason_name(int result) {
 
 /* Drive a freshly-established transport to a registered session. Returns:
  *  0  -> registered (state set to PUMPING by the caller)
- *  1  -> the bridge refused; terminal (GW_REFUSED)
+ *  1  -> the Satellite Gateway refused; terminal (GW_REFUSED)
  *  2  -> the link ended (I/O or a rejected frame); reconnect path
  */
 static int drive_to_registered(gateway_supervisor *sup) {
@@ -179,7 +179,7 @@ static int drive_to_registered(gateway_supervisor *sup) {
         /* WY_IO / WY_INVALID / WY_LIMIT: the transport or the protocol ended this attempt. */
         return 2;
     }
-    /* The bridge accepted the link but the handshake never completed within the cap/budget. */
+    /* The Satellite Gateway accepted the link but the handshake never completed within the cap/budget. */
     return 2;
 }
 
@@ -272,7 +272,7 @@ int gateway_supervisor_step(gateway_supervisor *sup) {
         int result = wy_session_step(session, sup->link.read_fn, sup->link.write_fn,
                                      sup->link.user);
         if (result == WY_OK) {
-            /* An event was pumped: a run/pause the bridge requested, a ping it answered, or a
+            /* An event was pumped: a run/pause the Satellite Gateway requested, a ping it answered, or a
              * well-formed event it safely ignored. The link is still alive. */
             sup->events += 1;
             return GW_OK;
@@ -289,7 +289,7 @@ int gateway_supervisor_step(gateway_supervisor *sup) {
                  result, wy_session_state(session), wy_session_streaming(session));
         append(sup, failure);
         ESP_LOGW("gwstep", "%s", failure);
-        /* WY_IO / WY_INVALID / WY_LIMIT: the bridge closed the link or the transport erred.
+        /* WY_IO / WY_INVALID / WY_LIMIT: the Satellite Gateway closed the link or the transport erred.
          * This is the only thing that ends an idle persistent session, on purpose. */
         link_down(sup);
         sup->consecutive_failures += 1;

@@ -21,7 +21,7 @@
  * this rate before it reaches the ring, or it plays three times too fast and far too high. */
 #define WY_AUDIO_I2S_RATE_HZ 48000u
 
-/* One playback resampler per stream: the bridge's TTS arrives at 22050 Hz (SND_FORMAT) but
+/* One playback resampler per stream: the Satellite Gateway's TTS arrives at 22050 Hz (SND_FORMAT) but
  * the board's I2S clock is 16 kHz (shared with the capture), so the device resamples playback
  * down. It keeps an ABSOLUTE input cursor, so the output grid is independent of how the audio
  * is chunked: whether a second of speech arrives as one frame or many, the same input yields
@@ -55,7 +55,7 @@ void wy_resampler_reset(wy_resampler *r);   /* fresh stream: cursor and base bac
  * Two conversions are needed and they are NOT symmetric, which is the whole point of writing
  * both explicitly rather than parameterising one:
  *
- *   wy_resample_22050_to_48000   UP-samples the bridge's TTS. No anti-aliasing filter: up-
+ *   wy_resample_22050_to_48000   UP-samples the Satellite Gateway's TTS. No anti-aliasing filter: up-
  *                                sampling cannot alias, and running the 7400 Hz low-pass that
  *                                the 16 kHz path needs would throw away exactly the 7.4-11 kHz
  *                                content this profile exists to KEEP. Linear interpolation
@@ -80,7 +80,7 @@ typedef struct wy_upsampler {
     double ratio;         /* input samples per output sample (in_rate / out_rate) */
 } wy_upsampler;
 
-/* Reset for the bridge's TTS: 22050 Hz in, 48000 Hz out. */
+/* Reset for the Satellite Gateway's TTS: 22050 Hz in, 48000 Hz out. */
 void wy_upsampler_reset(wy_upsampler *u);
 
 /* Reset for any other rate pair. The local tones (chime, done tone) are rendered at 16 kHz by
@@ -108,7 +108,7 @@ size_t wy_decimate_48000_to_16000(wy_decimator *d, const int16_t *in, size_t n,
 
 /* Playback volume. The project rule (docs/volume.md): NO PATH MAY TAKE THE DEVICE TO SILENCE.
  * A value of 0, or a value below the floor, becomes the floor -- a small but non-zero gain --
- * so a bad or refused level cannot deafen the device. The floor matches the bridge's
+ * so a bad or refused level cannot deafen the device. The floor matches the Satellite Gateway's
  * conservative floor; the default level is a named constant the live test calibrates. */
 #define WY_VOLUME_DEFAULT_PERCENT 50   /* conservative default, below full */
 #define WY_VOLUME_FLOOR_PERCENT   25   /* never silent: a real, audible minimum */
@@ -123,7 +123,7 @@ size_t wy_decimate_48000_to_16000(wy_decimator *d, const int16_t *in, size_t n,
  * scale did nothing at all. The number the user says and the number the device applies were only
  * equal by accident in the upper range.
  *
- * This is the same curve the bridge's volume.py applies (FLOOR + (user-1) * span / 99), so a level
+ * This is the same curve the Satellite Gateway's volume.py applies (FLOOR + (user-1) * span / 99), so a level
  * means the same thing whichever satellite is being talked to. */
 int wy_volume_user_to_gain_percent(int user);
 
@@ -190,7 +190,7 @@ void wy_output_upsample_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int left_upsam
  *
  * The PP Servicer (ResID 17) holds the co-processor's own AGC. It has never been touched by this
  * firmware. At normal speaking distance the far-field array's output sits far below what the wake
- * model wants, and the bridge's own measurement says so: speech RMS ~220-700 while the room floor
+ * model wants, and the Satellite Gateway's own measurement says so: speech RMS ~220-700 while the room floor
  * is ~300. Enabling AGC is the lever that fixes level without touching the link at all. */
 #define XVF_I2C_SET32_CMD_LEN   7    /* [resid, cmd, 1, b0, b1, b2, b3] */
 #define XVF_I2C_RESID_AEC       33   /* AEC Servicer: beamformer output taps */

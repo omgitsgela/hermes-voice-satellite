@@ -703,7 +703,7 @@ void provisioning_console_run(void) {
                 continue;  /* this branch replies for itself */
             } else if (!strcmp(line.data, "TLS_STATUS")) {
                 /* What is provisioned, without dialling anything: the full fingerprint is printed
-                 * because comparing it against the bridge's own value is the whole check, and a
+                 * because comparing it against the Satellite Gateway's own value is the whole check, and a
                  * truncated one would make that comparison guesswork. */
                 static tls_credentials credentials;
                 static char reason[96];
@@ -1051,7 +1051,7 @@ void provisioning_console_run(void) {
             } else if (!strncmp(line.data, "SET_NAME ", 9) ||
                        !strncmp(line.data, "SET_AREA ", 9) ||
                        !strncmp(line.data, "SET_FIRMWARE_VERSION ", 22)) {
-                /* The device identity the bridge and the house know it by. The name and area are
+                /* The device identity the Satellite Gateway and the house know it by. The name and area are
                  * what describe/info and the registration report; firmware_version is the build
                  * label. Staged to NVS like the Wi-Fi profile, so a re-flash keeps them. */
                 const char *key = !strncmp(line.data, "SET_NAME ", 9) ? "device_name"

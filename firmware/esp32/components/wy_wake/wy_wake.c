@@ -248,7 +248,7 @@ uint32_t wy_wake_playback_stall_frames(void)
 
 /* Is the device's own output still audible to its microphone?
  *
- * `active` is the bridge's stream flag; `queued_bytes` is what the ring still
+ * `active` is the Satellite Gateway's stream flag; `queued_bytes` is what the ring still
  * holds; `frames_since_queue_moved` is how many feed frames have passed since the
  * ring last SHRANK by any amount.
  *
@@ -261,7 +261,7 @@ int wy_wake_playback_sounds(int active, size_t queued_bytes,
                             uint32_t frames_since_queue_moved)
 {
     if (active)
-        return 1;   /* the bridge says it is sending audio: authoritative */
+        return 1;   /* the Satellite Gateway says it is sending audio: authoritative */
     if (queued_bytes == 0)
         return 0;
     return frames_since_queue_moved < WY_WAKE_STALL_FRAMES;

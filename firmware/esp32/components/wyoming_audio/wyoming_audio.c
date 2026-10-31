@@ -35,7 +35,7 @@ int wy_audio_downmix_mono16(const int32_t *stereo, size_t frame_count, int16_t *
     return (int)take;
 }
 
-/* The playback resampler's ratio, one constant: 22050 Hz in (the bridge's SND_FORMAT) to
+/* The playback resampler's ratio, one constant: 22050 Hz in (the Satellite Gateway's SND_FORMAT) to
  * 16000 Hz out (the board's I2S clock). A double, because the fractional cursor must not drift
  * on an integer ratio. */
 #define WY_RESAMPLE_RATIO  (22050.0 / 16000.0)
@@ -348,7 +348,7 @@ void wy_output_upsample_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int left_upsam
      * I2S or USB sample rate, they do not require the use of the upsampler in the case of a 48 kHz
      * connection, and therefore we explicitly unset the AUDIO_MGR_OP_UPSAMPLE flags."
      *
-     * Left at the default 1, a 48 kHz far-end signal we carefully up-sampled from the bridge's
+     * Left at the default 1, a 48 kHz far-end signal we carefully up-sampled from the Satellite Gateway's
      * 22050 Hz is resampled down to the 16 kHz voice-DSP rate and back up to 48 kHz on its way to
      * the DAC -- band-limiting it to 8 kHz, which destroys the entire reason for the 48 kHz
      * profile. Clearing the flags and selecting category 10 (far end AT NATIVE RATE) is what keeps

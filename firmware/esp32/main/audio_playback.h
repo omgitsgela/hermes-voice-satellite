@@ -71,7 +71,7 @@ int audio_xvf_write_frame(const uint8_t *frame, size_t len);
  *
  * Why it exists: measured on this hardware before it did, speech arrived at RMS ~219 against a room
  * floor of ~334, i.e. the talker was quieter than the room. The wake model then crossed its cutoff
- * only intermittently and the bridge's energy gate rejected every speech frame (87 of 87). */
+ * only intermittently and the Satellite Gateway's energy gate rejected every speech frame (87 of 87). */
 int audio_xvf_apply_frontend(int mic_gain_percent);
 
 /* Just the microphone gain, for the live config path (fleet `mic_gain`). Same 0..100 scale. */

@@ -15,8 +15,8 @@
  *             usable real model it hands back a tiny safe placeholder so the deterministic
  *             scorer still runs -- never a garbage scorer.
  *   chime  -> the rendered local tone (D4): wy_chime_render + wy_session_local_play (the same
- *             speaker ring/amp the bridge answer uses).
- *   wake   -> wy_session_wake (the run-satellite flow the bridge already speaks).
+ *             speaker ring/amp the Satellite Gateway answer uses).
+ *   wake   -> wy_session_wake (the run-satellite flow the Satellite Gateway already speaks).
  *
  * Single-consumer: the capture task drives the detector on every mic chunk via
  * wake_detector_feed, which ALSO syncs the core's deaf guard (streaming edge -> cooldown, and
@@ -40,7 +40,7 @@ void wake_detector_start(void *session, void *user,
 
 /* Feed one downmixed mono16 chunk (16 kHz) to the detector. Called by the capture task on
  * every chunk, always. Before the wake the chunk goes only to the detector; after the wake it
- * goes to the detector and (while the session streams) on to the bridge. The call first syncs
+ * goes to the detector and (while the session streams) on to the Satellite Gateway. The call first syncs
  * the deaf guard from live session state, then scores the frame. */
 void wake_detector_feed(const int16_t *mono, size_t n);
 
