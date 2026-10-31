@@ -46,13 +46,22 @@ class FakeSession:
         self.hermes = hermes
         self.calls = []
 
+    def platform_report(self):
+        return {"name": "linux", "can_flash": True, "can_supervise": True, "elevated": False,
+                "notes": []}
+
     def status(self):
         return {
             "hermes": self.hermes,
             "hermes_explained": "Hermes found",
             "devices": DEVICES,
             "dry_run": True,
+            "platform": self.platform_report(),
         }
+
+    def preflight(self, profile_id, **fields):
+        self.calls.append(("preflight", profile_id))
+        return {"ok": True, "problems": []}
 
     def usb_ports(self):
         return [{"device": "/dev/ttyACM0", "description": "USB JTAG"}]

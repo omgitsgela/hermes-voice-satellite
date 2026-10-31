@@ -75,8 +75,14 @@ def _argv(request: DeviceRequest, action: str) -> tuple[str, ...]:
         argv += ["--device-name", request.device_name]
     if request.certs_dir:
         argv += ["--tls-certs", request.certs_dir]
-    if request.wake_model:
-        argv += ["--model", request.wake_model, "--model-name", request.wake_word]
+    model = request.wake_model
+    if not model and request.wake_word == PROFILE.wake_default:
+        # The firmware bundles its default model. Passing it explicitly is what keeps the phrase the
+        # installer showed and the phrase the device answers to the same phrase: without --model the
+        # script falls back to its own default, which is okay_nabu.
+        model = f"firmware/esp32/models/{request.wake_word}.tflite"
+    if model:
+        argv += ["--model", model, "--model-name", request.wake_word]
     if request.wifi_ssid and request.wifi_psk_file:
         argv += ["--wifi-ssid", request.wifi_ssid, "--wifi-psk-file", request.wifi_psk_file]
     return tuple(argv)

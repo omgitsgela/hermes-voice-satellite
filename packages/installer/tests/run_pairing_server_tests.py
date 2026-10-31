@@ -189,6 +189,52 @@ class ServiceUnit(unittest.TestCase):
             self.assertIn("systemctl --user enable --now hermes-pairing.service", instructions)
 
 
+class ResponseConsistency(Base):
+    """A response must carry a certificate and the key that belongs to it."""
+
+    def test_concurrent_replacement_never_mixes_generations(self):
+        import threading
+        import time
+
+        tls = self.state / "registry-tls"
+        counter = {"n": 0}
+        guard = threading.Lock()
+        original = self.enroller.enroll
+
+        def generation_tagged(device_id, *, replace=False):
+            with guard:
+                counter["n"] += 1
+                generation = counter["n"]
+            cert = tls / f"{device_id}.crt"
+            key = tls / f"{device_id}.key"
+            cert.write_text(f"CERT-{generation}")
+            time.sleep(0.02)  # a window a second request can slip into without the lock
+            key.write_text(f"KEY-{generation}")
+            return cert, key
+
+        self.enroller.enroll = generation_tagged
+        results: list[dict] = []
+
+        def run(index):
+            # A distinct source each: the per-source interval is a separate rule, and this test is
+            # about response consistency under concurrency.
+            results.append(self.service.pair(WORDS, "esp32-dup", f"src{index}", replace=True))
+
+        threads = [threading.Thread(target=run, args=(index,)) for index in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.enroller.enroll = original
+
+        self.assertEqual(len(results), 4)
+        for payload in results:
+            cert_generation = payload["cert_pem"].split("-")[1]
+            key_generation = payload["key_pem"].split("-")[1]
+            self.assertEqual(cert_generation, key_generation,
+                             f"a response paired CERT-{cert_generation} with KEY-{key_generation}")
+
+
 class ReEnrolment(Base):
     """A reflashed device has no certificate. Replacement must be asked for, not assumed."""
 
@@ -234,6 +280,27 @@ class Hardening(Base):
     def test_a_trailing_newline_is_not_a_device_id(self):
         with self.assertRaises(PairingRefused):
             self.service.pair(WORDS, "kitchen\n", "s")
+
+    def test_a_burst_of_fresh_sources_cannot_grow_the_map(self):
+        # The earlier test advanced the clock between sources, which let idle entries be evicted and
+        # hid the bug: a burst arriving at the same instant grew the map past its own cap.
+        original_cap = PairingService.MAX_TRACKED_SOURCES
+        PairingService.MAX_TRACKED_SOURCES = 4
+        try:
+            for index in range(8):
+                try:
+                    self.service.pair("wrong", "kitchen-1", f"198.51.100.{index}")
+                except PairingRefused:
+                    pass  # refused, which is the point
+            self.assertLessEqual(len(self.service._sources), 4,
+                                 "the source map exceeded its cap during a burst")
+        finally:
+            PairingService.MAX_TRACKED_SOURCES = original_cap
+
+    def test_non_ascii_words_are_refused_rather_than_crashing(self):
+        # hmac.compare_digest raises TypeError on non-ASCII str; that surfaced as a 500.
+        with self.assertRaises(PairingRefused):
+            self.service.pair("amber lantern copper thrush méádow", "kitchen-1", "s")
 
     def test_the_source_map_is_bounded(self):
         for index in range(self.service.MAX_TRACKED_SOURCES + 50):

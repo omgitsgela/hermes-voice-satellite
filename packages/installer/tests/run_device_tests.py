@@ -197,10 +197,12 @@ class CardFlow(unittest.TestCase):
         self.assertTrue(command.requires_elevation)
         self.assertEqual(command.argv[command.argv.index("--source") + 1], "home")
 
-    def test_wifi_without_a_network_is_a_refusal(self):
+    def test_a_card_with_nothing_to_stage_is_not_an_error(self):
+        # Changing only, say, nothing at all must not fail: provisioning now covers credentials and
+        # Wi-Fi independently, and a card on Ethernet still needs neither.
         result = pi.DRIVER.provision(self.request(), dry())
-        self.assertFalse(result.ok)
-        self.assertIn("Wi-Fi", result.summary)
+        self.assertTrue(result.ok)
+        self.assertIn("nothing to stage", result.summary)
 
     def test_verify_refuses_a_directory_that_is_not_a_linux_root(self):
         # Any directory without an etc/ is the case under test; a hard-coded /tmp was a Linux

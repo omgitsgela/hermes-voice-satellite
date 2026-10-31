@@ -155,7 +155,10 @@ class PairingService:
         # is what the person was given, and this is the one place that decides whether they match.
         normalise = lambda text: " ".join(text.split()).lower()  # noqa: E731
         expected = normalise(self._expected_words())
-        return hmac.compare_digest(normalise(supplied), expected)
+        # hmac.compare_digest raises TypeError on non-ASCII str, which turned a stray accented
+        # character into a 500. Comparing the encoded bytes keeps the comparison constant-time and
+        # makes the answer a refusal.
+        return hmac.compare_digest(normalise(supplied).encode("utf-8"), expected.encode("utf-8"))
 
     # -- rate limiting ------------------------------------------------------------------------
 
@@ -170,6 +173,11 @@ class PairingService:
                 for key, state in list(self._sources.items()):
                     if state.locked_until <= now and now - state.last_attempt > self.config.lockout_seconds:
                         del self._sources[key]
+                if len(self._sources) >= self.MAX_TRACKED_SOURCES:
+                    # Still full of active or recent sources: refuse this one. Evicting an entry
+                    # that is locked out would reset its counter, and inserting anyway would make
+                    # the bound a decoration. A burst of fresh addresses is exactly this case.
+                    raise PairingRefused("too many attempts; wait a few minutes and try again")
             return self._sources.setdefault(source, _SourceState())
 
     def _check_rate(self, source: str) -> _SourceState:
@@ -218,21 +226,24 @@ class PairingService:
                 # they are.
                 raise PairingRefused("the pairing words are not correct")
             cert, key = self.enroller.enroll(device_id, replace=replace)
+            # Read back inside the same lock. The enrolment writes these files, and a second request
+            # replacing the same device would otherwise let this one read a certificate from one
+            # generation and a key from the next.
+            tls = self.config.tls_dir()
+            payload = {
+                "ok": True,
+                "ca_pem": (tls / "client-ca.crt").read_text(),
+                "cert_pem": Path(cert).read_text(),
+                "key_pem": Path(key).read_text(),
+                "server_pin": self.server_pin_hex(),
+                # Public material, and required by the provisioning step: it recomputes the pin from
+                # the certificate rather than trusting a number.
+                "server_cert_pem": (tls / "server.crt").read_text(),
+                "dial_address": self.config.dial_address,
+            }
             # Recorded inside the same lock: a success must clear the counter before the next
             # attempt is judged.
             self._record_success(source)
-        tls = self.config.tls_dir()
-        payload = {
-            "ok": True,
-            "ca_pem": (tls / "client-ca.crt").read_text(),
-            "cert_pem": Path(cert).read_text(),
-            "key_pem": Path(key).read_text(),
-            "server_pin": self.server_pin_hex(),
-            # Public material, and required by the provisioning step: it recomputes the pin from the
-            # certificate rather than trusting a number.
-            "server_cert_pem": (tls / "server.crt").read_text(),
-            "dial_address": self.config.dial_address,
-        }
         return payload
 
     def server_pin_hex(self) -> str:

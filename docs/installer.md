@@ -205,13 +205,39 @@ with no network at all.
   named as other people's marks, not recommendations.
 - **A download is verified or discarded.** Entries may carry a SHA-256; a mismatch deletes the file
   rather than leaving something half-trusted to flash into a device.
-- **Voices default to HFC female**, with HFC male beside it, and every voice offers a published sample
-  so it can be heard before 60 MB is downloaded. Samples are fetched on demand rather than committed
-  here, because the licences belong to the voice models, not to this project.
+- **Voices default to HFC female**, with HFC male beside it. **The two default voices ship their
+  sample clips**, 87 KB and 93 KB, served from the package itself, so the choice is audible with no
+  network at all (`web/samples/NOTICE.md` records where they came from). Every other voice plays its
+  published sample on demand.
+- **A voice of your own is supported**: point at a Piper `.onnx` with its `.json` beside it, hear a line
+  synthesised through it before deciding, and only then is it copied to the gateway's voice directory
+  and selected.
 
 The public API at `openwakeword.com/api` is used for *measurements only*: search and detail are
 anonymous, while downloading a model from that library needs an account. Its numbers are surfaced for
 comparison; the download path stays on the free sources.
+
+## Changing a device later
+
+Two entries, deliberately separated by what is actually reachable:
+
+- **"Change a device I have already set up"** in the interface, and the same choice in the console,
+  re-stages what lives on the device or its card: Wi-Fi, the gateway address, the credentials and the
+  wake word. It never reflashes, and it refuses with a list of reasons when there is nothing to apply.
+- **Volume, LED brightness and the wake threshold are gateway settings.** They are not changed here,
+  and the interface says so instead of implying otherwise. Teaching the installer to reach the gateway
+  is the work left for later.
+
+## What this machine can do
+
+`status` reports the platform honestly, and both frontends show it before the first choice: whether
+device flashing is possible at all (it needs a shell, so not on Windows), whether the gateway can be
+supervised (systemd, so Linux), and whether the process is elevated. A step that needs an administrator
+refuses with that reason rather than failing halfway through a write.
+
+Everything a setup needs is checked **before** anything is written. `preflight` returns every reason at
+once (no gateway address, no device identity, no Wi-Fi password, the wrong card partition, a missing
+model file), and an install with problems writes nothing at all.
 
 ## Re-enrolling a device
 
@@ -285,11 +311,13 @@ Worth looking at specifically, because these are the parts where a wrong decisio
 
 Everything in this document is implemented and tested: the profile contract and registry, the
 identity code, the pairing client with its confirmation gate, the pairing endpoint on the gateway with
-rate limiting and explicit re-enrolment, the credential store with the remember checkbox, the drivers
-for both devices against their real scripts, device installation as two stages, the wake-word and
-voice catalogues including live community measurements and a verified voice download, the console
-flow, the web UI with its token-gated API, per-platform builds, and 150 offline tests including
-one that pairs the shipping client with the real endpoint over real TLS.
+rate limiting, bounded source tracking, serialised enrolment and explicit re-enrolment reachable from
+both frontends, the credential store with the remember checkbox, the drivers for both devices against
+their real scripts, device installation as two checked stages, the wake-word and voice catalogues
+including bundled default samples, live community measurements, a verified voice download and a
+voice of your own with a synthesised preview, the "change a device later" path, the platform report,
+the console flow, the web UI with its token-gated API, per-platform builds, and 166 offline tests
+including one that pairs the shipping client with the real endpoint over real TLS.
 
 A device setup is two stages because flashing is not staging: the flash writes the software, and the
 provision step puts Wi-Fi, the dial address, the credentials and the model where the device looks for

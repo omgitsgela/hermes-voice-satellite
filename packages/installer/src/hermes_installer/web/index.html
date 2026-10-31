@@ -144,8 +144,16 @@
           <span class="detail">For a gateway you already set up, on this computer or another one.</span>
         </span>
       </label>
+      <label class="choice">
+        <input type="radio" name="role" value="manage" id="role-manage" />
+        <span><b>Change a device I have already set up</b>
+          <span class="detail">Connect it again to change its Wi-Fi, its gateway address or its wake
+            word.</span>
+        </span>
+      </label>
     </fieldset>
 
+    <div id="platform-note" class="notice warn hidden" style="margin-bottom:12px"></div>
     <div id="hermes-missing" class="notice warn hidden">
       Hermes was not found on this computer. Install Hermes here before setting up a gateway. If
       Hermes already runs somewhere else, choose "Add a device to an existing gateway" instead.
@@ -356,6 +364,13 @@
       </div>
       <audio id="voice-audio" class="hidden"></audio>
       <div class="actions"><button id="voice-download" class="ghost" disabled>Download this voice</button></div>
+      <label class="field" for="voice-file">Or a Piper voice on this computer</label>
+      <input id="voice-file" type="text" placeholder="path to a voice .onnx, with its .json beside it" />
+      <div class="actions">
+        <button id="voice-file-preview" class="ghost">Listen to it</button>
+        <button id="voice-file-use" class="ghost">Use this voice</button>
+      </div>
+      <p class="hint hidden" id="voice-file-status" aria-live="polite"></p>
       <p class="hint" id="voice-note" style="margin-top:8px"></p>
       <p class="hint hidden" id="voice-download-status" aria-live="polite"></p>
 
@@ -406,7 +421,8 @@ async function api(path, body) {
 }
 
 function visibleSteps() {
-  return state.role === "device" ? [1, 3] : (state.role === "gateway" ? [1, 2] : [1, 2, 3]);
+  if (state.role === "device" || state.role === "manage") return [1, 3];
+  return state.role === "gateway" ? [1, 2] : [1, 2, 3];
 }
 
 function relabelProgress() {
@@ -490,7 +506,8 @@ function selectDevice(event) {
 }
 
 function updateStartButton() {
-  const ready = state.role === "device" ? Boolean(state.device) : Boolean(state.role);
+  const needsDevice = state.role === "device" || state.role === "manage";
+  const ready = needsDevice ? Boolean(state.device) : Boolean(state.role);
   $("start-continue").disabled = !ready;
 }
 
@@ -501,6 +518,12 @@ async function boot() {
     ? "Hermes is not installed on this computer."
     : state.status.hermes_explained;
 
+  const platform = state.status.platform || {};
+  if ((platform.notes || []).length) {
+    $("platform-note").classList.remove("hidden");
+    $("platform-note").innerHTML = (platform.notes || []).map(escapeHtml).join("<br>");
+  }
+  state.platform = platform;
   if (hermes === "none") {
     $("role-gateway").disabled = true;
     $("hermes-missing").classList.remove("hidden");
@@ -515,7 +538,8 @@ async function boot() {
 }
 
 function applyRoute() {
-  $("device-picker").classList.toggle("hidden", state.role !== "device");
+  $("device-picker").classList.toggle("hidden",
+    state.role !== "device" && state.role !== "manage");
   const keep = visibleSteps();
   for (const n of [1, 2, 3]) $("step-tab-" + n).classList.toggle("hidden", !keep.includes(n));
   relabelProgress();
@@ -531,6 +555,7 @@ document.querySelectorAll('input[name="role"]').forEach((input) => {
 
 $("start-continue").onclick = () => {
   if (state.role === "gateway") { show(2); return; }
+  state.mode = state.role === "manage" ? "manage" : "install";
   prepareTransport();
   show(3);
 };
@@ -718,7 +743,7 @@ $("code-missing").onclick = () => {
   $("pair-panel").classList.add("hidden");
 };
 
-$("do-pair").onclick = async () => {
+async function pairWith(replace) {
   if (!state.checkedCode) return;
   const host = $("gwhost").value.trim();
   const port = Number($("gwport").value || 10702);
@@ -730,15 +755,25 @@ $("do-pair").onclick = async () => {
   const result = await api("/api/pair", {
     host, port, words: $("words").value, device_name: $("devname").value.trim(),
     device_id: state.deviceIdentity || null,
-    expected_code: state.checkedCode, remember: $("remember").checked
+    expected_code: state.checkedCode, remember: $("remember").checked,
+    replace: Boolean(replace)
   });
 
   $("do-pair").disabled = false;
   $("pair-status").classList.add("hidden");
 
   if (!result.ok) {
-    $("pair-result").innerHTML = `<div class="notice bad">${
-      escapeHtml(result.error || "Pairing did not complete.")}</div>`;
+    const message = String(result.error || "Pairing did not complete.");
+    const alreadyKnown = /exists|already/i.test(message);
+    $("pair-result").innerHTML = `<div class="notice bad">${escapeHtml(message)}</div>` +
+      (alreadyKnown
+        ? `<div class="actions"><button id="replace-cert" class="go">Replace its certificate</button></div>
+           <p class="hint">A device that was flashed before is already known to the gateway. Replacing
+           its certificate lets it come back without you having to start over.</p>`
+        : "");
+    if (alreadyKnown) {
+      $("replace-cert").onclick = () => pairWith(true);
+    }
     announce("Pairing did not complete.");
     return;
   }
@@ -752,7 +787,9 @@ $("do-pair").onclick = async () => {
   $("install-panel").classList.remove("hidden");
   prepareInstallPanel();
   announce("Paired. Ready to install the device software.");
-};
+}
+
+$("do-pair").onclick = () => pairWith(false);
 
 /* ------------------------------------------------------------------ device install */
 
@@ -820,6 +857,29 @@ $("voice-download").onclick = async () => {
   announce("Voice downloaded.");
 };
 
+async function voiceFile(action) {
+  const path = ($("voice-file").value || "").trim();
+  const status = $("voice-file-status");
+  status.classList.remove("hidden");
+  if (!path) { status.textContent = "Type the path to a Piper voice first."; return; }
+  status.textContent = action === "preview" ? "Synthesising a line..." : "Installing the voice...";
+  const result = await api("/api/voice-custom", { path, action });
+  if (!result.ok) { status.textContent = result.error || "That voice could not be used."; return; }
+  if (action === "preview") {
+    if (result.practice) { status.textContent = result.note; return; }
+    const audio = $("voice-audio");
+    audio.src = result.preview_url;
+    try { await audio.play(); status.textContent = "That is the voice, spoken by itself."; }
+    catch (error) { status.textContent = "The preview was made but this browser would not play it."; }
+    return;
+  }
+  status.textContent = result.apply_note || "Voice installed.";
+  announce("Voice installed.");
+}
+
+$("voice-file-preview").onclick = () => voiceFile("preview");
+$("voice-file-use").onclick = () => voiceFile("install");
+
 $("community-search").onclick = async () => {
   const query = ($("community-query").value || "").trim();
   if (!query) { $("community-query").focus(); return; }
@@ -856,7 +916,9 @@ function prepareInstallPanel() {
   loadChoices();
   $("wifi-password-box").classList.toggle("hidden", card);
   $("ssid-label").textContent = card ? "Copy which saved Wi-Fi network" : "Wi-Fi network";
-  $("install-device").textContent = card ? "Write card setup" : "Install device software";
+  $("install-device").textContent = state.mode === "manage"
+    ? "Apply these settings"
+    : (card ? "Write card setup" : "Install device software");
 
   const remote = state.device.remote_settings.length;
   const cable = state.device.cable_settings.length;
@@ -865,8 +927,10 @@ function prepareInstallPanel() {
     <p style="margin:8px 0 0">This device answers to
       <strong>${escapeHtml(state.device.wake_default)}</strong>. Wake-word performance varies with
       the room, the microphone and how you speak, so you can try another later.</p>
-    <p style="margin:8px 0 0">After setup, ${remote} settings can be changed over the network and
-      ${cable} need the ${card ? "card" : "cable"}. Run this installer again to change them.</p>`;
+    <p style="margin:8px 0 0">Wi-Fi, the gateway address, the credentials and the wake word are
+      changed by running this installer again with the ${card ? "card" : "cable"}.
+      Volume, LED brightness and the wake threshold are the gateway's settings and are changed from
+      the gateway, which is not part of this installer yet.</p>`;
 
 }
 
@@ -973,6 +1037,21 @@ async function ensureWakeModel(dryRun) {
 $("review-device").onclick = async () => {
   const fields = deviceFields(true);
   fields.wake_model = await ensureWakeModel(true) || fields.wake_model;
+
+  const check = await api("/api/preflight", fields);
+  if (!check.ok || (check.problems || []).length) {
+    $("device-review").classList.add("hidden");
+    $("install-device").disabled = true;
+    $("install-device").className = "ghost";
+    $("install-result").innerHTML =
+      `<div class="notice bad"><strong>Not ready to install:</strong>
+        <ul class="checklist">${(check.problems || [check.error || "that step cannot run yet"])
+          .map((problem) => `<li>${escapeHtml(problem)}</li>`).join("")}</ul>
+        <p style="margin:8px 0 0">Nothing has been written.</p></div>`;
+    announce("Not ready to install.");
+    return;
+  }
+
   const result = await api("/api/flash", fields);
   if (!result.ok) { renderDeviceProblem(result); return; }
   $("device-review").classList.remove("hidden");
@@ -1018,11 +1097,24 @@ $("install-device").onclick = async () => {
       return;  // the status line already explains what went wrong
     }
   }
-  const result = await api("/api/flash", fields);
+  const endpoint = state.mode === "manage" ? "/api/manage" : "/api/flash";
+  const result = await api(endpoint, fields);
   $("install-status").classList.add("hidden");
-  button.textContent = card ? "Write card setup" : "Install device software";
+  button.textContent = state.mode === "manage"
+    ? "Apply these settings"
+    : (card ? "Write card setup" : "Install device software");
 
   if (!result.ok) { button.disabled = false; renderDeviceProblem(result); return; }
+
+  if (state.mode === "manage") {
+    $("install-result").innerHTML = `
+      <div class="notice ok"><strong>Settings applied.</strong>
+        <p style="margin:8px 0 0">${escapeHtml(result.summary || "")}</p>
+        <p style="margin:8px 0 0">Volume, LED brightness and the wake threshold are gateway settings
+        and are not changed here.</p></div>`;
+    announce("Settings applied.");
+    return;
+  }
 
   const preview = Boolean(result.dry_run);
   $("install-result").innerHTML = preview

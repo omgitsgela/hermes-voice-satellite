@@ -163,28 +163,41 @@ class Voice:
     id: str
     name: str
     language: str = "en_US"
-    #: Where the published preview lives. Small, and played before anything large is downloaded.
+    #: What the interface plays. A bundled clip for the default voices, so the choice is audible with
+    #: no network; a published remote sample for the rest.
     sample_url: str = ""
+    #: The published clip, always, so a bundled one can be replaced or fall back.
+    remote_sample_url: str = ""
     size_mb: int = 60
     licence: str = ""
     default: bool = False
 
     @property
     def sample_is_local(self) -> bool:
-        return self.sample_url.startswith("file://")
+        return self.sample_url.startswith("/samples/") or self.sample_url.startswith("file://")
 
+
+HFC_FEMALE_SAMPLE = (
+    "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/hfc_female/medium/samples/"
+    "speaker_0.mp3"
+)
+HFC_MALE_SAMPLE = (
+    "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/hfc_male/medium/samples/"
+    "speaker_0.mp3"
+)
 
 VOICES: tuple[Voice, ...] = (
     Voice(
         id="en_US-hfc_female-medium", name="HFC, female", default=True, size_mb=60,
-        sample_url=("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/hfc_female/"
-                    "medium/samples/speaker_0.mp3"),
+        # Bundled: the default choice must be audible offline, and 87 KB is affordable.
+        sample_url="/samples/en_US-hfc_female-medium.mp3",
+        remote_sample_url=HFC_FEMALE_SAMPLE,
         licence="see the piper-voices model card",
     ),
     Voice(
         id="en_US-hfc_male-medium", name="HFC, male", size_mb=60,
-        sample_url=("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/hfc_male/"
-                    "medium/samples/speaker_0.mp3"),
+        sample_url="/samples/en_US-hfc_male-medium.mp3",
+        remote_sample_url=HFC_MALE_SAMPLE,
         licence="see the piper-voices model card",
     ),
     Voice(
@@ -206,6 +219,16 @@ VOICES: tuple[Voice, ...] = (
         licence="see the piper-voices model card",
         ),
 )
+
+
+def sample_path(voice: Voice) -> str:
+    """The URL the interface should play: the bundled clip when there is one on disk."""
+    if voice.sample_url.startswith("/samples/"):
+        bundled = Path(__file__).resolve().parent / "web" / voice.sample_url.lstrip("/")
+        if bundled.exists():
+            return voice.sample_url
+        return voice.remote_sample_url or voice.sample_url
+    return voice.sample_url
 
 
 def voices() -> tuple[Voice, ...]:

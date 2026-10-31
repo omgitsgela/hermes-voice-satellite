@@ -176,7 +176,8 @@ class SessionBehaviour(unittest.TestCase):
         result = self.session.install_device(
             "esp32-xvf3800", device_name="kitchen", device_id="esp32-0011223344",
             dial_address="tls://192.0.2.10:10702", port="/dev/ttyACM0", wifi_ssid="home",
-            certs_dir="/tmp/certs", dry_run=True,
+            wifi_password="correct horse battery staple", certs_dir=str(ROOT / "packages"),
+            dry_run=True,
         )
         self.assertTrue(result["ok"])
         stages = [s["stage"] for s in result.get("stages", [])]
@@ -242,7 +243,7 @@ class SessionBehaviour(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 with mock_home(tmp):
-                    result = self.session.download_voice("en_US-amy-medium")
+                    result = build_session(dry_run=False).download_voice("en_US-amy-medium")
         finally:
             catalogue.download = original
 
@@ -267,7 +268,7 @@ class SessionBehaviour(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 repo = Path(tmp)
                 (repo / "bridge.env").write_text("VOICE_PIPER_VOICE=en_US-hfc_female-medium\nKEEP=me\n")
-                session = build_session()
+                session = build_session(dry_run=False)
                 session.repo_root = repo
                 with mock_home(str(repo / "home")):
                     result = session.download_voice("en_US-amy-medium", apply=True)
@@ -279,6 +280,51 @@ class SessionBehaviour(unittest.TestCase):
         self.assertIn("VOICE_PIPER_VOICE=en_US-amy-medium", text)
         self.assertIn("VOICE_CONFIG=", text)
         self.assertIn("KEEP=me", text, "the rest of the environment file must survive")
+
+    def test_a_voice_file_must_arrive_with_its_config(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "my_voice.onnx"
+            model.write_bytes(b"model")
+            self.assertIn("config is missing", " ".join(self.session.voice_file_problems(str(model))))
+            (Path(str(model) + ".json")).write_text("{}")
+            self.assertEqual(self.session.voice_file_problems(str(model)), [])
+
+    def test_a_voice_file_preview_and_install_do_nothing_in_a_preview_session(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "my_voice.onnx"
+            model.write_bytes(b"model")
+            Path(str(model) + ".json").write_text("{}")
+            preview = self.session.preview_voice_file(str(model))
+            install = self.session.install_voice_file(str(model))
+        self.assertTrue(preview.get("practice"))
+        self.assertTrue(install.get("practice"))
+        self.assertFalse((self.session.repo_root / "voices" / "my_voice.onnx").exists())
+
+    def test_installing_a_voice_file_copies_both_files_and_selects_it(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            (repo / "voices").mkdir(parents=True)
+            (repo / "bridge.env").write_text("VOICE_PIPER_VOICE=old\nKEEP=me\n")
+            model = Path(tmp) / "my_voice.onnx"
+            model.write_bytes(b"model")
+            Path(str(model) + ".json").write_text('{"audio": {}}')
+            session = build_session(dry_run=False)
+            session.repo_root = repo
+            result = session.install_voice_file(str(model))
+            env = (repo / "bridge.env").read_text()
+            model_copied = (repo / "voices" / "my_voice.onnx").exists()
+            config_copied = (repo / "voices" / "my_voice.onnx.json").exists()
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(model_copied, "the model was not copied next to the others")
+        self.assertTrue(config_copied, "the config was not copied beside it")
+        self.assertIn("VOICE_PIPER_VOICE=my_voice", env)
+        self.assertIn("KEEP=me", env)
 
     def test_community_measurements_are_read_only(self):
         from hermes_installer import catalogue
@@ -295,6 +341,108 @@ class SessionBehaviour(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["results"][0]["recall"], 74.2)
         self.assertIn("account", result["note"])
+
+    def test_preflight_refuses_a_board_without_a_network(self):
+        # The board's staging step stages the network and refuses without it, so the refusal has to
+        # come before the firmware is written, not after.
+        check = self.session.preflight(
+            "esp32-xvf3800", device_name="kitchen", dial_address="tls://192.0.2.10:10702",
+            port="/dev/ttyACM0", device_id="esp32-0011223344",
+        )
+        self.assertFalse(check["ok"])
+        self.assertTrue(any("Wi-Fi" in problem for problem in check["problems"]))
+
+    def test_preflight_collects_every_problem_at_once(self):
+        check = self.session.preflight("esp32-xvf3800")
+        self.assertGreaterEqual(len(check["problems"]), 3)
+
+    def test_preflight_passes_for_a_ready_board(self):
+        check = self.session.preflight(
+            "esp32-xvf3800", device_name="kitchen", dial_address="tls://192.0.2.10:10702",
+            port="/dev/ttyACM0", device_id="esp32-0011223344", wifi_ssid="home",
+            wifi_password="correct horse battery staple",
+        )
+        self.assertTrue(check["ok"], check["problems"])
+
+    def test_install_refuses_before_writing_when_not_ready(self):
+        import hermes_installer.driver as driver_module
+
+        written = []
+        original = driver_module.Runner.run
+
+        def spy(self, command):
+            written.append(command)
+            return original(self, command)
+
+        driver_module.Runner.run = spy
+        try:
+            result = self.session.install_device(
+                "esp32-xvf3800", device_name="kitchen",
+                dial_address="tls://192.0.2.10:10702", port="/dev/ttyACM0",
+            )
+        finally:
+            driver_module.Runner.run = original
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["problems"])
+        self.assertEqual(written, [], "something ran before the setup was checked")
+
+    def test_managing_a_device_stages_without_flashing(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as card:
+            (Path(card) / "etc").mkdir()
+            (Path(card) / "home" / "satellite").mkdir(parents=True)
+            result = self.session.manage_device(
+                "pi-reSpeaker-2mic", device_name="bedroom", dial_address="tls://192.0.2.10:10702",
+                card_mount=card, wifi_ssid="home", dry_run=True,
+            )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result.get("mode"), "manage")
+        joined = " ".join(" ".join(c["argv"]) for c in result["commands"])
+        self.assertIn("add-wifi-profile-to-card.py", joined)
+        self.assertNotIn("install-esp32", joined)
+
+    def test_managing_with_nothing_to_change_says_so(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as card:
+            (Path(card) / "etc").mkdir()
+            result = self.session.manage_device(
+                "pi-reSpeaker-2mic", device_name="bedroom", dial_address="tls://h:10702",
+                card_mount=card, dry_run=True,
+            )
+        self.assertFalse(result["ok"])
+        self.assertIn("nothing to change", result["error"].lower())
+
+    def test_the_platform_report_states_what_this_machine_can_do(self):
+        report = self.session.platform_report()
+        self.assertIn("can_flash", report)
+        self.assertIn("can_supervise", report)
+        self.assertIsInstance(report["notes"], list)
+
+    def test_closing_removes_every_credential_directory(self):
+        import tempfile
+        from pathlib import Path as _Path
+
+        from hermes_installer.pairing import PairedCredentials
+
+        made = []
+        with tempfile.TemporaryDirectory() as tmp:
+            session = build_session(dry_run=False)
+            session.repo_root = _Path(tmp)
+            for index in range(3):
+                credentials = PairedCredentials(
+                    gateway=None, identity_code="ABCD-EFGH", ca_pem="CA", cert_pem="CERT",
+                    key_pem="KEY", server_pin="PIN", dial_address="tls://h:10702",
+                    server_cert_pem="SERVER", device_id=f"device-{index}",
+                )
+                made.append(_Path(session._materialise_credentials(credentials)))
+            # Each pairing supersedes the last, so at most one directory is live at a time.
+            live = [path for path in made if path.exists()]
+            self.assertLessEqual(len(live), 1)
+            session.close()
+            self.assertEqual([p for p in made if p.exists()], [],
+                             "a private key survived the session")
 
     def test_pairing_without_a_confirmed_code_is_refused(self):
         result = self.session.pair("192.0.2.10", 10702, "a b c d e", "kitchen")
@@ -363,12 +511,17 @@ class HttpInterface(unittest.TestCase):
         self.assertIn("cannot be reached", result["error"])
 
     @posix_only
+    @posix_only
     def test_flash_over_http(self):
-        result = self.post_json("/api/flash", {
-            "device_id": "pi-reSpeaker-2mic", "device_name": "bedroom",
-            "dial_address": "tls://192.0.2.10:10702", "card_mount": "/media/user/rootfs",
-            "dry_run": True,
-        })
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as card:
+            (Path(card) / "etc").mkdir()
+            result = self.post_json("/api/flash", {
+                "device_id": "pi-reSpeaker-2mic", "device_name": "bedroom",
+                "dial_address": "tls://192.0.2.10:10702", "card_mount": card,
+                "dry_run": True,
+            })
         self.assertTrue(result["ok"])
         # The card writer, not the on-device installer: install-pi.sh writes to the running
         # machine's /etc and would have installed services on the workbench.

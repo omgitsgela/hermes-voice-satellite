@@ -82,6 +82,26 @@ class Handler(BaseHTTPRequestHandler):
             )
             self._send(200, html.encode(), "text/html; charset=utf-8")
             return
+        if self.path.startswith("/samples/"):
+            name = self.path.rsplit("/", 1)[-1]
+            if not name.endswith(".mp3") or "/" in name:
+                self._json({"error": "not found"}, 404)
+                return
+            sample = WEB_ROOT / "samples" / name
+            if not sample.exists():
+                self._json({"error": "not found"}, 404)
+                return
+            self._send(200, sample.read_bytes(), "audio/mpeg")
+            return
+        if self.path.startswith("/previews/"):
+            name = self.path.rsplit("/", 1)[-1]
+            previews = Path.home() / ".cache" / "hermes-installer" / "previews"
+            candidate = previews / name
+            if "/" in name or not name.endswith(".wav") or not candidate.exists():
+                self._json({"error": "not found"}, 404)
+                return
+            self._send(200, candidate.read_bytes(), "audio/wav")
+            return
         if self.path == "/api/status":
             if not self._guard():
                 return
@@ -155,6 +175,7 @@ class Handler(BaseHTTPRequestHandler):
                         device_id=str(body.get("device_id") or "") or None,
                         expected_code=str(body.get("expected_code", "")),
                         remember=bool(body.get("remember", False)),
+                        replace=bool(body.get("replace", False)),
                     )
                 )
                 return
@@ -167,6 +188,14 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._json(self.session.install_device(profile_id, **body))
                 return
+            if self.path == "/api/voice-custom":
+                if body.get("action") == "preview":
+                    self._json(self.session.preview_voice_file(str(body.get("path", ""))))
+                else:
+                    self._json(self.session.install_voice_file(
+                        str(body.get("path", "")), apply=bool(body.get("apply", True))
+                    ))
+                return
             if self.path == "/api/voice":
                 self._json(self.session.download_voice(
                     str(body.get("voice", "")), apply=bool(body.get("apply", False))
@@ -176,6 +205,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(self.session.prepare_wake_word(
                     str(body.get("format", "")), str(body.get("model", ""))
                 ))
+                return
+            if self.path == "/api/manage":
+                profile = str(body.pop("device_profile", "") or body.pop("device_id", ""))
+                self._json(self.session.manage_device(profile, **body))
+                return
+            if self.path == "/api/preflight":
+                profile = str(body.pop("device_profile", "") or body.pop("device_id", ""))
+                self._json(self.session.preflight(profile, **body))
                 return
             if self.path == "/api/device-id":
                 self._json(self.session.device_identity(

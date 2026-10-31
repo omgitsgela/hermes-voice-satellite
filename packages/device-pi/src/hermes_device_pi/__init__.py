@@ -66,14 +66,23 @@ def bridge_env_path(mount: str, user: str) -> Path:
     return Path(mount) / "home" / user / "bridge-link.env"
 
 
-def render_bridge_env(existing: str, *, device_id: str, host: str, port: int, name: str) -> str:
-    """Set the four values the card needs, keeping every other line the template put there."""
+def render_bridge_env(existing: str, *, device_id: str, host: str, port: int, name: str,
+                      tls: dict[str, str] | None = None) -> str:
+    """Set the values the card needs, keeping every other line the template put there."""
     wanted = {
         "VOICE_DEVICE_ID": device_id,
         "VOICE_BRIDGE_HOST": host,
         "VOICE_BRIDGE_PORT": str(port),
         "VOICE_DEVICE_NAME": name,
     }
+    if tls:
+        # The device dials a TLS port, so it needs the CA it should trust and its own certificate
+        # and key. Without these the card boots, fails to authenticate and looks like a dead device.
+        wanted.update({
+            "VOICE_BRIDGE_TLS_CA": tls["ca"],
+            "VOICE_BRIDGE_TLS_CERT": tls["cert"],
+            "VOICE_BRIDGE_TLS_KEY": tls["key"],
+        })
     lines = existing.splitlines() if existing else [
         "# Bootstrap configuration for the outbound shape: the device dials the bridge.",
     ]
@@ -143,23 +152,88 @@ class PiDriver:
                      summary=f"card prepared for {request.device_name}")
 
     def provision(self, request: DeviceRequest, runner: Runner) -> StepResult:
-        """Copy a saved Wi-Fi profile onto the card. Needs root: the source profile is root-readable.
+        """Stage what the card needs beyond the software: credentials, and optionally Wi-Fi.
 
-        Note the shape: this copies a network this machine already knows. It cannot invent one from
-        a passphrase, so the interface must not offer to.
+        Two independent jobs, because they are independently needed. A card on Ethernet still needs
+        its TLS credentials, and a card without credentials cannot authenticate however good its
+        Wi-Fi is. Requiring one to do the other is what made a blank Wi-Fi fail an install.
         """
         if not request.card_mount:
             return StepResult(ok=False, summary="no SD card is mounted")
-        if not request.wifi_ssid:
-            return StepResult(ok=False, summary="no saved Wi-Fi network was chosen")
-        require_posix("Copying a Wi-Fi profile onto a card")
-        return runner.run(
-            Command(
-                (WIFI_SCRIPT, "--mount", request.card_mount, "--source", request.wifi_ssid,
-                 "--name", request.wifi_ssid),
-                f"copy the saved Wi-Fi network {request.wifi_ssid} onto the card",
-                requires_elevation=True,
+        require_posix("Preparing a satellite card")
+
+        staged: list[str] = []
+        commands: list[Command] = []
+        if request.certs_dir:
+            credentials = self._stage_credentials(request, runner)
+            if not credentials.ok:
+                return credentials
+            staged.append("credentials")
+
+        if request.wifi_ssid:
+            wifi = runner.run(
+                Command(
+                    (WIFI_SCRIPT, "--mount", request.card_mount, "--source", request.wifi_ssid,
+                     "--name", request.wifi_ssid),
+                    f"copy the saved Wi-Fi network {request.wifi_ssid} onto the card",
+                    requires_elevation=True,
+                )
             )
+            if not wifi.ok:
+                return wifi
+            # Keep the run's commands: the interface shows what ran, and dropping them made the
+            # Wi-Fi step look like it had done nothing at all.
+            commands.extend(wifi.commands)
+            staged.append(f"the Wi-Fi network {request.wifi_ssid}")
+
+        if not staged:
+            return StepResult(ok=True, summary="nothing to stage: the card keeps its settings")
+        return StepResult(ok=True, summary="staged " + " and ".join(staged),
+                          commands=tuple(commands))
+
+    def _stage_credentials(self, request: DeviceRequest, runner: Runner) -> StepResult:
+        """Copy the paired credentials onto the card and point its environment at them."""
+        source = Path(str(request.certs_dir))
+        user = request.card_user or "satellite"
+        identity = request.device_id or request.device_name
+        destination = Path(str(request.card_mount)) / "home" / user / "certs"
+        files = {
+            "client-ca.crt": "ca.crt",
+            f"{identity}.crt": "cert.pem",
+            f"{identity}.key": "key.pem",
+        }
+        written: list[Path] = []
+        for name, target in files.items():
+            origin = source / name
+            if not origin.exists():
+                return StepResult(
+                    ok=False,
+                    summary=f"the paired credentials have no {name}, so the card would dial TLS "
+                            f"without being able to authenticate. Pair again.",
+                )
+            result = runner.write_file(
+                destination / target, origin.read_text(), mode=0o600,
+                description=f"copy {target} onto the card",
+            )
+            if not result.ok:
+                return result
+            written.append(destination / target)
+
+        # Point the card's environment at them, alongside the values flash already wrote.
+        env_path = bridge_env_path(str(request.card_mount), user)
+        try:
+            existing = env_path.read_text()
+        except OSError:
+            existing = ""
+        host, port = split_dial(request.dial_address)
+        content = render_bridge_env(
+            existing, device_id=identity, host=host, port=port, name=request.device_name,
+            tls={"ca": str(destination / "ca.crt"),
+                 "cert": str(destination / "cert.pem"),
+                 "key": str(destination / "key.pem")},
+        )
+        return runner.write_file(
+            env_path, content, description="point the card's environment at its credentials"
         )
 
     def verify(self, request: DeviceRequest, runner: Runner) -> StepResult:

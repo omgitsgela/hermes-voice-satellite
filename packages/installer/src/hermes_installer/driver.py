@@ -93,6 +93,12 @@ class Runner:
 
     def run(self, command: Command) -> StepResult:
         argv = self.resolve(command.argv)
+        if command.requires_elevation and not self.dry_run and not _is_elevated():
+            return StepResult(
+                ok=False,
+                summary=("this step needs administrator rights. Run the installer with sudo, or "
+                         "perform this step where you can."),
+            )
         if self.dry_run:
             return StepResult(
                 ok=True,
@@ -166,6 +172,11 @@ def _subprocess_executor(argv: Sequence[str], cwd: Path | None) -> tuple[int, st
     except subprocess.TimeoutExpired:
         return 124, f"timed out: {' '.join(argv)}"
     return finished.returncode, (finished.stdout or "") + (finished.stderr or "")
+
+
+def _is_elevated() -> bool:
+    """Whether this process can do the things that need an administrator."""
+    return os.geteuid() == 0 if hasattr(os, "geteuid") else False
 
 
 def require_posix(operation: str) -> None:

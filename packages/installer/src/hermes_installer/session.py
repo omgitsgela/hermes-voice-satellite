@@ -51,14 +51,41 @@ class Session:
         # provisioning scripts can read them from.
         self.credentials = None
         self.certs_dir: str | None = None
+        #: The directory currently in use, and every directory made this session, so close() removes
+        #: all of them rather than only the newest.
         self._certs_tmp: Path | None = None
+        self._certs_dirs: list[Path] = []
         self.state = SessionState()
         self.state.hermes_shape = gateway_module.detect_hermes()
 
     # -- what the first screen needs -----------------------------------------------------------
 
+    def platform_report(self) -> dict:
+        """What this machine can and cannot do, stated rather than discovered by failing.
+
+        The builds run everywhere, but the device work is shell and systemd: Windows cannot flash, and
+        a gateway needs systemd to supervise the bridge. Elevation is listed too, because a step that
+        needs an administrator should say so before it is attempted.
+        """
+        import sys
+
+        elevated = os.geteuid() == 0 if hasattr(os, "geteuid") else False
+        can_flash = sys.platform != "win32"
+        can_supervise = sys.platform == "linux"
+        notes = []
+        if not can_flash:
+            notes.append("Flashing a device needs Linux or macOS: the device scripts are shell. On "
+                         "Windows, run that part on the machine holding the device, or inside WSL.")
+        if not can_supervise:
+            notes.append("Supervising a gateway needs systemd, which this platform does not have.")
+        if not elevated:
+            notes.append("Some card and Wi-Fi steps need administrator rights and will ask for them.")
+        return {"name": sys.platform, "can_flash": can_flash, "can_supervise": can_supervise,
+                "elevated": elevated, "notes": notes}
+
     def status(self) -> dict:
         return {
+            "platform": self.platform_report(),
             "hermes": self.state.hermes_shape,
             "hermes_explained": {
                 "desktop": "Hermes Desktop found. The installer will add the voice bridge and "
@@ -250,6 +277,7 @@ class Session:
         device_id: str | None = None,
         expected_code: str | None = None,
         remember: bool = False,
+        replace: bool = False,
     ) -> dict:
         # `device_name` is the pet name a person chose; `device_id` is what the gateway issues the
         # certificate for, and what provisioning later resolves files by. They are not the same
@@ -273,6 +301,7 @@ class Session:
                 enroll_as,
                 confirm=lambda code: False,  # unreachable: expected_code is set
                 expected_code=expected_code,
+                replace=replace,
             )
         except PairingCancelled as exc:
             return {"ok": False, "error": str(exc), "cancelled": True}
@@ -312,6 +341,9 @@ class Session:
             return None
         import tempfile
 
+        # One live credential directory at a time: pairing again means the previous credentials are
+        # superseded, not kept around in a temporary directory nobody will clean.
+        self._discard_certs_dir()
         directory = Path(tempfile.mkdtemp(prefix="hermes-pair-"))
         directory.chmod(0o700)
         # The names are not a style choice: provision-device-tls.py reads exactly these four, and
@@ -330,16 +362,21 @@ class Session:
             target.write_text(contents)
             target.chmod(0o600)
         self._certs_tmp = directory
+        self._certs_dirs.append(directory)
         return str(directory)
 
-    def close(self) -> None:
-        """Remove the temporary credentials. A private key should not outlive the session."""
+    def _discard_certs_dir(self) -> None:
         import shutil
 
-        if self._certs_tmp is not None:
-            shutil.rmtree(self._certs_tmp, ignore_errors=True)
-            self._certs_tmp = None
+        for directory in getattr(self, "_certs_dirs", []):
+            shutil.rmtree(directory, ignore_errors=True)
+        self._certs_dirs = []
+        self._certs_tmp = None
         self.certs_dir = None
+
+    def close(self) -> None:
+        """Remove every temporary credential directory. A private key must not outlive the session."""
+        self._discard_certs_dir()
 
     # -- what can be chosen -------------------------------------------------------------------
 
@@ -369,10 +406,13 @@ class Session:
             "default": catalogue.default_voice().id,
             "voices": [
                 {"id": v.id, "name": v.name, "language": v.language, "size_mb": v.size_mb,
-                 "sample_url": v.sample_url, "default": v.default}
+                 "sample_url": catalogue.sample_path(v),
+                 "bundled": catalogue.sample_path(v).startswith("/samples/"),
+                 "default": v.default}
                 for v in catalogue.voices()
             ],
-            "note": "Every voice can be heard before it is downloaded.",
+            "note": "The default voices can be heard offline; every other voice plays its published "
+                    "sample before anything large is downloaded.",
         }
 
     def community_wake_words(self, query: str, *, refresh: bool = True) -> dict:
@@ -395,6 +435,81 @@ class Session:
                      "fetch them. A model file you supply yourself works instead."),
         }
 
+    # -- a voice of your own ------------------------------------------------------------------
+
+    def _piper_executable(self) -> str | None:
+        import shutil
+
+        for candidate in (self.repo_root / ".venv" / "bin" / "piper",
+                          self.repo_root / ".venv" / "Scripts" / "piper.exe"):
+            if candidate.exists():
+                return str(candidate)
+        return shutil.which("piper")
+
+    def voice_file_problems(self, path: str) -> list[str]:
+        """A Piper voice is two files, and half of them is not a voice."""
+        voice = Path(str(path or ""))
+        if not voice:
+            return ["Choose a Piper voice file."]
+        if not voice.exists():
+            return [f"{voice} does not exist on this computer."]
+        if voice.suffix != ".onnx":
+            return [f"{voice.name} is not a Piper model; the model ends in .onnx."]
+        if not Path(str(voice) + ".json").exists():
+            return [f"Its config is missing: {voice.name}.json has to sit beside it."]
+        return []
+
+    def preview_voice_file(self, path: str) -> dict:
+        """Synthesise a line through a voice the person supplied, so they hear it before it is used."""
+        problems = self.voice_file_problems(path)
+        if problems:
+            return {"ok": False, "error": problems[0]}
+        if self.dry_run:
+            return {"ok": True, "practice": True,
+                    "note": "In a real run this would synthesise a line through the voice so you "
+                            "could hear it before it is used."}
+        piper = self._piper_executable()
+        if not piper:
+            return {"ok": False,
+                    "error": "There is no piper executable on this computer, so this voice cannot be "
+                             "previewed here. It can still be selected."}
+        import subprocess
+
+        previews = Path.home() / ".cache" / "hermes-installer" / "previews"
+        previews.mkdir(parents=True, exist_ok=True)
+        target = previews / f"{Path(path).stem}.wav"
+        sentence = "The quick brown fox jumps over the lazy dog."
+        try:
+            finished = subprocess.run(
+                [piper, "-m", str(path), "-c", str(path) + ".json", "-f", str(target)],
+                input=sentence, text=True, capture_output=True, timeout=180,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"ok": False, "error": f"piper could not run: {exc}"}
+        if not target.exists() or target.stat().st_size == 0:
+            detail = (finished.stderr or "").strip()[:200]
+            return {"ok": False, "error": f"the voice produced no audio. {detail}"}
+        return {"ok": True, "preview_url": f"/previews/{target.name}", "size": target.stat().st_size}
+
+    def install_voice_file(self, path: str, *, apply: bool = True) -> dict:
+        """Put a supplied voice where the gateway keeps its voices, and select it."""
+        problems = self.voice_file_problems(path)
+        if problems:
+            return {"ok": False, "error": problems[0]}
+        if self.dry_run:
+            return {"ok": True, "practice": True,
+                    "note": "In a real run this would copy the voice into the gateway's voices "
+                            "directory and select it."}
+        source = Path(path)
+        destination = self.repo_root / "voices"
+        destination.mkdir(parents=True, exist_ok=True)
+        for suffix in ("", ".json"):
+            origin = Path(str(source) + suffix)
+            target = destination / (source.name + suffix)
+            target.write_bytes(origin.read_bytes())
+        note = self._set_gateway_voice(source.stem, destination / source.name)
+        return {"ok": True, "voice": source.stem, "applied": apply, "apply_note": note}
+
     def download_voice(self, voice_id: str, *, apply: bool = False) -> dict:
         """Fetch a Piper voice, and optionally make it the gateway's voice.
 
@@ -406,6 +521,12 @@ class Session:
         voice = next((v for v in catalogue.voices() if v.id == voice_id), None)
         if voice is None:
             return {"ok": False, "error": f"no voice called {voice_id!r} in the catalogue"}
+        if self.dry_run:
+            # Downloading 60 MB and rewriting the gateway's voice are exactly the kind of change a
+            # preview promises not to make.
+            return {"ok": True, "practice": True, "voice": voice.id, "downloaded": [],
+                    "applied": False,
+                    "note": f"In a real run this would download {voice.size_mb} MB and select it."}
 
         cache = Path.home() / ".cache" / "hermes-installer" / "voices"
         model = cache / f"{voice.id}.onnx"
@@ -506,12 +627,77 @@ class Session:
                     "error": "the device did not report an identity; connect it and try again"}
         return {"ok": True, "device_id": found[0], "raw": output}
 
+    def preflight(self, profile_id: str, **fields: Any) -> dict:
+        """Everything the stages will need, checked BEFORE anything is written.
+
+        A flash that succeeds and a staging step that then refuses leaves a half-configured device,
+        which is worse than refusing at the start. Every reason to refuse is collected here, so a
+        person sees the whole list rather than one problem per attempt.
+        """
+        try:
+            profile = self.registry.get(profile_id)
+        except RegistryError as exc:
+            return {"ok": False, "problems": [str(exc)]}
+
+        problems: list[str] = []
+        if not str(fields.get("dial_address") or "").strip():
+            problems.append("No gateway address yet: pair with the gateway before installing.")
+        if not str(fields.get("device_name") or "").strip():
+            problems.append("Give the device a name.")
+
+        if profile.needs_card_reader:
+            mount = str(fields.get("card_mount") or "")
+            if not mount:
+                problems.append("Choose the card location.")
+            elif not (Path(mount) / "etc").is_dir():
+                problems.append(f"{mount} has no etc directory, so it is not the card's root "
+                                f"filesystem. Mount the system partition, not the small boot one.")
+        else:
+            if not fields.get("port"):
+                problems.append("Choose the USB connection the device is on.")
+            if not fields.get("device_id"):
+                problems.append("Read the device's own identity first: the certificate is issued for "
+                                "that identity, not for the name you chose.")
+            # The board's provisioner stages the network and refuses without one, so this has to be
+            # caught before the firmware is written.
+            if not fields.get("wifi_ssid"):
+                problems.append("The board needs a Wi-Fi network: its setup stages the network the "
+                                "device will join, and cannot skip it.")
+            elif not (fields.get("wifi_password") or fields.get("wifi_psk_file")):
+                problems.append("A Wi-Fi network needs its password as well as its name.")
+
+        model = str(fields.get("wake_model") or "")
+        if model and not Path(model).exists() and not (self.repo_root / model).exists():
+            problems.append(f"The wake-word file {model} does not exist on this computer.")
+        if not model and profile.wake_catalogue_format() == "microwakeword_tflite":
+            # The driver passes the firmware's bundled model by this path; if it is not here, the
+            # device would silently fall back to a different phrase.
+            bundled = self.repo_root / f"firmware/esp32/models/{profile.wake_default}.tflite"
+            if not bundled.exists():
+                problems.append(
+                    f"The wake-word model for {profile.wake_default} is missing from this checkout "
+                    f"({bundled}). Supply a model file instead."
+                )
+
+        certs = str(fields.get("certs_dir") or "")
+        if certs and not Path(certs).is_dir():
+            problems.append(f"The paired credentials are no longer at {certs}; pair again.")
+
+        return {"ok": not problems, "problems": problems}
+
     def install_device(self, profile_id: str, **fields: Any) -> dict:
         """Flash the device, then stage what must be staged. Success means every stage succeeded."""
         try:
             self.registry.get(profile_id)
         except RegistryError as exc:
             return {"ok": False, "error": str(exc)}
+
+        # Refuse before writing anything, with every reason at once.
+        check = self.preflight(profile_id, **fields)
+        if not check["ok"]:
+            return {"ok": False, "problems": check["problems"],
+                    "error": "; ".join(check["problems"]),
+                    "summary": check["problems"][0] if check["problems"] else "not ready"}
 
         first = self.flash(profile_id, **fields)
         if not first.get("ok"):
@@ -538,6 +724,28 @@ class Session:
             "stages": stages,
             "output": "\n".join(filter(None, [first.get("output", ""), second.get("output", "")])),
         }
+
+    def manage_device(self, profile_id: str, **fields: Any) -> dict:
+        """Change what the cable can change on a device that is already set up. No flashing.
+
+        Wi-Fi, the dial address, the credentials and the wake model live on the device or its card, so
+        this stages them again. Volume, brightness and the wake threshold are gateway-side settings and
+        are deliberately NOT pretended here: the gateway owns them and this installer cannot reach it
+        yet.
+        """
+        try:
+            self.registry.get(profile_id)
+        except RegistryError as exc:
+            return {"ok": False, "error": str(exc)}
+        if not str(fields.get("dial_address") or "").strip():
+            return {"ok": False, "error": "pair with the gateway first: the device needs its address"}
+        if not (fields.get("wifi_ssid") or fields.get("certs_dir") or fields.get("wake_model")):
+            return {"ok": False,
+                    "error": "nothing to change: choose a Wi-Fi network, a wake word, or pair again "
+                             "to refresh the credentials"}
+        result = self.flash(profile_id, **{**fields, "step": "provision"})
+        result["mode"] = "manage"
+        return result
 
     def flash(self, profile_id: str, **fields: Any) -> dict:
         try:

@@ -147,6 +147,7 @@ def pair(
     *,
     confirm: Callable[[str], bool],
     expected_code: str | None = None,
+    replace: bool = False,
     transport: Transport | None = None,
 ) -> PairedCredentials:
     """Pair with a gateway, proving it first.
@@ -178,7 +179,12 @@ def pair(
                 f"identity code {code} was not confirmed, so nothing was sent to {ref}"
             )
 
-        data = conn.post_json(PAIR_PATH, {"words": words, "device": device_name})
+        # `replace` asks the gateway to reissue a certificate for a device it already knows, which is
+        # what a reflashed satellite needs. It is sent only when the caller asked for it.
+        request_body = {"words": words, "device": device_name}
+        if replace:
+            request_body["replace"] = True
+        data = conn.post_json(PAIR_PATH, request_body)
     finally:
         if own_transport:
             conn.close()

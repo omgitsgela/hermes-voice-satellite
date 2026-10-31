@@ -112,6 +112,8 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
         role = "A satellite, using a gateway that already exists"
     else:
         out(f"  Found: {state['hermes_explained']}")
+        for note in (state.get("platform") or {}).get("notes", []):
+            out(f"  Note: {note}")
         out("")
         role = prompt.choice(
             "What are we setting up?",
@@ -130,8 +132,7 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
         # not a preview at all: by the time the question appeared the machine had changed.
         preview = session.install_gateway(
             gateway_address, registry_port=int(registry_port or 10701),
-            tls_port=int(tls_port or 10702), skip_hermes=role.startswith("Both"),
-            dry_run=True,
+            tls_port=int(tls_port or 10702), dry_run=True,
         )
         if not preview.get("ok"):
             out(f"  Could not continue: {preview.get('error') or preview.get('log')}")
@@ -149,8 +150,7 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
         else:
             result = session.install_gateway(
                 gateway_address, registry_port=int(registry_port or 10701),
-                tls_port=int(tls_port or 10702), skip_hermes=role.startswith("Both"),
-                dry_run=False,
+                tls_port=int(tls_port or 10702), dry_run=False,
             )
             out(result.get("log") or "")
         if not result.get("ok"):
@@ -244,8 +244,18 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
                               remember=prompt.yes_no("Remember these words on this machine?",
                                                      default=False))
         if not paired.get("ok"):
-            out(f"  Pairing failed: {paired.get('error')}")
-            return 1
+            message = str(paired.get("error") or "")
+            if "exists" in message.lower() or "already" in message.lower():
+                out(f"  {message}")
+                if prompt.yes_no("This device is already known to the gateway. Replace its "
+                                 "certificate?", default=True):
+                    paired = session.pair(host, port, words, name,
+                                          device_id=fields.get("device_id"),
+                                          expected_code=code, replace=True,
+                                          remember=False)
+            if not paired.get("ok"):
+                out(f"  Pairing failed: {paired.get('error')}")
+                return 1
         out(f"  Paired. {'Remembered in ' + paired['remembered_in'] if paired.get('remembered_in') else 'Nothing was saved.'}")
 
         # The device was chosen at the top of this block, before its identity could be read.
@@ -263,6 +273,14 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
                 "Wi-Fi network it should join (blank to keep as it is)", default="") or None
             if fields["wifi_ssid"]:
                 fields["wifi_password"] = prompt.secret("Wi-Fi password (used once, not stored)")
+
+        check = session.preflight(profile["id"], **fields)
+        if not check["ok"]:
+            out("  Not ready to install:")
+            for problem in check["problems"]:
+                out(f"    - {problem}")
+            out("  Nothing has been written.")
+            return 1
 
         # Flash and staging are two stages: the software, then the Wi-Fi, dial address, credentials
         # and model where the device looks for them.
@@ -298,11 +316,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.status:
         print(json.dumps(session.status(), indent=2))
         return 0
-    if args.gui:
-        from .server import serve
+    try:
+        if args.gui:
+            from .server import serve
 
-        return serve(session)
-    return run(session, TerminalPrompt())
+            return serve(session)
+        return run(session, TerminalPrompt())
+    finally:
+        # Temporary credential directories hold a private key; they end with the session.
+        session.close()
 
 
 if __name__ == "__main__":

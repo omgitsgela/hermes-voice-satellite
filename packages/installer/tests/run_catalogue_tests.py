@@ -67,7 +67,24 @@ class VoicesCatalogue(unittest.TestCase):
         self.assertIn("en_US-hfc_male-medium", ids)
         self.assertIn("en_US-hfc_female-medium", ids)
         for voice in catalogue.voices():
-            self.assertTrue(voice.sample_url.startswith("https://"), voice.id)
+            self.assertTrue(voice.sample_url, voice.id)
+
+    def test_the_default_voices_are_audible_with_no_network(self):
+        # Decision: the default voices bring a sample MP3, bundled, so the choice works offline.
+        web = ROOT / "packages" / "installer" / "src" / "hermes_installer" / "web"
+        for voice in catalogue.voices():
+            if not voice.sample_url.startswith("/samples/"):
+                continue
+            bundled = web / voice.sample_url.lstrip("/")
+            self.assertTrue(bundled.exists(), f"{voice.id} claims a bundled sample that is missing")
+            self.assertGreater(bundled.stat().st_size, 10_000, voice.id)
+            # A real MP3, not an empty file or an error page.
+            self.assertTrue(bundled.read_bytes()[:3] in (b"ID3", b"\xff\xfb", b"\xff\xf3"))
+
+    def test_every_voice_still_has_a_remote_sample_to_fall_back_to(self):
+        for voice in catalogue.voices():
+            if voice.sample_url.startswith("/samples/"):
+                self.assertTrue(voice.remote_sample_url.startswith("https://"), voice.id)
 
     def test_exactly_one_default(self):
         self.assertEqual(sum(1 for v in catalogue.voices() if v.default), 1)
