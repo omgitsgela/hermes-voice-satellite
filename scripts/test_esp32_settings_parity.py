@@ -8,7 +8,7 @@ against is a device that reports `degraded` for a setting it could apply perfect
 
 Measured 2026-10-29, live from state/fleet-config.json:
 
-    wyoming1 (Raspberry Pi) reported applied: playback_volume, led_brightness,
+    the Pi satellite (Raspberry Pi) reported applied: playback_volume, led_brightness,
                                               wake_threshold, wake_word
     wyoming2 (this ESP32)   reported applied: playback_volume, mic_gain, led_brightness
 
@@ -16,7 +16,7 @@ So the ESP32 was missing wake_threshold and wake_word. wake_threshold was merely
 a comment saying "there is no detector yet" -- written before the TFLM detector existed, and stale
 ever since: a per-device sensitivity change silently waited for a reboot the device never got.
 
-This file pins the ESP32's side of parity: every setting wyoming1 applies live must either have a
+This file pins the ESP32's side of parity: every setting the Pi satellite applies live must either have a
 live adapter here too, or be staged with a documented reason. It reads the firmware source, so a
 refactor that drops an adapter fails here rather than being discovered on the device.
 
@@ -74,7 +74,7 @@ def main() -> int:
     detector_h = DETECTOR_H.read_text()
     detector_c = DETECTOR_C.read_text()
 
-    # 1) The settings wyoming1 applies live must also be applied live here.
+    # 1) The settings the Pi satellite applies live must also be applied live here.
     check("playback_volume reaches the session",
           applies_live(GATEWAY, "playback_volume"))
     check("led_brightness reaches the ring",
@@ -86,7 +86,7 @@ def main() -> int:
     check("the threshold is also persisted, or it reverts at the next boot",
           stages(GATEWAY, "wake_threshold"))
 
-    # 2) mic_gain is a capability wyoming1 does NOT have; the ESP32 must keep it.
+    # 2) mic_gain is a capability the Pi satellite does NOT have; the ESP32 must keep it.
     check("mic_gain keeps its live adapter",
           applies_live(GATEWAY, "mic_gain"))
 
