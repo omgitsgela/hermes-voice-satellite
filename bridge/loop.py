@@ -1201,7 +1201,9 @@ class VoiceLoop:
         from bridge.config import WAKE_NO_SPEECH_SECONDS, WAKE_QUIET_SECONDS
 
         await asyncio.sleep(WAKE_QUIET_SECONDS)
-        dropped = await self._discard_queued_events()
+        # Bounded by the chime's own length, NOT "everything queued": the queue can hold seconds of
+        # the person's speech behind the chime, and draining all of it loses the first word.
+        dropped = await self._discard_queued_events(WAKE_QUIET_SECONDS)
         if dropped:
             _LOGGER.info("wake: discarded %d event(s) of our own chime before listening", dropped)
         # Two clocks, deliberately. `no_speech_deadline` is how long the person has to produce real
@@ -1266,27 +1268,60 @@ class VoiceLoop:
         except Exception as exc:  # noqa: BLE001 - a missed retry must never cost the window
             _LOGGER.debug("could not repeat the wake request: %s", exc)
 
-    async def _discard_queued_events(self) -> int:
+    async def _discard_queued_events(self, window_seconds: Optional[float] = None) -> int:
         """Throw away events already waiting for us, without waiting for any of them.
 
-        Used after the follow-up quiet interval. A satellite that is already streaming keeps
-        sending audio, so the device's own done tone arrives as ordinary chunks. Sleeping through
-        the interval only *delays* reading them, and the endpointer then treats its own chime as
-        speech: it can close the window on a word nobody said (issue #40). Discarding is the point;
-        the sleep stays because the chime should finish playing first.
+        Used after the follow-up quiet interval and after a wake. A satellite that is already
+        streaming keeps sending audio, so the device's own chime arrives as ordinary chunks.
+        Sleeping through the interval only *delays* reading them, and the endpointer then treats its
+        own chime as speech: it can close the window on a word nobody said (issue #40).
 
-        Drains the replay buffer too, so nothing skipped during a task reappears here.
+        `window_seconds` bounds what is discarded BY AUDIO DURATION. Without it, everything queued
+        is thrown away -- which is what the wake path used to do, and it is not safe there: the queue
+        holds however much the device sent while the bridge was sleeping, and that can be far more
+        than the chime. Measured 2026-10-30 on the ESP32 satellite (which has no device-side mic
+        mute to hide behind): `discarded 93 event(s)`, and "new conversation" arrived as
+        "conversation" -- the first word was queued behind the chime and dumped with it. The phrase
+        matcher needs the whole phrase, so the reset never fired and the model answered instead.
+
+        With a window, only the chime's worth of audio is dropped and everything still waiting is
+        put back at the FRONT of the queue, so the person's first word survives to the endpointer.
         """
         dropped = 0
-        buf = self._replay_buffer()
-        while buf:
-            buf.popleft()
-            dropped += 1
-        while True:
+        if window_seconds is None:
+            buf = self._replay_buffer()
+            while buf:
+                buf.popleft()
+                dropped += 1
+            while True:
+                event = await self._next(0)
+                if event is None:
+                    break
+                dropped += 1
+            return dropped
+
+        discarded_seconds = 0.0
+        while discarded_seconds < window_seconds:
             event = await self._next(0)
             if event is None:
                 break
             dropped += 1
+            if AudioChunk.is_type(event.type):
+                chunk = AudioChunk.from_event(event)
+                bytes_per_second = max(1, chunk.rate * chunk.width * chunk.channels)
+                discarded_seconds += len(chunk.audio) / bytes_per_second
+
+        # Anything still queued is the person, not the chime: hand it back to the front of the
+        # queue in its original order so the capture sees it.
+        kept = []
+        while True:
+            event = await self._next(0)
+            if event is None:
+                break
+            kept.append(event)
+        buf = self._replay_buffer()
+        for event in reversed(kept):
+            buf.appendleft(event)
         return dropped
 
     async def capture_follow_up(self) -> tuple[Optional[EndpointResult], str]:
