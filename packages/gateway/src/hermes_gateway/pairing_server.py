@@ -379,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
                          certfile=certfile, keyfile=keyfile)
 
 
-def serve_pairing(
+def make_pairing_server(
     service: PairingService,
     *,
     bind: str = "0.0.0.0",
@@ -388,12 +388,26 @@ def serve_pairing(
     port: int = 10704,
     certfile: Path,
     keyfile: Path,
-) -> int:
+) -> ThreadingHTTPServer:
+    """Build the TLS server without running it, so tests can bind port 0 and speak to it."""
     handler = type("BoundPairing", (PairingHandler,), {"service": service})
     server = ThreadingHTTPServer((bind, port), handler)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(certfile=str(certfile), keyfile=str(keyfile))
     server.socket = context.wrap_socket(server.socket, server_side=True)
+    return server
+
+
+def serve_pairing(
+    service: PairingService,
+    *,
+    bind: str = "0.0.0.0",
+    port: int = 10704,
+    certfile: Path,
+    keyfile: Path,
+) -> int:
+    server = make_pairing_server(service, bind=bind, port=port,
+                                 certfile=certfile, keyfile=keyfile)
     print(f"pairing endpoint listening on {bind}:{port} (TLS)")
     try:
         server.serve_forever()

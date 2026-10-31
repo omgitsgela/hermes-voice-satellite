@@ -40,7 +40,8 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - name: Install the one runtime dependency the installer uses
-        run: python -m pip install --upgrade pip pyserial
+        # cryptography is needed to generate the certificate the end-to-end pairing test serves.
+        run: python -m pip install --upgrade pip pyserial cryptography
 
       - name: Offline suites
         shell: bash
