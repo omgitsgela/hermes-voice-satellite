@@ -1,0 +1,2 @@
+[hermes_installer.devices]
+esp32-xvf3800 = hermes_device_esp32

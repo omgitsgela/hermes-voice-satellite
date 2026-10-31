@@ -1,0 +1,9 @@
+pyserial>=3.5
+cryptography>=42
+hermes-voice-gateway-install>=0.1.0
+
+[gui]
+pywebview>=5.0
+
+[keyring]
+keyring>=25

@@ -1,0 +1,2 @@
+[hermes_installer.devices]
+pi-respeaker-2mic = hermes_device_pi

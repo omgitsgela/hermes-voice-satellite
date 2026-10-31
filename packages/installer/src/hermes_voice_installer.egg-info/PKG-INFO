@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: hermes-voice-installer
+Version: 0.1.0
+Summary: Installer and configuration tool for Hermes voice gateways and satellites
+Requires-Python: >=3.10
+Requires-Dist: pyserial>=3.5
+Requires-Dist: cryptography>=42
+Requires-Dist: hermes-voice-gateway-install>=0.1.0
+Provides-Extra: gui
+Requires-Dist: pywebview>=5.0; extra == "gui"
+Provides-Extra: keyring
+Requires-Dist: keyring>=25; extra == "keyring"

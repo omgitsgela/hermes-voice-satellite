@@ -8,9 +8,12 @@
 #   scripts/build-installer.sh            # build into dist/
 #   scripts/build-installer.sh --check    # report what is missing and stop
 #
-# Output: dist/hermes-installer/ (a directory: an executable plus its data). Ship the directory, or
-# wrap it in a platform package (tar.gz, AppImage, MSI). A one-file build is possible by setting
-# HERMES_ONEFILE=1, at the cost of a slower first start, because the bundle is unpacked each run.
+# Output: dist/hermes-installer/ (an executable plus its data). Ship the directory, or wrap it in a
+# platform package (tar.gz, AppImage, MSI).
+#
+# Windows note: a venv keeps its binaries in Scripts/, not bin/, the tools carry .exe, and `python3`
+# often does not exist. This script resolves all three, because the same file builds on every platform
+# in CI and a build that only works on the author's machine is not a build.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -22,14 +25,33 @@ VENV="${BUILD_VENV:-$ROOT/.build-venv}"
 
 say() { printf '  %s\n' "$*" >&2; }
 
-command -v "$PYTHON" >/dev/null 2>&1 || { say "no $PYTHON on PATH"; exit 1; }
-[[ -f "$ROOT/packaging/hermes-installer.spec" ]] || { say "packaging/hermes-installer.spec is missing"; exit 1; }
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
+    PYTHON="python"
+fi
+command -v "$PYTHON" >/dev/null 2>&1 || { say "no python on PATH"; exit 1; }
+[ -f "$ROOT/packaging/hermes-installer.spec" ] || { say "packaging/hermes-installer.spec is missing"; exit 1; }
+
+venv_bin() {
+    if [ -x "$VENV/bin/python" ]; then printf '%s' "$VENV/bin"
+    elif [ -x "$VENV/Scripts/python.exe" ]; then printf '%s' "$VENV/Scripts"
+    fi
+}
+
+venv_tool() {
+    # venv_tool pip -> the pip inside the venv, whatever this platform calls it
+    local dir; dir="$(venv_bin)"
+    [ -n "$dir" ] || return 1
+    for candidate in "$dir/$1" "$dir/$1.exe"; do
+        [ -x "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+    done
+    return 1
+}
 
 if [ "$CHECK" -eq 1 ]; then
     say "python: $("$PYTHON" --version 2>&1)"
     say "spec:   packaging/hermes-installer.spec"
-    if [ -x "$VENV/bin/pyinstaller" ]; then
-        say "pyinstaller: $("$VENV/bin/pyinstaller" --version) (in $VENV)"
+    if pyi="$(venv_tool pyinstaller)"; then
+        say "pyinstaller: $("$pyi" --version) (in $VENV)"
     else
         say "pyinstaller: not installed yet; a build would create $VENV and install it"
     fi
@@ -37,30 +59,32 @@ if [ "$CHECK" -eq 1 ]; then
     exit 0
 fi
 
-if [ ! -x "$VENV/bin/python" ]; then
+if [ -z "$(venv_bin)" ]; then
     say "creating $VENV"
     "$PYTHON" -m venv "$VENV"
 fi
 
 say "installing the packages and PyInstaller"
-"$VENV/bin/pip" install --quiet --upgrade pip
-"$VENV/bin/pip" install --quiet pyinstaller
-"$VENV/bin/pip" install --quiet \
+"$(venv_tool pip)" install --quiet --upgrade pip
+"$(venv_tool pip)" install --quiet pyinstaller
+"$(venv_tool pip)" install --quiet \
     "$ROOT/packages/gateway" \
     "$ROOT/packages/device-esp32" \
     "$ROOT/packages/device-pi" \
     "$ROOT/packages/installer"
 
-SPEC_ARGS=(--noconfirm --distpath "$ROOT/dist" --workpath "$ROOT/build/pyinstaller")
-if [ "${HERMES_ONEFILE:-0}" = "1" ]; then
-    say "one-file build requested: first start will be slower"
-fi
-
 say "building"
-"$VENV/bin/pyinstaller" "${SPEC_ARGS[@]}" "$ROOT/packaging/hermes-installer.spec" >&2
+"$(venv_tool pyinstaller)" --noconfirm \
+    --distpath "$ROOT/dist" --workpath "$ROOT/build/pyinstaller" \
+    "$ROOT/packaging/hermes-installer.spec" >&2
 
 TARGET="$ROOT/dist/hermes-installer"
-[ -x "$TARGET/hermes-installer" ] || { say "the build finished but $TARGET/hermes-installer is missing"; exit 1; }
+BINARY="$TARGET/hermes-installer"
+[ -x "$BINARY" ] || BINARY="$TARGET/hermes-installer.exe"
+if [ ! -x "$BINARY" ]; then
+    say "the build finished but no executable is in $TARGET"
+    exit 1
+fi
 
 say "built: $TARGET ($(du -sh "$TARGET" | cut -f1))"
-say "check it runs with no Python:  env -i PATH=/usr/bin:/bin $TARGET/hermes-installer --status >/dev/null"
+say "check it runs with no Python:  $BINARY --status"

@@ -1,0 +1,6 @@
+Metadata-Version: 2.4
+Name: hermes-device-esp32-xvf3800
+Version: 0.1.0
+Summary: ESP32-S3 with reSpeaker XVF3800 for the Hermes voice installer
+Requires-Python: >=3.10
+Requires-Dist: hermes-voice-installer

@@ -1,0 +1,8 @@
+pyproject.toml
+src/hermes_device_esp32/__init__.py
+src/hermes_device_esp32_xvf3800.egg-info/PKG-INFO
+src/hermes_device_esp32_xvf3800.egg-info/SOURCES.txt
+src/hermes_device_esp32_xvf3800.egg-info/dependency_links.txt
+src/hermes_device_esp32_xvf3800.egg-info/entry_points.txt
+src/hermes_device_esp32_xvf3800.egg-info/requires.txt
+src/hermes_device_esp32_xvf3800.egg-info/top_level.txt

@@ -1,0 +1,2 @@
+[console_scripts]
+hermes-installer = hermes_installer.cli:main

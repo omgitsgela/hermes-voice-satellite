@@ -1,0 +1,8 @@
+pyproject.toml
+src/hermes_gateway/__init__.py
+src/hermes_gateway/pairing_server.py
+src/hermes_gateway/unit.py
+src/hermes_voice_gateway_install.egg-info/PKG-INFO
+src/hermes_voice_gateway_install.egg-info/SOURCES.txt
+src/hermes_voice_gateway_install.egg-info/dependency_links.txt
+src/hermes_voice_gateway_install.egg-info/top_level.txt
