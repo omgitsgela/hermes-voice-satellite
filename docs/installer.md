@@ -239,6 +239,15 @@ Everything a setup needs is checked **before** anything is written. `preflight` 
 once (no gateway address, no device identity, no Wi-Fi password, the wrong card partition, a missing
 model file), and an install with problems writes nothing at all.
 
+## Pairing a device that is not on the gateway's machine
+
+Pairing returns one more thing than the certificate, key, CA and pin: the **fingerprint the gateway
+registered for that device**. The provisioner refuses to write credentials unless it can confirm the
+certificate is the one the gateway has on file, and on another machine there is no registry file to
+check against. So the workbench writes the one line for its own device, from the value the gateway
+just issued, and passes it as `--registry`. It never receives the gateway's registry, so it cannot see
+any other device.
+
 ## Re-enrolling a device
 
 A device that was reflashed has no certificate of its own any more, and the enrolment script refuses an
@@ -270,8 +279,11 @@ scripts/build-installer.sh --check   # what would be used
 scripts/build-installer.sh           # build into dist/hermes-installer/
 ```
 
-The result runs with no Python, no virtualenv and no pip on the target machine. Sizes as built by CI:
-**20 MB on Linux, 21 MB on Windows, 20 MB on macOS**, as directories. Locally, on an interpreter built
+The result runs with no Python, no virtualenv and no pip on the target machine, and it carries the
+engine it needs: the install scripts, the Pi templates and the firmware model are inside the bundle,
+and a frozen build resolves them from its own directory rather than the current one. `--check-assets`
+verifies exactly that, and CI runs it against every packaged build with the Python environment
+stripped. Sizes with those assets: about **30 MB** locally, 20-21 MB before they were included. Locally, on an interpreter built
 with symbols, the same build was 24 MB stripped and **241 MB unstripped**, which is why the spec sets
 `strip` — and why it is set per platform, because stripping is not supported on Windows and produced a
 binary there that could not load its own Python DLL.

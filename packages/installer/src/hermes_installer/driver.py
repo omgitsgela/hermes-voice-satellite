@@ -204,6 +204,8 @@ class DeviceRequest:
     wifi_ssid: str | None = None
     wifi_psk_file: str | None = None
     certs_dir: str | None = None
+    #: The one-line registry record pairing wrote for this device, for provisioners that check it.
+    registry_file: str | None = None
     #: A wake-word model file for devices that take one (a microWakeWord .tflite, for instance).
     wake_model: str | None = None
     extra: dict = field(default_factory=dict)

@@ -57,6 +57,8 @@ class PairedCredentials:
     server_cert_pem: str = ""
     #: The identity the certificate was issued for, which is the board's own id, not its pet name.
     device_id: str = ""
+    #: The fingerprint the gateway registered for this device, which the provisioner checks against.
+    device_fingerprint: str = ""
 
     def is_complete(self) -> bool:
         return all(
@@ -199,6 +201,7 @@ def pair(
         dial_address=str(data.get("dial_address", f"tls://{ref.host}:{ref.port}")),
         server_cert_pem=str(data.get("server_cert_pem", "")),
         device_id=device_name,
+        device_fingerprint=str(data.get("device_fingerprint", "")),
     )
     if not credentials.is_complete():
         raise PairingError(

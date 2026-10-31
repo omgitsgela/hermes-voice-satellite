@@ -239,6 +239,10 @@ class PairingService:
                 # Public material, and required by the provisioning step: it recomputes the pin from
                 # the certificate rather than trusting a number.
                 "server_cert_pem": (tls / "server.crt").read_text(),
+                # The fingerprint the gateway registered for THIS device, so a workbench can write
+                # the one-line registry record the provisioner validates against. It reveals nothing
+                # about any other device.
+                "device_fingerprint": _pem_fingerprint(Path(cert).read_text()),
                 "dial_address": self.config.dial_address,
             }
             # Recorded inside the same lock: a success must clear the counter before the next
@@ -252,6 +256,19 @@ class PairingService:
         raw = server_crt.read_bytes()
         der = _pem_to_der(raw) if b"-----BEGIN CERTIFICATE-----" in raw else raw
         return hashlib.sha256(der).hexdigest()
+
+
+def _pem_fingerprint(pem_text: str) -> str:
+    """SHA-256 of the certificate's DER form, computed the way the bridge computes it.
+
+    Empty when the material cannot be parsed. That is not a silent success: the workbench then has no
+    registry record to write, and provisioning refuses for want of it rather than writing credentials
+    the gateway will not recognise.
+    """
+    try:
+        return hashlib.sha256(_pem_to_der(pem_text.encode())).hexdigest()
+    except Exception:  # noqa: BLE001 - unparseable material is a refusal downstream, not a crash here
+        return ""
 
 
 def _pem_to_der(pem: bytes) -> bytes:

@@ -96,6 +96,13 @@ class Esp32Commands(unittest.TestCase):
         self.assertIn("--tls-certs", argv)
         self.assertNotIn("--certs", argv)
 
+    def test_the_registry_record_travels_with_the_certificates(self):
+        # The provisioner refuses without it, so a paired device would flash and then fail to stage.
+        argv = esp32.DRIVER.flash(
+            self.request(certs_dir="/certs", registry_file="/certs/device-credentials.json"), dry()
+        ).commands[0].argv
+        self.assertEqual(argv[argv.index("--registry") + 1], "/certs/device-credentials.json")
+
     def test_no_port_is_a_refusal_not_a_crash(self):
         result = esp32.DRIVER.flash(self.request(port=None), dry())
         self.assertFalse(result.ok)

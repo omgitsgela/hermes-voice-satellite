@@ -308,11 +308,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--gui", action="store_true", help="open the graphical installer")
     parser.add_argument("--dry-run", action="store_true", help="show every command, run none of it")
     parser.add_argument("--status", action="store_true", help="print what was detected, as JSON")
+    parser.add_argument("--check-assets", action="store_true",
+                        help="verify the files an installation runs are present, then exit")
     parser.add_argument("--base", default=".", help="the repository checkout to install from")
     args = parser.parse_args(argv)
 
     session = Session(Path(args.base), dry_run=args.dry_run)
 
+    if args.check_assets:
+        from .session import RUNTIME_ASSETS
+
+        missing = [asset for asset in RUNTIME_ASSETS if not (session.repo_root / asset).exists()]
+        for asset in RUNTIME_ASSETS:
+            state = "missing" if asset in missing else "present"
+            print(f"  {state}: {asset}")
+        if missing:
+            print(f"  {len(missing)} runtime asset(s) missing from {session.repo_root}")
+            return 1
+        print(f"  all {len(RUNTIME_ASSETS)} runtime assets present in {session.repo_root}")
+        return 0
     if args.status:
         print(json.dumps(session.status(), indent=2))
         return 0

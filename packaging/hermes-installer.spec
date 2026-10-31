@@ -25,6 +25,13 @@ pathex = [
 # (See STRIP above for why stripping is platform-conditional.)
 datas = [
     (str(PACKAGES / "installer" / "src" / "hermes_installer" / "web"), "hermes_installer/web"),
+    # The engine, not just the front end. Without these the bundle can report what it sees and then
+    # has nothing to run: the gateway install, the device flash and the card writer are all scripts.
+    (str(ROOT / "scripts"), "scripts"),
+    (str(ROOT / "pi"), "pi"),
+    (str(ROOT / "firmware" / "esp32" / "models"), "firmware/esp32/models"),
+    (str(ROOT / "bridge.env.example"), "."),
+    (str(ROOT / "requirements.txt"), "."),
 ]
 
 hiddenimports = [

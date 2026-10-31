@@ -79,9 +79,29 @@ class StubEnroller:
         self.calls.append((device_id, replace))
         cert = self.tls_dir / f"{device_id}.crt"
         key = self.tls_dir / f"{device_id}.key"
-        cert.write_text("DEVICE CERTIFICATE")
+        # A real certificate, self-signed here, because the gateway derives the device's registry
+        # fingerprint from it and a placeholder would produce nothing to write.
+        certificate = device_certificate(device_id)
+        cert.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
         key.write_text("DEVICE KEY")
+        self.last_der = certificate.public_bytes(serialization.Encoding.DER)
         return cert, key
+
+
+def device_certificate(common_name: str) -> x509.Certificate:
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
+    now = dt.datetime.now(dt.timezone.utc)
+    return (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - dt.timedelta(minutes=5))
+        .not_valid_after(now + dt.timedelta(days=1))
+        .sign(key, hashes.SHA256())
+    )
 
 
 class EndToEnd(unittest.TestCase):
@@ -126,12 +146,20 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(credentials.identity_code, code)
         # And the material is complete and correctly named for the provisioner.
         self.assertEqual(credentials.ca_pem, "CLIENT CA")
-        self.assertEqual(credentials.cert_pem, "DEVICE CERTIFICATE")
+        self.assertTrue(credentials.cert_pem.startswith("-----BEGIN CERTIFICATE-----"),
+                        "the client did not receive a certificate")
         self.assertEqual(credentials.key_pem, "DEVICE KEY")
         self.assertEqual(credentials.device_id, "esp32-0011223344")
         self.assertEqual(credentials.dial_address, "tls://127.0.0.1:10702")
         # The pin is the fingerprint of the certificate this server actually presented.
         self.assertEqual(credentials.server_pin, hashlib.sha256(self.der).hexdigest())
+        # The gateway registers a fingerprint for the device it just enrolled, and the workbench needs
+        # it to build the one-line registry record the provisioner checks.
+        self.assertEqual(
+            credentials.device_fingerprint,
+            hashlib.sha256(self.enroller.last_der).hexdigest(),
+            "the fingerprint is not the one the provisioner will compute",
+        )
         self.assertTrue(credentials.server_cert_pem.startswith("-----BEGIN CERTIFICATE-----"))
         self.assertEqual(self.enroller.calls, [("esp32-0011223344", False)])
 

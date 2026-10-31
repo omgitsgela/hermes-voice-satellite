@@ -75,6 +75,10 @@ def _argv(request: DeviceRequest, action: str) -> tuple[str, ...]:
         argv += ["--device-name", request.device_name]
     if request.certs_dir:
         argv += ["--tls-certs", request.certs_dir]
+    if request.registry_file:
+        # Pairing issued this record for this device; without it the provisioner refuses to write,
+        # because it cannot confirm the certificate is the one the gateway registered.
+        argv += ["--registry", request.registry_file]
     model = request.wake_model
     if not model and request.wake_word == PROFILE.wake_default:
         # The firmware bundles its default model. Passing it explicitly is what keeps the phrase the

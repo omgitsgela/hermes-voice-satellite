@@ -92,6 +92,23 @@ jobs:
           if (-not $devices) { throw "no devices discovered" }
           Write-Host "devices:" ($devices | ForEach-Object { $_.id })
 
+      - name: The bundle carries what an installation runs (POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          # A bundle that can only report what it sees is not an installer: this checks the scripts,
+          # the Pi templates and the firmware model are inside it and found without a checkout.
+          env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
+            dist/hermes-installer/hermes-installer --check-assets
+
+      - name: The bundle carries what an installation runs (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-ChildItem env: | Where-Object { $_.Name -like 'PYTHON*' } | Remove-Item
+          & "dist/hermes-installer/hermes-installer.exe" --check-assets
+          if ($LASTEXITCODE -ne 0) { throw "runtime assets missing from the bundle" }
+
       - name: Record the size
         shell: bash
         run: du -sh dist/hermes-installer | tee size.txt

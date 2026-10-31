@@ -22,6 +22,40 @@ from .registry import DeviceRegistry, RegistryError
 from .secrets import CredentialStore
 
 
+#: The parts of the checkout an installation actually runs. A bundle has to carry all of them.
+RUNTIME_ASSETS = (
+    "scripts/install-gateway.sh",
+    "scripts/install-esp32.sh",
+    "scripts/deploy-to-card.sh",
+    "scripts/esp32_provision.py",
+    "scripts/issue-registry-tls.py",
+    "scripts/add-wifi-profile-to-card.py",
+    "firmware/esp32/models/hey_hermes.tflite",
+)
+
+
+def _resolve_repo_root(repo_root: Path | str | None) -> Path:
+    """Find the tree the installer runs from, which is not the current directory in a bundle.
+
+    A packaged installer starts wherever the person launched it. Its scripts, its device profiles and
+    its firmware models live inside the bundle, so when the given path has no scripts the bundle's own
+    directory is used instead.
+    """
+    import sys
+
+    if repo_root is not None:
+        candidate = Path(repo_root)
+        if (candidate / "scripts").exists() or not getattr(sys, "frozen", False):
+            return candidate
+
+    frozen = getattr(sys, "frozen", False)
+    if frozen:
+        bundle = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent / "_internal"))
+        if (bundle / "scripts").exists():
+            return bundle
+    return Path(repo_root) if repo_root is not None else Path.cwd()
+
+
 @dataclass
 class SessionState:
     hermes_shape: str = "none"
@@ -41,7 +75,7 @@ class Session:
         store: CredentialStore | None = None,
         dry_run: bool = False,
     ) -> None:
-        self.repo_root = Path(repo_root or Path.cwd())
+        self.repo_root = _resolve_repo_root(repo_root)
         self.registry = registry or DeviceRegistry()
         if registry is None:
             self.registry.discover()
@@ -361,6 +395,11 @@ class Session:
             target = directory / name
             target.write_text(contents)
             target.chmod(0o600)
+        if credentials.device_fingerprint:
+            record = directory / "device-credentials.json"
+            record.write_text(f'{{"{credentials.device_fingerprint}": "{device}"}}')
+            record.chmod(0o600)
+
         self._certs_tmp = directory
         self._certs_dirs.append(directory)
         return str(directory)
@@ -787,6 +826,11 @@ class Session:
             device_id=fields.get("device_id"),
             card_user=str(fields.get("card_user") or "satellite"),
             certs_dir=fields.get("certs_dir"),
+            registry_file=fields.get("registry_file") or (
+                str(Path(fields["certs_dir"]) / "device-credentials.json")
+                if fields.get("certs_dir") and
+                (Path(fields["certs_dir"]) / "device-credentials.json").exists() else None
+            ),
             wake_model=fields.get("wake_model"),
             extra=dict(fields.get("extra") or {}),
         )

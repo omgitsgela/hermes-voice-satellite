@@ -216,12 +216,19 @@ class SessionBehaviour(unittest.TestCase):
                 gateway=None, identity_code="ABCD-EFGH", ca_pem="CA", cert_pem="CERT",
                 key_pem="KEY", server_pin="PIN", dial_address="tls://h:10702",
                 server_cert_pem="SERVER", device_id="esp32-0011223344",
+                device_fingerprint="abc123",
             )
             directory = Path(session._materialise_credentials(credentials))
             names = sorted(p.name for p in directory.iterdir())
             self.assertEqual(names, sorted([
                 "client-ca.crt", "esp32-0011223344.crt", "esp32-0011223344.key", "server.crt",
+                "device-credentials.json",
             ]))
+            import json as _json
+
+            record = _json.loads((directory / "device-credentials.json").read_text())
+            self.assertEqual(record, {"abc123": "esp32-0011223344"},
+                             "the registry record must map the fingerprint to this device only")
             session.close()
             self.assertFalse(directory.exists(), "temporary credentials outlived the session")
 
