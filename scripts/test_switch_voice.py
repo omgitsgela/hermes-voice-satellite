@@ -271,19 +271,25 @@ with tempfile.TemporaryDirectory() as td:
           ".onnx.json" in (p.stdout + p.stderr), p.stdout + p.stderr)
 
 # --- 8. scope flags ---------------------------------------------------------
+# The two scopes name the two surfaces explicitly: `gateway` is the voice Gateway's own environment,
+# `hermes` is the Hermes configuration. They used to be "bridge" and "gateway", which made the flag
+# ambiguous the moment the service was renamed.
 with tempfile.TemporaryDirectory() as td:
     repo, cfg, cache, tmp = make_fixture(td)
-    run(repo, cfg, cache, tmp, "en_US-test-single", "--scope", "Gateway")
-    check("--scope Gateway leaves Hermes alone",
+    before = (repo / "gateway.env").read_text()
+    run(repo, cfg, cache, tmp, "en_US-test-single", "--scope", "gateway")
+    check("--scope gateway updates the Gateway's environment",
+          (repo / "gateway.env").read_text() != before)
+    check("--scope gateway leaves Hermes alone",
           hermes_piper(cfg).get("voice") == "en_US-old-medium", hermes_piper(cfg))
 
 with tempfile.TemporaryDirectory() as td:
     repo, cfg, cache, tmp = make_fixture(td)
     before = (repo / "gateway.env").read_text()
-    run(repo, cfg, cache, tmp, "en_US-test-single", "--scope", "gateway")
-    check("--scope gateway leaves gateway.env alone",
+    run(repo, cfg, cache, tmp, "en_US-test-single", "--scope", "hermes")
+    check("--scope hermes leaves gateway.env alone",
           (repo / "gateway.env").read_text() == before)
-    check("--scope gateway still updates Hermes",
+    check("--scope hermes still updates Hermes",
           hermes_piper(cfg).get("voice") == "en_US-test-single")
 
 with tempfile.TemporaryDirectory() as td:

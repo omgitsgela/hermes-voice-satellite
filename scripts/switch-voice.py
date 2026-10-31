@@ -27,7 +27,7 @@ Usage
     scripts/switch-voice.py clean100 --speaker 78
 
     # only one side (e.g. try it in chat before it speaks in the room)
-    scripts/switch-voice.py en_US-amy-medium --scope gateway
+    scripts/switch-voice.py en_US-amy-medium --scope hermes
 
     # see the plan without touching anything
     scripts/switch-voice.py clean100 --speaker 78 --dry-run
@@ -226,13 +226,13 @@ def backup(repo: Path, files, note: str) -> Path:
 def apply(bridge_env_path: Path, hermes_cfg: Path, cache_dir: Path, repo: Path,
           voice: str, speaker_setting, speaker_id, scope: str) -> None:
     """Write the voice into every file that needs it. Returns nothing; raises Refused."""
-    if scope in ("both", "Gateway"):
+    if scope in ("both", "gateway"):
         text = bridge_env_path.read_text() if bridge_env_path.is_file() else ""
         text = set_env(text, ENV_VOICE, voice)
         text = set_env(text, ENV_SPEAKER, speaker_setting)   # None removes the line
         bridge_env_path.write_text(text)
 
-    if scope in ("both", "gateway"):
+    if scope in ("both", "hermes"):
         cache_dir.mkdir(parents=True, exist_ok=True)
         for src in voice_files(repo, voice):
             shutil.copy2(src, cache_dir / src.name)
@@ -370,7 +370,7 @@ def main() -> int:
     parser.add_argument("voice", nargs="?", help="voice name, e.g. en_US-lessac-medium or clean100")
     parser.add_argument("--speaker", help="speaker NAME from the voice's own map, or a numeric id "
                                           "(multi-speaker voices only)")
-    parser.add_argument("--scope", choices=["both", "Gateway", "gateway"], default="both",
+    parser.add_argument("--scope", choices=["both", "gateway", "hermes"], default="both",
                         help="which surfaces to change (default both)")
     parser.add_argument("--repo", default=str(REPO), help="the Gateway checkout (default: this repo)")
     parser.add_argument("--bridge-env", default=None, help="gateway.env to edit (default <repo>/gateway.env)")
@@ -410,12 +410,12 @@ def main() -> int:
         return fail("no voice given; see --list, or --rollback")
 
     scope = args.scope
-    if scope in ("both", "gateway") and not hermes_cfg.is_file():
-        if args.scope == "gateway":
+    if scope in ("both", "hermes") and not hermes_cfg.is_file():
+        if args.scope == "hermes":
             return fail(f"no Hermes config at {hermes_cfg}; nothing to change there")
         say(f"  note     no Hermes config at {hermes_cfg}: the gateway is skipped, "
             f"changing the Gateway only")
-        scope = "Gateway"
+        scope = "gateway"
 
     try:
         info, speaker_setting, speaker_id = resolve_target(repo, args.voice, args.speaker, not args.no_fetch)
@@ -439,11 +439,11 @@ def main() -> int:
 
     if args.dry_run:
         say("  plan     (dry run: nothing written)")
-        if scope in ("both", "Gateway"):
+        if scope in ("both", "gateway"):
             say(f"           {bridge_env_path}: {ENV_VOICE}={args.voice}"
                 + (f", {ENV_SPEAKER}={speaker_setting}" if speaker_setting else
                    f", {ENV_SPEAKER} removed"))
-        if scope in ("both", "gateway"):
+        if scope in ("both", "hermes"):
             say(f"           {cache_dir}: copy {args.voice}.onnx{{,.json}}")
             say(f"           {hermes_cfg}: tts.piper.voice={args.voice}"
                 + (f", speaker_id={speaker_id}" if speaker_id is not None else ", speaker_id removed"))
@@ -463,7 +463,7 @@ def main() -> int:
     state.setdefault("history", []).append(wants)
     save_state(repo, state)
 
-    if scope in ("both", "Gateway") and not args.no_restart:
+    if scope in ("both", "gateway") and not args.no_restart:
         say(f"  service  {restart_bridge()}")
         if not args.no_verify:
             for note in verify_bridge(args.voice):
@@ -471,9 +471,9 @@ def main() -> int:
 
     say(f"\nDone: {args.voice}" + (f" (speaker {speaker_setting} -> id {speaker_id})"
                                    if speaker_setting else "") + f" on {scope}.")
-    if scope in ("both", "gateway"):
+    if scope in ("both", "hermes"):
         say("The gateway picks the change up without a restart; the next spoken reply uses it.")
-    if scope in ("both", "Gateway"):
+    if scope in ("both", "gateway"):
         say("The satellite speaks with it from its next reply.")
     return 0
 
