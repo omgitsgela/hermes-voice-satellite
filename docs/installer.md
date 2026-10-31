@@ -123,6 +123,35 @@ when a device is plugged in. **USB provisioning needs no credentials at all**: p
 device is ownership of it, which also means nobody can lock themselves out of their own gateway by
 running the installer locally.
 
+## The gateway's pairing endpoint
+
+The gateway holds the certificate authority and the words; a workbench on another machine holds only
+the words and an address. The endpoint is how the second half gets a device identity.
+
+```
+POST /pair   (TLS)
+  {"words": "five words", "device": "esp32-0011223344"}
+  -> 200 {"ok": true, "ca_pem": ..., "cert_pem": ..., "key_pem": ...,
+          "server_pin": "<sha256 hex>", "dial_address": "tls://host:10702"}
+  -> 401 wrong words    429 too many attempts    400 bad request
+```
+
+Run it with `python -m hermes_gateway.pairing_server --state <state> --dial tls://host:10702`, or
+`--check` to verify the words and certificate material without starting anything.
+
+Three rules are load-bearing, not decoration:
+
+- **The words are compared in constant time**, and they are never logged, echoed, or repeated in an
+  error. A wrong guess gets the same answer whatever it guessed.
+- **Failures are rate limited per source**, with a lockout after a handful of attempts. The words are
+  the only thing between the internet and the certificate authority, so an unlimited guess rate would
+  make the entropy meaningless.
+- **The device id is validated before it reaches the filesystem**, because it becomes a filename.
+
+The endpoint does not decide whether a device is welcome beyond the words: anyone holding them can
+enrol. Rotating the words is the remedy, and enrolling devices the owner no longer wants is what
+revoking their certificates is for.
+
 ## The local interface proves itself
 
 The interface is served on loopback, but loopback is not authorisation: any page in the same browser
