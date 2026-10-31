@@ -169,7 +169,7 @@ guided_normalise_endpoint() {
     printf '%s://%s:%s' "$scheme" "$host" "$port"
 }
 
-# guided_endpoint_is_implemented TRANSPORT -- 0 when the firmware and bridge can actually carry
+# guided_endpoint_is_implemented TRANSPORT -- 0 when the firmware and Gateway can actually carry
 # this link today. Expressing a transport and carrying it are different things: the vocabulary
 # accepts usb and bt so the design is not closed off, but a link that cannot yet be carried must
 # be refused with a clear reason instead of silently producing a satellite that cannot connect.

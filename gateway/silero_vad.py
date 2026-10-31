@@ -4,8 +4,8 @@ Why this replaced `webrtcvad` is in `scripts/test_silero_vad.py` and `docs/voice
 The one-line version: webrtcvad calls ~99% of a noisy room "speech", which is why the project
 needed an aggressive energy gate, and the gate then went deaf to the person in an office.
 
-The model lives in `bridge/vendor/silero_vad_v6.onnx` and is loaded with `onnxruntime`, which the
-bridge already installs. Nothing here reaches the network, and nothing here reads an asset out of
+The model lives in `gateway/vendor/silero_vad_v6.onnx` and is loaded with `onnxruntime`, which the
+Gateway already installs. Nothing here reaches the network, and nothing here reads an asset out of
 another package's wheel.
 
 ## Streaming
@@ -28,7 +28,7 @@ from typing import Optional
 
 import numpy as np
 
-_LOGGER = logging.getLogger("bridge.silero_vad")
+_LOGGER = logging.getLogger("gateway.silero_vad")
 
 MODEL_PATH = pathlib.Path(__file__).resolve().parent / "vendor" / "silero_vad_v6.onnx"
 
@@ -62,7 +62,7 @@ class SileroVad:
 
         opts = onnxruntime.SessionOptions()
         # One thread each, no arena: this runs inside an asyncio service on a small host, and a
-        # pool would fight the rest of the bridge for cores on every 20 ms frame.
+        # pool would fight the rest of the Gateway for cores on every 20 ms frame.
         opts.inter_op_num_threads = 1
         opts.intra_op_num_threads = 1
         opts.enable_cpu_mem_arena = False

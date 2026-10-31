@@ -1,6 +1,6 @@
 # Vendored files
 
-Everything here exists so the bridge does not depend on something that can move or disappear.
+Everything here exists so the Gateway does not depend on something that can move or disappear.
 
 | Item | Detail |
 |---|---|
@@ -18,7 +18,7 @@ unrelated upgrade can move or delete it. An earlier candidate path read the mode
 is our speech-to-text engine, and its next release is under no obligation to keep shipping our voice
 detector.
 
-The file is committed here, `bridge/silero_vad.py` loads it by relative path, and
+The file is committed here, `gateway/silero_vad.py` loads it by relative path, and
 `scripts/test_silero_vad.py` asserts both that it exists and that it is **not** being read from
 `site-packages`.
 
@@ -38,7 +38,7 @@ and confirm the checksum above or update it deliberately with a note.
 
 The upstream repository also ships a ggml build, which the `pysilero_vad` package uses. It is not
 vendored here because it needs `libggml*.so` shared objects as well as the weights, where the ONNX
-file is pure data driven by `onnxruntime` — which the bridge already installs. Fewer moving parts to
+file is pure data driven by `onnxruntime` — which the Gateway already installs. Fewer moving parts to
 own.
 
 ## What it must not become

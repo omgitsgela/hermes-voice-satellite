@@ -34,7 +34,7 @@ Verified:
 
 The offline architecture-document test compares the configured Gateway URL with
 prose describing the reference defaults. Run that source-document check without
-installation-specific `bridge.env`; a custom port is not an architecture defect.
+installation-specific `gateway.env`; a custom port is not an architecture defect.
 The volume-range test now checks the configured floor rather than assuming the
 reference installation's private calibration.
 
@@ -54,5 +54,5 @@ ALSA device-control tests also require `alsa-utils`, even when commands are stub
 
 On a public host, explicitly bind announcements and raw Wyoming to loopback or a
 trusted private interface. `VOICE_ANNOUNCE_HOST` and `VOICE_ANNOUNCE_PORT` are now
-configurable through environment or `bridge.env`; the LAN default is preserved
+configurable through environment or `gateway.env`; the LAN default is preserved
 for compatibility. Transport security remains separate work under #61.

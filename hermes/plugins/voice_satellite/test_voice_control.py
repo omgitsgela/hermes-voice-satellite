@@ -22,7 +22,7 @@ def main() -> int:
         if method == "POST":
             assert isinstance(payload, dict)
             if payload.get("conversation_reset"):
-                # The real bridge rotates and returns the new session id.
+                # The real Gateway rotates and returns the new session id.
                 return {"ok": True, "conversation": "voice-test-session"}
             state.update(payload)
         return {"ok": True, **state}

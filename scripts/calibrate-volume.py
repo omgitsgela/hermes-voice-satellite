@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Find the satellite's real volume control and its audible floor (issue #10).
 
-Run this **on the satellite**, not on the bridge. It is deliberately standalone: stdlib
+Run this **on the satellite**, not on the gateway. It is deliberately standalone: stdlib
 only, no imports from this repository, so it can be copied to the device on its own
 without a dependency chain. That is why it duplicates a little amixer parsing instead of
 importing `pi/volume_control.py` - a diagnostic that cannot run is worth nothing.

@@ -18,7 +18,7 @@ class RewriteTests(unittest.TestCase):
         parser.read_dict({
             "connection": {"id": "source", "uuid": "old", "type": "wifi",
                            "interface-name": "wlan9", "master": "source-master",
-                           "slave-type": "bridge", "mac-address": "02:00:00:00:00:01"},
+                           "slave-type": "Gateway", "mac-address": "02:00:00:00:00:01"},
             "wifi": {"ssid": "test-network", "mode": "infrastructure",
                      "mac-address": "02:00:00:00:00:01",
                      "cloned-mac-address": "02:00:00:00:00:02",

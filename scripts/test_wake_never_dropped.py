@@ -9,11 +9,11 @@ then nothing at all, because the first turn was still finishing and its watcher
 ate the wake.
 
 The tone sounding is what makes this so confusing from the room: the device very
-clearly said "I heard you", and then the bridge dropped it.
+clearly said "I heard you", and then the Gateway dropped it.
 
-Run with the bridge's own interpreter:
+Run with the Gateway's own interpreter:
 
-    ~/hermes-voice-bridge/.venv/bin/python -B scripts/test_wake_never_dropped.py
+    ~/hermes-voice-satellite/.venv/bin/python -B scripts/test_wake_never_dropped.py
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.loop import VoiceLoop  # noqa: E402
+from gateway.loop import VoiceLoop  # noqa: E402
 
 
 class HeldWakeTests(unittest.IsolatedAsyncioTestCase):
@@ -54,7 +54,7 @@ class HeldWakeTests(unittest.IsolatedAsyncioTestCase):
         # The capture finds no speech: the exact branch that discarded the wake.
         loop.capture_utterance = AsyncMock(return_value=None)
 
-        with patch('bridge.loop.Detection') as Detection:
+        with patch('gateway.loop.Detection') as Detection:
             Detection.is_type.return_value = True
             Detection.from_event.return_value = type('D', (), {'name': 'hey-hermes'})()
             await asyncio.wait_for(loop._watch_for_interruption(state), timeout=3.0)
@@ -90,7 +90,7 @@ class HeldWakeTests(unittest.IsolatedAsyncioTestCase):
             return type('E', (), {'type': 'detection'})()
 
         loop.sat.next_event = next_event
-        with patch('bridge.loop.Detection') as Detection:
+        with patch('gateway.loop.Detection') as Detection:
             Detection.is_type.return_value = True
             Detection.from_event.return_value = type('D', (), {'name': 'hey-hermes'})()
             finished = await asyncio.wait_for(loop.wait_for_played(timeout=5.0),
@@ -120,7 +120,7 @@ class HeldWakeTests(unittest.IsolatedAsyncioTestCase):
         loop.self_trigger_count = 0
         loop.sat = AsyncMock()
         loop.sat.eof = False
-        with patch('bridge.loop.Detection') as Detection:
+        with patch('gateway.loop.Detection') as Detection:
             Detection.is_type.return_value = True
             Detection.from_event.return_value = type('D', (), {'name': 'hey-hermes'})()
             loop.sat.next_event = AsyncMock(return_value=type(

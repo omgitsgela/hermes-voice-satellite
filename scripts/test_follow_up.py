@@ -28,11 +28,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import bridge.config as config_module  # noqa: E402
-import bridge.loop as loop_module  # noqa: E402
-from bridge.endpointing import Endpointer  # noqa: E402
-from bridge.endpointing import EndpointResult  # noqa: E402
-from bridge.satellite import SatelliteClient  # noqa: E402
+import gateway.config as config_module  # noqa: E402
+import gateway.loop as loop_module  # noqa: E402
+from gateway.endpointing import Endpointer  # noqa: E402
+from gateway.endpointing import EndpointResult  # noqa: E402
+from gateway.satellite import SatelliteClient  # noqa: E402
 
 PROBLEMS = 0
 
@@ -142,7 +142,7 @@ async def main() -> int:
         check("...and none of them touched the mode", loop.follow_up is True)
 
     # 2c. "stop" is an ordinary word: only a whole-utterance stop may be intercepted.
-    from bridge.config import STOP_CORES
+    from gateway.config import STOP_CORES
     loop.stop_requested = False
     for sentence in ("stop the sprinklers", "don't stop the music",
                      "remind me where the bus stop is", "stop by the store later",

@@ -39,7 +39,7 @@ error body, or a response field.
 
 Minting is NOT implemented here: `POST /enroll` invokes the existing issuer
 (scripts/issue-registry-tls.py) so the fingerprint registered in `device-credentials.json` stays
-byte-identical to what bridge/registry.py's `peer_fingerprint` computes from a live TLS peer.
+byte-identical to what gateway/registry.py's `peer_fingerprint` computes from a live TLS peer.
 """
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
-from bridge.config import (
+from gateway.config import (
     ENROLL_CHALLENGE_TTL_SECONDS,
     ENROLL_GLOBAL_RATE_PER_MINUTE,
     ENROLL_RATE_PER_MINUTE,
@@ -75,7 +75,7 @@ from bridge.config import (
     REGISTRY_TLS_CERT_FILE,
 )
 
-_LOGGER = logging.getLogger("bridge.enroll")
+_LOGGER = logging.getLogger("gateway.enroll")
 
 TOKEN_WORDS = 5          # five dictionary words: ~55 bits from a 2048-entry list, typeable
 CHALLENGE_BYTES = 32     # 64 hex characters
@@ -122,7 +122,7 @@ def load_token(*, token_file: Path = ENROLL_TOKEN_FILE, words_file: Path = ENROL
     """Env override, else the token file, else generate one -- the announce token's shape.
 
     A generated token is written mode 600 and never printed from here: `install-gateway.sh`
-    prints it ONCE at install time, and a bridge that generates it lazily leaves it for the
+    prints it ONCE at install time, and a Gateway that generates it lazily leaves it for the
     operator to read from the file. Never log the value.
     """
     from_env = os.environ.get(env_name, "").strip() or ""
@@ -237,7 +237,7 @@ def _issuer():
 
     cmd_enroll is invoked rather than rewritten so the fingerprint this endpoint registers in
     `device-credentials.json` is computed by the same code the manual flow uses, and stays
-    byte-identical to bridge/registry.py's `peer_fingerprint`.
+    byte-identical to gateway/registry.py's `peer_fingerprint`.
     """
     global _issuer_module
     if _issuer_module is None:
@@ -256,7 +256,7 @@ class MintError(Exception):
 # -- the service -------------------------------------------------------------
 
 class EnrollmentService:
-    """`GET /enroll/challenge` + `POST /enroll`, wired into the bridge's existing LAN server."""
+    """`GET /enroll/challenge` + `POST /enroll`, wired into the Gateway's existing LAN server."""
 
     def __init__(self, *, token_file: Path = ENROLL_TOKEN_FILE,
                  words_file: Path = ENROLL_WORDS_FILE, token_env: str = ENROLL_TOKEN_ENV,

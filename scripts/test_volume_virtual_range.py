@@ -26,7 +26,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.volume import (  # noqa: E402
+from gateway.volume import (  # noqa: E402
     ALARM_MIN_PERCENT,
     FLOOR_PERCENT,
     MAX_PERCENT,

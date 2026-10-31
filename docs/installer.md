@@ -12,9 +12,9 @@ terminal, a Python install, or any knowledge of what a Wyoming protocol is.
 | **Gateway** | The service the satellites talk to and that talks to the Hermes API. One component with two roles, never two services. "Satellite Gateway" is the same thing, seen from the satellites' side. |
 | **Satellite** | A physical device: an ESP32 with a microphone array, or a Raspberry Pi with a HAT. |
 
-The word "bridge" was the Gateway's earlier name. It survives in three technical identifiers, which
-are file names rather than the component's name: the package directory `bridge/`, the environment file
-`bridge.env`, and the unit `hermes-voice-bridge.service`. A migration to `gateway/`, `gateway.env` and
+The word "Gateway" was the Gateway's earlier name. It survives in three technical identifiers, which
+are file names rather than the component's name: the package directory `gateway/`, the environment file
+`gateway.env`, and the unit `hermes-voice-gateway.service`. A migration to `gateway/`, `gateway.env` and
 `hermes-voice-gateway.service` is a separate change, because it touches a running service.
 
 It is also a **configuration tool**: run it again, point it at a gateway you already set up, and
@@ -199,7 +199,7 @@ them as if they were:
 - **Pi**: `scripts/deploy-to-card.sh <mount> [user]` writes onto the mounted card. `install-pi.sh` is
   the *on-device* installer: it writes into `/etc/systemd/system` and calls the host's `systemctl`,
   so pointing it at a mounted card is wrong. The card's real values live in
-  `bridge-link.env`, which the script deliberately never overwrites, so the driver fills it and then
+  `gateway-link.env`, which the script deliberately never overwrites, so the driver fills it and then
   re-runs the script: the second run is what enables the unit, which keeps that rule in one place.
 
 ## Choosing a wake word, and choosing a voice

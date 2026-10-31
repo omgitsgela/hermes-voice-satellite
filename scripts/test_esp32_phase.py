@@ -128,7 +128,7 @@ class PhaseSequenceTests(unittest.TestCase):
         self.assertIn(ERROR, self.seen, 'a definite refusal is an error, not an outage')
 
     def test_a_followup_window_is_announced(self):
-        """wake-now is the bridge saying "keep talking, no wake word needed". It is the only
+        """wake-now is the Gateway saying "keep talking, no wake word needed". It is the only
         signal the device has that the conversation is not over."""
         self._armed()
         self.lib.wy_session_step(self.sess, self._source_for([
@@ -138,7 +138,7 @@ class PhaseSequenceTests(unittest.TestCase):
 
     def test_a_dropped_wake_now_still_announces_the_followup_window(self):
         """A wake-now the core DROPS is not a fault, but the window IS open either way -- the
-        bridge is listening for more speech regardless of whether the device re-armed. The first
+        Gateway is listening for more speech regardless of whether the device re-armed. The first
         opens the stream; the second lands while it is already running and is genuinely dropped."""
         self._armed()
         self.lib.wy_session_step(self.sess, self._source_for([
@@ -175,7 +175,7 @@ class PhaseSequenceTests(unittest.TestCase):
         self.assertIn(ERROR, self.seen)
 
     def test_the_bridge_presentation_events_are_honoured(self):
-        """led-idle is how the bridge cleans up after aborted work and an expired follow-up --
+        """led-idle is how the Gateway cleans up after aborted work and an expired follow-up --
         exactly the cases the device cannot work out for itself."""
         self._armed()
         for name, expected in (('led-busy', TRANSCRIPT),

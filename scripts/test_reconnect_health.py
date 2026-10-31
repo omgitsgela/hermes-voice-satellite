@@ -4,7 +4,7 @@
 reconnect() used to clear `_eof` before connecting. When the connect failed the client reported
 itself healthy with no reader task, so the loop's `sat.eof` checks never fired and nothing retried
 until the next hourly refresh: the device stayed inert for up to an hour after one failed connect.
-Run with the bridge venv:
+Run with the Gateway venv:
 
     .venv/bin/python scripts/test_reconnect_health.py
 """
@@ -16,7 +16,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.satellite import SatelliteClient  # noqa: E402
+from gateway.satellite import SatelliteClient  # noqa: E402
 
 checks = 0
 failures = []

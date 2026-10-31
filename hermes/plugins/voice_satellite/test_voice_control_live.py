@@ -5,7 +5,7 @@
 script, it should be able to execute that on its own smartly." So the assistant gets a tool, and
 this proves the tool can actually change the device.
 
-Checks the whole chain: the plugin's handler -> the bridge's authenticated /settings endpoint -> the
+Checks the whole chain: the plugin's handler -> the Gateway's authenticated /settings endpoint -> the
 loop's persisted state, and back out again. It leaves follow-up mode OFF, which is the default.
 
     python3 ~/.hermes/plugins/voice_satellite/test_voice_control_live.py
@@ -21,7 +21,7 @@ import urllib.request
 from pathlib import Path
 
 PLUGIN = Path(os.path.expanduser("~/.hermes/plugins/voice_satellite/voice_tool.py"))
-STATE = Path(os.path.expanduser("~/hermes-voice-bridge/state/follow-up-on"))
+STATE = Path(os.path.expanduser("~/hermes-voice-satellite/state/follow-up-on"))
 PROBLEMS = 0
 
 
@@ -44,7 +44,7 @@ def call(module, action: str) -> dict:
 
 
 def raw(module, method: str, path: str, payload=None, token: str | None = "auto"):
-    """A request straight at the bridge, bypassing the plugin, to check it independently."""
+    """A request straight at the gateway, bypassing the plugin, to check it independently."""
     if token == "auto":
         token = module._token()
     body = json.dumps(payload).encode() if payload is not None else None
@@ -62,7 +62,7 @@ def raw(module, method: str, path: str, payload=None, token: str | None = "auto"
 
 def main() -> int:
     module = load()
-    print("=== VOICE CONTROL (live, through the bridge) ===")
+    print("=== VOICE CONTROL (live, through the gateway) ===")
 
     # 1. Status reads the real state.
     result = call(module, "follow_up_status")
@@ -79,7 +79,7 @@ def main() -> int:
     result = call(module, "follow_up_on")
     check("follow_up_on reports success and verification",
           result.get("ok") and result.get("verified") and result.get("follow_up") is True, result)
-    check("the bridge persisted it to its state file",
+    check("the Gateway persisted it to its state file",
           STATE.is_file() and STATE.read_text().strip() == "on",
           STATE.read_text().strip() if STATE.is_file() else "missing")
     check("a fresh read sees it on", raw(module, "GET", "/settings")["body"].get("follow_up") is True)

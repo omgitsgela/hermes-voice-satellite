@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Every registered device must be leased, armed and wake-responsive (issue #111).
 
-Run with the bridge's own interpreter:
+Run with the Gateway's own interpreter:
 
-    ~/hermes-voice-bridge/.venv/bin/python scripts/test_fleet_lease.py
+    ~/hermes-voice-satellite/.venv/bin/python scripts/test_fleet_lease.py
 
-Why this exists. The bridge leased exactly one satellite (`_first_ready_device` ->
+Why this exists. The Gateway leased exactly one satellite (`_first_ready_device` ->
 `ready[0]`) and only re-leased after a lease loss. A second registered device sat
 registered forever: its mic task ran, its wake scorer stayed disarmed because the
 firmware only scores under `RUN_REQUESTED`, and it never answered "Okay Nabu".
@@ -37,8 +37,8 @@ from wyoming.audio import AudioChunk, AudioStart  # noqa: E402
 from wyoming.event import Event, async_read_event, async_write_event  # noqa: E402
 from wyoming.wake import Detection  # noqa: E402
 
-from bridge.loop import IdleWakeRefresh, VoiceLoop  # noqa: E402
-from bridge.registry import (  # noqa: E402
+from gateway.loop import IdleWakeRefresh, VoiceLoop  # noqa: E402
+from gateway.registry import (  # noqa: E402
     PROTOCOL_VERSION,
     REGISTER_EVENT,
     REGISTER_OK_EVENT,
@@ -66,7 +66,7 @@ def free_port() -> int:
 
 class FakeDevice:
     """A fake satellite: a real socket, real framing, and a record of everything
-    the bridge ever sent it, in arrival order."""
+    the Gateway ever sent it, in arrival order."""
 
     def __init__(self, port: int, device_id: str) -> None:
         self.port = port
@@ -152,7 +152,7 @@ class Harness:
 
     def __init__(self) -> None:
         import tempfile
-        from bridge.config_plane import ConfigPlane
+        from gateway.config_plane import ConfigPlane
 
         self._tmp = tempfile.TemporaryDirectory()
         self.loop = VoiceLoop(api_key="test")
@@ -333,8 +333,8 @@ async def scenario_liveness() -> None:
 async def scenario_announce_fanout() -> None:
     """Check 11-14 (Task A6): announcements across the fleet, the gate on the busy device
     only, and per-device playback locks that do not globally serialize."""
-    from bridge.announce import Announcement
-    from bridge.satellite import SatelliteClient
+    from gateway.announce import Announcement
+    from gateway.satellite import SatelliteClient
 
     h = Harness()
     await h.start()
@@ -379,7 +379,7 @@ async def scenario_announce_fanout() -> None:
               and lease_a._playback_lock_override is not lease_b._playback_lock_override
               and lease_a._playback_lock_override is not SatelliteClient.PLAYBACK_LOCK,
               True)
-        from bridge.tts import TtsStream
+        from gateway.tts import TtsStream
 
         async def sink(event):
             pass
@@ -400,7 +400,7 @@ async def scenario_level_arbitration() -> None:
     """Checks 15-19 (Milestone B, issue #32): with the claim window open, the device that
     heard the utterance BEST wins the turn, the loser's stream is cancelled and re-armed,
     and level-less detections degrade to first-arrival FIFO."""
-    from bridge.wake_router import WakeRecord, pick_winner
+    from gateway.wake_router import WakeRecord, pick_winner
 
     # -- pure unit: the ordering rule itself -------------------------------------
     def rec(device: str, level=None, score=None, at=0.0):

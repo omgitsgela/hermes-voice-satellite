@@ -2,7 +2,7 @@
 """Offline contract check for the voice surface's device scope and guessing rules.
 
 This pins the rules a live failure needed. A spoken "volume five" was mis-heard as a fragment;
-the bridge's deliberately conservative volume matcher declined it, correctly; the model then
+the Gateway's deliberately conservative volume matcher declined it, correctly; the model then
 invented the temperature 65, asked the person to confirm it, read their repeat of the *same
 volume request* as agreement, and set the thermostat. The volume never changed, and a device the
 person never named did.
@@ -26,7 +26,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from bridge.config import VOICE_INSTRUCTIONS  # noqa: E402
+from gateway.config import VOICE_INSTRUCTIONS  # noqa: E402
 
 REQUIRED = (
     "volume request is about this device's own playback level",

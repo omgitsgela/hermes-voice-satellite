@@ -37,7 +37,7 @@ command to it, and it is passed through as such.
 
 ## Configuration
 
-In `bridge/config.py`:
+In `gateway/config.py`:
 
 - `INTERRUPT_ENABLED` (default `True`)
 - `INTERRUPT_MIN_CHARS` (default `5`) applies to the steer path only, never to a stop

@@ -7,9 +7,9 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from bridge import tts
-from bridge.config import SND_FORMAT
-from bridge.satellite import SatelliteClient
+from gateway import tts
+from gateway.config import SND_FORMAT
+from gateway.satellite import SatelliteClient
 
 
 class FailureTests(unittest.IsolatedAsyncioTestCase):

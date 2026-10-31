@@ -62,7 +62,7 @@ wrong-device/version acknowledgment, early run requests, framing failures and
 transport errors end the session. Fresh initialization is required on reconnect.
 Configuration, audio and unknown events currently fail closed rather than being
 acknowledged as applied. This does not establish compatibility with the full
-bridge configuration/lease/audio composition.
+Gateway configuration/lease/audio composition.
 
 A session has caller-owned header/body workspace. Allocate it outside a small
 RTOS task stack; JSON parsing additionally allocates temporary heap memory. One
@@ -116,7 +116,7 @@ frame, so it fails closed instead of retrying blindly. In both scenarios bytes
 arriving after the link ended were not obeyed as provisioning commands, and a
 real reset restored the console. The whole run passed twice.
 
-The PC-to-gateway relay against the real bridge, Wi-Fi/TLS, enrollment, audio
+The PC-to-gateway relay against the real Gateway, Wi-Fi/TLS, enrollment, audio
 payloads, wake, reconnect behaviour, combined-workload resources, factory restore
 and Windows acceptance remain unverified. (Reconnect behaviour is proved by host
 loopback tests of the persistent supervisor; it has not yet been exercised on this
@@ -242,7 +242,7 @@ contract.
 There is **no authenticated enrollment flow**. The device's identity is a provisioned client
 certificate plus the pinned server fingerprint, written out of band over USB by
 `scripts/provision-device-tls.py`; the device presents the certificate in the mTLS handshake and
-the bridge resolves its fingerprint to a device id. The device **must never claim an enrollment
+the Gateway resolves its fingerprint to a device id. The device **must never claim an enrollment
 it does not have**: its `hermes.register` reports only its real state (`protocol_version` and its
 actual `capabilities`, e.g. `["microphone"]`) and never a credential or an "enrolled" flag it
 cannot back. The provisioning console's `ENROLL_STATUS` reports the honest state
@@ -276,13 +276,13 @@ Focused tests: `scripts/test_usb_gateway_relay.py`, which drives the relay with 
 scripted device and a socketpair gateway and asserts byte-exact forwarding in both
 directions.
 
-Filed 2026-10-03 the relay registered this device with the running bridge over the
-network: the bridge logged `device esp32-<mac hex> registered`, adopted it, and
+Filed 2026-10-03 the relay registered this device with the running Gateway over the
+network: the Gateway logged `device esp32-<mac hex> registered`, adopted it, and
 cleared the slot on disconnect, with no errors and no lingering socket. Two
-details that matter for the next step: the bridge immediately dispatches desired
+details that matter for the next step: the Gateway immediately dispatches desired
 state to a device it has not seen before, and it records a durable config entry
 for it. The core now ignores well-formed control events it does not implement and
-answers `ping` with `pong`, so a real bridge cannot end the session just by talking;
+answers `ping` with `pong`, so a real Gateway cannot end the session just by talking;
 anything carrying a payload is still refused.
 
 ## Ask the device what it can see
@@ -402,7 +402,7 @@ it returns.
 
 The task is the device half of item 1: it runs the persistent supervisor for the life of
 the session — establish, register, pump — and re-dials, and re-associates, whenever the
-link goes away. A bridge that **refuses** the registration is the one terminal case: the
+link goes away. A Gateway that **refuses** the registration is the one terminal case: the
 task releases the radio and exits, and stopping is the correct thing.
 
 Because a persistent task owns the radio while it runs, the radio commands defer to it:
@@ -520,7 +520,7 @@ The whole session shares one deadline (25s) and the dial has its own (8s), becau
 accepts a connection and then stalls must not be able to hold the console open for ever.
 
 Filed 2026-10-03 on hardware, against the live gateway: the device joined the travel router,
-reached `<gateway-host>:10701` across it, registered as `esp32-68ee8f4b5988`, and the bridge's own
+reached `<gateway-host>:10701` across it, registered as `esp32-68ee8f4b5988`, and the Gateway's own
 journal recorded `registered (ESP32 control probe), generation 2` followed by
 `disconnected (generation 2, slot cleared)`. The identity is the same one the USB path uses, so
 the gateway sees one device whichever transport it arrives on.
@@ -532,10 +532,10 @@ for it to be used, and they land together:
 
 | What | Where it comes from |
 |---|---|
-| the CA that signed the bridge's certificate | `<certs>/client-ca.crt` |
+| the CA that signed the Gateway's certificate | `<certs>/client-ca.crt` |
 | the device's own certificate | `<certs>/<device>.crt` |
 | the device's private key | `<certs>/<device>.key` |
-| the fingerprint of the bridge's certificate to expect | computed from `<certs>/server.crt` |
+| the fingerprint of the Gateway's certificate to expect | computed from `<certs>/server.crt` |
 
 `scripts/provision-device-tls.py` builds those into one blob using `scripts/tls_credential_blob.py`
 (the single implementation of the format, shared with the host tests) and writes it at the head of the
@@ -543,7 +543,7 @@ for it to be used, and they land together:
 4 KB beyond the region did not change. It does not go through the console: the console is a line
 protocol, and a private key typed into a line protocol is a key in a log. Two checks run before anything
 is written, because both would otherwise fail silently — the device certificate's fingerprint must be the
-one the bridge has on file for that device, and the offset comes from `partitions.csv` rather than being
+one the Gateway has on file for that device, and the offset comes from `partitions.csv` rather than being
 repeated in the script.
 
 ```sh
@@ -552,7 +552,7 @@ python scripts/provision-device-tls.py --certs <certs> --device <device> \
 ```
 
 `TLS_STATUS` reports what is provisioned without dialling anything. It prints the whole fingerprint,
-because comparing that value against the bridge's own is the entire check:
+because comparing that value against the Gateway's own is the entire check:
 
 ```
 PROVISION OK TLS STAGED host=<gateway-host> port=10702 pin=<64 hex characters>
@@ -578,7 +578,7 @@ python scripts/run-tls-gateway.py <psk-file> <ssid> tls://<gateway-host>:10702 <
 
 Three decisions are visible in those lines.
 
-**The bridge is identified by a fingerprint, not by a name.** The certificate the handshake produced is
+**The Gateway is identified by a fingerprint, not by a name.** The certificate the handshake produced is
 hashed and compared against the provisioned pin. A name would be the weaker check: it admits any
 certificate this CA signs for that name, where a fingerprint admits exactly one certificate. A name
 check is also what would have to be re-implemented against an IP address.
@@ -586,7 +586,7 @@ check is also what would have to be re-implemented against an IP address.
 **The comparison happens inside the handshake, not after it.** mbedTLS frees the peer's certificate as
 soon as verification finishes (`MBEDTLS_SSL_KEEP_PEER_CERTIFICATE` is off in this configuration), so the
 check runs in a verification callback while the certificate is still held, and a mismatch sets a
-verification flag. The handshake fails there and then, rather than a wrong bridge being discovered after
+verification flag. The handshake fails there and then, rather than a wrong Gateway being discovered after
 a session was already established.
 
 **The clock comes up before the handshake, and is reported whether or not it worked.** The board has no
@@ -596,13 +596,13 @@ a trust problem, and the fix would be looked for in the wrong place. `CONFIG_MBE
 enabled for the same reason: without it mbedTLS ignores the validity window entirely and would accept an
 expired certificate.
 
-Filed 2026-10-03 on hardware, against the live bridge: the device synced its clock over SNTP, handshook
-TLS 1.2 with `TLS-ECDHE-RSA-WITH-AES-256-GCM-SHA384`, matched the pinned fingerprint of the bridge's
-certificate, and registered as `esp32-<mac hex>`. The bridge's own journal recorded
+Filed 2026-10-03 on hardware, against the live Gateway: the device synced its clock over SNTP, handshook
+TLS 1.2 with `TLS-ECDHE-RSA-WITH-AES-256-GCM-SHA384`, matched the pinned fingerprint of the Gateway's
+certificate, and registered as `esp32-<mac hex>`. The Gateway's own journal recorded
 `device esp32-<mac hex> registered (<stored name>), generation N` on its TLS listener. The negative case
 was tested as well, by corrupting one byte of the pinned fingerprint in the credential region and reading
 the region back to confirm the change: the device then reported
-`tls=failed reason=server_pin presented=<the bridge's real fingerprint>` and did not register, and
+`tls=failed reason=server_pin presented=<the Gateway's real fingerprint>` and did not register, and
 restoring the region made it register again. That is what shows the pin is compared rather than merely
 printed.
 
@@ -689,9 +689,9 @@ remains genuinely open:
 - **USB audio transport.**
 - **Secure enrollment.** Credentials are provisioned out of band and the device-side
   material is written over USB; there is no authenticated enrollment flow.
-- **A persistent PC relay service** (the relay is one bounded run) and full bridge
+- **A persistent PC relay service** (the relay is one bounded run) and full Gateway
   configuration/lease interoperability (the probe does not implement the configuration
-  plane, so the bridge holds desired-but-unreported state for a device it registers).
+  plane, so the Gateway holds desired-but-unreported state for a device it registers).
 - **Audio-event schemas / general binary decoding.**
 - **Combined-workload memory and stack measurements**, an installer, and Windows
   acceptance.

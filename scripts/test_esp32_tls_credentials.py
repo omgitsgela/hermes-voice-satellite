@@ -42,12 +42,12 @@ class Credentials(C.Structure):
 
 def good_blob(**overrides):
     pin = overrides.pop('pin', bytes(range(PIN_LEN)))
-    host = overrides.pop('host', 'bridge.example')
+    host = overrides.pop('host', 'gateway.example')
     port = overrides.pop('port', 10702)
     return blob_format.build_blob(CA_PEM, CERT_PEM, KEY_PEM, pin, host, port, **overrides)
 
 
-def raw_blob(ca_pem=CA_PEM, cert_pem=CERT_PEM, key_pem=KEY_PEM, pin=None, host='bridge.example',
+def raw_blob(ca_pem=CA_PEM, cert_pem=CERT_PEM, key_pem=KEY_PEM, pin=None, host='gateway.example',
              port=10702, version=blob_format.VERSION, magic=blob_format.MAGIC,
              header_len=HEADER_LEN, crc=None, total_len=None, pad=b''):
     """Build a blob without the producer's sanity checks, the way a corrupted or hand-edited flash
@@ -106,7 +106,7 @@ class BlobTests(unittest.TestCase):
         self.assertEqual(out.cert_len, len(CERT_PEM))
         self.assertEqual(out.key_len, len(KEY_PEM))
         self.assertEqual(bytes(out.server_pin), bytes(range(PIN_LEN)))
-        self.assertEqual(out.server_host, b'bridge.example')
+        self.assertEqual(out.server_host, b'gateway.example')
         self.assertEqual(out.server_port, 10702)
         self.assertEqual(out.total_len, HEADER_LEN + len(CA_PEM + CERT_PEM + KEY_PEM))
 

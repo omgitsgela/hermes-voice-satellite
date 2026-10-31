@@ -1,4 +1,4 @@
-"""Persistent relative timers for the voice bridge.
+"""Persistent relative timers for the voice gateway.
 
 Timers are bridge-owned because they need sub-minute relative deadlines. They are
 stored atomically and fire through a callback supplied by the announcement plane.
@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
-_LOGGER = logging.getLogger("bridge.timers")
+_LOGGER = logging.getLogger("gateway.timers")
 DEFAULT_STATE_PATH = Path(__file__).resolve().parent.parent / "state" / "timers.json"
 _DURATION_PART = re.compile(
     r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)",
@@ -202,7 +202,7 @@ class TimerManager:
         for timer in due:
             lateness = max(0.0, now - timer["due_at"])
             if lateness:
-                _LOGGER.info("timer %s expired %.1fs while the bridge was unavailable", timer["id"], lateness)
+                _LOGGER.info("timer %s expired %.1fs while the Gateway was unavailable", timer["id"], lateness)
             result = self.on_expire(dict(timer))
             if inspect.isawaitable(result):
                 await result

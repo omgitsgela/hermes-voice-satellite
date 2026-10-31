@@ -18,8 +18,8 @@ import wave
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.announce import Announcement, Announcer  # noqa: E402
-from bridge.volume import (  # noqa: E402
+from gateway.announce import Announcement, Announcer  # noqa: E402
+from gateway.volume import (  # noqa: E402
     ALARM_MIN_PERCENT,
     FLOOR_PERCENT,
     MAX_PERCENT,

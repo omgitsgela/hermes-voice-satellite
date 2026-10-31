@@ -25,8 +25,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from bridge.config import AUDIO_OUT, SATELLITE_HOST, SATELLITE_PORT  # noqa: E402
-from bridge.satellite import SatelliteClient  # noqa: E402
+from gateway.config import AUDIO_OUT, SATELLITE_HOST, SATELLITE_PORT  # noqa: E402
+from gateway.satellite import SatelliteClient  # noqa: E402
 
 
 async def main() -> int:

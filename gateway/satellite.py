@@ -2,7 +2,7 @@
 
 This is the protocol, not the transport, and the distinction matters: `connect()` dials a
 device, but the device now dials US. The direction change did not fork the protocol -
-`bridge/lease.py` subclasses `SatelliteClient` and overrides only the connection lifecycle
+`gateway/lease.py` subclasses `SatelliteClient` and overrides only the connection lifecycle
 and the two I/O primitives (`send`, `next_event`), so this session logic runs unchanged over
 a connection that arrived instead of one that was dialled. The older dial-out shape stays
 reachable for rollback; see `docs/outbound-link.md` and `docs/architecture.md`.
@@ -14,7 +14,7 @@ runs `--wake-uri tcp://127.0.0.1:10400 --wake-word-name hey_hermes`, so it uses 
 
 Note on the wake URI: port 10400 is the wake **shim** (`pi/wake_shim.py`), not the wake
 engine. The shim holds that port and forwards to `wyoming-openwakeword` on 10401, which is
-what lets the bridge open the microphone on demand for follow-up mode.
+what lets the Gateway open the microphone on demand for follow-up mode.
 
 Handshake, exactly as the satellite implements it:
 
@@ -69,11 +69,11 @@ from wyoming.satellite import (
 from wyoming.snd import Played
 from wyoming.wake import Detection
 
-from bridge.net import enable_tcp_keepalive
+from gateway.net import enable_tcp_keepalive
 
-from bridge.config import SND_FORMAT
+from gateway.config import SND_FORMAT
 
-_LOGGER = logging.getLogger("bridge.satellite")
+_LOGGER = logging.getLogger("gateway.satellite")
 
 # Sentinel pushed on the queue when the connection ends, so consumers never hang.
 _EOF = object()
@@ -135,7 +135,7 @@ class SatelliteClient:
         """Let the kernel notice a dead satellite, which the protocol cannot.
 
         An idle TCP connection has no timeout of its own, and the satellite says nothing while it
-        waits for a wake word. Measured 2026-09-22: with the Pi off the network, the bridge held a
+        waits for a wake word. Measured 2026-09-22: with the Pi off the network, the Gateway held a
         socket that still looked ESTAB and reported itself healthy with zero restarts, so a power
         cut left the satellite permanently inert. The satellite does NOT answer application-level
         pings (tested: a Ping draws no Pong), so keepalive is the only cheap liveness signal.
@@ -144,7 +144,7 @@ class SatelliteClient:
         reader reports EOF, `wait_for_wake` raises ConnectionError, and systemd restarts us into a
         fresh connection.
 
-        The mechanism and the values live in `bridge/net.py` now, because the accepted registry
+        The mechanism and the values live in `gateway/net.py` now, because the accepted registry
         sockets need exactly the same thing and two copies of "15, 5, 3" would drift apart.
         """
         writer = getattr(self._client, "_writer", None)
@@ -164,7 +164,7 @@ class SatelliteClient:
     async def reconnect(self) -> None:
         """Reopen the socket without restarting the process or reloading the models.
 
-        2026-09-23. The bridge used to exit on the hourly wake-word timeout, so systemd
+        2026-09-23. The Gateway used to exit on the hourly wake-word timeout, so systemd
         restarted it: the connect tone played every hour, whisper and Piper reloaded (about 640 MB
         churn), and the device was deaf for roughly nine seconds. Refreshing in place does the same
         job with none of that.
@@ -282,7 +282,7 @@ class SatelliteClient:
         """The rate/width/channels to SEND this device.
 
         Decided by the DEVICE, not by the gateway. A fleet is one gateway plus any number of
-        satellites in any mix of hardware, so the bridge must never assume a particular host (or
+        satellites in any mix of hardware, so the Gateway must never assume a particular host (or
         that a Raspberry Pi is present anywhere). Each device reports the rate its own audio path
         runs at (`snd_rate`); that is what it gets sent, and 22050 stays the default for anything
         that has not said otherwise.
@@ -308,7 +308,7 @@ class SatelliteClient:
         shares the process-wide class lock exactly as before; a satellite lease overrides it
         with its own, so two devices' answers never serialize behind each other.
         """
-        from bridge.tts import TtsStream
+        from gateway.tts import TtsStream
 
         return TtsStream(self.send, pace=pace,
                          lock=getattr(self, "_playback_lock_override", None),

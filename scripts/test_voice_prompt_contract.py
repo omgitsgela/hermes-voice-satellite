@@ -14,7 +14,7 @@ What this pins:
 2. The prompt states the bare-word rule: naming a feature is not a request to change it.
 3. The prompt tells the model how to answer "what can I say".
 
-Run with the bridge venv:
+Run with the Gateway venv:
 
     .venv/bin/python scripts/test_voice_prompt_contract.py
 """
@@ -25,7 +25,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.config import VOICE_INSTRUCTIONS  # noqa: E402
+from gateway.config import VOICE_INSTRUCTIONS  # noqa: E402
 
 checks = 0
 failures: list[str] = []

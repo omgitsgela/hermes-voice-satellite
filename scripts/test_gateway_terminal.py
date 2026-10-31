@@ -9,7 +9,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from bridge.gateway import VoiceGateway, VoiceGatewayError  # noqa: E402
+from gateway.gateway import VoiceGateway, VoiceGatewayError  # noqa: E402
 
 
 class Response:

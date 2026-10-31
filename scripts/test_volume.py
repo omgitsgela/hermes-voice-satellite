@@ -10,9 +10,9 @@ Companion to `test_volume_virtual_range.py`, which owns the user/raw mapping and
   * the alarm override's upward-only behaviour
   * that every reply is one short spoken line
 
-Run with the bridge interpreter:
+Run with the Gateway interpreter:
 
-    ~/hermes-voice-bridge/.venv/bin/python scripts/test_volume.py
+    ~/hermes-voice-satellite/.venv/bin/python scripts/test_volume.py
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.volume import (  # noqa: E402
+from gateway.volume import (  # noqa: E402
     ALARM_MIN_PERCENT,
     FLOOR_PERCENT,
     MAX_PERCENT,
@@ -145,7 +145,7 @@ check("'by 3' becomes three steps",
 
 # Conservative on purpose: a bridge-local command that changes the room on a mis-heard
 # phrase is worse than the assistant taking an extra second. "turn it up" is here because
-# "it" could be music playing on the same device and the bridge cannot tell.
+# "it" could be music playing on the same device and the Gateway cannot tell.
 for text in ("turn on follow up mode", "what is the weather", "play some music",
              "set a timer for 5 minutes", "turn it up", "turn it down", "", "   ",
              "stop", "what time is it", "the volume of the box", "spin up a server"):

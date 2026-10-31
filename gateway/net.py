@@ -10,12 +10,12 @@ The protocol cannot settle it: the satellite does not answer application-level p
 
 Both directions need it, which is why it lives here rather than in either client:
 
-* the device's outbound socket, so a rebooted bridge does not leave the device dialling a corpse;
-* the bridge's dialled client, so a dead satellite surfaces instead of hanging;
-* the bridge's **accepted** registry sockets, so a satellite that vanishes without closing is noticed
+* the device's outbound socket, so a rebooted Gateway does not leave the device dialling a corpse;
+* the Gateway's dialled client, so a dead satellite surfaces instead of hanging;
+* the Gateway's **accepted** registry sockets, so a satellite that vanishes without closing is noticed
   rather than held as a registration and a lease forever.
 
-Measured 2026-09-26: the Pi was power-cycled and the bridge did not notice at all. The accepted
+Measured 2026-09-26: the Pi was power-cycled and the Gateway did not notice at all. The accepted
 socket stayed ESTAB for the whole outage and was cleaned up only because the returning device
 displaced it.
 
@@ -30,7 +30,7 @@ import logging
 import socket
 from typing import Optional
 
-_LOGGER = logging.getLogger("bridge.net")
+_LOGGER = logging.getLogger("gateway.net")
 
 # 15 s idle, then three probes 5 s apart: roughly 30 s to notice a dead peer.
 KEEPALIVE_IDLE_SECONDS = 15

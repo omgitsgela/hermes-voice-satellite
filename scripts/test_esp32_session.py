@@ -206,7 +206,7 @@ class SessionTests(unittest.TestCase):
     def test_capture_turn_streams_mic_audio_and_stops_on_transcript(self):
         """The documented voice loop, device side: run-satellite arms the microphone, the local
         wake starts the stream (detection -> run-pipeline -> streaming-started), the capture
-        task's audio leaves as 16 kHz / S16 / mono chunks, and the bridge's transcript stops it
+        task's audio leaves as 16 kHz / S16 / mono chunks, and the Gateway's transcript stops it
         (streaming-stopped) while the microphone stays armed for the next wake."""
         lib = self.library()
         lib.wy_session_wake.argtypes = [C.c_void_p, C.c_char_p, C.c_int, C.c_float, IO, C.c_void_p]
@@ -286,7 +286,7 @@ class SessionTests(unittest.TestCase):
         """The microphone is armed by run-satellite, and only then. A wake-now that lands
         registered but still unarmed (after hermes.register.ok, before the first run-satellite)
         must be dropped, never opened: it would run the wake sequence and set streaming with no
-        capture task running, so the bridge would hold a live mic stream carrying zero chunks
+        capture task running, so the Gateway would hold a live mic stream carrying zero chunks
         until it gave up. The drop is not a fault, and it writes nothing."""
         lib = self.library()
         lib.wy_session_streaming.argtypes = [C.c_void_p]
@@ -329,7 +329,7 @@ class SessionTests(unittest.TestCase):
                           'a dropped wake-now writes no detection or stream events')
 
     def test_wake_now_opens_the_microphone(self):
-        """The bridge's wake-now (the follow-up window's 'open the microphone') must run the
+        """The Gateway's wake-now (the follow-up window's 'open the microphone') must run the
         wake sequence -- detection, run-pipeline, streaming-started -- with the device's wake
         word, because on this device the session core is where the Pi's wake shim lives. A
         wake-now that lands before the host is ready, or while the stream already runs, is
@@ -530,7 +530,7 @@ class SessionTests(unittest.TestCase):
 
     def test_local_play_writes_chime_frames_to_the_ring(self):
         """The detector's chime seam (D4) renders a 16 kHz mono tone and must sound it
-        through the SAME speaker path as a bridge answer: the pump task reads the session
+        through the SAME speaker path as a Gateway answer: the pump task reads the session
         ring and owns the amplifier, so the only way a local tone reaches the speaker is by
         being written into that ring. local_play is the device-local half of the conversion:
         no resample (the chime is already at the board's 16 kHz), but the SAME volume
@@ -604,7 +604,7 @@ class SessionTests(unittest.TestCase):
                          'no ring configured: a local play has nowhere to go')
 
     def test_local_play_applies_the_config_volume(self):
-        """local_play must honor the config plane's playback volume exactly as the bridge's
+        """local_play must honor the config plane's playback volume exactly as the Gateway's
         answer does (wy_apply_volume, floor never silences): the chime is part of the
         device's own voice and is level-matched to it, not a full-scale tone that could
         blast at a level the answer would not."""
@@ -646,7 +646,7 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(got[0], expected)
 
     def test_playback_audio_is_accepted_without_tearing_the_link(self):
-        """The bridge sends audio-start / audio-chunk / audio-stop for playback, and it sends
+        """The Gateway sends audio-start / audio-chunk / audio-stop for playback, and it sends
         them to a registered device. The session must accept and drain them -- link stays
         registered -- not refuse the frame the way the old core refused every payload."""
         lib = self.library()
@@ -738,9 +738,9 @@ class SessionTests(unittest.TestCase):
             ([Event(type='describe'), Event(type='hermes.register.ok',
                data={'device_id': 'control-fixture', 'protocol_version': True})], -1),
             ([Event(type='describe'), Event(type='hermes.register.refused', data={'reason': 'test'})], -4),
-            # Inbound audio-chunk is the bridge's playback: accepted and drained (the speaker
+            # Inbound audio-chunk is the Gateway's playback: accepted and drained (the speaker
             # path is a later increment), and the link stays registered -- the old core refused
-            # every payload and died the first time the bridge spoke.
+            # every payload and died the first time the Gateway spoke.
             ([Event(type='describe'), Event(type='hermes.register.ok', data=good_ack),
                Event(type='audio-chunk', payload=b'not audio')], 0),
             # Fail-soft is limited to well-formed, known event types. An UNKNOWN event carrying a
@@ -785,9 +785,9 @@ class SessionTests(unittest.TestCase):
                     self.assertEqual(lib.wy_session_state(session), 5)
 
     def test_unrecognised_control_events_are_ignored_and_ping_answered(self):
-        """A real bridge sends desired state right after registration.
+        """A real Gateway sends desired state right after registration.
 
-        Failing on it made the device useless against the actual bridge. Unknown *control* events are
+        Failing on it made the device useless against the actual gateway. Unknown *control* events are
         ignored, a ping is answered, and the session keeps working; only malformed frames and anything
         carrying a payload still end it.
         """
@@ -876,7 +876,7 @@ class SessionTests(unittest.TestCase):
 
     def test_real_registry_over_loopback_tcp(self):
         sys.path.insert(0, str(ROOT))
-        from bridge.registry import RegistryServer, SatelliteRegistry
+        from gateway.registry import RegistryServer, SatelliteRegistry
         lib = self.library()
 
         async def fixture():
@@ -1041,11 +1041,11 @@ class SessionTests(unittest.TestCase):
         return frames
 
     def test_playback_converts_a_canonical_answer_to_the_ring(self):
-        """The full playback path, canonical bridge -> device ring: an audio-start (22050/2/1),
+        """The full playback path, canonical Gateway -> device ring: an audio-start (22050/2/1),
         an audio-chunk (a known 1024-sample PCM), and an audio-stop. The session resamples the
         chunk to 16 kHz, applies the configured volume, and expands it to stereo 32-bit
         full-scale, appending the exact frames to the ring -- byte-identical to an independent
-        reference. This is the device half of 'the bridge speaks, the speaker plays'."""
+        reference. This is the device half of 'the Gateway speaks, the speaker plays'."""
         lib = self.playback_lib()
         pcm = list(range(1024))   # a 1024-sample identity ramp, 22050 Hz mono (the input)
         pcm_bytes = b''.join(b'%d%02d' % (abs(s) % 256, (abs(s) >> 8) % 256) for s in pcm)
@@ -1233,7 +1233,7 @@ class SessionTests(unittest.TestCase):
         """The config plane's apply adapter (the device glue) must change the LIVE playback level
         for the next audio slice, and it does so under the playback ring lock (the same lock that
         guards the ring pointers and the volume read in the audio-chunk conversion). A level the
-        bridge requests is applied the moment the config dispatch is processed -- the next answer
+        Gateway requests is applied the moment the config dispatch is processed -- the next answer
         plays at the new level without a reconnect. The value is stored raw; wy_apply_volume
         clamps it at use (the no-silence floor), so the setter does not clamp here."""
         lib = self.playback_lib()
@@ -1280,7 +1280,7 @@ class SessionTests(unittest.TestCase):
         not the desired: handing it to the handler would let a payload tail that happens to
         parse as a desired be silently APPLIED, and a non-parsing one is nondeterministic
         garbage. Failing closed (the same policy as an unknown-with-payload) is the only
-        honest answer: no handler call, no report, the link is down, the bridge reconnects
+        honest answer: no handler call, no report, the link is down, the Gateway reconnects
         and re-dispatches the well-formed desired."""
         lib = self.config_library()
         session = C.create_string_buffer(lib.wy_session_size())
@@ -1336,7 +1336,7 @@ class SessionTests(unittest.TestCase):
                          'a refused config frame sends no report')
 
     def test_config_desired_produces_reported(self):
-        """The bridge sends hermes.config.desired right after registration. The session must hand
+        """The Gateway sends hermes.config.desired right after registration. The session must hand
         the decoded data to the (injected) config agent and answer with hermes.config.reported --
         the agent's real report (the device's actual + health), never the rejected desired. This
         is the wiring; the agent's own logic is proven in test_esp32_config.py."""
@@ -1374,7 +1374,7 @@ class SessionTests(unittest.TestCase):
         # The reconnect: the supervisor re-inits the same buffer.
         self.assertEqual(lib.wy_session_init(session, b'control-fixture', b'boot-2'), 0)
         self.assertEqual(lib.wy_session_state(session), 0, 'a re-init resets to describe')
-        # The handler must still be wired: the bridge's reconnect re-dispatch still gets an answer.
+        # The handler must still be wired: the Gateway's reconnect re-dispatch still gets an answer.
         second = io.BytesIO()
         events = self._register_then_desired(lib, session, profile, 1, second)
         self.assertEqual([e.type for e in events],

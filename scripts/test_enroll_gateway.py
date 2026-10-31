@@ -19,11 +19,11 @@ What is pinned:
   9  the per-IP rate limit fires (10/min) and the global one fires across IPs
  10  a REAL round trip over real HTTP: real openssl minting via the existing issuer, an
      independently-implemented client that computes the proof and decrypts the bundle, and the
-     registered fingerprint byte-identical to bridge/registry.py's peer_fingerprint form
+     registered fingerprint byte-identical to gateway/registry.py's peer_fingerprint form
  11  a re-enrolment with force reissues and supersedes the old credential
  12  the token and the proof never appear in a log record
  13  install-time generation: scripts/generate-enroll-token.py writes 0600 and never overwrites
- 14  the wiring: the routes are registered on the bridge's existing announce server
+ 14  the wiring: the routes are registered on the Gateway's existing announce server
 
 The client side of check 10 is written straight from the wire contract (HMAC context, HKDF
 salt/info, AES-256-GCM) instead of importing the server's helpers: a server that drifted from
@@ -57,10 +57,10 @@ from cryptography.hazmat.primitives import hashes  # noqa: E402
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: E402
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF  # noqa: E402
 
-from bridge.enroll import (  # noqa: E402
+from gateway.enroll import (  # noqa: E402
     EnrollmentService, generate_token, load_token, load_wordlist,
 )
-from bridge.config import ENROLL_TOKEN_FILE  # noqa: E402
+from gateway.config import ENROLL_TOKEN_FILE  # noqa: E402
 
 WORDS = REPO / "scripts" / "data" / "enroll-words.txt"
 ISSUER = REPO / "scripts" / "issue-registry-tls.py"
@@ -152,7 +152,7 @@ class Harness:
             clock=self.clock,
         )
         self.app = web.Application()
-        self.service.register(self.app)     # also generates the token lazily, like the bridge
+        self.service.register(self.app)     # also generates the token lazily, like the Gateway
         self.runner = None
         self.session = None
         self.port = free_port()
@@ -226,7 +226,7 @@ def t_token_shape() -> None:
 @check("3", "secrets.choice picks the words, random never does, and the file is 0600")
 def t_entropy_source() -> None:
     words = load_wordlist(WORDS)
-    source = (REPO / "bridge" / "enroll.py").read_text()
+    source = (REPO / "Gateway" / "enroll.py").read_text()
     assert "import random" not in source and "from random" not in source, \
         "the enrolment token must never be generated from random"
     assert "secrets.choice" in source
@@ -451,7 +451,7 @@ def t_real_round_trip() -> None:
                 def emit(self, record):
                     captured.append(record.getMessage())
 
-            bridge_log = logging.getLogger("bridge")
+            bridge_log = logging.getLogger("Gateway")
             previous_level = bridge_log.level
             capture = Capture()
             bridge_log.setLevel(logging.INFO)      # so the enrolment INFO line is observable
@@ -479,7 +479,7 @@ def t_real_round_trip() -> None:
                 assert bundle["cert"] == (h.tls / f"{device_id}.crt").read_text()
                 assert bundle["key"] == (h.tls / f"{device_id}.key").read_text()
 
-                # The registered fingerprint is byte-identical to what bridge/registry.py's
+                # The registered fingerprint is byte-identical to what gateway/registry.py's
                 # peer_fingerprint computes from a live TLS peer: sha256 over the DER.
                 creds = json.loads(h.credentials.read_text())
                 der_fingerprint = "sha256:" + hashlib.sha256(
@@ -584,13 +584,13 @@ def t_install_gateway_step() -> None:
     assert "never re-printed" in source.lower()
 
 
-@check("14", "the routes are registered on the bridge's existing announce server")
+@check("14", "the routes are registered on the Gateway's existing announce server")
 def t_wiring() -> None:
-    source = (REPO / "bridge" / "announce.py").read_text()
+    source = (REPO / "Gateway" / "announce.py").read_text()
     assert "self.enrollment.register(app)" in source, \
         "the announce server must register the enrolment routes"
     assert "EnrollmentService()" in source
-    enroll_source = (REPO / "bridge" / "enroll.py").read_text()
+    enroll_source = (REPO / "Gateway" / "enroll.py").read_text()
     assert 'add_get("/enroll/challenge"' in enroll_source
     assert 'add_post("/enroll"' in enroll_source
 

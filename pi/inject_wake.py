@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Ask the wake shim to open the microphone, as the bridge does for a follow-up window.
+"""Ask the wake shim to open the microphone, as the Gateway does for a follow-up window.
 
-This is the same request the bridge makes: it sends a `wake-now` event over the satellite connection,
+This is the same request the Gateway makes: it sends a `wake-now` event over the satellite connection,
 the LED/event service relays it here, and the shim injects a wake detection so the satellite starts
 streaming. Running it by hand is how you test that path without speaking to the device.
 

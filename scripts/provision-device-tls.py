@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Provision a satellite's TLS material into its credential region over the USB download path.
 
-The device needs four things to reach the bridge over TLS: the CA that signed the bridge's
+The device needs four things to reach the Gateway over TLS: the CA that signed the Gateway's
 certificate, its own certificate, its own private key, and the fingerprint of the certificate it
-should expect from the bridge. It also records the host and port to make the report lines readable.
+should expect from the gateway. It also records the host and port to make the report lines readable.
 
 None of it goes through the console. The console is a line protocol that echoes what it is sent, and
 a private key sent through a line protocol is a private key in a log, a scrollback and a terminal
@@ -12,8 +12,8 @@ back.
 
 Two silent failures are checked before anything is written:
 
-  * the device certificate's fingerprint matches the credential the bridge has on file for this
-    device, so what is being written is what the bridge will accept rather than a near miss;
+  * the device certificate's fingerprint matches the credential the Gateway has on file for this
+    device, so what is being written is what the Gateway will accept rather than a near miss;
   * the region being written is the one the partition table names, read from partitions.csv rather
     than repeated here, and the write does not reach past it.
 
@@ -69,9 +69,9 @@ def storage_offset(partitions_csv: Path) -> int:
 
 
 def check_registry(registry: Path, device: str, fingerprint: str) -> None:
-    """The bridge's own record of which certificate belongs to which device, as a set of mappings
+    """The Gateway's own record of which certificate belongs to which device, as a set of mappings
     from fingerprint to device name. Anything else here means the material on disk and the material
-    the bridge will accept have diverged."""
+    the Gateway will accept have diverged."""
     record = json.loads(registry.read_text())
     if record.get(fingerprint) != device:
         raise SystemExit(f'{registry} does not map {fingerprint} to {device} '
@@ -100,17 +100,17 @@ def main() -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--certs', type=Path, required=True,
                         help='directory holding client-ca.crt, <device>.crt, <device>.key and the '
-                             'bridge server certificate')
-    parser.add_argument('--device', required=True, help='device name, as the bridge knows it')
+                             'Gateway server certificate')
+    parser.add_argument('--device', required=True, help='device name, as the Gateway knows it')
     parser.add_argument('--server-cert', default='server.crt',
-                        help='file in --certs holding the bridge certificate to pin')
+                        help='file in --certs holding the Gateway certificate to pin')
     parser.add_argument('--host', required=True, help='the address the device should dial')
     parser.add_argument('--port', type=_port, required=True, help='the port the device should dial (1-65535)')
     parser.add_argument('--partitions', type=Path,
                         default=Path(__file__).resolve().parent.parent / 'firmware/esp32/partitions.csv')
     parser.add_argument('--registry', type=Path,
                         help='state/device-credentials.json, to check the certificate is the one the '
-                             'bridge has on file for this device')
+                             'Gateway has on file for this device')
     parser.add_argument('--port-device',
                         help='ESP32 USB serial device for --write; or set HERMES_SATELLITE_SERIAL')
     parser.add_argument('--out', type=Path, default=Path('tls-provisioning'),
@@ -130,7 +130,7 @@ def main() -> int:
     pin = server_pin(pem_to_der(server_pem))
     if arguments.registry:
         check_registry(arguments.registry, arguments.device, fingerprint)
-        print(f'certificate matches the bridge registry entry for {arguments.device}')
+        print(f'certificate matches the Gateway registry entry for {arguments.device}')
 
     blob = build_blob(ca_pem, cert_pem, key_pem, pin, arguments.host, arguments.port)
     region = blob.ljust(REGION_BYTES, PADDING)

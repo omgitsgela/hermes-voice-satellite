@@ -13,7 +13,7 @@ device can route to (the `--device-reachable-as` value used at gateway install).
 Prerequisites, from `docs/installation.md`:
 
 * the gateway host runs Hermes and `scripts/install-gateway.sh` has completed
-  (`systemctl --user status hermes-voice-bridge` is active, and `state/registry-tls/` holds the
+  (`systemctl --user status hermes-voice-satellite` is active, and `state/registry-tls/` holds the
   CA + server certificate);
 * a machine with the board attached by USB (the board appears as a serial device, typically
   `/dev/ttyACM0` on `<usb-port>`) — often a laptop rather than the gateway host;
@@ -163,14 +163,14 @@ verify-satellite: PASS (4/4 links) -- <device-id> is registered and ready
 ```
 
 **Top failure:** `FAIL registered ... no live evidence that <device-id> has registered` — the
-board never reached the Gateway. Watch `journalctl --user -u hermes-voice-bridge -f` while
+board never reached the Gateway. Watch `journalctl --user -u hermes-voice-satellite -f` while
 power-cycling the board: `refused a registration from <addr>: no recognised credential` or
 `unknown credential sha256:... from <addr>` means the board presents a certificate the Gateway
 does not know (re-enroll, then re-provision). A dial failure naming the host and port (ESP32:
 `GATEWAY_STATUS` on the provisioning console; Pi: `journalctl -u outbound-satellite`) means a
 wrong `--endpoint` or no route to `<host>`. A `FAIL listener` with `Connection refused` means
-nothing is listening on the port: check `systemctl --user status hermes-voice-bridge` and the
-port in `bridge.env`.
+nothing is listening on the port: check `systemctl --user status hermes-voice-satellite` and the
+port in `gateway.env`.
 
 ## 6. Speak the wake word (the acceptance test)
 
@@ -191,7 +191,7 @@ baud; see `firmware/esp32/README.md`), which is the right tool for exercising th
 answer path without speaking, or when the room is too noisy to test acoustically.
 
 **Top failure:** the chime plays but no answer — that is the mic/endpointing path, not the wake
-detector; follow the turn in `journalctl --user -u hermes-voice-bridge -f`. No chime at all —
+detector; follow the turn in `journalctl --user -u hermes-voice-satellite -f`. No chime at all —
 the detector did not fire: ESP32, `WAKE_STATUS` on the console (re-run the provision step if no
 model is loaded); Pi, `journalctl -u wyoming-openwakeword -u wake-shim` and check the model
 file exists. Too many false wakes in a busy room — say the phrase less clearly at first

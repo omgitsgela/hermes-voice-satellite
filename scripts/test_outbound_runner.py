@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Offline checks for the device-side outbound runner (issue #61, migration phase 3).
 
-Run with the bridge's interpreter, which is where `wyoming` lives:
+Run with the gateway's interpreter, which is where `wyoming` lives:
 
-    ~/hermes-voice-bridge/.venv/bin/python scripts/test_outbound_runner.py
+    ~/hermes-voice-satellite/.venv/bin/python scripts/test_outbound_runner.py
 
-A **fake bridge** is a real socket server playing the host's half of the contract: it sends `describe`,
+A **fake gateway** is a real socket server playing the host's half of the contract: it sends `describe`,
 reads `info` and `hermes.register`, and can accept, refuse, drop the connection, or stop reading. No
 device and no hardware are involved, which is the point: phase 3 is testable while the satellite is away.
 
@@ -17,7 +17,7 @@ Checks:
   4  a dropped connection reconnects and re-registers
   5  ping is answered with pong, so an idle link stays honest
   6  the backoff grows with consecutive failures and is capped
- 6b  an accept-then-drop bridge accumulates backoff rather than retrying at the base rate (#63)
+ 6b  an accept-then-drop gateway accumulates backoff rather than retrying at the base rate (#63)
   7  a stalled write fails the link instead of hanging the device
   8  the bootstrap configuration is exactly what the device needs
   9  a stale write failure does not tear down a newer connection (#64)
@@ -64,7 +64,7 @@ async def write_event(writer: asyncio.StreamWriter, event: Event) -> None:
 
 
 class FakeBridge:
-    """The host's half of the contract, with the failure modes a real bridge has."""
+    """The host's half of the contract, with the failure modes a real gateway has."""
 
     def __init__(self, *, refuse_reason: str | None = None, drop_on_register: bool = False,
                  drop_every_register: bool = False, stop_reading: bool = False) -> None:
@@ -120,17 +120,17 @@ class FakeBridge:
                 )
                 self.registered.set()
                 if self.drop_every_register:
-                    # A bridge that accepts the handshake and then closes, every time: the flapping case
+                    # A gateway that accepts the handshake and then closes, every time: the flapping case
                     # filed as #63.
                     writer.close()
                     return
                 if self.drop_on_register and self._drops == 0:
-                    # Drop the first accepted connection, the way a bridge restarted mid-session would.
+                    # Drop the first accepted connection, the way a gateway restarted mid-session would.
                     self._drops += 1
                     writer.close()
                     return
                 if self.stop_reading:
-                    # A bridge that stops reading: the device's writes must fail, not hang.
+                    # A gateway that stops reading: the device's writes must fail, not hang.
                     await asyncio.sleep(3600)
                     return
                 continue
@@ -210,63 +210,63 @@ def check(number: str, description: str):
 
 @check("1", "the handshake registers once, and readiness is reported only after acceptance")
 async def t_handshake() -> None:
-    bridge = FakeBridge()
-    await bridge.start()
-    link = BridgeLink(config_for(bridge.port))
+    gateway = FakeBridge()
+    await gateway.start()
+    link = BridgeLink(config_for(gateway.port))
     runner = LinkRunner(link)
     # What the world looked like at the moment readiness was reported. A callback fired at TCP connect
     # would show zero registrations here, which is the failure this check exists to catch.
     observed: list[tuple[int, bool, bool, dict]] = []
 
     async def observe(payload: dict) -> None:
-        observed.append((len(bridge.registrations), link.registered, link.connected, dict(payload)))
+        observed.append((len(gateway.registrations), link.registered, link.connected, dict(payload)))
 
     link.on_registered = observe
     try:
         await runner.start()
-        await asyncio.wait_for(bridge.registered.wait(), TIMEOUT)
+        await asyncio.wait_for(gateway.registered.wait(), TIMEOUT)
         await asyncio.sleep(0.1)
-        assert bridge.connections == 1, f"expected one connection, saw {bridge.connections}"
-        payload = bridge.registrations[0]
+        assert gateway.connections == 1, f"expected one connection, saw {gateway.connections}"
+        payload = gateway.registrations[0]
         assert payload["device_id"] == "kitchen-1"
         assert payload["area"] == "kitchen"
         assert payload["protocol_version"] == 1
         assert link.registered and link.connected
         assert len(observed) == 1, "readiness must be reported exactly once"
         registrations, registered_flag, connected_flag, reported = observed[0]
-        assert registrations == 1, "readiness must not be reported before the bridge processed the register"
+        assert registrations == 1, "readiness must not be reported before the gateway processed the register"
         assert registered_flag and connected_flag
         assert reported["device_id"] == "kitchen-1"
     finally:
         await runner.stop()
-        await bridge.stop()
+        await gateway.stop()
 
 
 @check("2", "events flow both ways after registration")
 async def t_both_directions() -> None:
-    bridge = FakeBridge()
-    await bridge.start()
-    link = BridgeLink(config_for(bridge.port))
+    gateway = FakeBridge()
+    await gateway.start()
+    link = BridgeLink(config_for(gateway.port))
     runner = LinkRunner(link)
     try:
         await runner.start()
-        await asyncio.wait_for(bridge.registered.wait(), TIMEOUT)
-        await bridge.push(Event(type="led-idle"))
+        await asyncio.wait_for(gateway.registered.wait(), TIMEOUT)
+        await gateway.push(Event(type="led-idle"))
         await asyncio.sleep(0.15)
         assert [e.type for e in runner.events] == ["led-idle"], f"saw {[e.type for e in runner.events]}"
         assert await link.send(Event(type="detection", data={"name": "hey_hermes"}))
         await asyncio.sleep(0.15)
-        assert any(e.type == "detection" for e in bridge.received), "the bridge must receive the detection"
+        assert any(e.type == "detection" for e in gateway.received), "the gateway must receive the detection"
     finally:
         await runner.stop()
-        await bridge.stop()
+        await gateway.stop()
 
 
 @check("3", "a refusal surfaces its reason and is not retried on the short timer")
 async def t_refusal() -> None:
-    bridge = FakeBridge(refuse_reason="no recognised credential")
-    await bridge.start()
-    link = BridgeLink(config_for(bridge.port))
+    gateway = FakeBridge(refuse_reason="no recognised credential")
+    await gateway.start()
+    link = BridgeLink(config_for(gateway.port))
     runner = LinkRunner(link)
     try:
         await runner.start()
@@ -274,8 +274,8 @@ async def t_refusal() -> None:
         assert link.stats.refusals == 1, f"expected one refusal, saw {link.stats.refusals}"
         assert "no recognised credential" in link.stats.last_error
         assert not link.registered
-        assert bridge.connections == 1, (
-            f"a refusal must not be retried on the short timer, saw {bridge.connections} connections"
+        assert gateway.connections == 1, (
+            f"a refusal must not be retried on the short timer, saw {gateway.connections} connections"
         )
         # The refusal path waits on the fixed long timer rather than the jittered reconnect backoff, so
         # last_backoff staying at zero is the correct expectation here. The connection count above is what
@@ -283,60 +283,60 @@ async def t_refusal() -> None:
         assert link.stats.last_backoff == 0.0, "a refusal must not consume the jittered backoff"
     finally:
         await runner.stop()
-        await bridge.stop()
+        await gateway.stop()
 
 
 @check("4", "a dropped connection reconnects and re-registers")
 async def t_reconnect() -> None:
-    bridge = FakeBridge(drop_on_register=True)
-    await bridge.start()
-    link = BridgeLink(config_for(bridge.port))
+    gateway = FakeBridge(drop_on_register=True)
+    await gateway.start()
+    link = BridgeLink(config_for(gateway.port))
     runner = LinkRunner(link)
     try:
         await runner.start()
         deadline = asyncio.get_running_loop().time() + 6
-        while asyncio.get_running_loop().time() < deadline and bridge.connections < 2:
+        while asyncio.get_running_loop().time() < deadline and gateway.connections < 2:
             await asyncio.sleep(0.1)
-        assert bridge.connections >= 2, f"the device must reconnect, saw {bridge.connections} connections"
-        assert len(bridge.registrations) >= 2, "each new connection must register again"
+        assert gateway.connections >= 2, f"the device must reconnect, saw {gateway.connections} connections"
+        assert len(gateway.registrations) >= 2, "each new connection must register again"
         assert runner.disconnects, "the dropped connection must be reported to the caller"
     finally:
         await runner.stop()
-        await bridge.stop()
+        await gateway.stop()
 
 
 @check("5", "ping is answered with pong")
 async def t_ping_pong() -> None:
-    bridge = FakeBridge()
-    await bridge.start()
-    link = BridgeLink(config_for(bridge.port))
+    gateway = FakeBridge()
+    await gateway.start()
+    link = BridgeLink(config_for(gateway.port))
     runner = LinkRunner(link)
     try:
         await runner.start()
-        await asyncio.wait_for(bridge.registered.wait(), TIMEOUT)
-        await bridge.push(Event(type="ping"))
+        await asyncio.wait_for(gateway.registered.wait(), TIMEOUT)
+        await gateway.push(Event(type="ping"))
         await asyncio.sleep(0.2)
-        assert any(e.type == "pong" for e in bridge.received), "an idle link must answer ping"
+        assert any(e.type == "pong" for e in gateway.received), "an idle link must answer ping"
         assert not any(e.type == "ping" for e in runner.events), "ping must not reach the event sink"
     finally:
         await runner.stop()
-        await bridge.stop()
+        await gateway.stop()
 
 
 @check("13", "the outbound socket enables short TCP keepalive")
 async def t_tcp_keepalive() -> None:
-    bridge = FakeBridge()
-    await bridge.start()
-    link = BridgeLink(config_for(bridge.port))
+    gateway = FakeBridge()
+    await gateway.start()
+    link = BridgeLink(config_for(gateway.port))
     runner = LinkRunner(link)
     try:
         await runner.start()
-        await asyncio.wait_for(bridge.registered.wait(), TIMEOUT)
+        await asyncio.wait_for(gateway.registered.wait(), TIMEOUT)
         assert link.writer is not None
         sock = link.writer.get_extra_info("socket")
         assert sock is not None, "the connected stream must expose its socket"
         assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE) == 1, (
-            "an idle outbound link must not survive a vanished bridge indefinitely"
+            "an idle outbound link must not survive a vanished gateway indefinitely"
         )
         for name, expected in (("TCP_KEEPIDLE", 15), ("TCP_KEEPINTVL", 5), ("TCP_KEEPCNT", 3)):
             option = getattr(socket, name, None)
@@ -345,7 +345,7 @@ async def t_tcp_keepalive() -> None:
                 assert actual == expected, f"{name}={actual}, expected {expected}"
     finally:
         await runner.stop()
-        await bridge.stop()
+        await gateway.stop()
 
 
 @check("6", "the backoff grows with consecutive failures and is capped")
@@ -377,13 +377,13 @@ async def t_backoff() -> None:
 
 @check("7", "a stalled write fails the link instead of hanging the device")
 async def t_stalled_write() -> None:
-    bridge = FakeBridge(stop_reading=True)
-    await bridge.start()
-    link = BridgeLink(config_for(bridge.port, write_timeout=0.5))
+    gateway = FakeBridge(stop_reading=True)
+    await gateway.start()
+    link = BridgeLink(config_for(gateway.port, write_timeout=0.5))
     runner = LinkRunner(link)
     try:
         await runner.start()
-        await asyncio.wait_for(bridge.registered.wait(), TIMEOUT)
+        await asyncio.wait_for(gateway.registered.wait(), TIMEOUT)
         payload = b"\x00" * (1024 * 1024)
         failed = False
         deadline = asyncio.get_running_loop().time() + 20
@@ -391,25 +391,25 @@ async def t_stalled_write() -> None:
             if not await link.send(Event(type="audio-chunk", payload=payload)):
                 failed = True
                 break
-        assert failed, "a bridge that stops reading must fail the write, not hang the device"
+        assert failed, "a gateway that stops reading must fail the write, not hang the device"
         assert link.stats.write_failures == 1, f"saw {link.stats.write_failures} write failures"
         assert not link.connected, "the link must be torn down so the reconnect loop can run"
     finally:
         await runner.stop()
-        await bridge.stop()
+        await gateway.stop()
 
 
 @check("8", "the bootstrap configuration is exactly what the device needs")
 async def t_config_from_env() -> None:
     config = load_config_from_env({
         "VOICE_DEVICE_ID": "kitchen-1",
-        "VOICE_BRIDGE_HOST": "bridge.example",
-        "VOICE_BRIDGE_PORT": "443",
+        "VOICE_GATEWAY_HOST": "gateway.example",
+        "VOICE_GATEWAY_PORT": "443",
         "VOICE_DEVICE_AREA": "kitchen",
         "VOICE_DEVICE_CONFIG_STATE": "/tmp/kitchen-config.json",
     })
     assert config.device_id == "kitchen-1"
-    assert config.host == "bridge.example" and config.port == 443
+    assert config.host == "gateway.example" and config.port == 443
     assert config.config_state_path == pathlib.Path("/tmp/kitchen-config.json")
     assert config.ssl_context is None, "a plain local connection must not build a TLS context"
     try:
@@ -419,53 +419,53 @@ async def t_config_from_env() -> None:
         pass
 
 
-@check("6b", "an accept-then-drop bridge accumulates backoff instead of retrying at the base interval")
+@check("6b", "an accept-then-drop gateway accumulates backoff instead of retrying at the base interval")
 async def t_flapping_backoff() -> None:
-    # Filed as #63: the reset used to happen on every handshake, so a bridge that accepts and immediately
+    # Filed as #63: the reset used to happen on every handshake, so a gateway that accepts and immediately
     # closes produced a tight retry loop forever. This drives the real run loop rather than calling
     # _next_backoff directly.
-    bridge = FakeBridge(drop_every_register=True)
-    await bridge.start()
-    link = BridgeLink(config_for(bridge.port, backoff_base=0.05, backoff_max=1.0, healthy_after=30.0))
+    gateway = FakeBridge(drop_every_register=True)
+    await gateway.start()
+    link = BridgeLink(config_for(gateway.port, backoff_base=0.05, backoff_max=1.0, healthy_after=30.0))
     runner = LinkRunner(link)
     try:
         await runner.start()
         deadline = asyncio.get_running_loop().time() + 8
         while asyncio.get_running_loop().time() < deadline and link._backoff_index < 4:
             await asyncio.sleep(0.05)
-        assert bridge.connections >= 4, f"expected several attempts, saw {bridge.connections}"
+        assert gateway.connections >= 4, f"expected several attempts, saw {gateway.connections}"
         assert link._backoff_index >= 4, (
             f"the backoff must grow across a flapping link, index={link._backoff_index}"
         )
-        gaps = [b - a for a, b in zip(bridge.connection_times, bridge.connection_times[1:])]
+        gaps = [b - a for a, b in zip(gateway.connection_times, gateway.connection_times[1:])]
         assert len(gaps) >= 3, f"need a few gaps to compare, got {gaps}"
         assert gaps[-1] > gaps[0], f"attempts must space out, gaps={[round(g, 3) for g in gaps]}"
         assert link.stats.registrations >= 4, "each attempt did register; that is what made it look healthy"
     finally:
         await runner.stop()
-        await bridge.stop()
+        await gateway.stop()
 
 
 @check("9", "a stale write failure does not tear down a newer connection")
 async def t_stale_write_teardown() -> None:
     # Filed as #64: send() saved a local writer reference but tore down unconditionally, so a write that
     # failed on a superseded socket closed the replacement the run loop had already installed.
-    bridge = FakeBridge(stop_reading=True)
-    await bridge.start()
-    link = BridgeLink(config_for(bridge.port, write_timeout=0.5))
+    gateway = FakeBridge(stop_reading=True)
+    await gateway.start()
+    link = BridgeLink(config_for(gateway.port, write_timeout=0.5))
     runner = LinkRunner(link)
     try:
         await runner.start()
-        await asyncio.wait_for(bridge.registered.wait(), TIMEOUT)
+        await asyncio.wait_for(gateway.registered.wait(), TIMEOUT)
         old_writer = link.writer
         assert old_writer is not None
-        # A write that cannot complete, because the bridge has stopped reading.
+        # A write that cannot complete, because the gateway has stopped reading.
         stale = asyncio.create_task(
             link.send(Event(type="audio-chunk", payload=b"\x00" * (8 * 1024 * 1024)))
         )
         await asyncio.sleep(0.1)
         # Meanwhile the run loop reconnects and installs a new generation.
-        reader2, new_writer = await asyncio.open_connection("127.0.0.1", bridge.port)
+        reader2, new_writer = await asyncio.open_connection("127.0.0.1", gateway.port)
         link.writer, link.reader, link.connected = new_writer, reader2, True
         assert not await stale, "the stale write must fail"
         assert link.writer is new_writer, "the live connection must still be installed"
@@ -474,7 +474,7 @@ async def t_stale_write_teardown() -> None:
         new_writer.close()
     finally:
         await runner.stop()
-        await bridge.stop()
+        await gateway.stop()
 
 
 @check("10", "local satellite EOF ends the paired relay")
@@ -500,7 +500,7 @@ async def t_local_eof_ends_relay() -> None:
         )
     )
     link.connected = True
-    # The bridge side stays open and sends nothing. The local side's EOF must still
+    # The gateway side stays open and sends nothing. The local side's EOF must still
     # end _serve_local promptly so run() can tear down and reconnect both legs.
     link.reader = asyncio.StreamReader()
     try:
@@ -555,15 +555,15 @@ async def t_configuration_control_plane() -> None:
                 "error": None,
             })
 
-    bridge = FakeBridge()
-    await bridge.start()
+    gateway = FakeBridge()
+    await gateway.start()
     agent = FakeConfigAgent()
-    link = BridgeLink(config_for(bridge.port), config_agent=agent)
+    link = BridgeLink(config_for(gateway.port), config_agent=agent)
     runner = LinkRunner(link)
     try:
         await runner.start()
-        await asyncio.wait_for(bridge.registered.wait(), TIMEOUT)
-        await bridge.push(Event(type="hermes.config.desired", data={
+        await asyncio.wait_for(gateway.registered.wait(), TIMEOUT)
+        await gateway.push(Event(type="hermes.config.desired", data={
             "schema_version": 1,
             "device_id": "kitchen-1",
             "generation": 4,
@@ -571,16 +571,16 @@ async def t_configuration_control_plane() -> None:
         }))
         deadline = asyncio.get_running_loop().time() + TIMEOUT
         while (asyncio.get_running_loop().time() < deadline
-               and not any(event.type == "hermes.config.reported" for event in bridge.received)):
+               and not any(event.type == "hermes.config.reported" for event in gateway.received)):
             await asyncio.sleep(0.01)
         assert len(agent.events) == 1
-        assert any(event.type == "hermes.config.reported" for event in bridge.received)
+        assert any(event.type == "hermes.config.reported" for event in gateway.received)
         assert not any(event.type == "hermes.config.desired" for event in runner.events), (
             "configuration control events must not be relayed into the local satellite audio path"
         )
     finally:
         await runner.stop()
-        await bridge.stop()
+        await gateway.stop()
 
 
 # ---------------------------------------------------------------- runner

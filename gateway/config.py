@@ -1,7 +1,7 @@
 """Bridge configuration for this voice satellite.
 
 The satellite is a Wyoming *server*: we dial out to it. All audio processing
-(VAD, STT, TTS) happens here on the bridge host; the Pi only does mic capture,
+(VAD, STT, TTS) happens here on the Gateway host; the Pi only does mic capture,
 wake word, and playback.
 
 That direction is being inverted (issue #61): a device may instead dial *us*, and we keep a registry of
@@ -9,7 +9,7 @@ who is connected. The listener lives under "the registry listener" below and is 
 the voice loop still dials the satellite.
 
 Installation-specific values (the satellite's address, the gateway's port, the session id, ...) are
-never literals here. They come from the environment first and from `bridge.env` (at the project
+never literals here. They come from the environment first and from `gateway.env` (at the project
 root, git-ignored, see `bridge.env.example`) second, so a clone on another machine is configured by
 copying the example file rather than by editing source. The host's systemd unit points at the same
 file, so one file is the whole host-side configuration. Same pattern on the device side:
@@ -23,7 +23,10 @@ from pathlib import Path
 # The one place this installation's values live. `KEY=VALUE` lines, `#` comments, optional quotes.
 # Absent is fine: every value falls back to its default below. A real environment variable always
 # wins over the file, so the file holds the durable values and the environment holds experiments.
-LOCAL_ENV_FILE = Path(__file__).resolve().parent.parent / "bridge.env"
+LOCAL_ENV_FILE = Path(__file__).resolve().parent.parent / "gateway.env"
+#: The name this file had before the Gateway rename. Read only when the new file is absent, so an
+#: installation made before the rename keeps its settings instead of silently reverting to defaults.
+LEGACY_ENV_FILE = LOCAL_ENV_FILE.with_name("bridge.env")
 
 _LOCAL_ENV_CACHE: dict | None = None
 
@@ -76,25 +79,33 @@ def _parse_env(text: str) -> dict[str, str]:
 
 
 def _local_env() -> dict:
-    """Read bridge.env once per process; missing/unreadable files use defaults."""
+    """Read gateway.env once per process; missing/unreadable files use defaults.
+
+    A `bridge.env` left over from before the rename is read when `gateway.env` does not exist, so an
+    upgrade does not quietly lose every setting.
+    """
     global _LOCAL_ENV_CACHE
     if _LOCAL_ENV_CACHE is None:
-        try:
-            _LOCAL_ENV_CACHE = _parse_env(LOCAL_ENV_FILE.read_text())
-        except OSError:
+        for candidate in (LOCAL_ENV_FILE, LEGACY_ENV_FILE):
+            try:
+                _LOCAL_ENV_CACHE = _parse_env(candidate.read_text())
+                break
+            except OSError:
+                continue
+        else:
             _LOCAL_ENV_CACHE = {}
     return _LOCAL_ENV_CACHE
 
 
 def _cfg(name: str, default: str = "") -> str:
-    """Environment > bridge.env > default, including explicitly empty values."""
+    """Environment > gateway.env > default, including explicitly empty values."""
     if name in os.environ:
         return os.environ[name]
     return _local_env().get(name, default)
 
 
 # --- the satellite ---------------------------------------------------------
-# Where the bridge dials. This was a hardcoded LAN address, which is why the bridge once spent
+# Where the Gateway dials. This was a hardcoded LAN address, which is why the Gateway once spent
 # hours dialling a satellite that had gone away and why moving the device broke it silently
 # (issue #45). Default is loopback on purpose: a clone with no configuration fails visibly and
 # locally instead of quietly hunting a foreign address.
@@ -107,7 +118,7 @@ SATELLITE_PORT = int(_cfg("VOICE_SATELLITE_PORT", "10700"))
 #
 # On is not handshake-only any more. A registered device is leaseable by the voice loop, carries real
 # conversations over the leased connection, and receives declarative desired state from the
-# configuration plane (bridge/config_plane.py) with its reported actual state flowing back.
+# configuration plane (gateway/config_plane.py) with its reported actual state flowing back.
 #
 # What is still missing before this can replace the dial-in shape: listener-side authentication that
 # is not the trusted-network override, and device-side cutover. See issue #61.
@@ -126,14 +137,14 @@ REGISTRY_CREDENTIALS_FILE = Path(__file__).resolve().parent.parent / "state" / "
 REGISTRY_ALLOW_UNAUTHENTICATED = _cfg("VOICE_REGISTRY_ALLOW_UNAUTHENTICATED", "").strip().lower() in (
     "1", "true", "yes", "on")
 # --- the registry listener's TLS (issue #61, the transport decision) --------
-# TLS terminates here, in the bridge, and each device is authenticated by the fingerprint of its client
+# TLS terminates here, in the gateway, and each device is authenticated by the fingerprint of its client
 # certificate (see REGISTRY_CREDENTIALS_FILE above). Provisioning a certificate pair IS the opt-in: when
 # both files below exist the listener speaks TLS and requires a peer certificate, with no second flag to
 # forget, because "certificates are installed" and "the traffic is encrypted" have to mean the same
 # thing. With neither file the listener is a plain socket, which stays a first-class choice for a local
-# network rather than a fallback. Half a pair stops the bridge instead of serving plaintext quietly.
+# network rather than a fallback. Half a pair stops the Gateway instead of serving plaintext quietly.
 #
-# Overridable so the private key can live in a root-owned directory rather than beside the bridge's other
+# Overridable so the private key can live in a root-owned directory rather than beside the Gateway's other
 # state: a copy of a private key in a directory someone else can read is a needless second copy.
 _STATE = Path(__file__).resolve().parent.parent / "state"
 REGISTRY_TLS_CERT_FILE = Path(_cfg("VOICE_REGISTRY_TLS_CERT", str(_STATE / "registry-tls" / "server.crt")))
@@ -148,7 +159,7 @@ REGISTRY_TLS_PORT = int(_cfg("VOICE_REGISTRY_TLS_PORT", str(REGISTRY_PORT + 1)))
 # by default, and it warns on every start whenever it is on.
 REGISTRY_LEGACY_PLAINTEXT = _cfg("VOICE_REGISTRY_LEGACY_PLAINTEXT", "").strip().lower() in (
     "1", "true", "yes", "on")
-# How often the bridge retries the direct dial to the satellite while it is staying up without one. With
+# How often the Gateway retries the direct dial to the satellite while it is staying up without one. With
 # the registry enabled, a failed connect no longer exits: the listeners have to outlive the absence of
 # every device, because a device that is away can only get in by dialling us (issue #61). The dial retry
 # exists so a device that comes home is picked up exactly as before.
@@ -156,7 +167,7 @@ REGISTRY_WAIT_RETRY_SECONDS = float(_cfg("VOICE_REGISTRY_WAIT_RETRY_SECONDS", "3
 # How long to wait for a device to dial in before falling back to dialling the configured satellite. Both
 # shapes are supported during the migration, and a device that dials in is preferred (it is the newer shape,
 # and two clients competing for one device is what the one-client rule exists to prevent). Waiting a moment
-# first stops the bridge from grabbing a device that is about to dial us itself.
+# first stops the Gateway from grabbing a device that is about to dial us itself.
 REGISTRY_LEASE_WAIT_SECONDS = float(_cfg("VOICE_REGISTRY_LEASE_WAIT_SECONDS", "30"))
 # The direct dial is a migration/rollback path, not something that should race the device-initiated link.
 # Registry deployments therefore wait only for a device by default. An installation that still has an
@@ -245,11 +256,11 @@ GATEWAY_API_KEY_VAR = "API_SERVER_KEY"
 # no longer carried, so if a routed run starts failing with a provider error, suspect the profile's
 # provider-specific `extra_body` leaking onto DeepSeek before suspecting DeepSeek itself.
 VOICE_ROUTE_ALIAS = _cfg("VOICE_ROUTE_ALIAS", "voice-fast")
-# Stable id so the assistant has continuity across bridge restarts. Carries the device's name, so it
+# Stable id so the assistant has continuity across Gateway restarts. Carries the device's name, so it
 # is a deployment value rather than a literal.
 VOICE_SESSION_ID = _cfg("VOICE_SESSION_ID", "voice-satellite")
 
-# How long a wake keeps the mic open while the bridge waits for a real utterance. A blip (the
+# How long a wake keeps the mic open while the Gateway waits for a real utterance. A blip (the
 # satellite's wake chime leaking into the mic, a cough, a lip smack) no longer ends the
 # activation, so this is the only bound on an activation where nobody actually speaks. Chosen
 # 2026-09-22 after it was reported that the activation was closing before a person could speak.
@@ -561,7 +572,7 @@ VOICE_INSTRUCTIONS = (
     "three or four of the controls above in plain speech, not a catalogue, and offer to try one. "
     "Never volunteer anything about your own setup: not your hardware, settings, models, "
     "microphones, logs, or how you work. Do not open a reply with a caveat about your own limits. "
-    "When someone does ask about your own setup, look it up with skill_view on hermes-voice-bridge "
+    "When someone does ask about your own setup, look it up with skill_view on hermes-voice-satellite "
     "and answer from what you find there, numbers included. Do not guess at a setting or a cause: "
     "if the skill does not cover it, say you cannot find it and that it is worth checking on the "
     "device. "
@@ -580,7 +591,7 @@ VOICE_INSTRUCTIONS = (
     "runs the repository's scripts/alarm_fire.py with its --text argument set to the alarm "
     "wording; a thin wrapper of that one call is the whole script. That combination is what "
     "makes the alarm speak out loud through the house speaker, because the script fires the "
-    "bridge announcement plane. A script path is a file, never an inline command: shell syntax "
+    "Gateway announcement plane. A script path is a file, never an inline command: shell syntax "
     "there is rejected. A plain reminder prompt that delivers a message is not an alarm and "
     "will never be heard. When asked what alarms are set, call hermes_timers with the "
     "alarm_list action and answer from those entries only; never read out the rest of the cron "
@@ -608,9 +619,9 @@ ANNOUNCE_TOKEN_ENV = "VOICE_ANNOUNCE_TOKEN"   # set this to override the file
 # --- satellite enrolment (plug-and-play, 2026-10-08) ------------------------
 # The gateway-issued five-word token a new satellite is set up with. Same shape as the announce
 # token: a 0600 file under state/, overridable by environment, generated once by
-# install-gateway.sh (printed ONCE there) and lazily by the bridge on first start. The value is
+# install-gateway.sh (printed ONCE there) and lazily by the Gateway on first start. The value is
 # never logged and never transmitted: it authenticates an HMAC challenge and derives the key the
-# credential bundle is sealed under (see bridge/enroll.py).
+# credential bundle is sealed under (see gateway/enroll.py).
 ENROLL_TOKEN_FILE = PROJECT_DIR / "state" / "enroll-token.txt"
 ENROLL_TOKEN_ENV = "VOICE_ENROLL_TOKEN"       # set this to override the file
 # The bundled word list the five words are picked from (scripts/data/enroll-words.txt).
@@ -651,7 +662,7 @@ ANNOUNCE_TURN_MAX_AGE = 180.0     # a turn "active" longer than this means the f
 
 # Startup feedback for the device itself. It has no power light and no connection light, so the
 # person in the room asked to be able to hear both (2026-09-22). power-on.wav is played by the
-# Pi; connected.wav is played by this bridge the moment the link is up, because only the host knows
+# Pi; connected.wav is played by this Gateway the moment the link is up, because only the host knows
 # that. See scripts/make_chimes.py for the two designs.
 CONNECTED_TONE = PROJECT_DIR / "sounds" / "connected.wav"
 # The connected tone and the green LED flash must fire once per boot, not once per connection.

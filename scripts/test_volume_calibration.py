@@ -5,7 +5,7 @@ The calibration script runs on the Pi and is deliberately standalone; the two re
 live in different packages on different machines. Nothing but the JSON contract holds
 them together, so this test pins that contract:
 
-  writer (scripts/calibrate-volume.py)  ->  readers (bridge/volume.py, pi/volume_control.py)
+  writer (scripts/calibrate-volume.py)  ->  readers (gateway/volume.py, pi/volume_control.py)
 
 A drift here would mean a measured floor silently ignored, which reads as "the volume
 feature does not work" rather than "the file format changed".
@@ -40,7 +40,7 @@ script = ROOT / "scripts" / "calibrate-volume.py"
 check("the calibration script exists", script.is_file(), script)
 
 source = script.read_text()
-for forbidden in ("from bridge", "from pi", "import bridge", "import pi"):
+for forbidden in ("from Gateway", "from pi", "import gateway", "import pi"):
     check(f"the script does not import the repo ({forbidden!r}), so it can be copied alone",
           forbidden not in source, forbidden)
 
@@ -121,17 +121,17 @@ with tempfile.TemporaryDirectory() as tmp:
     check("the device reader picks up the measured control", control == "HP DAC", control)
     check("the device reader picks up the card", card == "seeed2micvoicec", card)
 
-    # ---- reader 2: the bridge side
-    import bridge.volume as bridge_volume
+    # ---- reader 2: the Gateway side
+    import gateway.volume as bridge_volume
 
     original = bridge_volume.CALIBRATION_FILE
     bridge_volume.CALIBRATION_FILE = target
     try:
         floor, alarm, card2, control2 = bridge_volume._load_calibration()
-        check("the bridge reader picks up the measured floor", floor == 31, floor)
-        check("the bridge reader picks up the alarm minimum", alarm == 65, alarm)
-        check("the bridge reader picks up the control", control2 == "HP DAC", control2)
-        check("the bridge reader picks up the card", card2 == "seeed2micvoicec", card2)
+        check("the Gateway reader picks up the measured floor", floor == 31, floor)
+        check("the Gateway reader picks up the alarm minimum", alarm == 65, alarm)
+        check("the Gateway reader picks up the control", control2 == "HP DAC", control2)
+        check("the Gateway reader picks up the card", card2 == "seeed2micvoicec", card2)
 
         # ---- and a measurement actually changes the clamping behaviour
         #

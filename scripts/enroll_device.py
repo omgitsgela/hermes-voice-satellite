@@ -33,7 +33,7 @@ Usage:
         --token-file ~/.config/hermes-voice-satellite/enroll-token
     enroll_device.py --device-id ... --gateway ... --out ... --endpoint tls://192.0.2.10:10702
 
-With --endpoint the bridge's own server certificate is read from that TLS port and checked against
+With --endpoint the Gateway's own server certificate is read from that TLS port and checked against
 the client CA that arrived in the encrypted bundle before it is saved as `server.crt` -- the file
 `provision-device-tls.py` pins into the board. The endpoint is the very address the board will
 dial, so the certificate saved is the certificate the board will meet.
@@ -213,10 +213,10 @@ def post_enroll(gateway: str, proof: str, device_id: str, force: bool = False,
     raise EnrolError(f'the gateway answered HTTP {status}')
 
 
-# ---------------------------------------------------------------- bridge certificate
+# ---------------------------------------------------------------- Gateway certificate
 
 def capture_server_cert(endpoint: str, client_ca_pem: str, timeout: float = 10.0) -> str:
-    """The bridge's server certificate, read from the very endpoint the board will dial.
+    """The Gateway's server certificate, read from the very endpoint the board will dial.
 
     The connection is verified against the client CA that arrived inside the AEAD-protected
     bundle, so the certificate saved is authenticated by that bundle: an impostor without a
@@ -237,10 +237,10 @@ def capture_server_cert(endpoint: str, client_ca_pem: str, timeout: float = 10.0
             with context.wrap_socket(raw) as tls:
                 der = tls.getpeercert(binary_form=True)
     except (OSError, ssl.SSLError, ValueError) as exc:
-        raise EnrolError(f'could not read the bridge certificate from {endpoint} '
+        raise EnrolError(f'could not read the Gateway certificate from {endpoint} '
                          f'(it must answer TLS, signed by the client CA): {exc}') from None
     if not der:
-        raise EnrolError(f'the bridge at {endpoint} presented no certificate')
+        raise EnrolError(f'the Gateway at {endpoint} presented no certificate')
     return ssl.DER_cert_to_PEM_cert(der)
 
 
@@ -248,7 +248,7 @@ def capture_server_cert(endpoint: str, client_ca_pem: str, timeout: float = 10.0
 
 def pem_to_der(pem: bytes) -> bytes:
     """The DER form of a PEM block -- loaded from provision-device-tls.py so the fingerprint here
-    and the fingerprint the provisioner and the bridge compute can never drift apart."""
+    and the fingerprint the provisioner and the Gateway compute can never drift apart."""
     spec = importlib.util.spec_from_file_location(
         'provision_device_tls', Path(__file__).resolve().parent / 'provision-device-tls.py')
     assert spec is not None and spec.loader is not None
@@ -276,7 +276,7 @@ def write_bundle(out_dir: Path, device_id: str, bundle: dict,
     if server_cert_pem is not None:
         put('server.crt', server_cert_pem)
 
-    # The bridge's own record shape: fingerprint -> device id, computed exactly as the bridge
+    # The Gateway's own record shape: fingerprint -> device id, computed exactly as the Gateway
     # computes it. Existing entries for other boards are kept: the file grows, never shrinks.
     fingerprint = 'sha256:' + hashlib.sha256(
         pem_to_der(bundle['cert'].encode('utf-8'))).hexdigest()
@@ -350,7 +350,7 @@ def main() -> int:
                         help='folder to write client-ca.crt, <id>.crt, <id>.key and '
                              'device-credentials.json into')
     parser.add_argument('--endpoint', help='tls://host:port the board will dial; when given, the '
-                                           'bridge certificate is read from there (verified '
+                                           'Gateway certificate is read from there (verified '
                                            'against the client CA) and saved as server.crt')
     parser.add_argument('--token-file', help='file holding the setup code; read, never printed. '
                                              'Without it the saved file '
@@ -385,7 +385,7 @@ def main() -> int:
             print('enrol: the gateway sent its own server certificate in the sealed bundle')
         elif arguments.endpoint:
             server_cert_pem = capture_server_cert(arguments.endpoint, bundle['client_ca'])
-            print(f'enrol: read the bridge certificate from {arguments.endpoint} '
+            print(f'enrol: read the Gateway certificate from {arguments.endpoint} '
                   '(verified against the client CA)')
         else:
             raise EnrolError('the gateway sent no server certificate, so the board would have '

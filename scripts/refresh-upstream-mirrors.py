@@ -65,7 +65,7 @@ WHY = {
 NOTES = {
     "wyoming-satellite": "our vendored snapshot is `13bb024` from 2025-04-25, so check the mirrored "
                          "commits here before assuming our copy is current",
-    "silero-vad": "the ONNX model we actually run is vendored in `bridge/vendor/` and tracked in our "
+    "silero-vad": "the ONNX model we actually run is vendored in `gateway/vendor/` and tracked in our "
                   "own repository with its checksum (`docs/voice-detection.md`), because a detector "
                   "that decides whether the device hears its owner must not depend on an asset "
                   "living inside someone else's wheel. This mirror is the source of record for "

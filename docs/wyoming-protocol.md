@@ -128,7 +128,7 @@ Rules that are part of the contract:
 - **Removal is generation-safe.** Every connection carries a monotonic generation and cleanup only removes a
   slot if the generation still matches, so a device that reconnects is not removed by its own old handler.
 
-Implemented in `bridge/registry.py`, pinned by `scripts/test_registry.py` (twelve offline checks over real
+Implemented in `gateway/registry.py`, pinned by `scripts/test_registry.py` (twelve offline checks over real
 sockets), and **not yet carrying voice traffic**: the running gateway still dials the device, and the worker
 that leases a registered device is migration phase 4.
 

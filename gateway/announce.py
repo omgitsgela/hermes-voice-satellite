@@ -50,8 +50,8 @@ from typing import Any, Awaitable, Callable, Iterable, Optional
 
 from aiohttp import web
 
-from bridge import tts
-from bridge.config import (
+from gateway import tts
+from gateway.config import (
     ALARM_VOLUME_HOLD_MARGIN,
     ALARM_VOLUME_HOLD_MAX,
     ANNOUNCE_DEDUP_SECONDS,
@@ -69,14 +69,14 @@ from bridge.config import (
     FLEET_RESTART_DISPATCH_INTERVAL_SECONDS,
     FLEET_DISPATCH_TIMEOUT_SECONDS,
 )
-from bridge.satellite import SatelliteClient
-from bridge.enroll import EnrollmentService
-from bridge.timers import DEFAULT_STATE_PATH, TimerLimitError, TimerManager, parse_duration
-from bridge.config_plane import (
+from gateway.satellite import SatelliteClient
+from gateway.enroll import EnrollmentService
+from gateway.timers import DEFAULT_STATE_PATH, TimerLimitError, TimerManager, parse_duration
+from gateway.config_plane import (
     ConfigConflict, ConfigPlane, ConfigValidationError, setting_requires_restart,
 )
 
-_LOGGER = logging.getLogger("bridge.announce")
+_LOGGER = logging.getLogger("gateway.announce")
 
 
 @dataclass
@@ -129,7 +129,7 @@ class Announcer:
         # are optional so an Announcer built without a loop still works.
         self._follow_up_get = follow_up_get
         self._follow_up_set = follow_up_set
-        # Starting a new conversation from a VOICE request. The bridge already rotates on the fixed
+        # Starting a new conversation from a VOICE request. The Gateway already rotates on the fixed
         # "new conversation" phrases, but that path can only act on an exact phrase -- so when the
         # assistant asked "did you want me to start a new conversation?" and the person answered
         # "yes please", there was nothing for the model to call and it had to say it could not do it.
@@ -223,7 +223,7 @@ class Announcer:
         app = web.Application()
         app.router.add_post("/announce", self._handle_announce)
         app.router.add_get("/announce/health", self._handle_health)
-        # The device's own settings, on the port the bridge already listens on. Token-protected
+        # The device's own settings, on the port the Gateway already listens on. Token-protected
         # like announcements: this changes how the device behaves in the room.
         app.router.add_get("/settings", self._handle_settings_get)
         app.router.add_post("/settings", self._handle_settings_post)
@@ -236,7 +236,7 @@ class Announcer:
         app.router.add_put("/config/devices/{device_id}/desired", self._handle_config_desired)
         app.router.add_put("/config/fleet/desired", self._handle_config_fleet)
         app.router.add_post("/config/devices/{device_id}/reported", self._handle_config_reported)
-        # Satellite enrolment, beside /announce on this same LAN port (bridge/enroll.py).
+        # Satellite enrolment, beside /announce on this same LAN port (gateway/enroll.py).
         self.enrollment.register(app)
         self._runner = web.AppRunner(app, access_log=None)
         await self._runner.setup()
@@ -249,7 +249,7 @@ class Announcer:
 
     async def stop(self) -> None:
         # Pending fleet restart-class dispatches are sleeping tasks that would otherwise
-        # survive shutdown and keep bouncing device services after the bridge has stopped.
+        # survive shutdown and keep bouncing device services after the Gateway has stopped.
         # This cleanup is unconditional: it must run even if an earlier shutdown step raises,
         # because a task that outlives stop() is a service being restarted after the fact.
         try:
@@ -991,7 +991,7 @@ class Announcer:
             _LOGGER.debug("no volume path wired; the alarm plays at the current level")
             return {}
 
-        from bridge.volume import alarm_percent
+        from gateway.volume import alarm_percent
 
         # EVERY device the alarm will play on, each at its own level. The old code asked for "the"
         # volume and set "the" volume, which on a fleet meant only the addressed device moved.

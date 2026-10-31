@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Offline tests for the 2mic LED controller and boot-pulse gate.
 
-Runs on the bridge host against the Pi's LED service source with gpiozero and spidev stubbed out,
+Runs on the Gateway host against the Pi's LED service source with gpiozero and spidev stubbed out,
 so the animation and the gating can be checked without touching the device.
 
-    ~/hermes-voice-bridge/.venv/bin/python test_led_controller.py
+    ~/hermes-voice-satellite/.venv/bin/python test_led_controller.py
 """
 import asyncio
 import importlib.util
@@ -109,7 +109,7 @@ async def test_second_pulse_replaces_the_first(led):
 
 
 async def test_event_mapping(led):
-    """Pin the mapping that broke: the filler must not end the pulse, the bridge must."""
+    """Pin the mapping that broke: the filler must not end the pulse, the Gateway must."""
     strip = FakeStrip()
     controller = led.LEDController(strip, 3)
     args = types.SimpleNamespace(pulse_low=6, pulse_high=45, pulse_period=1.8,
@@ -127,12 +127,12 @@ async def test_event_mapping(led):
     assert controller.pulse_label is None, "stream stop must not start the working pulse"
     assert strip.frames[-1][1:4] == (0, 0, 0), "stream stop should be dark"
 
-    # The bridge says it is working.
+    # The Gateway says it is working.
     await handler.handle_event(Event(type=led.LED_BUSY_EVENT))
     assert controller.pulse_label == "working", "led-busy did not start the working pulse"
     await asyncio.sleep(0.25)
 
-    # The bridge says the answer is starting.
+    # The Gateway says the answer is starting.
     await handler.handle_event(Event(type=led.LED_IDLE_EVENT))
     assert controller.pulse_label is None, "led-idle did not stop the pulse"
     frames = len(strip.frames)

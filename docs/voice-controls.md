@@ -1,9 +1,9 @@
 # Voice controls: what a person can say, and what answers it
 
 This is the contract for the voice surface. It is enforced in two places and documented here so the
-two can be checked against each other: the **fixed phrase matchers** in `bridge/loop.py`, and the
+two can be checked against each other: the **fixed phrase matchers** in `gateway/loop.py`, and the
 **model's tool surface** plus the **instructions the gateway sends** (`VOICE_INSTRUCTIONS` in
-`bridge/config.py`).
+`gateway/config.py`).
 
 The split matters. A control that lives only in a phrase matcher can misfire on nothing — but it can
 also only fire on an exact phrase. A control that lives only in the model can understand any phrasing —
@@ -52,28 +52,28 @@ reset the conversation from this side" after asking the question itself.
 Hermes' own auto-expiring conversations are disabled, so the satellite would otherwise carry a single
 conversation indefinitely. The Gateway rotates on idle instead: `--idle-reset-minutes`, **set to 60** for
 this installation by the drop-in
-`~/.config/systemd/user/hermes-voice-bridge.service.d/20-idle-reset.conf`. The log line to confirm it
+`~/.config/systemd/user/hermes-voice-gateway.service.d/20-idle-reset.conf`. The log line to confirm it
 is `resumed conversation is N min old; idle window is 60 min`.
 
 ## Where each piece lives
 
 | Piece | File |
 |---|---|
-| Fixed phrase lists (follow-up, stop, reset) | `bridge/config.py` |
-| Matcher order (status before set, deadbands) | `bridge/loop.py::_local_command` |
-| Instructions sent with every voice turn | `bridge/config.py::VOICE_INSTRUCTIONS` |
+| Fixed phrase lists (follow-up, stop, reset) | `gateway/config.py` |
+| Matcher order (status before set, deadbands) | `gateway/loop.py::_local_command` |
+| Instructions sent with every voice turn | `gateway/config.py::VOICE_INSTRUCTIONS` |
 | Model-facing tool schema and description | `hermes/plugins/voice_satellite/__init__.py` |
 | Tool dispatch | `hermes/plugins/voice_satellite/voice_tool.py` |
-| `/settings` endpoint (follow-up, profile, reset) | `bridge/announce.py` |
-| Wake arbitration between satellites | `VOICE_WAKE_CLAIM_WINDOW_MS` in `bridge.env` |
+| `/settings` endpoint (follow-up, profile, reset) | `gateway/announce.py` |
+| Wake arbitration between satellites | `VOICE_WAKE_CLAIM_WINDOW_MS` in `gateway.env` |
 
 ## Host settings this installation runs with
 
 These are host-local (not in the repo) and are recorded here so a rebuild can reproduce them:
 
-- `VOICE_WAKE_CLAIM_WINDOW_MS=500` in `bridge.env` — without it the first satellite to report a wake
+- `VOICE_WAKE_CLAIM_WINDOW_MS=500` in `gateway.env` — without it the first satellite to report a wake
   takes the turn, which let a satellite in another room answer a request meant for this one (and take
   the volume command with it).
 - `20-idle-reset.conf` drop-in — the 60 minute idle window above.
-- `VOICE_DUMP_UTTERANCES=1` in `bridge.env` — **off by default**, kept as a diagnostic: it writes each
+- `VOICE_DUMP_UTTERANCES=1` in `gateway.env` — **off by default**, kept as a diagnostic: it writes each
   utterance to a WAV under `audio/` so a missing word can be examined instead of guessed at.

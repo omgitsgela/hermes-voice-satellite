@@ -1,5 +1,5 @@
 #!/bin/sh
-# Report what this satellite's network looks like, and whether the bridge is reachable from here.
+# Report what this satellite's network looks like, and whether the Gateway is reachable from here.
 #
 # Run it on the device, whichever network it is on:
 #
@@ -7,11 +7,11 @@
 #     sh ~/check-network.sh                        # on the device itself
 #
 # It answers three questions a person actually has: which network did it join, what address does it have,
-# and can it reach the bridge from here. It does not change anything.
+# and can it reach the Gateway from here. It does not change anything.
 set -u
 
-BRIDGE_HOST="${BRIDGE_HOST:?set BRIDGE_HOST to the bridge address, e.g. BRIDGE_HOST=10.0.0.5 sh check-network.sh}"
-# Ports worth testing from the device's side. 22 is the host's SSH, 8765 is the bridge's announcement
+BRIDGE_HOST="${BRIDGE_HOST:?set BRIDGE_HOST to the Gateway address, e.g. BRIDGE_HOST=10.0.0.5 sh check-network.sh}"
+# Ports worth testing from the device's side. 22 is the host's SSH, 8765 is the Gateway's announcement
 # endpoint, and 10701 is the registry listener the inversion adds. The device's own 10700 is deliberately
 # absent: testing a port the device itself owns proves nothing about the network, which is what the first
 # version of this script got wrong.
@@ -45,7 +45,7 @@ for f in /etc/NetworkManager/system-connections/*.nmconnection; do
 done
 
 echo
-echo "=== can this device reach the bridge host $BRIDGE_HOST? ==="
+echo "=== can this device reach the Gateway host $BRIDGE_HOST? ==="
 echo "  route: $(ip route get "$BRIDGE_HOST" 2>/dev/null | head -1)"
 if ping -c 2 -W 2 "$BRIDGE_HOST" >/dev/null 2>&1; then
     echo "  ping:  reachable"
@@ -55,7 +55,7 @@ fi
 for port in $BRIDGE_PORTS; do
     case "$port" in
         22)    what="host SSH" ;;
-        8765)  what="bridge announcements" ;;
+        8765)  what="Gateway announcements" ;;
         10701) what="registry listener (the inversion's port)" ;;
         *)     what="" ;;
     esac
@@ -82,9 +82,9 @@ ss -lntp 2>/dev/null | grep -E "10700|10400|10500" | sed 's/^/    /' || echo "  
 echo
 echo "=== what this means ==="
 cat <<'NOTE'
-  The device joining a network is step one. For the voice link itself: today the bridge dials the
+  The device joining a network is step one. For the voice link itself: today the Gateway dials the
   satellite at its home address, so a device sitting behind a travel router cannot be reached and will
-  sit idle. The device dialling the bridge (issue #61) is what makes a remote network work, and that is
+  sit idle. The device dialling the Gateway (issue #61) is what makes a remote network work, and that is
   not wired in yet. This report proves the network half only: whichever network it is on, this device
-  can reach the bridge host.
+  can reach the Gateway host.
 NOTE

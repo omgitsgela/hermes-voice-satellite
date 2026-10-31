@@ -4,7 +4,7 @@
 The interruption watcher and the answer's playback waiter both pull from `sat.next_event`. The
 watcher skipped every event that was not a wake detection, so a `played` arriving while it ran was
 consumed and lost, and the waiter sat there for its full 180 second timeout before concluding that
-playback had failed. Run with the bridge venv:
+playback had failed. Run with the Gateway venv:
 
     .venv/bin/python scripts/test_event_replay.py
 """
@@ -17,10 +17,10 @@ import types
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import bridge.loop as loop_module  # noqa: E402
+import gateway.loop as loop_module  # noqa: E402
 from wyoming.event import Event  # noqa: E402
 
-# Find the bridge class rather than naming it: the module holds several classes, and guessing here
+# Find the Gateway class rather than naming it: the module holds several classes, and guessing here
 # already cost one failed run.
 Loop = next(
     obj for obj in vars(loop_module).values()
@@ -53,10 +53,10 @@ class FakeSat:
 
 
 def make_bridge(events):
-    bridge = Loop.__new__(Loop)          # skip __init__: this tests two methods, not the world
-    bridge.sat = FakeSat(events)
-    bridge.self_trigger_count = 0
-    return bridge
+    gateway = Loop.__new__(Loop)          # skip __init__: this tests two methods, not the world
+    gateway.sat = FakeSat(events)
+    gateway.self_trigger_count = 0
+    return Gateway
 
 
 PLAYED = Event(type="played")
@@ -64,10 +64,10 @@ PLAYED = Event(type="played")
 
 async def main() -> int:
     # The watcher runs while the turn waits for `played`
-    bridge = make_bridge([PLAYED])
+    gateway = make_bridge([PLAYED])
     state = types.SimpleNamespace(done=False, stop_playback=False)
-    watcher = asyncio.create_task(bridge._watch_for_interruption(state))
-    played = await bridge.wait_for_played(timeout=2.0)
+    watcher = asyncio.create_task(gateway._watch_for_interruption(state))
+    played = await gateway.wait_for_played(timeout=2.0)
     state.done = True
     await asyncio.sleep(0.05)
     watcher.cancel()
@@ -79,16 +79,16 @@ async def main() -> int:
     check("the turn still sees `played` while the watcher runs", played, True)
 
     # and a detection is still the watcher's own to consume
-    bridge = make_bridge([Event(type="detection", data={"name": "hey_hermes"})])
+    gateway = make_bridge([Event(type="detection", data={"name": "hey_hermes"})])
     state = types.SimpleNamespace(done=True, stop_playback=False)
-    await bridge._watch_for_interruption(state)
-    check("no detection left behind in the buffer", len(bridge._replay_buffer()), 0)
+    await gateway._watch_for_interruption(state)
+    check("no detection left behind in the buffer", len(gateway._replay_buffer()), 0)
 
     # the buffer is bounded, so a long task cannot grow it without limit
-    bridge = make_bridge([])
+    gateway = make_bridge([])
     for _ in range(100):
-        bridge._replay_buffer().append(PLAYED)
-    check("buffer bounded", len(bridge._replay_buffer()) <= 32, True)
+        gateway._replay_buffer().append(PLAYED)
+    check("buffer bounded", len(gateway._replay_buffer()) <= 32, True)
 
     print(f"event replay checks: {checks - len(failures)}/{checks} passed")
     for f in failures:

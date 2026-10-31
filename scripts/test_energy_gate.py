@@ -14,7 +14,7 @@ is what a person does, and a frame at 190 must never be treated as speech no mat
 activity detector thinks of it. That matters because webrtcvad decides on spectral content, not
 energy, and a fan's blips are spectrally speech-like - twelve of them across one day, 0.08 s each.
 
-Run with the bridge venv:
+Run with the Gateway venv:
 
     .venv/bin/python scripts/test_energy_gate.py
 """
@@ -25,8 +25,8 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import bridge.config as config_module  # noqa: E402
-from bridge.endpointing import Endpointer, EnergyGate  # noqa: E402
+import gateway.config as config_module  # noqa: E402
+from gateway.endpointing import Endpointer, EnergyGate  # noqa: E402
 
 checks = 0
 failures: list[str] = []

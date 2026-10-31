@@ -13,7 +13,7 @@ one defect that came from two code paths disagreeing about who owns a socket.
 
 What a lease cannot do is reconnect. A dialled satellite can be re-dialled; a leased one connects when the
 device decides to. So `reconnect()` re-arms the device over the link it already owns, and losing the link
-means waiting for a device to arrive, which `bridge/loop.py` handles.
+means waiting for a device to arrive, which `gateway/loop.py` handles.
 """
 
 from __future__ import annotations
@@ -26,14 +26,14 @@ from typing import Optional
 from wyoming.audio import AudioChunk
 from wyoming.event import Event
 
-from bridge.registry import SatelliteConnection
-from bridge.satellite import SatelliteClient
+from gateway.registry import SatelliteConnection
+from gateway.satellite import SatelliteClient
 
 _LOGGER = logging.getLogger(__name__)
 
 # The fleet rule (issue #111): every registered device is leased, and a lease is read by its
 # supervisor whenever it does not own the conversation. A lease that wakes but loses
-# arbitration keeps streaming for a round trip before the bridge can cancel it; its chunks go
+# arbitration keeps streaming for a round trip before the Gateway can cancel it; its chunks go
 # here, bounded, rather than being read and discarded by two consumers racing on one socket.
 PARKED_MAX_EVENTS = 2048   # ~2 minutes of 100 ms chunks, far past any arbitration window
 

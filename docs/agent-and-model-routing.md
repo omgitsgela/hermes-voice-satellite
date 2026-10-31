@@ -15,7 +15,7 @@ They solve different problems and can be used independently.
 With the repository defaults:
 
 ```python
-# bridge/config.py
+# gateway/config.py
 GATEWAY_BASE_URL = "http://127.0.0.1:8642"
 VOICE_ROUTE_ALIAS = ""
 ```
@@ -55,11 +55,11 @@ gateway:
 Then set the Gateway to send that alias:
 
 ```python
-# bridge/config.py
+# gateway/config.py
 VOICE_ROUTE_ALIAS = "voice-fast"
 ```
 
-`bridge/gateway.py` adds this to every `POST /v1/runs` body:
+`gateway/gateway.py` adds this to every `POST /v1/runs` body:
 
 ```json
 {"input": "...", "session_id": "...", "model": "voice-fast"}
@@ -74,8 +74,8 @@ real model id unless the alias happens to use the same text.
 | Setting | Saved in | Read by |
 |---|---|---|
 | Alias definition (`model_routes.voice-fast`) | `~/.hermes/config.yaml`, under `gateway.api_server` | Hermes gateway/API server at startup |
-| Alias selected by the satellite (`VOICE_ROUTE_ALIAS`) | this repository's `bridge/config.py` | `VoiceLoop`, then `VoiceGateway` |
-| API-server bearer credential | `API_SERVER_KEY` in the Gateway process environment or the selected profile's `.env` | `bridge/gateway.py` |
+| Alias selected by the satellite (`VOICE_ROUTE_ALIAS`) | this repository's `gateway/config.py` | `VoiceLoop`, then `VoiceGateway` |
+| API-server bearer credential | `API_SERVER_KEY` in the Gateway process environment or the selected profile's `.env` | `gateway/gateway.py` |
 | Current voice conversation id | untracked `state/voice-session.txt` | the Gateway's session-rotation code |
 
 Restart the Hermes gateway after changing `model_routes`; restart the Gateway after changing
@@ -127,7 +127,7 @@ To make every satellite conversation use that profile:
 4. Point the Gateway at the profile-prefixed base URL:
 
    ```python
-   # bridge/config.py
+   # gateway/config.py
    GATEWAY_BASE_URL = "http://127.0.0.1:8642/p/<profile-slug>"
    ```
 
@@ -140,7 +140,7 @@ inside the same profile. Session-id rotation starts a fresh conversation inside 
 falls back to the default profile.
 
 This uses Hermes' supported profile routing and requires no Hermes source patch. It does require gateway
-configuration because the repository currently keeps `GATEWAY_BASE_URL` in `bridge/config.py` rather
+configuration because the repository currently keeps `GATEWAY_BASE_URL` in `gateway/config.py` rather
 than exposing it as a command-line option.
 
 ### Combining profile and model routing

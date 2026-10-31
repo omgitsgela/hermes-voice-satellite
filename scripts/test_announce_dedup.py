@@ -19,7 +19,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.announce import Announcer  # noqa: E402
+from gateway.announce import Announcer  # noqa: E402
 
 checks = 0
 failures: list[str] = []

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """An open microphone stream must be bounded, not open-ended.
 
-The bridge closes a stream with `transcript`. If that never arrives -- a wake the
-bridge loses track of, a crash mid-turn -- the device would keep forwarding a room
-nobody is listening to. Measured: a wake the bridge dismissed as its own echo left
+The Gateway closes a stream with `transcript`. If that never arrives -- a wake the
+Gateway loses track of, a crash mid-turn -- the device would keep forwarding a room
+nobody is listening to. Measured: a wake the Gateway dismissed as its own echo left
 `streaming = 1` indefinitely, with `capacct: sent 100, dropped 0` running for
 minutes. The reference satellite closes its stream at the end of the utterance;
 this is the same guarantee enforced from the device side.

@@ -8,16 +8,16 @@ The whole system, end to end, in the order you actually build it:
 4. **prebuilt images** where a build toolchain would be a tax
 
 Each installer has a `--dry-run` that prints exactly what it would do without writing (the gateway
-dry-run is the one exception: it edits a throwaway copy of `bridge.env` so it can show you the
-file you will end up with). Re-running an installer does not clobber a tuned `bridge.env` or a
-live registry CA — the managed `bridge.env` keys move in place to the current flag values and the
+dry-run is the one exception: it edits a throwaway copy of `gateway.env` so it can show you the
+file you will end up with). Re-running an installer does not clobber a tuned `gateway.env` or a
+live registry CA — the managed `gateway.env` keys move in place to the current flag values and the
 CA is reused, never regenerated, because a regenerated CA strands every enrolled device. The
 venv/dependencies step rebuilds only when its import check fails, so it is conditional rather than
 strictly idempotent. The installers live in `scripts/`:
 
 | Script | Where it runs | What it does |
 |---|---|---|
-| `install-gateway.sh` | the gateway host, next to Hermes | venv, `bridge.env`, registry TLS, user unit, Hermes plugin + config |
+| `install-gateway.sh` | the gateway host, next to Hermes | venv, `gateway.env`, registry TLS, user unit, Hermes plugin + config |
 | `install-esp32.sh` | a machine with the ESP32 attached by USB | build, bundle, flash, and provision a board |
 | `install-pi.sh` | the Pi itself (as root) | venv, units, `satellite.env`, the registry link, services |
 | `issue-registry-tls.py` | the gateway host | mint the CA / server certificate, enroll devices, verify the set |
@@ -61,15 +61,15 @@ side*, for what those keys do and why the surface deliberately has no toolset ov
 On the host that stays on:
 
 ```sh
-git clone https://github.com/omgitsgela/hermes-voice-satellite.git ~/hermes-voice-bridge
-cd ~/hermes-voice-bridge
+git clone https://github.com/omgitsgela/hermes-voice-satellite.git ~/hermes-voice-satellite
+cd ~/hermes-voice-satellite
 
 # look first: what would it do
-scripts/install-gateway.sh --base ~/hermes-voice-bridge \
+scripts/install-gateway.sh --base ~/hermes-voice-satellite \
     --device-reachable-as 192.0.2.10 --dry-run
 
 # then for real
-scripts/install-gateway.sh --base ~/hermes-voice-bridge --device-reachable-as 192.0.2.10
+scripts/install-gateway.sh --base ~/hermes-voice-satellite --device-reachable-as 192.0.2.10
 ```
 
 `--device-reachable-as` is the address a satellite will dial on this host: the LAN IP, or a name the
@@ -78,20 +78,20 @@ certificate no device could ever pin.
 
 What the installer does, in order:
 
-1. **venv** — `~/hermes-voice-bridge/.venv` with `requirements.txt` (faster-whisper, Piper,
+1. **venv** — `~/hermes-voice-satellite/.venv` with `requirements.txt` (faster-whisper, Piper,
    wyoming, silero VAD) plus the Piper voice `en_US-hfc_male-medium` from the catalog (a curated
    external voice is fetched instead by `scripts/fetch-voice.py` with pinned checksums; its
    speaker is selected by `VOICE_PIPER_SPEAKER`; see `docs/switching-voices.md`). To change the
    voice after install, run `scripts/switch-voice.py <voice>` — it updates both the Gateway and
    the Hermes gateway, validates the 22,050 Hz audio contract, and can `--rollback`.
-2. **bridge.env** — from `bridge.env.example`, with the registry link values appended: the listener
+2. **gateway.env** — from `bridge.env.example`, with the registry link values appended: the listener
    enabled, bound to the reachable address, the TLS certificate paths, and the satellite dial
    (`VOICE_SATELLITE_HOST/PORT`, loopback by default for the old shape).
 3. **registry TLS** — `scripts/issue-registry-tls.py init` mints the client CA and the Gateway's
    server certificate (SAN = the reachable address) under `state/registry-tls/`, then `verify`
    re-checks the set. A re-run reuses the CA: regenerating it would strand every enrolled device.
-4. **systemd user unit** — `hermes-voice-bridge.service` installed to `~/.config/systemd/user/`,
-   enabled and started, plus lingering so it survives logout. The unit reads `bridge.env` as its
+4. **systemd user unit** — `hermes-voice-gateway.service` installed to `~/.config/systemd/user/`,
+   enabled and started, plus lingering so it survives logout. The unit reads `gateway.env` as its
    `EnvironmentFile`, so the step-2 values are already visible to the service: no drop-in needed.
 5. **Hermes side** — the plugin installed and enabled, the voice-surface keys applied to
    `~/.hermes/config.yaml` (with a timestamped backup, and no key the installer does not manage is
@@ -115,8 +115,8 @@ here is accepted by the exact lookup the Gateway's registry builds.
 ### Verifying the gateway
 
 ```sh
-systemctl --user status hermes-voice-bridge
-journalctl --user -u hermes-voice-bridge -n 30
+systemctl --user status hermes-voice-satellite
+journalctl --user -u hermes-voice-satellite -n 30
 ss -ltnup | grep -E '1070[0-9]|8765'
 ```
 
@@ -171,11 +171,11 @@ scripts/install-esp32.sh --provision --port /dev/ttyACM0 \
 `--tls-certs` must point at a directory holding `client-ca.crt`, this device's `<id>.crt` and
 `<id>.key`, with the Gateway's `device-credentials.json` beside that directory. This is the manual
 way -- the automation path, and exactly what the guided flow falls back to when the gateway cannot
-be reached. On the gateway host those live in `~/hermes-voice-bridge/state/`; on a separate
+be reached. On the gateway host those live in `~/hermes-voice-satellite/state/`; on a separate
 flashing machine (the usual case -- the gateway stays on, the board is flashed from a laptop),
 copy them there first, e.g.
-`scp gateway:~/hermes-voice-bridge/state/registry-tls/{client-ca.crt,<id>.crt,<id>.key} ./registry-tls/`
-and `scp gateway:~/hermes-voice-bridge/state/device-credentials.json ./`. The device's `<id>` is
+`scp gateway:~/hermes-voice-satellite/state/registry-tls/{client-ca.crt,<id>.crt,<id>.key} ./registry-tls/`
+and `scp gateway:~/hermes-voice-satellite/state/device-credentials.json ./`. The device's `<id>` is
 printed by the board itself (`python3 scripts/esp32_provision.py --port /dev/ttyACM0 status`) and is
 the identity the gateway enrolls it under (`scripts/issue-registry-tls.py enroll --new <id>`, or
 automatically via the setup code above).
@@ -286,7 +286,7 @@ the satellite's `examples/` directory (where the audio units' `ExecStart` and th
 #    with its venv at $VS_BASE/.venv and script/run. This is a prerequisite the audio units assume.
 
 # 2. Bring the enrolled certificate files onto the Pi -- they live on the gateway host, not the Pi:
-scp 192.0.2.10:~/hermes-voice-bridge/state/registry-tls/{client-ca.crt,kitchen-pi.crt,kitchen-pi.key} \
+scp 192.0.2.10:~/hermes-voice-satellite/state/registry-tls/{client-ca.crt,kitchen-pi.crt,kitchen-pi.key} \
     /etc/voice-satellite/registry-tls/
 
 # 3. Install, from a checkout of THIS repository. --base is the wyoming-satellite root; --tls-certs
@@ -298,7 +298,7 @@ sudo scripts/install-pi.sh --base /opt/wyoming-satellite --device-name kitchen-p
 ```
 
 `install-pi.sh` builds the satellite venv, installs the nine `pi/*.py` device modules into
-`$BASE/examples/`, renders `satellite.env` (identity, wake word, and the `VOICE_BRIDGE_*` registry
+`$BASE/examples/`, renders `satellite.env` (identity, wake word, and the `VOICE_GATEWAY_*` registry
 link that `outbound-satellite` reads), installs the coupled audio units **and** `outbound-satellite`
 (rendered from its `.in` template: the env file, the venv python, the runner path), and enables them
 as one group. Two things it refuses: `--tls-certs` without `--endpoint` (credentials with nowhere to
@@ -316,7 +316,7 @@ minutes, which is why the installer is the unit of distribution rather than an S
 
 ```sh
 # gateway host
-journalctl --user -u hermes-voice-bridge -f      # watch a device register
+journalctl --user -u hermes-voice-satellite -f      # watch a device register
 
 # device (ESP32: the provisioning console; Pi: the journal)
 python3 scripts/esp32_provision.py --port /dev/ttyACM0 status
@@ -331,13 +331,13 @@ only real test of the wake word, and see *Verify* in `README.md` for the surface
 
 | Thing | Path |
 |---|---|
-| Gateway venv | `~/hermes-voice-bridge/.venv` |
-| Gateway config | `~/hermes-voice-bridge/bridge.env` |
-| Registry TLS | `~/hermes-voice-bridge/state/registry-tls/` |
-| Credential file | `~/hermes-voice-bridge/state/device-credentials.json` |
+| Gateway venv | `~/hermes-voice-satellite/.venv` |
+| Gateway config | `~/hermes-voice-satellite/gateway.env` |
+| Registry TLS | `~/hermes-voice-satellite/state/registry-tls/` |
+| Credential file | `~/hermes-voice-satellite/state/device-credentials.json` |
 | Enrolment setup code | `~/.config/hermes-voice-satellite/enroll-token` (optional; typed once) |
 | Board certificates (fetched) | `~/.config/hermes-voice-satellite/certs/` |
-| Gateway unit | `~/.config/systemd/user/hermes-voice-bridge.service` |
+| Gateway unit | `~/.config/systemd/user/hermes-voice-gateway.service` |
 | ESP32 flash bundle | the reviewed `flash.bundle.bin` + `flash.manifest.txt` |
 | ESP32 wake model | staged to the board's `model` partition |
 | Pi satellite env | `/etc/voice-satellite/satellite.env` |

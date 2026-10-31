@@ -13,7 +13,7 @@ What this module owns:
     device Y's independent wake.
 
 What it deliberately does NOT own: the audio, the turn machinery, or which device is
-`self.sat`. Those stay in bridge/loop.py. The winner keeps its already-open listen stream
+`self.sat`. Those stay in gateway/loop.py. The winner keeps its already-open listen stream
 (decided 2026-10-23): claiming a record never sends anything to the device. Releases happen
 only through the router's resolve step, and only for records the arbitration judged
 unfavourable — never for the tentative winner of an unresolved claim.

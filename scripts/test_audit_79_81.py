@@ -8,7 +8,7 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from wyoming.event import Event
-from bridge.registry import SatelliteConnection
+from gateway.registry import SatelliteConnection
 
 
 class BrokenWriter:
@@ -64,9 +64,9 @@ class OutboundRetryTests(unittest.IsolatedAsyncioTestCase):
                 except ConnectionError:
                     pass  # The test deliberately disconnects this peer.
 
-        bridge = ClosingBridge()
-        await bridge.start()
-        link = BridgeLink(config_for(bridge.port, relay=True, local_port=1,
+        gateway = ClosingBridge()
+        await gateway.start()
+        link = BridgeLink(config_for(gateway.port, relay=True, local_port=1,
                                      local_retry_seconds=60))
         real_connect = asyncio.open_connection
         disconnected = asyncio.Event()
@@ -74,7 +74,7 @@ class OutboundRetryTests(unittest.IsolatedAsyncioTestCase):
 
         async def connect(host, port, **kwargs):
             if port == 1:
-                bridge.writers[-1].close()
+                gateway.writers[-1].close()
                 raise ConnectionRefusedError("local service unavailable")
             return await real_connect(host, port, **kwargs)
 
@@ -88,17 +88,17 @@ class OutboundRetryTests(unittest.IsolatedAsyncioTestCase):
             disconnect_waiter = asyncio.create_task(disconnected.wait())
             try:
                 done, _ = await asyncio.wait([disconnect_waiter], timeout=0.5)
-                self.assertTrue(done, "bridge EOF must interrupt local retries")
+                self.assertTrue(done, "gateway EOF must interrupt local retries")
                 self.assertEqual(states[0], (False, False))
                 async with asyncio.timeout(2):
-                    while len(bridge.registrations) < 2:
+                    while len(gateway.registrations) < 2:
                         await asyncio.sleep(0.01)
             finally:
                 await link.stop()
                 task.cancel()
                 disconnect_waiter.cancel()
                 await asyncio.gather(task, disconnect_waiter, return_exceptions=True)
-                await bridge.stop()
+                await gateway.stop()
 
 
 class ConfigPersistenceTests(unittest.TestCase):
@@ -106,14 +106,14 @@ class ConfigPersistenceTests(unittest.TestCase):
         import tempfile
         import stat
         from unittest.mock import patch
-        from bridge.config_plane import ConfigPlane
+        from gateway.config_plane import ConfigPlane
 
         with tempfile.TemporaryDirectory() as tmp:
             path = pathlib.Path(tmp) / "state.json"
             plane = ConfigPlane(path)
             # The staged inode is already private. A second chmod after replace
             # could report failure after disk has committed the new generation.
-            with patch("bridge.config_plane.os.chmod", side_effect=OSError("chmod unavailable")):
+            with patch("gateway.config_plane.os.chmod", side_effect=OSError("chmod unavailable")):
                 try:
                     result = plane.set_desired("test-device", {"mic_gain": 50})
                 except OSError:
@@ -126,7 +126,7 @@ class ConfigPersistenceTests(unittest.TestCase):
         import errno
         import tempfile
         from unittest.mock import patch
-        from bridge.config_plane import ConfigPlane
+        from gateway.config_plane import ConfigPlane
 
         for existing in (False, True):
             with self.subTest(existing=existing), tempfile.TemporaryDirectory() as tmp:
@@ -149,7 +149,7 @@ class ConfigPersistenceTests(unittest.TestCase):
         import errno
         import tempfile
         from unittest.mock import patch
-        from bridge.config_plane import ConfigPlane
+        from gateway.config_plane import ConfigPlane
 
         for existing in (False, True):
             with self.subTest(existing=existing), tempfile.TemporaryDirectory() as tmp:

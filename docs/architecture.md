@@ -29,7 +29,7 @@ SPEAKING                                            →  the device hears a wake
                                                     │
                                         Wyoming protocol over TCP
                                                     ▼
-        ┌────────────────────────────── the Gateway (Gateway host, bridge/loop.py) ────────────────────┐
+        ┌────────────────────────────── the Gateway (Gateway host, gateway/loop.py) ────────────────────┐
         │                                                                                            │
   4  endpoint  endpointing.py ── VAD (silero_vad.py) ── energy gate ──► one trimmed utterance           │
         │                                                                                            │
@@ -56,10 +56,10 @@ See `docs/outbound-link.md`.
 The direction change did **not** fork the protocol code, and knowing that saves a wrong turn when
 reading it:
 
-- `bridge/satellite.py` - `SatelliteClient`, "an async Wyoming client for one satellite connection".
+- `gateway/satellite.py` - `SatelliteClient`, "an async Wyoming client for one satellite connection".
   It owns the session: `run`, `pause`, `tts_stream`, `play_wav`, `capture`, `describe`, plus the two
   I/O primitives `send` and `next_event`.
-- `bridge/lease.py` - `LeasedSatellite(**SatelliteClient**)`. It overrides **only** the connection
+- `gateway/lease.py` - `LeasedSatellite(**SatelliteClient**)`. It overrides **only** the connection
   lifecycle and those two I/O primitives, so the same session logic runs over a connection that
   arrived instead of one that was dialled.
 
@@ -132,14 +132,14 @@ of that in full; `docs/voice-detection.md` covers the detector.
 
 | Knob | File | Value in force |
 |---|---|---|
-| which detector | `bridge/config.py` `VOICE_DETECTOR` | `silero` |
-| detector sensitivity | `bridge/config.py` `SILERO_THRESHOLD` | `0.5` |
-| energy gate: ratio, ceiling, floor clamps | `bridge/config.py` `VOICE_ENERGY_GATE` | see the comment above it |
+| which detector | `gateway/config.py` `VOICE_DETECTOR` | `silero` |
+| detector sensitivity | `gateway/config.py` `SILERO_THRESHOLD` | `0.5` |
+| energy gate: ratio, ceiling, floor clamps | `gateway/config.py` `VOICE_ENERGY_GATE` | see the comment above it |
 | which model the voice surface uses | `~/.hermes/config.yaml` `gateway.api_server.model_routes.voice-fast` | `deepseek` / `deepseek-flash` |
-| that route, selected by the Gateway | `bridge/config.py` `VOICE_ROUTE_ALIAS` | `voice-fast` |
-| speech-to-text model | `bridge/loop.py` `stt_model` (a default argument, **not** a config constant) | `small.en`, int8, CPU |
-| text-to-speech voice | `bridge/config.py` `PIPER_VOICE_NAME` (+ `PIPER_SPEAKER_SETTING`, `PIPER_LENGTH_SCALE`) | `en_US-hfc_male-medium` |
-| the gateway the Gateway calls | `bridge/config.py` `GATEWAY_BASE_URL` | `http://127.0.0.1:8642` |
+| that route, selected by the Gateway | `gateway/config.py` `VOICE_ROUTE_ALIAS` | `voice-fast` |
+| speech-to-text model | `gateway/loop.py` `stt_model` (a default argument, **not** a config constant) | `small.en`, int8, CPU |
+| text-to-speech voice | `gateway/config.py` `PIPER_VOICE_NAME` (+ `PIPER_SPEAKER_SETTING`, `PIPER_LENGTH_SCALE`) | `en_US-hfc_male-medium` |
+| the gateway the Gateway calls | `gateway/config.py` `GATEWAY_BASE_URL` | `http://127.0.0.1:8642` |
 
 ## What each stage actually decides
 
@@ -205,4 +205,4 @@ make it a repo we track."*
 That is why the detector model is committed to this repository rather than read out of a package's
 wheel, why the satellite source sits in `pi/vendor/`, and why the upstream projects are mirrored as
 git bundles. `scripts/refresh-upstream-mirrors.py` is the maintained list; `pi/vendor/MANIFEST.md` and
-`bridge/vendor/MANIFEST.md` record the vendored files and their checksums.
+`gateway/vendor/MANIFEST.md` record the vendored files and their checksums.

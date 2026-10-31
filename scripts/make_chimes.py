@@ -15,7 +15,7 @@ with `preview_awake_candidates.py`, then change that constant, re-run this, and 
 Pi. The satellite opens the WAV per detection (satellite.py:646-669), so changing a tone
 needs no service restart.
 
-Wiring (the satellite's own flags, not the bridge's):
+Wiring (the satellite's own flags, not the Gateway's):
     --awake-wav ${VS_SOUNDS}/awake.wav
     --done-wav  ${VS_SOUNDS}/done.wav
     --mic-seconds-to-mute-after-awake-wav 0.1
@@ -136,7 +136,7 @@ print(f"  power-on.wav   {info['ms']:.0f} ms  {info['dbfs']:.1f} dBFS  (three ri
       f"played by the satellite on the Pi)")
 info = write_wav(OUT / "connected.wav", build(CONNECTED, gap_ms=14))
 print(f"  connected.wav  {info['ms']:.0f} ms  {info['dbfs']:.1f} dBFS  (two quick bright notes, "
-      f"played by the bridge on connect)")
+      f"played by the Gateway on connect)")
 info = write_wav(OUT / "alarm.wav", build(ALARM, gap_ms=70))
 print(f"  alarm.wav      {info['ms']:.0f} ms  {info['dbfs']:.1f} dBFS  (three repeated notes, "
       f"used only by cron-backed alarms)")

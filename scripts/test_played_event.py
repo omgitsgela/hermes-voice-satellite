@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""The device must report `played`, or the bridge waits for an answer that never comes.
+"""The device must report `played`, or the Gateway waits for an answer that never comes.
 
-After every reply the bridge waits for the device's `played` event. Firmware that
+After every reply the Gateway waits for the device's `played` event. Firmware that
 does not emit it parks the whole conversation in that wait -- measured at 20 s of
 dead air after every single answer, and at a "works once then nothing" failure
 while every wake inside the wait was dismissed as an echo.

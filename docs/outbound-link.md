@@ -16,14 +16,14 @@ That lives in one file, referenced by the unit as `EnvironmentFile`:
 
 ```
 VOICE_DEVICE_ID=                  # required: stable identity, not a display name
-VOICE_BRIDGE_HOST=                # required: where to dial
-VOICE_BRIDGE_PORT=10701           # the registry listener's port
+VOICE_GATEWAY_HOST=                # required: where to dial
+VOICE_GATEWAY_PORT=10701           # the registry listener's port
 VOICE_DEVICE_NAME=                # optional: what the Gateway calls it
 VOICE_DEVICE_AREA=                # optional: which room it is in
 VOICE_CAPABILITIES=led,speaker,microphone
-VOICE_BRIDGE_TLS_CA=              # optional: validate the Gateway (see the TLS section below)
-VOICE_BRIDGE_TLS_CERT=            # optional: this device's client certificate, for mutual TLS
-VOICE_BRIDGE_TLS_KEY=             # optional: its key
+VOICE_GATEWAY_TLS_CA=              # optional: validate the Gateway (see the TLS section below)
+VOICE_GATEWAY_TLS_CERT=            # optional: this device's client certificate, for mutual TLS
+VOICE_GATEWAY_TLS_KEY=             # optional: its key
 ```
 
 The file is the only place real values live. It is never committed, and it is created with placeholders by
@@ -70,7 +70,7 @@ without keepalive the Gateway cannot tell at all.
 Measured 2026-09-26: the satellite was power-cycled and the accepted socket stayed `ESTABLISHED` for the whole
 outage, cleaned up only because the returning device displaced it. Had it stayed off, the stale state would
 have persisted indefinitely and anything trying to use the device would have blocked on a dead socket. The
-gateway's dialled client and its accepted registry sockets now share one implementation in `bridge/net.py`, so
+gateway's dialled client and its accepted registry sockets now share one implementation in `gateway/net.py`, so
 the two ends cannot drift apart; the device repeats the same values from `pi/outbound_satellite.py`.
 
 Relaying is the audio: once registered, the runner connects to the satellite service running on the same
@@ -160,7 +160,7 @@ One CA signing the Gateway and the devices is the simple case and the one these 
 wants a separate device CA do so without changing the code.
 
 ```sh
-cd ~/hermes-voice-bridge
+cd ~/hermes-voice-satellite
 mkdir -p state/registry-tls && chmod 700 state/registry-tls
 cd state/registry-tls
 DAYS=3650
@@ -183,7 +183,7 @@ chmod 600 server.key ca.key
 Then a certificate per device, and the credential entry that admits it:
 
 ```sh
-cd ~/hermes-voice-bridge/state/registry-tls
+cd ~/hermes-voice-satellite/state/registry-tls
 DEVICE_ID=kitchen-1
 printf "basicConstraints=CA:FALSE\nextendedKeyUsage=clientAuth\n" > client.ext
 openssl req -newkey rsa:2048 -nodes -keyout "$DEVICE_ID.key" -out "$DEVICE_ID.csr" -subj "/CN=$DEVICE_ID"
@@ -214,8 +214,8 @@ device keeps it: the CA's private key never leaves at all.
   taken here. The listener is built by a subclass of the pinned wyoming `AsyncTcpServer`, because that
   class creates its socket without an `ssl` argument; only the two methods that create the server are
   overridden, so the handler lifecycle stays the library's.
-- **Device.** `VOICE_BRIDGE_TLS_CA` is the CA to validate the Gateway against, `VOICE_BRIDGE_TLS_CERT` and
-  `VOICE_BRIDGE_TLS_KEY` are its own certificate and key. A device that presents a certificate is
+- **Device.** `VOICE_GATEWAY_TLS_CA` is the CA to validate the Gateway against, `VOICE_GATEWAY_TLS_CERT` and
+  `VOICE_GATEWAY_TLS_KEY` are its own certificate and key. A device that presents a certificate is
   registering as an identity; a device without one can only talk to an unauthenticated listener, which is
   exactly the plain local case.
 

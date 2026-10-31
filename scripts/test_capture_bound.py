@@ -3,7 +3,7 @@
 
 capture_after_wake computed a deadline but only consulted it after a rejected blip, while each
 capture_utterance call waits up to 30s for events of its own. A wake with an unending stream of
-noise therefore held the microphone well past the advertised window. Run with the bridge venv:
+noise therefore held the microphone well past the advertised window. Run with the Gateway venv:
 
     .venv/bin/python scripts/test_capture_bound.py
 """
@@ -17,7 +17,7 @@ import types
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import bridge.loop as loop_module  # noqa: E402
+import gateway.loop as loop_module  # noqa: E402
 
 Loop = next(obj for obj in vars(loop_module).values()
             if isinstance(obj, type) and hasattr(obj, "_watch_for_interruption"))
@@ -37,7 +37,7 @@ def check(label, got, want):
 
 
 async def _nothing_queued():
-    """The new flow discards the opening moment first; a stub bridge has no queue to drain."""
+    """The new flow discards the opening moment first; a stub Gateway has no queue to drain."""
     return 0
 
 
@@ -46,7 +46,7 @@ def bridge_with(capture):
     b.capture_utterance = capture
     b._discard_queued_events = _nothing_queued
     # capture_after_wake scopes the no-speech budget on the endpointer, so the stub needs one.
-    from bridge.endpointing import Endpointer
+    from gateway.endpointing import Endpointer
     b._ep = Endpointer(silence_ms=700, min_speech_ms=250)
     return b
 

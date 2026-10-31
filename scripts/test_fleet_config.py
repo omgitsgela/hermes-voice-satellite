@@ -2,13 +2,13 @@
 """Deterministic checks for the fleet-wide desired-state write (#6).
 
 `set_desired_fleet` is the "change it on every satellite" operation. Its properties, all
-checked here without a running bridge:
+checked here without a running gateway:
 
 * it bumps every targeted device's generation by exactly one and merges the patch into each
   one's desired state, in a single atomic save;
 * it narrows to a named subset when `device_ids` is given and leaves the rest untouched;
 * it refuses unknown targets and an empty patch rather than writing nothing silently;
-* the restart-class classification (`setting_requires_restart`) is what the bridge uses to
+* the restart-class classification (`setting_requires_restart`) is what the Gateway uses to
   decide whether a fleet write must be paced, so it is pinned to the schema's `apply` field.
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.config_plane import (  # noqa: E402
+from gateway.config_plane import (  # noqa: E402
     ConfigPlane,
     ConfigValidationError,
     DEVICE_SETTING_SCHEMA,
@@ -83,7 +83,7 @@ def main() -> int:
                 refused = True
             check(label, refused)
 
-        # The restart-class classification is what the bridge paces on. It must track the
+        # The restart-class classification is what the Gateway paces on. It must track the
         # schema's `apply` field: a setting is restart-class exactly when applying it bounces
         # a device service.
         for name, spec in DEVICE_SETTING_SCHEMA.items():

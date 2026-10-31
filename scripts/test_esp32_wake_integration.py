@@ -15,7 +15,7 @@ the device glue's wiring. It proves the integration contract the plan states:
      the core is self-deaf after a fire, and the session core independently
      drops a wake that lands while streaming -- the device cannot re-wake on
      its own answer.
-  4. The bridge's transcript stops the stream (streaming-stopped, still armed);
+  4. The Gateway's transcript stops the stream (streaming-stopped, still armed);
      after wy_wake_stream_ended (0 ms cooldown) the detector re-arms and a
      crossing frame starts a FRESH stream: a second full three-event sequence.
 
@@ -206,7 +206,7 @@ class WakeSessionIntegrationTests(unittest.TestCase):
 
     def test_second_detection_while_streaming_is_dropped_on_the_wire(self):
         """After a fire, another crossing frame must produce NOTHING new: the
-        core is self-deaf (the microphone is now forwarded to the bridge) and
+        core is self-deaf (the microphone is now forwarded to the gateway) and
         the session core independently drops a wake that lands while streaming
         -- the device cannot re-wake on its own answer."""
         lib = self.library()
@@ -267,7 +267,7 @@ class WakeSessionIntegrationTests(unittest.TestCase):
 
     def test_unmeasured_fire_keeps_the_historical_context_free_shape(self):
         """A forced fire with nothing measured sends the OLD detection frame exactly
-        ({'name': ...} and no context at all): old bridge builds and the bridge's
+        ({'name': ...} and no context at all): old Gateway builds and the Gateway's
         level-less fallback both keep working unchanged."""
         lib = self.library()
         session, output, reader, writer = self.armed_session(lib)
@@ -288,7 +288,7 @@ class WakeSessionIntegrationTests(unittest.TestCase):
                          'a level-less detection must be byte-identical to the historical shape')
 
     def test_transcript_stops_and_the_detector_rearms(self):
-        """The bridge's transcript stops the stream (streaming-stopped, device
+        """The Gateway's transcript stops the stream (streaming-stopped, device
         still armed); after wy_wake_stream_ended with a 0 ms cooldown the core
         re-arms, and a crossing frame starts a FRESH stream -- a second full
         three-event sequence."""

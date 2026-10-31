@@ -54,7 +54,7 @@ class AudioTests(unittest.TestCase):
 
     def test_embedded_writer_chunk_reads_in_canonical_reader(self):
         """The device's mic chunk, sent with the production `wy_send`, must read back in the
-        bridge's `AudioChunk.from_event` with the exact rate/width/channels and PCM payload.
+        Gateway's `AudioChunk.from_event` with the exact rate/width/channels and PCM payload.
         A self-round-trip would let the same defect survive on both sides; this is interop."""
         lib = self.library()
         pcm = bytes(range(256)) * 4          # 1024 bytes: distinct, order-revealing
@@ -83,7 +83,7 @@ class AudioTests(unittest.TestCase):
         self.assertEqual(chunk.samples, len(pcm) // 2)
 
     def test_chunk_data_carries_exactly_the_format_fields(self):
-        """The chunk data carries rate/width/channels, and nothing the bridge would distrust."""
+        """The chunk data carries rate/width/channels, and nothing the Gateway would distrust."""
         lib = self.library()
         data = C.create_string_buffer(64)
         n = lib.wy_audio_chunk_data(data, 64, 22050, 2, 1)
@@ -112,7 +112,7 @@ class AudioTests(unittest.TestCase):
         near-extreme pair cannot overflow -- then SCALED down 16 bits with rounding, and the
         int16 clip is only a guard for out-of-range input. Clipping instead of scaling turns
         every real speech sample (well above 2^15 in 32-bit terms) into a sign-only square
-        wave: the bridge would get +32767/-32768, not audio."""
+        wave: the Gateway would get +32767/-32768, not audio."""
         lib = self.library()
         stereo = (C.c_int32 * 12)(
             393216, 786432,        # avg 589824, >>16 = 9 (rounds to 9)
@@ -197,7 +197,7 @@ class AudioTests(unittest.TestCase):
         c1 = lib.wy_resample_22050_to_16000(C.byref(r1), ramp, n, out1, 16005)
         # the same total input, fed as many small chunks with the absolute offset carried:
         # the resampler is chunking-invariant, so this must equal the one-shot resample
-        chunk = 2048   # the bridge's samples_per_chunk shape
+        chunk = 2048   # the Gateway's samples_per_chunk shape
         offs = range(0, n, chunk)
         # Each chunk emits at most ceil(2048 * 16000/22050) + 1 samples, so a 2048-slot buffer
         # per chunk is enough; the values are concatenated in stream order.

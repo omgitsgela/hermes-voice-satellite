@@ -16,7 +16,7 @@ What this pins:
 4. A non-alarm announcement never touches any volume.
 5. A single-device deployment (no per-device callbacks) keeps the old behaviour exactly.
 
-Run with the bridge venv:
+Run with the Gateway venv:
 
     .venv/bin/python scripts/test_announce_alarm_volume.py
 """
@@ -30,8 +30,8 @@ from typing import Any
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.announce import Announcement, Announcer  # noqa: E402
-from bridge.volume import alarm_percent  # noqa: E402
+from gateway.announce import Announcement, Announcer  # noqa: E402
+from gateway.volume import alarm_percent  # noqa: E402
 
 checks = 0
 failures: list[str] = []

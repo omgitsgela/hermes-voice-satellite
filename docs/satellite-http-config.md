@@ -185,10 +185,10 @@ Not to be raised again until she asks, by her instruction on 2026-09-23:
 
 ## Files, when built
 
-New: `bridge/config_ui.py` (routes and validators), `bridge/static/settings.html`,
+New: `gateway/config_ui.py` (routes and validators), `gateway/static/settings.html`,
 `scripts/test_config_ui.py` (validators, allowlist, rollback logic), and a line in `README.md`.
 
-Changed: `bridge/announce.py` (mount the app), `pi/2mic_service.py` (a settings-apply event
+Changed: `gateway/announce.py` (mount the app), `pi/2mic_service.py` (a settings-apply event
 handler, reusing the existing forward-event path), and whatever sudoers allowlist the hardening
 produces.
 

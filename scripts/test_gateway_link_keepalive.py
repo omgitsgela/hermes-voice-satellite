@@ -3,7 +3,7 @@
 
 The satellite's half of the dead-peer rule is in gateway_socket.c: the long-lived link (both the
 TLS and the plain path dial through gateway_socket_dial) must set SO_KEEPALIVE AND the per-socket
-TCP_KEEPIDLE/INTVL/CNT to the same 15 s / 5 s / 3 probes the bridge side sets (bridge/net.py).
+TCP_KEEPIDLE/INTVL/CNT to the same 15 s / 5 s / 3 probes the Gateway side sets (gateway/net.py).
 SO_KEEPALIVE alone would leave the link at lwIP's own default (first probe ~2 h after the last
 segment), which is not the standard the project agrees on -- and it was a real defect: a first
 fix set only SO_KEEPALIVE and a reviewer had to catch that the interval was 2 h, not 15 s.
@@ -25,7 +25,7 @@ import tempfile
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SRC = ROOT / "firmware/esp32/main/gateway_socket.c"
 
-# The exact values the whole project agrees on (bridge/net.py: KEEPALIVE_IDLE_SECONDS=15,
+# The exact values the whole project agrees on (gateway/net.py: KEEPALIVE_IDLE_SECONDS=15,
 # KEEPALIVE_INTERVAL_SECONDS=5, KEEPALIVE_PROBES=3).
 IDLE = 15
 INTVL = 5

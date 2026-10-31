@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Playback-lock tests for bridge.tts.TtsStream (issue #14).
+"""Playback-lock tests for gateway.tts.TtsStream (issue #14).
 
 `__aexit__` is not called when `__aenter__` raises, so if the opening audio-start cannot be sent
 the process-wide PLAYBACK_LOCK must be released by the entry path itself, or it is held for the
-life of the process and every later answer blocks. Run with the bridge venv:
+life of the process and every later answer blocks. Run with the Gateway venv:
 
     .venv/bin/python scripts/test_tts_lock.py
 """
@@ -15,8 +15,8 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.satellite import SatelliteClient  # noqa: E402
-from bridge.tts import TtsStream  # noqa: E402
+from gateway.satellite import SatelliteClient  # noqa: E402
+from gateway.tts import TtsStream  # noqa: E402
 
 checks = 0
 failures = []

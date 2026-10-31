@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Check the bridge's *wired* registry path on this host: config -> credential loader -> listener -> device.
+"""Check the Gateway's *wired* registry path on this host: config -> credential loader -> listener -> device.
 
-The offline suites drive `bridge/registry.py` and `pi/outbound_satellite.py` directly. This one goes through
-`bridge/config.py` and the same sequence `bridge/loop.py` uses when it starts the listener, so a change to a
+The offline suites drive `gateway/registry.py` and `pi/outbound_satellite.py` directly. This one goes through
+`gateway/config.py` and the same sequence `gateway/loop.py` uses when it starts the listener, so a change to a
 config key, to the credential file format, or to the failure policy shows up here rather than in production.
 
 It binds a temporary port, writes a temporary credentials file, and connects a fake device. It does not touch
 the satellite, the live listener port, or any service.
 
-    ~/hermes-voice-bridge/.venv/bin/python scripts/check-registry-wiring.py
+    ~/hermes-voice-satellite/.venv/bin/python scripts/check-registry-wiring.py
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from wyoming.event import Event, async_read_event, async_write_event  # noqa: E402
 
-from bridge.config import (  # noqa: E402
+from gateway.config import (  # noqa: E402
     REGISTRY_ALLOW_UNAUTHENTICATED,
     REGISTRY_CREDENTIALS_FILE,
     REGISTRY_DUPLICATE_POLICY,
@@ -32,7 +32,7 @@ from bridge.config import (  # noqa: E402
     REGISTRY_HOST,
     REGISTRY_PORT,
 )
-from bridge.registry import (  # noqa: E402
+from gateway.registry import (  # noqa: E402
     REGISTER_EVENT,
     REGISTER_OK_EVENT,
     REGISTER_REFUSED_EVENT,
@@ -81,7 +81,7 @@ async def register(port: int, device_id: str, registry: SatelliteRegistry) -> tu
 
 
 async def main() -> int:
-    print("=== 1. the configuration the bridge would read ===")
+    print("=== 1. the configuration the Gateway would read ===")
     print(f"  enabled={REGISTRY_ENABLED} host={REGISTRY_HOST} port={REGISTRY_PORT}")
     print(f"  duplicate policy={REGISTRY_DUPLICATE_POLICY}")
     print(f"  credentials file={REGISTRY_CREDENTIALS_FILE}")

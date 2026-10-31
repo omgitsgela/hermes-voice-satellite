@@ -259,7 +259,7 @@ class PairingService:
 
 
 def _pem_fingerprint(pem_text: str) -> str:
-    """SHA-256 of the certificate's DER form, computed the way the bridge computes it.
+    """SHA-256 of the certificate's DER form, computed the way the Gateway computes it.
 
     Empty when the material cannot be parsed. That is not a silent success: the workbench then has no
     registry record to write, and provisioning refuses for want of it rather than writing credentials

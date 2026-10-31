@@ -3,7 +3,7 @@
 
 The handler decides and returns; the watcher sets the flag and then speaks. Speaking first would
 block on the playback lock held by the very answer being interrupted, up to the 30 second acquire
-timeout, with the audio still playing. Run with the bridge venv:
+timeout, with the audio still playing. Run with the Gateway venv:
 
     .venv/bin/python scripts/test_stop_ordering.py
 """
@@ -17,8 +17,8 @@ import types
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import bridge.loop as loop_module
-from bridge.announce import Announcer
+import gateway.loop as loop_module
+from gateway.announce import Announcer
 from wyoming.event import Event
 
 Bridge = next(obj for obj in vars(loop_module).values()
@@ -42,18 +42,18 @@ class StubGateway:
 
 async def main():
     global checks
-    bridge = Bridge.__new__(Bridge)
-    bridge.gateway = StubGateway()
-    bridge.interrupt_enabled = True
-    bridge.stop_requested = False
-    bridge.sat = types.SimpleNamespace(eof=False)
-    bridge.self_trigger_count = 0
+    gateway = Bridge.__new__(Bridge)
+    gateway.gateway = StubGateway()
+    gateway.interrupt_enabled = True
+    gateway.stop_requested = False
+    gateway.sat = types.SimpleNamespace(eof=False)
+    gateway.self_trigger_count = 0
 
     order = []
     state = types.SimpleNamespace(done=False, stop_playback=False)
 
     def local_command(text):
-        bridge.stop_requested = True
+        gateway.stop_requested = True
         return ""
 
     async def transcribe(audio):
@@ -78,16 +78,16 @@ async def main():
         await asyncio.sleep(0.05)
         return None
 
-    bridge._local_command = local_command
-    bridge.transcribe = transcribe
-    bridge.capture_utterance = capture_utterance
-    bridge._end_capture = end_capture
-    bridge.say = say
+    gateway._local_command = local_command
+    gateway.transcribe = transcribe
+    gateway.capture_utterance = capture_utterance
+    gateway._end_capture = end_capture
+    gateway.say = say
     # The watcher owns the direct satellite read, not the shared replay helper (#82).
-    bridge.sat.next_event = next_event
+    gateway.sat.next_event = next_event
 
     error = None
-    task = asyncio.create_task(bridge._watch_for_interruption(state))
+    task = asyncio.create_task(gateway._watch_for_interruption(state))
     for _ in range(80):
         await asyncio.sleep(0.02)
         if state.stop_playback:

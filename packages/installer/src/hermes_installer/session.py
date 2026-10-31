@@ -98,7 +98,7 @@ class Session:
         """What this machine can and cannot do, stated rather than discovered by failing.
 
         The builds run everywhere, but the device work is shell and systemd: Windows cannot flash, and
-        a gateway needs systemd to supervise the bridge. Elevation is listed too, because a step that
+        a gateway needs systemd to supervise the gateway. Elevation is listed too, because a step that
         needs an administrator should say so before it is attempted.
         """
         import sys
@@ -122,10 +122,10 @@ class Session:
             "platform": self.platform_report(),
             "hermes": self.state.hermes_shape,
             "hermes_explained": {
-                "desktop": "Hermes Desktop found. The installer will add the voice bridge and "
+                "desktop": "Hermes Desktop found. The installer will add the voice Gateway and "
                            "configure Hermes for it.",
                 "service": "A Hermes service install found. The installer will also own how the "
-                           "bridge is supervised.",
+                           "Gateway is supervised.",
                 "none": "Hermes was not found on this machine. Install Hermes first, then run this "
                         "installer again. Nothing has been changed.",
             }.get(self.state.hermes_shape, ""),
@@ -597,14 +597,14 @@ class Session:
         return result
 
     def _set_gateway_voice(self, voice_id: str, model: Path) -> str:
-        """Point this gateway at a voice, by editing the bridge environment in place.
+        """Point this gateway at a voice, by editing the Gateway environment in place.
 
-        The bridge speaks with one voice today; per-device voices are issue #120. This sets the one it
+        The Gateway speaks with one voice today; per-device voices are issue #120. This sets the one it
         has, and says so rather than implying more.
         """
-        env = self.repo_root / "bridge.env"
+        env = self.repo_root / "gateway.env"
         if not env.exists():
-            return "bridge.env was not found here, so the voice was downloaded but not selected"
+            return "gateway.env was not found here, so the voice was downloaded but not selected"
         lines = env.read_text().splitlines()
         wanted = {"VOICE_PIPER_VOICE": voice_id, "VOICE_CONFIG": str(model)}
         seen = set()
@@ -620,7 +620,7 @@ class Session:
             if key not in seen:
                 output.append(f"{key}={value}")
         env.write_text("\n".join(output) + "\n")
-        return "bridge.env now selects this voice for the gateway; restart the bridge to use it"
+        return "gateway.env now selects this voice for the gateway; restart the Gateway to use it"
 
     def prepare_wake_word(self, fmt: str, model_id: str) -> dict:
         """Make a chosen wake word available locally, verifying any download before it is used."""

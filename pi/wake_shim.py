@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Put "open the microphone" under the bridge's control.
+"""Put "open the microphone" under the Gateway's control.
 
 The choice, 2026-09-22, option 3. Follow-up mode needs the microphone opened with no wake word,
 and a wyoming satellite in wake-word mode only streams audio after a wake detection:
@@ -11,7 +11,7 @@ logs "Waiting for wake word". Measured on the device: a follow-up window receive
 So this small proxy sits between the satellite and wyoming-openwakeword. It forwards their traffic, and
 on request writes a synthetic `Detection` into the satellite's connection. To the satellite that is
 indistinguishable from the wake word being heard: it chimes, starts streaming and hands the audio to
-the bridge. The bridge therefore decides when the microphone opens, which is exactly what a follow-up
+the gateway. The Gateway therefore decides when the microphone opens, which is exactly what a follow-up
 window needs.
 
 Two additions, each owned here because the shim is the one process that sees both directions:
@@ -32,7 +32,7 @@ Topology, all loopback on the Pi:
                             +--> synthetic Detection, on request from :10402
 
 The control port is loopback only, and in practice only the 2mic LED/event service talks to it, after
-receiving a `wake-now` event that the bridge sends over the satellite connection it already owns.
+receiving a `wake-now` event that the Gateway sends over the satellite connection it already owns.
 Nothing new is exposed to the LAN.
 
 Run it with the satellite's virtualenv: it needs the `wyoming` package.

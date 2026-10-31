@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.gateway import VoiceGatewayError  # noqa: E402
-from bridge.loop import VoiceLoop  # noqa: E402
+from gateway.gateway import VoiceGatewayError  # noqa: E402
+from gateway.loop import VoiceLoop  # noqa: E402
 
 
 class FakeGateway:
@@ -68,7 +68,7 @@ class RebootRecoveryTests(unittest.IsolatedAsyncioTestCase):
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        with patch("bridge.loop.asyncio.sleep", side_effect=fake_sleep):
+        with patch("gateway.loop.asyncio.sleep", side_effect=fake_sleep):
             health = await loop._wait_for_gateway_ready()
 
         self.assertEqual(health, {"status": "ok"})
@@ -93,9 +93,9 @@ class RebootRecoveryTests(unittest.IsolatedAsyncioTestCase):
             await allow_retry.wait()
 
         with (
-            patch("bridge.config.REGISTRY_ENABLED", False),
-            patch("bridge.loop.asyncio.sleep", side_effect=blocked_retry),
-            patch("bridge.tts.load_voice", return_value=None),
+            patch("gateway.config.REGISTRY_ENABLED", False),
+            patch("gateway.loop.asyncio.sleep", side_effect=blocked_retry),
+            patch("gateway.tts.load_voice", return_value=None),
         ):
             start_task = asyncio.create_task(loop.start())
             await asyncio.wait_for(retry_seen.wait(), 0.2)
@@ -131,11 +131,11 @@ class RebootRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     raise OSError("Cannot assign requested address")
 
         with (
-            patch("bridge.config.REGISTRY_ENABLED", True),
-            patch("bridge.config.DIRECT_DIAL_FALLBACK", False),
-            patch("bridge.registry.RegistryServer", RecoveringRegistryServer),
-            patch("bridge.registry.load_credential_lookup", return_value=lambda _token: "satellite"),
-            patch("bridge.tts.load_voice", return_value=None),
+            patch("gateway.config.REGISTRY_ENABLED", True),
+            patch("gateway.config.DIRECT_DIAL_FALLBACK", False),
+            patch("gateway.registry.RegistryServer", RecoveringRegistryServer),
+            patch("gateway.registry.load_credential_lookup", return_value=lambda _token: "satellite"),
+            patch("gateway.tts.load_voice", return_value=None),
         ):
             with self.assertRaises(OSError):
                 await loop.start()
@@ -152,9 +152,9 @@ class RebootRecoveryTests(unittest.IsolatedAsyncioTestCase):
         loop._log_events = False
 
         with (
-            patch("bridge.config.DIRECT_DIAL_FALLBACK", False, create=True),
-            patch("bridge.config.REGISTRY_WAIT_RETRY_SECONDS", 0.01),
-            patch("bridge.config.REGISTRY_LEASE_WAIT_SECONDS", 0.02),
+            patch("gateway.config.DIRECT_DIAL_FALLBACK", False, create=True),
+            patch("gateway.config.REGISTRY_WAIT_RETRY_SECONDS", 0.01),
+            patch("gateway.config.REGISTRY_LEASE_WAIT_SECONDS", 0.02),
         ):
             task = asyncio.create_task(loop._acquire_a_satellite())
             await asyncio.sleep(0.05)
@@ -170,9 +170,9 @@ class RebootRecoveryTests(unittest.IsolatedAsyncioTestCase):
         loop._log_events = False
 
         with (
-            patch("bridge.config.DIRECT_DIAL_FALLBACK", True, create=True),
-            patch("bridge.config.REGISTRY_WAIT_RETRY_SECONDS", 0.01),
-            patch("bridge.config.REGISTRY_LEASE_WAIT_SECONDS", 0.03),
+            patch("gateway.config.DIRECT_DIAL_FALLBACK", True, create=True),
+            patch("gateway.config.REGISTRY_WAIT_RETRY_SECONDS", 0.01),
+            patch("gateway.config.REGISTRY_LEASE_WAIT_SECONDS", 0.03),
         ):
             started = time.monotonic()
             await asyncio.wait_for(loop._acquire_a_satellite(), 0.2)

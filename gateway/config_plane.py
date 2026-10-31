@@ -43,7 +43,7 @@ DEVICE_SETTING_SCHEMA: dict[str, dict[str, Any]] = {
     "playback_volume": {
         "type": "integer", "minimum": 0, "maximum": 100,
         "default": 55, "apply": "immediate",
-        # The bridge speaks a user scale (1-100 over what the hardware can do) while the
+        # The Gateway speaks a user scale (1-100 over what the hardware can do) while the
         # device sets an integer ALSA percentage, so the round trip user->raw->user shifts
         # by one for 49 of the 100 values. Without a tolerance those settings would report
         # permanent drift and `converged: false` forever, which is worse than useless: it

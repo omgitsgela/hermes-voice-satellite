@@ -47,7 +47,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from bridge.endpointing import Endpointer  # noqa: E402
+from gateway.endpointing import Endpointer  # noqa: E402
 
 PROJECT = Path(__file__).resolve().parent.parent
 
@@ -93,7 +93,7 @@ def frames_to_pcm(n_frames: int, rate: int = 16000, frame_ms: int = 20) -> bytes
 class FeedBoundaryTests(TestCase):
     """An utterance that completes inside a feed must not destroy the feed's remaining audio.
 
-    The bridge feeds the endpointer chunked audio (the satellite's AudioChunk size, 1024
+    The Gateway feeds the endpointer chunked audio (the satellite's AudioChunk size, 1024
     samples). When an utterance ends mid-feed, `process` returns that one result and stops --
     and `_finish` -> `reset()` replaces the internal buffer. If the audio still held in that
     buffer when the boundary frame is processed is discarded, the next utterance's onset -- the

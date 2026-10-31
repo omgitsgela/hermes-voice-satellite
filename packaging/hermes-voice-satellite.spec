@@ -30,7 +30,7 @@ datas = [
     (str(ROOT / "scripts"), "scripts"),
     (str(ROOT / "pi"), "pi"),
     (str(ROOT / "firmware" / "esp32" / "models"), "firmware/esp32/models"),
-    (str(ROOT / "bridge.env.example"), "."),
+    (str(ROOT / "gateway.env.example"), "."),
     (str(ROOT / "requirements.txt"), "."),
 ]
 

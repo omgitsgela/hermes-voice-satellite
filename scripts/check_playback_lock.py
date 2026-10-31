@@ -22,8 +22,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from bridge.satellite import SatelliteClient  # noqa: E402
-from bridge.tts import TtsStream  # noqa: E402
+from gateway.satellite import SatelliteClient  # noqa: E402
+from gateway.tts import TtsStream  # noqa: E402
 
 
 async def main() -> int:

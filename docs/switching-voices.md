@@ -12,8 +12,8 @@ voices, licensing, what to verify — are exactly where a voice change goes wron
 
 ## The three knobs
 
-All live in `bridge.env` (environment variable first, then this file, then the code default in
-`bridge/config.py`):
+All live in `gateway.env` (environment variable first, then this file, then the code default in
+`gateway/config.py`):
 
 | Key | Meaning | Default |
 |---|---|---|
@@ -21,7 +21,7 @@ All live in `bridge.env` (environment variable first, then this file, then the c
 | `VOICE_PIPER_SPEAKER` | For multi-speaker voices: a speaker name from the voice's own map (`78`) or a numeric id. Ignored by single-speaker voices. | (empty — the default voice has one speaker) |
 | `VOICE_PIPER_LENGTH_SCALE` | Speaking rate: `< 1` faster, `> 1` slower. Empty uses the voice's own default. | (empty) |
 
-The voice files live in `voices/` beside `bridge/`, named `{VOICE_PIPER_VOICE}.onnx` and
+The voice files live in `voices/` beside `gateway/`, named `{VOICE_PIPER_VOICE}.onnx` and
 `{VOICE_PIPER_VOICE}.onnx.json`. `voices/` is **git-ignored** (not committed): each
 installation downloads its own voice, and the terms of some voices do not allow redistribution
 (see Licensing below). `install-gateway.sh` fetches the configured voice automatically:
@@ -47,7 +47,7 @@ It does the four things that are easy to get wrong by hand, in one pass:
 2. **installs it twice** — `voices/` for the Gateway and `~/.hermes/cache/piper-voices/` for
    Hermes, which never downloads a name it does not recognise and otherwise fails quietly at
    synthesis time rather than at switch time.
-3. **writes the two shapes of the same setting**: `bridge.env` gets the speaker NAME from the
+3. **writes the two shapes of the same setting**: `gateway.env` gets the speaker NAME from the
    voice's own map, Hermes gets the numeric ID that name resolves to, and a single-speaker voice
    has `speaker_id` *removed* rather than set to 0.
 4. **backs up both files, restarts the Gateway, then verifies** that the service is active and the
@@ -60,8 +60,8 @@ Two separate decisions, deliberately kept apart:
 
 | Decision | Where it lives | How to change it |
 |---|---|---|
-| Which voice **this installation** speaks with | `bridge.env` + Hermes `config.yaml` (both git-ignored) | `scripts/switch-voice.py <voice>` |
-| Which voice a **fresh clone** defaults to | `PIPER_VOICE_NAME` in `bridge/config.py`, mirrored in `bridge.env.example` | a code change, with docs |
+| Which voice **this installation** speaks with | `gateway.env` + Hermes `config.yaml` (both git-ignored) | `scripts/switch-voice.py <voice>` |
+| Which voice a **fresh clone** defaults to | `PIPER_VOICE_NAME` in `gateway/config.py`, mirrored in `bridge.env.example` | a code change, with docs |
 
 Changing what you listen to should never need a pull request, a test update, or a re-read of this
 document. The tests pin the *contract* — a plausible catalog-style default that agrees with
@@ -75,7 +75,7 @@ files a switch touches, and because some installations cannot run the command (n
 gateway on a different host from the Hermes gateway).
 
 ```sh
-cd ~/hermes-voice-bridge
+cd ~/hermes-voice-satellite
 
 # 1. Pick a voice. Two sources:
 #    a) the Piper catalog: https://huggingface.co/rhasspy/piper-voices (the site's demo
@@ -114,22 +114,22 @@ with wave.open('/tmp/try-this-voice.wav', 'wb') as w:
                      syn_config=sc)
 PY
 
-# 5. Point the Gateway at it in bridge.env:
+# 5. Point the Gateway at it in gateway.env:
 #      VOICE_PIPER_VOICE=clean100
 #      VOICE_PIPER_SPEAKER=78
 #    (a catalog single-speaker voice needs only VOICE_PIPER_VOICE; leave the speaker empty)
 #    (VOICE_PIPER_LENGTH_SCALE only if the voice speaks too fast or too slow.)
 
 # 6. Restart the Gateway and verify the new voice is the one that loaded:
-systemctl --user restart hermes-voice-bridge.service
-journalctl --user -u hermes-voice-bridge -n 20 | grep -i "loading Piper voice"
+systemctl --user restart hermes-voice-gateway.service
+journalctl --user -u hermes-voice-satellite -n 20 | grep -i "loading Piper voice"
 #    -> "loading Piper voice clean100.onnx"
 
 # 7. Say something to the satellite. Listen for: natural prosody, no robotic clipping, and
 #    no lag before the first words (see Latency below).
 ```
 
-To roll back by hand: set the old values back in `bridge.env` and restart. The old voice files are
+To roll back by hand: set the old values back in `gateway.env` and restart. The old voice files are
 untouched; nothing else references the voice. `scripts/switch-voice.py --rollback` does the same
 thing from the recorded state, including the Hermes side.
 
@@ -214,7 +214,7 @@ audible to the device faster than it can be spoken by any of these except a GPU 
 Both stay comfortably ahead of the playback pace (`TtsStream` sends at 2x realtime) and the
 first-chunk delay stays under the silence window the wake behaviour allows. But if a host is
 much weaker than this, or busy running a local LLM, a `medium` voice is the fallback: the swap
-is one line in `bridge.env`. Re-measure with the step-4 preview if you suspect a regression —
+is one line in `gateway.env`. Re-measure with the step-4 preview if you suspect a regression —
 the voice is never the slow part of a turn (the model is), so a slow-sounding answer is not
 evidence the voice is wrong.
 
@@ -249,6 +249,6 @@ and `bridge.env.example` to name the same voice, so the two cannot drift apart.
 `scripts/test_switch_voice.py` covers the switcher as a black box against a throwaway repo and a
 throwaway Hermes config: both surfaces updated by default, each `--scope` honoured, the 22,050 Hz
 contract enforced *before* any write, a multi-speaker voice refused without `--speaker`, the
-speaker stored as a NAME on the Gateway and an ID in Hermes, `bridge.env` comments preserved, a
+speaker stored as a NAME on the Gateway and an ID in Hermes, `gateway.env` comments preserved, a
 backup and a state record written per switch, `--dry-run` writing nothing, and `--rollback`
 restoring both surfaces.

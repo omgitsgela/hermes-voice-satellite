@@ -11,9 +11,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from wyoming.event import Event  # noqa: E402
 
-from bridge.config_plane import ConfigPlane  # noqa: E402
-from bridge.loop import VoiceLoop  # noqa: E402
-from bridge.registry import CONFIG_DESIRED_EVENT, CONFIG_REPORTED_EVENT, DeviceIdentity  # noqa: E402
+from gateway.config_plane import ConfigPlane  # noqa: E402
+from gateway.loop import VoiceLoop  # noqa: E402
+from gateway.registry import CONFIG_DESIRED_EVENT, CONFIG_REPORTED_EVENT, DeviceIdentity  # noqa: E402
 
 
 class FakeConnection:

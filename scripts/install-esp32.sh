@@ -21,7 +21,7 @@
 # Usage:
 #   scripts/install-esp32.sh --flash --port /dev/ttyACM0   # flash the prebuilt bundle (no ESP-IDF)
 #   scripts/install-esp32.sh --provision --port /dev/ttyACM0 \
-#       --tls-certs ~/hermes-voice-bridge/state/registry-tls --device-id <id> \
+#       --tls-certs ~/hermes-voice-satellite/state/registry-tls --device-id <id> \
 #       --endpoint tls://<host>:10702 \
 #       --wifi-ssid <ssid> --wifi-psk-file <file>
 #   scripts/install-esp32.sh --build                       # (opt-in) build + bundle from source
@@ -71,11 +71,11 @@ DRY_RUN=0
 MODEL_FILE=""
 MODEL_URL=""
 MODEL_NAME=""   # empty = the model file's stem
-TLS_CERTS_DIR=""  # the bridge's state/registry-tls: client-ca.crt, <device>.crt/.key, server.crt
+TLS_CERTS_DIR=""  # the Gateway's state/registry-tls: client-ca.crt, <device>.crt/.key, server.crt
 DEVICE_ID=""      # the registry identity this board is enrolled as (its own MAC id)
 DEVICE_NAME=""    # the friendly name the house knows it by (device_name in NVS)
 ENDPOINT=""       # what the board dials: tls://host:port (tcp:// for a trusted LAN)
-REGISTRY_FILE=""  # the bridge's state/device-credentials.json; defaults beside the certs dir
+REGISTRY_FILE=""  # the Gateway's state/device-credentials.json; defaults beside the certs dir
 WIFI_SSID=""
 WIFI_PSK_FILE=""
 # The bundle sha256 the operator selected and reviewed. When set, the flash refuses any artifact
@@ -223,7 +223,7 @@ if [ "$GUIDED" = 1 ]; then
     fi
     REGISTRY_TLS="$(guided_first_dir_with client-ca.crt \
         "$REPO_ROOT/state/registry-tls" \
-        "$HOME/hermes-voice-bridge/state/registry-tls")"
+        "$HOME/hermes-voice-satellite/state/registry-tls")"
     if [ -n "$REGISTRY_TLS" ]; then
         echo "   certificates: found at $REGISTRY_TLS"
     else
@@ -279,7 +279,7 @@ if [ "$GUIDED" = 1 ]; then
             KNOWN_CERTS="$(guided_first_dir_with "$DETECTED_DEVICE_ID.crt" \
                 "$TLS_CERTS_DIR" "$ENROLL_DIR" \
                 "$REPO_ROOT/state/registry-tls" \
-                "$HOME/hermes-voice-bridge/state/registry-tls")"
+                "$HOME/hermes-voice-satellite/state/registry-tls")"
             if [ -n "$KNOWN_CERTS" ] && { [ ! -f "$KNOWN_CERTS/client-ca.crt" ] || \
                     [ ! -f "$KNOWN_CERTS/$DETECTED_DEVICE_ID.key" ]; }; then
                 KNOWN_CERTS=""   # a half set is not "certificates already here"
@@ -528,7 +528,7 @@ if [ "$GUIDED" = 1 ]; then
                       --wifi-ssid "$WIFI_SSID" --wifi-psk-file "$WIFI_PSK_FILE")
         if [ "$ENROL_MODE" = token ]; then
             # The fetch wrote the registry record beside the certificates; the flag path would
-            # otherwise look for it one directory up (the bridge's own layout).
+            # otherwise look for it one directory up (the Gateway's own layout).
             GUIDED_ARGS+=(--registry "$ENROLL_DIR/device-credentials.json")
         fi
     fi
@@ -698,7 +698,7 @@ fi
 # provisioning helpers, so nothing secret lands in a shell history or a log line.
 if [ "$DO_PROVISION" = 1 ]; then
     echo "== provision ($PORT) =="
-    [ -n "$TLS_CERTS_DIR" ] || die "--tls-certs is required (the bridge's state/registry-tls directory)"
+    [ -n "$TLS_CERTS_DIR" ] || die "--tls-certs is required (the Gateway's state/registry-tls directory)"
     [ -n "$DEVICE_ID" ]     || die "--device-id is required (the registry identity this board is enrolled as)"
     [ -n "$ENDPOINT" ]      || die "--endpoint is required (tls://host:port; the board dials exactly this)"
     [ -n "$WIFI_SSID" ]     || die "--wifi-ssid is required (the network the board joins)"
@@ -724,19 +724,19 @@ if [ "$DO_PROVISION" = 1 ]; then
     if [ "$ENDPOINT_PORT" -lt 1 ] || [ "$ENDPOINT_PORT" -gt 65535 ]; then
         die "--endpoint port out of range 1-65535: $ENDPOINT_PORT"
     fi
-    # The registry file sits beside the certs directory in the bridge's state/; --registry overrides.
+    # The registry file sits beside the certs directory in the Gateway's state/; --registry overrides.
     [ -n "$REGISTRY_FILE" ] || REGISTRY_FILE="$(dirname "$TLS_CERTS_DIR")/device-credentials.json"
     [ "$DRY_RUN" = 1 ] || [ -d "$TLS_CERTS_DIR" ] || die "no TLS cert directory at $TLS_CERTS_DIR"
     [ "$DRY_RUN" = 1 ] || [ -f "$TLS_CERTS_DIR/client-ca.crt" ] || die "no client-ca.crt in $TLS_CERTS_DIR"
     [ "$DRY_RUN" = 1 ] || [ -f "$TLS_CERTS_DIR/$DEVICE_ID.crt" ] || die "no $DEVICE_ID.crt in $TLS_CERTS_DIR (is the device enrolled?)"
     [ "$DRY_RUN" = 1 ] || [ -f "$TLS_CERTS_DIR/$DEVICE_ID.key" ] || die "no $DEVICE_ID.key in $TLS_CERTS_DIR (is the device enrolled?)"
-    [ "$DRY_RUN" = 1 ] || [ -f "$REGISTRY_FILE" ] || die "no registry file at $REGISTRY_FILE (the bridge's state/device-credentials.json)"
+    [ "$DRY_RUN" = 1 ] || [ -f "$REGISTRY_FILE" ] || die "no registry file at $REGISTRY_FILE (the Gateway's state/device-credentials.json)"
     [ "$DRY_RUN" = 1 ] || [ -f "$WIFI_PSK_FILE" ] || die "wifi psk file not found: $WIFI_PSK_FILE"
 
-    # 1. The TLS credential region: the CA that signed the bridge, this device's certificate and
-    #    key, the pinned fingerprint of the bridge's certificate, and the host:port to dial.
-    #    The bridge's registry file cross-checks that the certificate being written is the one the
-    #    bridge has on file for this identity, so a mix-up is refused before a byte is written.
+    # 1. The TLS credential region: the CA that signed the Gateway, this device's certificate and
+    #    key, the pinned fingerprint of the Gateway's certificate, and the host:port to dial.
+    #    The Gateway's registry file cross-checks that the certificate being written is the one the
+    #    Gateway has on file for this identity, so a mix-up is refused before a byte is written.
     run "$PY" "$REPO_ROOT/scripts/provision-device-tls.py" \
         --certs "$TLS_CERTS_DIR" --device "$DEVICE_ID" \
         --host "$ENDPOINT_HOST" \

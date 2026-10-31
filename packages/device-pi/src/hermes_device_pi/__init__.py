@@ -8,7 +8,7 @@ Pointed at a mounted card it would have failed without root, or worse, installed
 on the workbench.
 
 The right script is `scripts/deploy-to-card.sh <mount> [user]`, which copies the device files onto
-the card and writes a placeholder `bridge-link.env`. That script deliberately never overwrites the
+the card and writes a placeholder `gateway-link.env`. That script deliberately never overwrites the
 env file, because it holds values only a person can supply, so this driver fills it in and then runs
 the script a second time. The script is idempotent, and it enables the unit only once the values are
 real, so that rule stays in one place instead of being duplicated here.
@@ -63,7 +63,7 @@ WIFI_SCRIPT = "scripts/add-wifi-profile-to-card.py"
 
 
 def bridge_env_path(mount: str, user: str) -> Path:
-    return Path(mount) / "home" / user / "bridge-link.env"
+    return Path(mount) / "home" / user / "gateway-link.env"
 
 
 def render_bridge_env(existing: str, *, device_id: str, host: str, port: int, name: str,
@@ -71,20 +71,20 @@ def render_bridge_env(existing: str, *, device_id: str, host: str, port: int, na
     """Set the values the card needs, keeping every other line the template put there."""
     wanted = {
         "VOICE_DEVICE_ID": device_id,
-        "VOICE_BRIDGE_HOST": host,
-        "VOICE_BRIDGE_PORT": str(port),
+        "VOICE_GATEWAY_HOST": host,
+        "VOICE_GATEWAY_PORT": str(port),
         "VOICE_DEVICE_NAME": name,
     }
     if tls:
         # The device dials a TLS port, so it needs the CA it should trust and its own certificate
         # and key. Without these the card boots, fails to authenticate and looks like a dead device.
         wanted.update({
-            "VOICE_BRIDGE_TLS_CA": tls["ca"],
-            "VOICE_BRIDGE_TLS_CERT": tls["cert"],
-            "VOICE_BRIDGE_TLS_KEY": tls["key"],
+            "VOICE_GATEWAY_TLS_CA": tls["ca"],
+            "VOICE_GATEWAY_TLS_CERT": tls["cert"],
+            "VOICE_GATEWAY_TLS_KEY": tls["key"],
         })
     lines = existing.splitlines() if existing else [
-        "# Bootstrap configuration for the outbound shape: the device dials the bridge.",
+        "# Bootstrap configuration for the outbound shape: the device dials the gateway.",
     ]
     seen: set[str] = set()
     output: list[str] = []

@@ -17,7 +17,7 @@ That is enforced in three independent places, deliberately:
 
 | Where | What it does |
 |---|---|
-| `bridge/volume.py` `clamp()` | the Gateway's choke point; raises anything below the floor |
+| `gateway/volume.py` `clamp()` | the Gateway's choke point; raises anything below the floor |
 | `pi/volume_control.py` `AlsaVolume.clamp()` | the device's own choke point, so a bug or a bad desired value on the host still cannot produce a deaf device |
 | `scripts/calibrate-volume.py` | refuses to record a floor of 0, and validates on read |
 
@@ -303,7 +303,7 @@ Every one of those is on the calibration script, and none of it is claimed here.
 
 | File | Role |
 |---|---|
-| `bridge/volume.py` | parsing, the scale, the floor, the alarm override, replies |
+| `gateway/volume.py` | parsing, the scale, the floor, the alarm override, replies |
 | `pi/volume_control.py` | the device's own `amixer`/`alsactl` path and its own floor |
 | `pi/device_apply.py` | the configuration plane's hardware adapter |
 | `scripts/calibrate-volume.py` | the on-device measurement (standalone) |

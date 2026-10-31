@@ -11,10 +11,10 @@ import tempfile
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import bridge.config as config_module  # noqa: E402
-from bridge.announce import Announcer  # noqa: E402
-from bridge.endpointing import Endpointer  # noqa: E402
-from bridge.loop import VoiceLoop  # noqa: E402
+import gateway.config as config_module  # noqa: E402
+from gateway.announce import Announcer  # noqa: E402
+from gateway.endpointing import Endpointer  # noqa: E402
+from gateway.loop import VoiceLoop  # noqa: E402
 
 
 def check(got, wanted, label: str, failures: list[str]) -> None:

@@ -50,7 +50,7 @@ From the satellite unit on the device, with the reason each one is there:
     --snd-command 'aplay -D plughw:CARD=seeed2micvoicec,DEV=0 -r 22050 -c 1 -f S16_LE -t raw'
     --wake-uri 'tcp://127.0.0.1:10400'        the wake shim, not the wake engine directly
     --wake-word-name '<your wake word>'
-    --event-uri 'tcp://127.0.0.1:10500'       how the bridge drives the LEDs
+    --event-uri 'tcp://127.0.0.1:10500'       how the Gateway drives the LEDs
     --awake-wav  ~/sounds/awake.wav
     --done-wav   ~/sounds/done.wav
     --mic-seconds-to-mute-after-awake-wav 0.4
@@ -77,7 +77,7 @@ the microphone by our core patch, because otherwise the device hears its own chi
   the jack, the *with jack cutout* insert is the matching print.
 - **Timers are available on the satellite and not wired up.** Our pinned revision supports
   `--timer-finished-wav`, `--timer-finished-wav-repeat` and the timer event commands. Issue #5 assumed
-  the bridge would own the whole timing path; it may only need to drive the satellite's own timer.
+  the Gateway would own the whole timing path; it may only need to drive the satellite's own timer.
 - **`--mic-auto-gain`, `--mic-noise-suppression` and `--snd-volume-multiplier` are all unused**, and all
   three are plausible wins: the first two against the long endpointer waits in a noisy room, the third
   for voice volume control in #10.

@@ -1,6 +1,6 @@
 """Voice metadata and speaker resolution, with no Piper/onnxruntime dependency.
 
-`bridge/tts.py` needs the speaker resolution at synthesis time; `scripts/switch-voice.py` needs
+`gateway/tts.py` needs the speaker resolution at synthesis time; `scripts/switch-voice.py` needs
 the same rules *before* it writes any configuration, and it should not have to load onnxruntime
 to read a JSON file. Keeping the rules here means there is exactly one implementation of
 "what does this speaker setting mean", which is the piece that has gone wrong before:
@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-# The satellite plays 22050 Hz 16-bit mono (see SND_FORMAT in bridge/config.py). Every published
+# The satellite plays 22050 Hz 16-bit mono (see SND_FORMAT in gateway/config.py). Every published
 # Piper English voice is 22050, so a voice at any other rate is a contract violation, not a
 # preference: nothing resamples on the device.
 VOICE_SAMPLE_RATE = 22050
@@ -25,7 +25,7 @@ def load_voice_config(config_path) -> dict:
     if not path.is_file():
         raise FileNotFoundError(
             f"voice config {path.name} not found; download the voice before starting the "
-            f"bridge (see docs/switching-voices.md)")
+            f"Gateway (see docs/switching-voices.md)")
     return json.loads(path.read_text())
 
 
@@ -73,7 +73,7 @@ def resolve_speaker_id(setting, config_path: Path):
     if not Path(config_path).is_file():
         raise FileNotFoundError(
             f"voice config {Path(config_path).name} not found; download the voice before "
-            f"starting the bridge (see docs/switching-voices.md)")
+            f"starting the Gateway (see docs/switching-voices.md)")
 
     config = json.loads(Path(config_path).read_text())
     speaker_map = config.get("speaker_id_map", {})

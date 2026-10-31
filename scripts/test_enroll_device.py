@@ -13,13 +13,13 @@ only credential is the operator's five-word setup code. What is pinned here:
      HKDF-SHA256(ikm = token, salt = b"hermes-enroll-v1", info = b"bundle")
   2  a full exchange against a stub gateway that implements the written protocol produces the
      expected files: client-ca.crt, <id>.crt, <id>.key and a device-credentials.json whose
-     fingerprint entry is the one the bridge's lookup builds
+     fingerprint entry is the one the Gateway's lookup builds
   3  a bad server response (wrong key, tampered tag) is REJECTED by the AEAD check and nothing
      is written -- an unauthenticated answer is never trusted
   4  the setup code never appears in any output, and passing it as an argument is refused
      (argv lands in the process list and the shell history)
   5  gateway refusals (401/409/429) and a bad challenge are reported as clear errors
-  6  with --endpoint the bridge certificate is read from that TLS port, checked against the
+  6  with --endpoint the Gateway certificate is read from that TLS port, checked against the
      client CA from the bundle, and saved as server.crt -- and a certificate the CA did not
      sign is refused
 
@@ -212,7 +212,7 @@ class StubGateway:
 
 
 class StubTLSServer:
-    """A TLS listener that completes a handshake and closes -- the bridge certificate the
+    """A TLS listener that completes a handshake and closes -- the Gateway certificate the
     client captures from --endpoint."""
 
     def __init__(self, cert_pem, key_pem):
@@ -451,7 +451,7 @@ class ExchangeTests(unittest.TestCase):
 
 
 class ServerCertCaptureTests(unittest.TestCase):
-    """--endpoint: the bridge certificate pinned into the board comes from the very address the
+    """--endpoint: the Gateway certificate pinned into the board comes from the very address the
     board will dial, and is checked against the client CA that arrived inside the bundle."""
 
     def setUp(self):
@@ -493,7 +493,7 @@ class ServerCertCaptureTests(unittest.TestCase):
             gateway.close()
             tls.close()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('could not read the bridge certificate', result.stderr)
+        self.assertIn('could not read the Gateway certificate', result.stderr)
         self.assertFalse((self.out / 'server.crt').exists())
 
 
@@ -510,7 +510,7 @@ class WriteShapeTests(unittest.TestCase):
             self.assertEqual(out.joinpath('esp32-enroll-test.key').stat().st_mode & 0o777, 0o600)
             self.assertEqual(out.joinpath('device-credentials.json').stat().st_mode & 0o777,
                              0o600)
-            # The fingerprint is the DER hash the bridge looks up (pem_to_der, one producer).
+            # The fingerprint is the DER hash the Gateway looks up (pem_to_der, one producer).
             der = MOD.pem_to_der(DEVICE_CERT_PEM.encode('ascii'))
             registry = json.loads((out / 'device-credentials.json').read_text())
             self.assertEqual(registry,

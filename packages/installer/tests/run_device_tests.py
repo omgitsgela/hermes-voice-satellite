@@ -168,18 +168,18 @@ class CardFlow(unittest.TestCase):
         result = pi.DRIVER.flash(self.request(), dry())
         self.assertTrue(result.ok)
         # A dry run must not write anything.
-        self.assertFalse((self.mount / "home" / "satellite" / "bridge-link.env").exists())
+        self.assertFalse((self.mount / "home" / "satellite" / "gateway-link.env").exists())
 
     @posix_only
     def test_a_real_run_fills_the_env_and_keeps_other_values(self):
-        env = self.mount / "home" / "satellite" / "bridge-link.env"
+        env = self.mount / "home" / "satellite" / "gateway-link.env"
         env.write_text("VOICE_DEVICE_ID=CHANGE-ME\nVOICE_DEVICE_AREA=hallway\n")
         runner = Runner(dry_run=False, executor=noop_executor, repo_root=ROOT)
         result = pi.DRIVER.flash(self.request(), runner)
         self.assertTrue(result.ok, result.summary)
         text = env.read_text()
-        self.assertIn("VOICE_BRIDGE_HOST=gateway.example", text)
-        self.assertIn("VOICE_BRIDGE_PORT=10702", text)
+        self.assertIn("VOICE_GATEWAY_HOST=gateway.example", text)
+        self.assertIn("VOICE_GATEWAY_PORT=10702", text)
         self.assertIn("VOICE_DEVICE_NAME=bedroom", text)
         self.assertNotIn("CHANGE-ME", text)
         # A line the driver does not own must survive untouched.
@@ -224,15 +224,15 @@ class CardFlow(unittest.TestCase):
         self.assertIn("not the card's root filesystem", result.summary)
 
     def test_verify_refuses_a_card_that_still_says_change_me(self):
-        env = self.mount / "home" / "satellite" / "bridge-link.env"
+        env = self.mount / "home" / "satellite" / "gateway-link.env"
         env.write_text("VOICE_DEVICE_ID=CHANGE-ME\n")
         result = pi.DRIVER.verify(self.request(), Runner(dry_run=False))
         self.assertFalse(result.ok)
         self.assertIn("CHANGE-ME", result.summary)
 
     def test_verify_accepts_a_filled_in_card(self):
-        env = self.mount / "home" / "satellite" / "bridge-link.env"
-        env.write_text("VOICE_DEVICE_ID=satellite\nVOICE_BRIDGE_HOST=gateway.example\n")
+        env = self.mount / "home" / "satellite" / "gateway-link.env"
+        env.write_text("VOICE_DEVICE_ID=satellite\nVOICE_GATEWAY_HOST=gateway.example\n")
         result = pi.DRIVER.verify(self.request(), Runner(dry_run=False))
         self.assertTrue(result.ok, result.summary)
 
@@ -245,19 +245,19 @@ class EnvRendering(unittest.TestCase):
 
     def test_rendering_sets_keys_without_duplicating_them(self):
         rendered = pi.render_bridge_env(
-            "VOICE_BRIDGE_HOST=CHANGE-ME\nVOICE_BRIDGE_PORT=10701\n",
+            "VOICE_GATEWAY_HOST=CHANGE-ME\nVOICE_GATEWAY_PORT=10701\n",
             device_id="kitchen", host="gw", port=10702, name="kitchen",
         )
-        self.assertEqual(rendered.count("VOICE_BRIDGE_HOST="), 1)
-        self.assertIn("VOICE_BRIDGE_HOST=gw", rendered)
-        self.assertIn("VOICE_BRIDGE_PORT=10702", rendered)
+        self.assertEqual(rendered.count("VOICE_GATEWAY_HOST="), 1)
+        self.assertIn("VOICE_GATEWAY_HOST=gw", rendered)
+        self.assertIn("VOICE_GATEWAY_PORT=10702", rendered)
 
     def test_commented_keys_are_not_treated_as_settings(self):
         rendered = pi.render_bridge_env(
-            "# VOICE_BRIDGE_HOST=CHANGE-ME\n", device_id="k", host="gw", port=10702, name="k"
+            "# VOICE_GATEWAY_HOST=CHANGE-ME\n", device_id="k", host="gw", port=10702, name="k"
         )
-        self.assertIn("# VOICE_BRIDGE_HOST=CHANGE-ME", rendered)
-        self.assertIn("\nVOICE_BRIDGE_HOST=gw", rendered)
+        self.assertIn("# VOICE_GATEWAY_HOST=CHANGE-ME", rendered)
+        self.assertIn("\nVOICE_GATEWAY_HOST=gw", rendered)
 
 
 class PlatformRefusal(unittest.TestCase):

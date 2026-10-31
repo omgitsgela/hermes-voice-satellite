@@ -70,7 +70,7 @@ with tempfile.TemporaryDirectory() as tmp:
         unit = (rootfs / 'etc/systemd/system/outbound-satellite.service').read_text()
         home = '/home/' + DEVICE_USER
         check('unit uses only device paths', str(rootfs) not in unit, unit)
-        check('unit env path', f'EnvironmentFile=-{home}/bridge-link.env' in unit)
+        check('unit env path', f'EnvironmentFile=-{home}/gateway-link.env' in unit)
         check('unit executable path', f'ExecStart={home}/wyoming-satellite/.venv/bin/python ' in unit)
         check('interpreter checked against card once', 'interpreter: present' in installed.stdout)
         satenv = rootfs / 'etc/voice-satellite/satellite.env'
@@ -79,7 +79,7 @@ with tempfile.TemporaryDirectory() as tmp:
             check('fresh satellite env is template', satenv.read_bytes() == (ROOT / 'pi/systemd/satellite.env').read_bytes())
             check('placeholder link not enabled', not wanted.is_symlink())
             satenv.write_text('VS_DEVICE_NAME=custom-device\n')
-            (rootfs / 'home' / DEVICE_USER / 'bridge-link.env').write_text('VOICE_DEVICE_ID=example\nVOICE_BRIDGE_HOST=10.1.2.3\n')
+            (rootfs / 'home' / DEVICE_USER / 'gateway-link.env').write_text('VOICE_DEVICE_ID=example\nVOICE_GATEWAY_HOST=10.1.2.3\n')
         else:
             check('existing satellite env preserved', satenv.read_text() == 'VS_DEVICE_NAME=custom-device\n')
             check('configured link enabled under set -eu', wanted.is_symlink())

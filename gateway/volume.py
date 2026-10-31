@@ -11,7 +11,7 @@ The decision, 2026-09-25, on the one question the issue reserved for the room's 
 audible even when the room is set quiet. That override is upward-only. It never
 lowers a level the owner chose.
 
-Where the level actually lives: speech is rendered on the bridge but *playback*
+Where the level actually lives: speech is rendered on the Gateway but *playback*
 happens on the satellite, so the number that matters is the Pi's ALSA level for
 the output card. Our TTS, the connected tone, the done tone and announcements all
 take that one path, which is why one control governs everything.
@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-log = logging.getLogger("bridge.volume")
+log = logging.getLogger("gateway.volume")
 
 MAX_PERCENT = 100
 MIN_PERCENT = 0
@@ -67,7 +67,7 @@ def _load_calibration() -> tuple[int, int, str, str]:
     """Read the measured values, or fall back to the placeholders with a warning.
 
     A malformed file falls back rather than raising: an unusable calibration must not
-    stop the bridge from starting, and the fallback is safe by construction (it is
+    stop the Gateway from starting, and the fallback is safe by construction (it is
     above zero). It is logged, because silently using a placeholder is how a
     placeholder becomes permanent.
     """
@@ -125,13 +125,13 @@ FLOOR_PERCENT, ALARM_MIN_PERCENT, CARD, CONTROL = _load_calibration()
 
 
 def reload_calibration() -> tuple[int, int, str, str]:
-    """Re-read the calibration file and adopt it, without restarting the bridge.
+    """Re-read the calibration file and adopt it, without restarting the gateway.
 
     The calibrated values are module constants on purpose: `clamp` is on the hot path
     for every announcement, timer and alarm, and it must not stat the filesystem to
     decide whether it is allowed to be silent. The cost is that a calibration change
     does not take effect until something calls this. Run it after calibrating, or
-    restart the bridge - either is fine, but doing neither means the measured floor is
+    restart the Gateway - either is fine, but doing neither means the measured floor is
     sitting on disk being ignored, which looks exactly like the feature being broken.
 
     Returns the newly adopted values.
@@ -306,12 +306,12 @@ def parse_volume_command(text: str) -> Optional[VolumeIntent]:
     """Recognise a volume request, or return None and let the model have it.
 
     Deliberately conservative. A phrase that is not clearly about volume must fall
-    through to the assistant, because the bridge acting on a mis-heard phrase is worse
+    through to the assistant, because the Gateway acting on a mis-heard phrase is worse
     than the assistant taking an extra second.
 
     That principle is why bare "turn it up" is NOT matched, even though it probably
     means the device volume. "It" could be music playing on the same device, and the
-    bridge has no way to tell. "turn the volume up" and plain "volume up" both work,
+    Gateway has no way to tell. "turn the volume up" and plain "volume up" both work,
     because neither leaves the object ambiguous.
     """
     if not isinstance(text, str):

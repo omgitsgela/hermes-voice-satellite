@@ -168,7 +168,7 @@ The Gateway logs every turn:
 ```
 
 ```bash
-journalctl --user -u hermes-voice-bridge -f | grep -E "heard|said|local control|volume"
+journalctl --user -u hermes-voice-satellite -f | grep -E "heard|said|local control|volume"
 ```
 
 `local control` and `volume control` in the log mean a Gateway-local command was recognised;
@@ -176,8 +176,8 @@ anything else went to the assistant.
 
 ## Adding a command
 
-1. Add the phrase to the relevant list in `bridge/config.py`, or, for a new class, alongside
-   the existing matcher in `bridge/loop.py`.
+1. Add the phrase to the relevant list in `gateway/config.py`, or, for a new class, alongside
+   the existing matcher in `gateway/loop.py`.
 2. Decide the matching rule deliberately: whole-utterance for anything that changes the room,
    substring only for phrases that cannot plausibly appear inside a real question.
 3. Add it to the test suite for that class, **including a negative case** proving a near-miss

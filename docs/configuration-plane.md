@@ -6,8 +6,8 @@ Interface contract for the voice gateway's settings and fleet-configuration surf
 system on the other side of it: the Hermes gateway, a script, a cron job, or an operator's browser.
 
 Verified against the implementation on `main`. Every field, bound and status code below is read from
-the code, not from an intention: `bridge/config_plane.py` (state and validation), `bridge/announce.py`
-(HTTP), `bridge/registry.py` (wire events), `pi/config_agent.py` (device side), `pi/device_apply.py`
+the code, not from an intention: `gateway/config_plane.py` (state and validation), `gateway/announce.py`
+(HTTP), `gateway/registry.py` (wire events), `pi/config_agent.py` (device side), `pi/device_apply.py`
 (hardware adapter), `pi/mic_gain_control.py` (input level).
 
 ## 1. What this is
@@ -245,7 +245,7 @@ write is durable and the device takes the generation on its next registration. P
 are cancelled and awaited by `Announcer.stop()`, in a `finally` that runs even when an earlier shutdown
 step raises, so a shutdown cannot leave a restart firing after the Gateway is down.
 
-The configuration page (`GET /configure`, served from `bridge/static/settings.html`) sends **only the
+The configuration page (`GET /configure`, served from `gateway/static/settings.html`) sends **only the
 settings the operator selected** on a fleet apply: each fleet field is checkbox-gated, and an
 unselected field is omitted from the request entirely. This is what makes a fleet apply a *change*
 rather than a *clobber* — a setting the operator did not touch keeps each device's own value, which

@@ -18,7 +18,7 @@ IDENTITY_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 INSTALL_SCRIPT = "scripts/install-gateway.sh"
 
 #: What the installer found on this machine. Desktop and a service install differ in who supervises
-#: the bridge, so the UI says which one it is rather than assuming.
+#: the gateway, so the UI says which one it is rather than assuming.
 HERMES_SHAPES = ("desktop", "service", "none")
 
 

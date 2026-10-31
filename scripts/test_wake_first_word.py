@@ -7,14 +7,14 @@ passed to the existing conversation instead. The transcripts showed why:
     heard (0.5s speech): conversation.
     heard (0.6s speech): conversation.
 
-The first word was gone. `_discard_queued_events()` threw away EVERY event waiting for the bridge,
-and after a wake the queue holds however much the device sent while the bridge was asleep for
+The first word was gone. `_discard_queued_events()` threw away EVERY event waiting for the gateway,
+and after a wake the queue holds however much the device sent while the Gateway was asleep for
 WAKE_QUIET_SECONDS. The log said `discarded 93 event(s)` -- far more than the 308 ms chime. The
 person's first word was queued behind the chime and dumped with it, the phrase matcher needs the
 whole phrase, so the reset never fired.
 
 The Pi satellite survived this because it mutes its own microphone across the chime, so there is
-nothing to discard; the ESP32 has no mic mute, which is why the same bridge code behaved differently
+nothing to discard; the ESP32 has no mic mute, which is why the same Gateway code behaved differently
 on the two devices.
 
 What this pins:
@@ -23,7 +23,7 @@ What this pins:
    so the capture sees it.
 3. The unbounded drain (follow-up path) still drops everything, unchanged.
 
-Run with the bridge venv:
+Run with the Gateway venv:
 
     .venv/bin/python scripts/test_wake_first_word.py
 """
@@ -38,7 +38,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from wyoming.audio import AudioChunk  # noqa: E402
 
-from bridge.loop import VoiceLoop  # noqa: E402
+from gateway.loop import VoiceLoop  # noqa: E402
 
 RATE = 16000
 BYTES_PER_SECOND = RATE * 2          # mono S16

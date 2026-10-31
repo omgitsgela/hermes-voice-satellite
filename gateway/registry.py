@@ -1,8 +1,8 @@
 """Device registry for the inverted connection shape (issue #61, migration phase 2).
 
-**Wired into the bridge behind `VOICE_REGISTRY_ENABLED`, off by default.** A registered device is
+**Wired into the Gateway behind `VOICE_REGISTRY_ENABLED`, off by default.** A registered device is
 leaseable by the voice loop and carries real conversations over the leased connection
-(`bridge/lease.py`, acquired in `bridge/loop.py`). The registry also carries the configuration control
+(`gateway/lease.py`, acquired in `gateway/loop.py`). The registry also carries the configuration control
 plane: desired state goes down, reported actual state comes back (`hermes.config.desired` /
 `hermes.config.reported`), and those control events are handled out of band so they never enter the
 audio queue.
@@ -50,9 +50,9 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from wyoming.event import Event, async_write_event
 from wyoming.server import AsyncEventHandler, AsyncTcpServer, HandlerFactory
 
-from bridge.net import enable_tcp_keepalive
+from gateway.net import enable_tcp_keepalive
 
-log = logging.getLogger("bridge.registry")
+log = logging.getLogger("gateway.registry")
 
 #: Bumped when the registration contract changes, so an old device is refused clearly instead of
 #: half-working.
@@ -125,7 +125,7 @@ def load_credential_lookup(
 
     # The map is deliberately NOT frozen here. The enrolment endpoint mints certificates into this
     # same file while the listener is already running, so a map captured at startup refuses a device
-    # the bridge itself has just enrolled -- "no recognised credential" -- until the service is
+    # the Gateway itself has just enrolled -- "no recognised credential" -- until the service is
     # restarted, which is precisely the moment a new satellite first appears. That broke
     # plug-and-play at the last step. Registrations are rare and the file is tiny, so re-reading per
     # lookup is cheap, and it also means a REMOVED entry is genuinely revoked instead of surviving
@@ -153,7 +153,7 @@ class TlsConfigError(Exception):
 
     The same principle as `CredentialConfigError`, for the same reason: a half-deployed certificate
     must stop the listener rather than leave it silently plaintext. Someone who installs a certificate
-    and sees the bridge come up is entitled to assume the traffic is encrypted, and a listener that
+    and sees the Gateway come up is entitled to assume the traffic is encrypted, and a listener that
     quietly stayed plain would be the worst outcome of all.
     """
 
@@ -301,7 +301,7 @@ class DeviceIdentity:
         if protocol_version != PROTOCOL_VERSION:
             raise RegistrationError(
                 f"protocol version {protocol_version} is not supported "
-                f"(this bridge speaks {PROTOCOL_VERSION})"
+                f"(this Gateway speaks {PROTOCOL_VERSION})"
             )
 
         # The contract says "a list of strings", so check that rather than coercing whatever arrives: a
@@ -345,7 +345,7 @@ class IngressLimits:
     """Bounded ingress. Audio dominates the byte count, so both limits matter."""
 
     # 64 was far too small once the device started sending 10 ms chunks: that is 0.64 s of audio, so
-    # any brief spell where the bridge is busy (speech-to-text, a model call, streaming a reply)
+    # any brief spell where the Gateway is busy (speech-to-text, a model call, streaming a reply)
     # overflowed it and DROPPED LIVE AUDIO -- measured 2026-10-30, 39 drops in a few minutes, and the
     # log line names it: "ingress full (64 events, 19840 bytes queued), dropped audio-chunk".
     #
@@ -882,7 +882,7 @@ class RegistryServer:
     def _handler_factory(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> RegistrationHandler:
         # Keepalive on the accepted socket, for the same reason the dialled client has it: an idle link
         # has no timeout of its own, and a device that dies without closing leaves this end believing it
-        # is connected. Measured 2026-09-26: the satellite was power-cycled and the bridge did not notice
+        # is connected. Measured 2026-09-26: the satellite was power-cycled and the Gateway did not notice
         # at all — the registration and the lease were held for the whole outage, and only the returning
         # device displaced the stale socket. Applied per accepted connection, before anything reads.
         enable_tcp_keepalive(

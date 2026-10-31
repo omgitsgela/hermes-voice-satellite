@@ -4,7 +4,7 @@ Registration and schema here, logic in ``voice_tool.py``, split the same way as 
 google plugins.
 
 This exists so the assistant can change how the device behaves in the room, including follow-up mode
-and the bounded endpointing profile, by calling a tool instead of relying on the bridge recognising a
+and the bounded endpointing profile, by calling a tool instead of relying on the Gateway recognising a
 literal phrase.
 """
 
@@ -26,7 +26,7 @@ _SCHEMA = {
         "no-speech and utterance limits; 'endpointing_standard' restores ordinary timing, and "
         "'endpointing_status' reports the current profile. Use these for requests to wait longer "
         "while someone speaks. Every change is read back from the device before it is reported. "
-        "'fleet_status' lists every satellite the bridge knows with its convergence state; "
+        "'fleet_status' lists every satellite the Gateway knows with its convergence state; "
         "'config_status' reports one device's desired settings, reported settings and drift; "
         "'config_set' writes durable desired settings (wake_word, wake_threshold, mic_gain, "
         "playback_volume, led_brightness, locale, update_channel) for one device. "

@@ -304,7 +304,7 @@ static int gateway_task_started;
 static const char gateway_task_report_lines[] =
     "gateway=started\n"
     "gateway=established transport=tls\n"
-    "socket=connected host=bridge.example port=10702\n"
+    "socket=connected host=gateway.example port=10702\n"
     "session=registered result=ok device_id=esp32-68ee8f4b5988\n"
     "link=lost reconnecting\n"
     "reconnect=registered reconnects=1\n"
@@ -465,7 +465,7 @@ int tls_credentials_probe(tls_credentials *out, char *reason, size_t reason_capa
     }
     for (size_t index = 0; index < TLS_SERVER_PIN_LEN; index++)
         out->server_pin[index] = (unsigned char)index;
-    snprintf(out->server_host, sizeof(out->server_host), "bridge.example");
+    snprintf(out->server_host, sizeof(out->server_host), "gateway.example");
     out->server_port = 10702;
     return 0;
 }
@@ -821,14 +821,14 @@ int usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);
             tls_record = Path(tmp) / 'tls-record.txt'
             output = self.console(executable,
                                   f'SET_WIFI_SSID GL-Test-AP\nSET_WIFI_PSK {SECRET}\n'
-                                  'SET_ENDPOINT tls://bridge.example:10702\nSTART_GATEWAY\n',
+                                  'SET_ENDPOINT tls://gateway.example:10702\nSTART_GATEWAY\n',
                                   GATEWAY_RECORD=str(tcp_record), TLS_RECORD=str(tls_record))
             self.assertIn('PROVISION GATEWAY BEGIN', output)
             self.assertIn('transport=tls', output)
             self.assertIn('PROVISION GATEWAY END', output)
             self.assertIn('GATEWAY_RELEASED', output)
             self.assertTrue(tls_record.exists(), 'the TLS transport must be the one that dialled')
-            self.assertEqual(tls_record.read_text().strip(), 'host=bridge.example port=10702')
+            self.assertEqual(tls_record.read_text().strip(), 'host=gateway.example port=10702')
             self.assertFalse(tcp_record.exists(), 'a TLS endpoint must never be dialled in plaintext')
             self.assertNotIn(SECRET, output)
 
@@ -852,7 +852,7 @@ int usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);
             executable = self.build(tmp)
             output = self.console(executable,
                                   f'SET_WIFI_SSID GL-Test-AP\nSET_WIFI_PSK {SECRET}\n'
-                                  'SET_ENDPOINT tls://bridge.example:10702\nSTART_GATEWAY\n',
+                                  'SET_ENDPOINT tls://gateway.example:10702\nSTART_GATEWAY\n',
                                   TLS_FAIL='1')
             self.assertIn('clock=unix=1780000000 synced=yes', output,
                           'the clock state belongs next to the result, not only on success')
@@ -865,7 +865,7 @@ int usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);
         with tempfile.TemporaryDirectory() as tmp:
             executable = self.build(tmp)
             staged = self.console(executable, 'TLS_STATUS\n')
-            self.assertIn('PROVISION OK TLS STAGED host=bridge.example port=10702 pin=', staged)
+            self.assertIn('PROVISION OK TLS STAGED host=gateway.example port=10702 pin=', staged)
             self.assertIn('pin=' + ''.join(f'{index:02x}' for index in range(32)), staged)
             self.assertNotIn('GATEWAY BEGIN', staged, 'a status query must not dial anything')
             absent = self.console(executable, 'TLS_STATUS\n', TLS_PROBE_ABSENT='1')

@@ -12,8 +12,8 @@ import wave
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.announce import Announcer, _concat_wavs  # noqa: E402
-from bridge.config import ALARM_CHIME, ANNOUNCE_SOUNDS, SND_FORMAT, TIMER_CHIME  # noqa: E402
+from gateway.announce import Announcer, _concat_wavs  # noqa: E402
+from gateway.config import ALARM_CHIME, ANNOUNCE_SOUNDS, SND_FORMAT, TIMER_CHIME  # noqa: E402
 
 
 class Sat:

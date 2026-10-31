@@ -20,7 +20,7 @@ rejected, because the room floor and that word measured within 15 percent of eac
 soft-only audio trigger would have the device answering the fan. The quiet word survives when the
 person keeps talking, which is exactly the case that broke.
 
-Run with the bridge venv:
+Run with the Gateway venv:
 
     .venv/bin/python scripts/test_endpointing_soft_speech.py
 """
@@ -31,7 +31,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.endpointing import Endpointer  # noqa: E402
+from gateway.endpointing import Endpointer  # noqa: E402
 
 FRAME_MS = 20
 checks = 0

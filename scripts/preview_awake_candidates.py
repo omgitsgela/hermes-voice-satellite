@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Play the awake-tone candidates on the satellite, each announced by name.
 
-Announced with Piper through the same bridge, so the choice is made by ear rather than by
+Announced with Piper through the same gateway, so the choice is made by ear rather than by
 reading frequency numbers.
 
     .venv/bin/python scripts/preview_awake_candidates.py
@@ -17,9 +17,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from bridge import tts  # noqa: E402
-from bridge.config import AUDIO_OUT, SATELLITE_HOST, SATELLITE_PORT  # noqa: E402
-from bridge.satellite import SatelliteClient  # noqa: E402
+from gateway import tts  # noqa: E402
+from gateway.config import AUDIO_OUT, SATELLITE_HOST, SATELLITE_PORT  # noqa: E402
+from gateway.satellite import SatelliteClient  # noqa: E402
 
 CANDIDATES = [
     ("a-warm-fifth", "Option A: four forty, rising to six sixty."),

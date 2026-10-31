@@ -120,7 +120,7 @@ def scripted_device(port, stop, *, ack=True, respond=True, info_name='ESP32 cont
 
 
 class GatewayPeer:
-    """Stand in for the bridge's registry listener at the far end of a socketpair."""
+    """Stand in for the Gateway's registry listener at the far end of a socketpair."""
 
     def __init__(self, *, reply_ok=True):
         self.host_side, self.relay_side = socket.socketpair()
@@ -215,8 +215,8 @@ def run(session, **kwargs):
 class RelayTests(unittest.TestCase):
     def test_endpoint_parsing(self):
         self.assertEqual(relay.parse_endpoint('192.0.2.10:10701'), ('192.0.2.10', 10701))
-        self.assertEqual(relay.parse_endpoint('bridge.example'), ('bridge.example', 10701))
-        self.assertEqual(relay.parse_endpoint('bridge.example:9999'), ('bridge.example', 9999))
+        self.assertEqual(relay.parse_endpoint('gateway.example'), ('gateway.example', 10701))
+        self.assertEqual(relay.parse_endpoint('gateway.example:9999'), ('gateway.example', 9999))
         for bad in ('', 'host:not-a-port', 'host:0', 'host:70000', ':10701'):
             with self.subTest(endpoint=bad), self.assertRaises(ValueError):
                 relay.parse_endpoint(bad)
@@ -370,7 +370,7 @@ class RelayTests(unittest.TestCase):
         """A gateway that crashes mid-run answers with a RST, not a FIN. Over a real network
         socket the relay's recv (or a mid-forward sendall) then raises an OSError on the
         GATEWAY side: the run must exit not-registered (3), the same as the FIN death that
-        already does, not device-link-failed (4) -- or an operator chasing a crashed bridge is
+        already does, not device-link-failed (4) -- or an operator chasing a crashed Gateway is
         told to reseat the USB cable. This is the crash-shaped case the relay's own pinned
         principle (an unreachable gateway is not a device fault) must cover. A socketpair RST
         would not do this: it surfaces as an EOF, so the peer must be a real network listener.
@@ -517,7 +517,7 @@ class RelayTests(unittest.TestCase):
         # documents as "refused ... retrying will not help until a human acts". A typo must not
         # be read as a gateway refusal: it exits the usage code instead.
         with self.assertRaises(SystemExit) as raised:
-            relay.main(['--gateway', 'bridge.example:10702'])  # --port missing
+            relay.main(['--gateway', 'gateway.example:10702'])  # --port missing
         self.assertEqual(raised.exception.code, relay.EXIT_USAGE)
         with self.assertRaises(SystemExit) as raised:
             relay.main(['--port', '/dev/null'])                # --gateway missing
@@ -526,7 +526,7 @@ class RelayTests(unittest.TestCase):
     def test_help_still_exits_cleanly(self):
         # --help must keep exiting 0: remapping usage errors must not swallow help.
         with self.assertRaises(SystemExit) as raised:
-            relay.main(['--port', '/dev/null', '--gateway', 'bridge.example:10702', '--help'])
+            relay.main(['--port', '/dev/null', '--gateway', 'gateway.example:10702', '--help'])
         self.assertEqual(raised.exception.code, 0)
 
 

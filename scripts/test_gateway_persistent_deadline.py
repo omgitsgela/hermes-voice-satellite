@@ -5,7 +5,7 @@ The supervisor's persistent link runs two regimes (gateway_socket.c): while a se
 registering, the socket's deadline is finite and a stalled peer must cut the read with an
 error (which the supervisor turns into a backoff and a fresh dial); once registered, the
 deadline is "no deadline" and the read blocks until a real end of stream, because an idle
-registered link is the healthy state. The whole fix for a wedged bridge -- one that accepts
+registered link is the healthy state. The whole fix for a wedged Gateway -- one that accepts
 the connection and then goes silent while its kernel keeps ACKing, the one case keepalive
 cannot catch -- lives in the first regime: gateway_socket_read_persistent must check the
 deadline each poll.

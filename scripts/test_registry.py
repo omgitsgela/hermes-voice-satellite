@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Offline tests for the device registry (issue #61, migration phase 2).
 
-Run with the bridge's own interpreter:
+Run with the Gateway's own interpreter:
 
-    ~/hermes-voice-bridge/.venv/bin/python scripts/test_registry.py
+    ~/hermes-voice-satellite/.venv/bin/python scripts/test_registry.py
 
 No device, no network beyond localhost, no mocks of the thing under test: fake devices are real sockets
 speaking real Wyoming framing to a real listener, because the failures worth catching here are framing,
@@ -38,7 +38,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from wyoming.event import Event, async_read_event, async_write_event  # noqa: E402
 
-from bridge.registry import (  # noqa: E402
+from gateway.registry import (  # noqa: E402
     CONFIG_REPORTED_EVENT,
     PROTOCOL_VERSION,
     REGISTER_EVENT,
@@ -407,7 +407,7 @@ async def t_protocol_version() -> None:
 async def t_credential_file() -> None:
     import json
     import tempfile
-    from bridge.registry import CredentialConfigError, load_credential_lookup
+    from gateway.registry import CredentialConfigError, load_credential_lookup
 
     with tempfile.TemporaryDirectory() as tmp:
         path = pathlib.Path(tmp) / "device-credentials.json"
@@ -488,12 +488,12 @@ async def t_credential_reload() -> None:
     is already running. The registry must SEE it.
 
     It did not: load_credential_lookup froze its map at startup, while the enrol side re-reads the
-    same file. So a satellite enrolled against a running bridge connected, presented the certificate
-    the bridge had just issued, and was refused "no recognised credential" until someone restarted
+    same file. So a satellite enrolled against a running Gateway connected, presented the certificate
+    the Gateway had just issued, and was refused "no recognised credential" until someone restarted
     the service -- which breaks plug-and-play at exactly the moment a new satellite first appears."""
     import json
     import tempfile
-    from bridge.registry import load_credential_lookup
+    from gateway.registry import load_credential_lookup
 
     with tempfile.TemporaryDirectory() as tmp:
         path = pathlib.Path(tmp) / "device-credentials.json"
@@ -551,10 +551,10 @@ async def t_configuration_report_control_event() -> None:
 
 @check("16", "a realistic audio burst does not overflow the DEFAULT ingress limits")
 async def t_default_ingress_holds_real_audio() -> None:
-    """The device sends 10 ms chunks; the bridge must not drop them while it is briefly busy.
+    """The device sends 10 ms chunks; the Gateway must not drop them while it is briefly busy.
 
     Regression, 2026-10-30: the default event cap was 64, which at 320 bytes per 10 ms chunk is
-    0.64 s of audio. Any spell where the bridge was busy -- speech to text, a model call, streaming
+    0.64 s of audio. Any spell where the Gateway was busy -- speech to text, a model call, streaming
     a reply -- overflowed it, and the log recorded the damage: "ingress full (64 events, 19840 bytes
     queued), dropped audio-chunk", 39 times in a few minutes. Dropped audio means eaten words.
 

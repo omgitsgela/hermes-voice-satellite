@@ -16,8 +16,8 @@ __pycache__/
 .mypy_cache/
 
 # The one host-side configuration file: real values for THIS installation only. The committed
-# template is bridge.env.example (issue #45).
-bridge.env
+# template is gateway.env.example (issue #45).
+gateway.env
 
 # Local edits and backups people leave behind
 *.orig

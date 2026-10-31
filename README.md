@@ -65,7 +65,7 @@ notification, and the moment your hands are full.
                  | wyoming protocol, tcp/10700
                  v
   <host>  (everything that needs a CPU)
-    hermes-voice-bridge    user service, ~/hermes-voice-bridge
+    hermes-voice-satellite    user service, ~/hermes-voice-satellite
       endpointing -> faster-whisper STT -> Hermes run API -> Piper TTS
       announcements on :8765, token authenticated, queued politely
                  |
@@ -98,7 +98,7 @@ device and receive its audio. Everything else in the stack is loopback only.
 
 | Path | What it is |
 |---|---|
-| `bridge/` | The Gateway itself: endpointing, STT, TTS, gateway client, satellite client, announcements |
+| `gateway/` | The Gateway itself: endpointing, STT, TTS, gateway client, satellite client, announcements |
 | `scripts/` | Operational scripts: live checks, tests, chime generation, capture tools |
 | `pi/` | The device side: wake shim, LED service, the systemd units, and the device's configuration template (`pi/systemd/satellite.env`) |
 | `sounds/` | Chimes and tones the device plays |
@@ -149,17 +149,17 @@ required on an ALSA satellite and by the device-control offline checks, not for
 bridge-only audio synthesis. Newer Python releases are not validated by this guide.
 
 ```sh
-git clone https://github.com/omgitsgela/hermes-voice-satellite.git ~/hermes-voice-bridge
-cd ~/hermes-voice-bridge
+git clone https://github.com/omgitsgela/hermes-voice-satellite.git ~/hermes-voice-satellite
+cd ~/hermes-voice-satellite
 python3.11 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m pip check
 .venv/bin/python -m piper.download_voices --download-dir voices en_US-hfc_male-medium
-cp bridge.env.example bridge.env
+cp bridge.env.example gateway.env
 ```
 
 Set your host, device identity, session, registry and announcement bind values in
-`bridge.env`. If using a registry-only deployment, enable it, bind it to a trusted
+`gateway.env`. If using a registry-only deployment, enable it, bind it to a trusted
 interface, and set `VOICE_DIRECT_DIAL_FALLBACK=0`. See `docs/outbound-link.md` for
 credentials and the explicit trusted-network override. Never expose raw Wyoming
 on a public interface. Set `VOICE_ROUTE_ALIAS=` if your Gateway has no named route.
@@ -170,12 +170,12 @@ Install the unmodified user unit after configuring the separate Hermes Gateway:
 
 ```sh
 mkdir -p ~/.config/systemd/user
-cp hermes/systemd/hermes-voice-bridge.service ~/.config/systemd/user/
+cp hermes/systemd/hermes-voice-gateway.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now hermes-voice-bridge.service
+systemctl --user enable --now hermes-voice-gateway.service
 ```
 
-The supplied unit expects `~/hermes-voice-bridge`; for a different clone directory,
+The supplied unit expects `~/hermes-voice-satellite`; for a different clone directory,
 use a systemd drop-in overriding `WorkingDirectory`, `EnvironmentFile` and
 `ExecStart`, not source edits. User services need lingering for unattended boot.
 Verify listeners, registration and actual audio delivery, not just `active`.
@@ -191,9 +191,9 @@ synthetic-Gateway and hardware-test boundaries.
 3. Apply the configuration keys from `hermes/config/voice-surface.example.yaml` to
    `~/.hermes/config.yaml`. The surface deliberately has **no** `platform_toolsets.api_server` entry:
    it inherits the default toolset list, which is how it runs at full parity.
-4. Write `bridge.env` at the project root from `bridge.env.example` and set at least
+4. Write `gateway.env` at the project root from `bridge.env.example` and set at least
    `VOICE_SATELLITE_HOST` to the address of this installation's satellite. This is the host side's one
-   configuration file: `bridge/config.py` reads it (a real environment variable always wins over the
+   configuration file: `gateway/config.py` reads it (a real environment variable always wins over the
    file, and the file wins over the default in the code), and the user unit points at it too, so one
    file is the whole host-side configuration.
 5. Apply the core patch: see `hermes/patches/README.md`.
@@ -227,11 +227,11 @@ those scripts do, for reference and for a device you want to wire by hand.
 
 ```bash
 # the Gateway is alive and connected
-systemctl --user status hermes-voice-bridge
-journalctl --user -u hermes-voice-bridge -n 30
+systemctl --user status hermes-voice-satellite
+journalctl --user -u hermes-voice-satellite -n 30
 
 # what the voice surface actually resolves (it runs at parity with a normal conversation,
-# so the tool_search bridge is expected here)
+# so the tool_search Gateway is expected here)
 cd ~/.hermes/hermes-agent && ./venv/bin/python - <<'PY'
 import sys; sys.path.insert(0, '~/.hermes/hermes-agent')
 from hermes_cli.plugins import discover_plugins; discover_plugins(force=True)
@@ -341,7 +341,7 @@ it.
   block: **21 toolsets, 19 tools, about 8.4k tokens of tool schema**.
   It is no longer narrowed, and it no longer pins a voice-specific model route.
 - **One satellite only.** The Gateway dials one configured address and the session is a single session.
-- The host side's configuration is `bridge.env` (template `bridge.env.example`); the device side's is
+- The host side's configuration is `gateway.env` (template `bridge.env.example`); the device side's is
   `/etc/voice-satellite/satellite.env` (template `pi/systemd/satellite.env`). The repository itself
   carries no installation-specific value: `scripts/check-no-personal-data.sh` fails if one gets back in.
 - `voices/`, `logs/`, `audio/` and `state/` are intentionally not committed.
