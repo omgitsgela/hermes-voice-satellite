@@ -208,9 +208,9 @@ class Endpointer:
     """Streaming VAD endpointer. Feed it audio, get back one utterance at a time."""
 
     def __init__(self, *, rate: int = _DEFAULT_RATE, frame_ms: int = 20,
-                 vad_aggressiveness: int = 2, silence_ms: int = 700,
+                 vad_aggressiveness: int = 2, silence_ms: int = 700, soft_run_ms: int = 2000,
                  min_speech_ms: int = 250, max_utterance_seconds: float = 15.0,
-                 pre_roll_ms: int = 300, tail_ms: int = 200,
+                 pre_roll_ms: int = 600, tail_ms: int = 200,
                  no_speech_timeout_seconds: float = 8.0) -> None:
         if frame_ms not in _VALID_FRAME_MS:
             raise ValueError(f"frame_ms must be one of {_VALID_FRAME_MS}")
@@ -240,6 +240,10 @@ class Endpointer:
 
         self.gate = EnergyGate(**VOICE_ENERGY_GATE)
         self._silence_frames = max(1, silence_ms // frame_ms)
+        # A soft frame (detector says speech, gate says "too quiet for this room") holds the turn
+        # open, but a run of nothing-but-soft ends it: without that cap a loud room could keep the
+        # microphone open until max_utterance_seconds on noise alone.
+        self._soft_run_frames = max(1, soft_run_ms // frame_ms)
         self._min_speech_frames = max(1, min_speech_ms // frame_ms)
         self._max_frames = max(1, int(max_utterance_seconds * 1000 / frame_ms))
         self._tail_frames = max(0, tail_ms // frame_ms)
@@ -265,6 +269,8 @@ class Endpointer:
         # is deaf to the speaker, a low `vad_speech` means the spectral detector is. Keeping
         # them apart is the whole point - a single "speech" count cannot tell them apart.
         self._vad_speech_frames = 0
+        self._soft_frames = 0     # detector said speech, gate said "too quiet": kept, not accepted
+        self._soft_run = 0        # consecutive soft frames, for the cap
         self._gate_rejected_frames = 0
         self._accepted_frames = 0
         self._speech_levels: list[float] = []
@@ -337,6 +343,19 @@ class Endpointer:
         level = self.gate.observe(frame, looks_like_speech)
         gate_ok = self.gate.passes_rms(level)
         is_speech = looks_like_speech and gate_ok
+        # SOFT speech: the detector says someone is talking and the level gate says "not loud enough
+        # for this room". The gate exists to reject noise, but in a loud room its ceiling is clamped
+        # so it can never rise above a person -- and a quiet word then lands between the room and the
+        # ceiling. Measured 2026-10-30: room 489-638, gate clamped at 1000, a quiet "new" at ~700 was
+        # gated out while the loud "conversation" after it passed. Treating the gated frame as SILENCE
+        # ended the turn at the first word.
+        #
+        # So a soft frame is neither speech nor silence: it keeps the utterance alive and stays in
+        # the captured audio, but it does NOT count towards the minimum speech that makes a turn. A
+        # lone quiet word is still rejected on purpose -- the room floor and that word measured within
+        # 15 percent of each other, so letting soft-only audio trigger would have the device answering
+        # the fan. The quiet word survives when the person keeps talking, which is the case that broke.
+        soft_speech = looks_like_speech and not gate_ok
 
         # Attribute the refusal, not just the outcome.
         if looks_like_speech:
@@ -346,6 +365,8 @@ class Endpointer:
                 self._gate_rejected_frames += 1
         if is_speech:
             self._accepted_frames += 1
+        if soft_speech:
+            self._soft_frames += 1
 
         if not self._in_speech:
             if is_speech:
@@ -368,9 +389,19 @@ class Endpointer:
         if is_speech:
             self._speech_frames += 1
             self._trailing_silence = 0
+            self._soft_run = 0
+        elif soft_speech:
+            # Someone is talking, quietly. Hold the utterance open and keep the audio (it is already
+            # in `_frames` above); do NOT count it as accepted speech. A long run of soft frames with
+            # nothing accepted ends the turn below, so a loud room cannot hold the microphone open.
+            self._trailing_silence = 0
+            self._soft_run += 1
         else:
             self._trailing_silence += 1
+            self._soft_run = 0
 
+        if self._soft_run >= self._soft_run_frames:
+            return self._finish("soft_only")
         if self._trailing_silence >= self._silence_frames:
             return self._finish("silence")
         if len(self._frames) >= self._max_frames:
@@ -429,10 +460,11 @@ class Endpointer:
         loudest = levels[-1] if levels else 0.0
         _LOGGER.info(
             "  levels: room p20=%.0f p50=%.0f p90=%.0f max=%.0f (n=%d) | floor=%.0f thr=%.0f"
-            " | frames: vad_speech=%d gate_rejected=%d accepted=%d"
+            " | frames: vad_speech=%d gate_rejected=%d accepted=%d soft_kept=%d"
             " | vad_speech_rms med=%.0f max=%.0f",
             gate["p20"], gate["p50"], gate["p90"], gate["max"], gate["samples"],
             gate["floor"], gate["threshold"],
             self._vad_speech_frames, self._gate_rejected_frames, self._accepted_frames,
+            self._soft_frames,
             median, loudest,
         )
