@@ -265,6 +265,13 @@ if [ "$GUIDED" = 1 ]; then
         DETECTED_DEVICE_ID=""
         if [ -z "$DEVICE_ID" ] && [ -n "$SERIAL_PORTS" ] && command -v "$PY" >/dev/null 2>&1; then
             DETECTED_DEVICE_ID="$("$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" device-id 2>/dev/null | head -n1 | tr -d '\r' || true)"
+            if [ -z "$DETECTED_DEVICE_ID" ]; then
+                # No console: a new board, or one still carrying a vendor image. The ROM bootloader
+                # always answers, and the identity is derived from the same factory MAC the firmware
+                # uses, so a first-time board can be prepared by this installer at all.
+                echo "   (no satellite firmware answered; reading the board's factory identity instead)" >&2
+                DETECTED_DEVICE_ID="$("$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" rom-mac 2>/dev/null | head -n1 | tr -d '\r' || true)"
+            fi
             case "$DETECTED_DEVICE_ID" in
                 ''|*[!A-Za-z0-9._-]*) DETECTED_DEVICE_ID="" ;;  # never trust a stray line as an id
             esac
@@ -780,6 +787,10 @@ if [ "$DO_PROVISION" = 1 ]; then
     [ "$DRY_RUN" = 1 ] || [ -f "$MODEL_FILE" ] || die "model file not found: $MODEL_FILE"
     run "$PY" "$REPO_ROOT/scripts/provision-device-model.py" --port "$PORT" \
         --model "$MODEL_FILE" --name "$MODEL_NAME"
+    # The model blob on its own is not enough: the detector loads the model whose header name equals
+    # the `wake_word` selector, and it keeps the PREVIOUS selector until told otherwise. Provisioning
+    # a new model without it left the board discarding the new model and not waking at all.
+    run "$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" set-wake "$MODEL_NAME"
 
     # 3. The endpoint the board dials. The scheme is the transport: tls:// is the registry
     #    standard and tcp:// a trusted-LAN rollback. A passphrase is never an argument.
@@ -802,8 +813,14 @@ if [ "$DO_PROVISION" = 1 ]; then
         unset HERMES_DISPOSABLE_PSK
     fi
     run "$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" list-profiles
-    echo "   provisioned: TLS credential, wake model, endpoint, Wi-Fi. On reboot the satellite"
-    echo "   associates, dials $ENDPOINT and registers as $DEVICE_ID."
+    # A first-time board only evaluates its register-on-boot gate once, before the provisioning
+    # session's first command; a later save does not run it again. So the board is restarted here
+    # explicitly, rather than telling the person the device is restarting when nothing asked it to.
+    run "$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" restart
+    echo "   provisioned: TLS credential, wake model, endpoint, Wi-Fi."
+    echo "   The board has been restarted. It should associate, dial $ENDPOINT and register as"
+    echo "   $DEVICE_ID within about half a minute. If it does not, power-cycle it once and check"
+    echo "   the Wi-Fi network it joined."
 fi
 
 echo "install-esp32: done"

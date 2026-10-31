@@ -403,10 +403,10 @@ static int cfg_apply(void *user, const char *settings_json,
  * regression, not a refactor. */
 static void gateway_task_on_link_down(void *user) {
     /* WHY the link went down is the single most useful line in a field log: a reader error, a
-     * write error and a deliberate close all look identical from the bridge ("Connection reset
+     * write error and a deliberate close all look identical from the Satellite Gateway ("Connection reset
      * by peer"). This path is reached at the exact moment a voice reply should arrive, and until
      * now it has been silent. */
-    ESP_LOGW("gwlink", "on_link_down: the gateway link is going away (user=%p)", user);
+    ESP_LOGW("gwlink", "on_link_down: the Satellite Gateway link is going away (user=%p)", user);
     /* NOT led_have_connected = 0. This latch is "has this MCU boot ever reached the host", and a
      * disconnect is not a reboot. Clearing it here made every reconnect flash green, which turns
      * the once-per-boot handshake into a routine blink people learn to ignore. */

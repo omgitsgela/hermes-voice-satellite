@@ -126,7 +126,13 @@ static void profile_key(char *out, size_t capacity, int index, const char *field
 static int count_profiles(void *ctx) {
     if (!*(bool *)ctx) return -1;
     nvs_handle_t handle;
-    if (nvs_open("hermes_wifi", NVS_READONLY, &handle) != ESP_OK) return -1;
+    /* A namespace that does not exist yet means nothing has been saved, which is the state of every
+     * board before its first network. Treating it as an error made WIFI_PROFILE_SAVE fail on a fresh
+     * device, so the very first profile could never be stored. load_wifi() already reads it this
+     * way; this is the same rule for the count. */
+    esp_err_t opened = nvs_open("hermes_wifi", NVS_READONLY, &handle);
+    if (opened == ESP_ERR_NVS_NOT_FOUND) return 0;
+    if (opened != ESP_OK) return -1;
     uint8_t count = 0;
     esp_err_t result = nvs_get_u8(handle, "prof_n", &count);
     nvs_close(handle);
@@ -1054,6 +1060,16 @@ void provisioning_console_run(void) {
                 const char *value = strchr(line.data, ' ');
                 value = value ? value + 1 : "";
                 if (save_identity_field(&storage_ready, key, value) == 0)
+                    snprintf(response, sizeof(response), "OK SAVED STAGED");
+                else
+                    snprintf(response, sizeof(response), "ERR STORAGE");
+            } else if (!strncmp(line.data, "SET_WAKE ", 9)) {
+                /* The model SELECTOR: the detector loads the model whose header name equals this
+                 * string, so a new model provisioned without it is quietly discarded in favour of
+                 * the previous one and the satellite stops waking. Setting the model and the
+                 * selector in the same cable session is what keeps them agreeing. */
+                const char *value = line.data + 9;
+                if (save_identity_field(&storage_ready, "wake_word", value) == 0)
                     snprintf(response, sizeof(response), "OK SAVED STAGED");
                 else
                     snprintf(response, sizeof(response), "ERR STORAGE");
