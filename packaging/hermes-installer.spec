@@ -4,9 +4,16 @@
 Built from the checkout rather than installed wheels, so the packaged build contains exactly what a
 developer runs. The web interface is data, not code, and has to be listed or the window comes up empty.
 """
+import sys
 from pathlib import Path
 
 ROOT = Path(SPECPATH).resolve().parent          # the spec lives in packaging/
+
+# Stripping is what took the Linux bundle from 241 MB to 24 MB, because the bundled interpreter
+# carried its symbols. On Windows it is not supported and damaged the build: the executable could not
+# load its own python3xx.dll ('Invalid access to memory location'). So: strip where it is safe, not
+# everywhere.
+STRIP = sys.platform != "win32" 
 PACKAGES = ROOT / "packages"
 
 pathex = [
@@ -15,6 +22,7 @@ pathex = [
 ]
 
 # The interface file plus anything else the installer reads from its own package.
+# (See STRIP above for why stripping is platform-conditional.)
 datas = [
     (str(PACKAGES / "installer" / "src" / "hermes_installer" / "web"), "hermes_installer/web"),
 ]
@@ -53,7 +61,7 @@ exe = EXE(
     exclude_binaries=True,
     name="hermes-installer",
     debug=False,
-    strip=True,
+    strip=STRIP,
     upx=False,
     console=True,          # the console path is a feature, not a fallback
     disable_windowed_traceback=False,
@@ -63,7 +71,7 @@ coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
-    strip=True,
+    strip=STRIP,
     upx=False,
     name="hermes-installer",
 )
