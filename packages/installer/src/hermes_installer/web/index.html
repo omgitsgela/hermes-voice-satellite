@@ -238,15 +238,42 @@
   <section class="card hidden" id="stage3" aria-labelledby="stage3-title">
     <h2 id="stage3-title" tabindex="-1">Add your device</h2>
 
-    <h3 id="connect-title">Connect to your gateway</h3>
+    <h3 id="connect-title">Connect your device</h3>
+    <div id="transport-usb">
+      <label class="field" for="port-select">Device connection</label>
+      <div class="row">
+        <div style="flex:2 1 260px"><select id="port-select" aria-describedby="port-help"></select></div>
+        <div style="flex:0 0 auto"><button id="refresh-ports" class="ghost">Refresh</button></div>
+      </div>
+      <p class="hint" id="port-help" style="margin-top:8px">Use a USB data cable, not a charging-only
+        one. A charging cable can power the device without letting this computer find it.</p>
+      <div class="actions"><button id="find-device">Read the device's identity</button></div>
+      <div id="device-id-status" class="busy hidden" aria-live="polite"></div>
+    </div>
+
+    <div id="transport-card" class="hidden">
+      <label class="field" for="mount-select">Card location</label>
+      <div class="row">
+        <div style="flex:2 1 260px"><select id="mount-select" aria-describedby="mount-help"></select></div>
+        <div style="flex:0 0 auto"><button id="refresh-mounts" class="ghost">Refresh</button></div>
+      </div>
+      <label class="field" for="mount-manual">Or type the path</label>
+      <input id="mount-manual" type="text" placeholder="/media/you/rootfs or /Volumes/rootfs" />
+      <p class="hint" id="mount-help" style="margin-top:8px">Shut the device down before removing its
+        card, then put the card in this computer's reader.</p>
+    </div>
+
+    <h3 id="connect-title-gateway">Connect to your gateway</h3>
     <p class="hint">Type the gateway's address. We will show its identity code so you can check it
       against the one you saved.</p>
     <div class="row">
       <div><label class="field" for="gwhost">Gateway address</label>
         <input id="gwhost" type="text" placeholder="192.0.2.10" /></div>
-      <div><label class="field" for="gwport">Port</label>
-        <input id="gwport" type="text" value="10702" /></div>
+      <div><label class="field" for="gwport">Pairing port</label>
+        <input id="gwport" type="text" value="10704" aria-describedby="gwport-help" /></div>
     </div>
+    <p class="hint" id="gwport-help" style="margin-top:8px">Devices dial the registry port; this
+      pairing port is only used while setting one up. The gateway setup prints both.</p>
     <div class="actions"><button id="check-gateway">Check the gateway</button></div>
     <div id="gateway-check-status" class="busy hidden" aria-live="polite"></div>
 
@@ -284,29 +311,6 @@
 
     <div id="install-panel" class="hidden">
       <h3>Install the software</h3>
-      <div id="transport-usb">
-        <label class="field" for="port-select">Device connection</label>
-        <div class="row">
-          <div style="flex:2 1 260px"><select id="port-select"
-                 aria-describedby="port-help"></select></div>
-          <div style="flex:0 0 auto"><button id="refresh-ports" class="ghost">Refresh</button></div>
-        </div>
-        <p class="hint" id="port-help" style="margin-top:8px">Use a USB data cable, not a
-          charging-only one. A charging cable can power the device without letting this computer
-          find it.</p>
-      </div>
-
-      <div id="transport-card" class="hidden">
-        <label class="field" for="mount-select">Card location</label>
-        <div class="row">
-          <div style="flex:2 1 260px"><select id="mount-select"
-                 aria-describedby="mount-help"></select></div>
-          <div style="flex:0 0 auto"><button id="refresh-mounts" class="ghost">Refresh</button></div>
-        </div>
-        <p class="hint" id="mount-help" style="margin-top:8px">Shut the device down before removing
-          its card, then put the card in this computer's reader.</p>
-      </div>
-
       <label class="field" for="ssid" id="ssid-label">Wi-Fi network</label>
       <input id="ssid" type="text" placeholder="your network name" aria-describedby="ssid-help" />
       <p class="hint" id="ssid-help" style="margin-top:8px">Leave this blank to keep the device's
@@ -475,22 +479,25 @@ async function boot() {
   renderDevices();
 }
 
+function applyRoute() {
+  $("device-picker").classList.toggle("hidden", state.role !== "device");
+  const keep = visibleSteps();
+  for (const n of [1, 2, 3]) $("step-tab-" + n).classList.toggle("hidden", !keep.includes(n));
+  relabelProgress();
+  updateStartButton();
+}
+
 document.querySelectorAll('input[name="role"]').forEach((input) => {
   input.onchange = () => {
     state.role = input.value;
-    $("device-picker").classList.toggle("hidden", state.role !== "device");
-    updateStartButton();
-    // Keep the progress list honest for the route just chosen.
-    const keep = visibleSteps();
-    for (const n of [1, 2, 3]) $("step-tab-" + n).classList.toggle("hidden", !keep.includes(n));
-    relabelProgress();
+    applyRoute();
   };
 });
 
 $("start-continue").onclick = () => {
   if (state.role === "gateway") { show(2); return; }
+  prepareTransport();
   show(3);
-  if (state.device) prepareInstallPanel();
 };
 
 /* ------------------------------------------------------------------ stage 2 */
@@ -546,8 +553,10 @@ $("install-gateway").onclick = async () => {
     announce("The gateway install failed.");
     return;
   }
-  $("gateway-status").innerHTML =
-    `<div class="notice ok">The gateway is installed on this computer.</div>`;
+  $("gateway-status").innerHTML = result.dry_run
+    ? `<div class="notice warn">Practice run: the gateway was not installed. This is what would
+        have happened.</div>`
+    : `<div class="notice ok">The gateway is installed on this computer.</div>`;
   if (result.card) {
     $("gateway-card").classList.remove("hidden");
     $("card-address").textContent = result.card.dial_address;
@@ -575,17 +584,25 @@ $("copy-card").onclick = async () => {
 
 $("to-device-from-gateway").onclick = () => {
   if (state.card) {
-    // "tls://host:10702" becomes host and port, which is what the check asks for.
     const [host, port] = state.card.dial_address.replace(/^[a-z]+:\/\//, "").split(":");
     $("gwhost").value = host || "";
     if (port) $("gwport").value = port;
   }
-  show(3);
+  // Straight to stage 3 with no device selected would leave the install panel unbuildable, so this
+  // goes back to the device question and carries the rest of the state with it.
+  state.role = "device";
+  $("role-device").checked = true;
+  applyRoute();
+  show(1);
+  announce("Gateway ready. Choose the device you want to add.");
+  const first = $("device-field").querySelector("input");
+  if (first) first.focus();
 };
 
 /* ------------------------------------------------------------------ stage 3 */
 
 function resetIdentity() {
+  state.generation = (state.generation || 0) + 1;
   state.checkedCode = null;
   state.paired = null;
   $("identity").classList.add("hidden");
@@ -602,10 +619,16 @@ $("check-gateway").onclick = async () => {
   const host = $("gwhost").value.trim();
   const port = Number($("gwport").value || 10702);
   if (!host) { $("gwhost").focus(); return; }
+  const generation = state.generation || 0;
   $("gateway-check-status").classList.remove("hidden");
   $("gateway-check-status").textContent = "Checking the gateway...";
   announce("Checking the gateway.");
   const result = await api("/api/inspect", { host, port });
+  if ((state.generation || 0) !== generation) {
+    // The address changed while this request was in flight; its answer describes another gateway.
+    $("gateway-check-status").classList.add("hidden");
+    return;
+  }
   $("gateway-check-status").classList.add("hidden");
 
   if (!result.ok) {
@@ -664,6 +687,7 @@ $("do-pair").onclick = async () => {
 
   const result = await api("/api/pair", {
     host, port, words: $("words").value, device_name: $("devname").value.trim(),
+    device_id: state.deviceIdentity || null,
     expected_code: state.checkedCode, remember: $("remember").checked
   });
 
@@ -690,11 +714,17 @@ $("do-pair").onclick = async () => {
 
 /* ------------------------------------------------------------------ device install */
 
-function prepareInstallPanel() {
+function prepareTransport() {
   if (!state.device) return;
   const card = state.device.needs_card_reader;
   $("transport-usb").classList.toggle("hidden", card);
   $("transport-card").classList.toggle("hidden", !card);
+  if (card) loadMounts(); else loadPorts();
+}
+
+function prepareInstallPanel() {
+  if (!state.device) return;
+  const card = state.device.needs_card_reader;
   $("wifi-password-box").classList.toggle("hidden", card);
   $("ssid-label").textContent = card ? "Copy which saved Wi-Fi network" : "Wi-Fi network";
   $("install-device").textContent = card ? "Write card setup" : "Install device software";
@@ -709,8 +739,6 @@ function prepareInstallPanel() {
     <p style="margin:8px 0 0">After setup, ${remote} settings can be changed over the network and
       ${cable} need the ${card ? "card" : "cable"}. Run this installer again to change them.</p>`;
 
-  loadPorts();
-  loadMounts();
 }
 
 async function loadPorts() {
@@ -735,15 +763,42 @@ async function loadMounts() {
 $("refresh-ports").onclick = () => loadPorts();
 $("refresh-mounts").onclick = () => loadMounts();
 
+$("find-device").onclick = async () => {
+  const port = $("port-select").value;
+  if (!port) {
+    $("device-id-status").classList.remove("hidden");
+    $("device-id-status").textContent = "No device found. Connect it, then choose Refresh.";
+    return;
+  }
+  $("find-device").disabled = true;
+  $("device-id-status").classList.remove("hidden");
+  $("device-id-status").textContent = "Reading the device's identity...";
+  const result = await api("/api/device-id", { profile: state.device.id, port });
+  $("find-device").disabled = false;
+  if (!result.ok) {
+    $("device-id-status").textContent = result.error || "The device did not answer.";
+    return;
+  }
+  state.deviceIdentity = result.device_id;
+  $("device-id-status").innerHTML =
+    `This device calls itself <strong>${escapeHtml(result.device_id)}</strong>. Its certificate will
+     be issued for that identity, so the gateway can recognise it.`;
+  announce("Device identity read.");
+};
+
 function deviceFields(dryRun) {
   const card = state.device.needs_card_reader;
   const ssid = $("ssid").value.trim();
   return {
-    device_id: state.device.id,
+    device_profile: state.device.id,
+    device_id: state.deviceIdentity || null,
     device_name: $("devname").value.trim() || "satellite",
     dial_address: state.paired ? state.paired.dial_address : "",
     port: card ? null : ($("port-select").value || null),
-    card_mount: card ? ($("mount-select").value || null) : null,
+    // A detected mount is a convenience; a typed path is the fallback for anything unusual.
+    card_mount: card
+      ? (($("mount-manual").value || "").trim() || ($("mount-select").value || null))
+      : null,
     wifi_ssid: ssid || null,
     wifi_password: (!card && ssid) ? ($("wifi-password").value || null) : null,
     certs_dir: state.paired ? state.paired.certs_dir : null,
@@ -788,7 +843,13 @@ $("install-device").onclick = async () => {
 
   if (!result.ok) { button.disabled = false; renderDeviceProblem(result); return; }
 
-  $("install-result").innerHTML = `
+  const preview = Boolean(result.dry_run);
+  $("install-result").innerHTML = preview
+    ? `<div class="notice warn"><strong>Practice run: nothing was written.</strong>
+        <p style="margin:8px 0 0">This is what the install would run.</p></div>
+       <details><summary>What would run</summary><pre>${
+         (result.commands || []).map((c) => c.argv.join(" ")).join("\n")}</pre></details>`
+    : `
     <div class="notice ok"><strong>${card ? "Card setup written." : "Software installed."}</strong>
       <p style="margin:8px 0 0">${card
         ? "Eject the card, put it back in the device, and switch the device on."
@@ -799,14 +860,30 @@ $("install-device").onclick = async () => {
     <div class="actions">
       <button id="add-another" class="ghost">Add another device</button>
     </div>`;
-  $("add-another").onclick = () => {
-    state.paired = null; state.checkedCode = null; state.device = null;
-    $("install-panel").classList.add("hidden");
-    $("pair-result").innerHTML = "";
-    $("install-result").innerHTML = "";
-    show(1);
-  };
-  announce("Device software installed. The device will check in when it starts.");
+  const another = $("add-another");
+  if (another) {
+    another.onclick = () => {
+      state.paired = null;
+      state.checkedCode = null;
+      state.device = null;
+      state.deviceIdentity = null;
+      document.querySelectorAll('input[name="device"]').forEach((radio) => {
+        radio.checked = false;
+      });
+      $("checklist").classList.add("hidden");
+      $("install-panel").classList.add("hidden");
+      $("identity").classList.add("hidden");
+      $("pair-panel").classList.add("hidden");
+      $("pair-result").innerHTML = "";
+      $("install-result").innerHTML = "";
+      $("device-review").classList.add("hidden");
+      applyRoute();
+      show(1);
+      announce("Choose the next device.");
+    };
+  }
+  announce(preview ? "Practice run complete. Nothing was written."
+                   : "Device software installed. The device will check in when it starts.");
 };
 
 function renderDeviceProblem(result) {

@@ -53,6 +53,10 @@ class PairedCredentials:
     key_pem: str
     server_pin: str
     dial_address: str
+    #: The gateway's public certificate. The provisioning step recomputes the pin from it.
+    server_cert_pem: str = ""
+    #: The identity the certificate was issued for, which is the board's own id, not its pet name.
+    device_id: str = ""
 
     def is_complete(self) -> bool:
         return all(
@@ -187,6 +191,8 @@ def pair(
         key_pem=str(data.get("key_pem", "")),
         server_pin=str(data.get("server_pin", "")),
         dial_address=str(data.get("dial_address", f"tls://{ref.host}:{ref.port}")),
+        server_cert_pem=str(data.get("server_cert_pem", "")),
+        device_id=device_name,
     )
     if not credentials.is_complete():
         raise PairingError(

@@ -131,14 +131,25 @@ class Handler(BaseHTTPRequestHandler):
                         int(body.get("port", 10702)),
                         str(body.get("words", "")),
                         str(body.get("device_name", "")),
+                        device_id=str(body.get("device_id") or "") or None,
                         expected_code=str(body.get("expected_code", "")),
                         remember=bool(body.get("remember", False)),
                     )
                 )
                 return
             if self.path == "/api/flash":
-                device_id = str(body.pop("device_id", ""))
-                self._json(self.session.flash(device_id, **body))
+                # `device_profile` selects the driver; `device_id` is the board's own identity.
+                profile_id = str(body.pop("device_profile", "") or body.pop("device_id", ""))
+                if body.get("stage_only"):
+                    body.pop("stage_only", None)
+                    self._json(self.session.flash(profile_id, **body))
+                else:
+                    self._json(self.session.install_device(profile_id, **body))
+                return
+            if self.path == "/api/device-id":
+                self._json(self.session.device_identity(
+                    str(body.get("profile", "")), port=body.get("port")
+                ))
                 return
         except (TypeError, ValueError) as exc:
             self._json({"ok": False, "error": str(exc)}, 400)
@@ -162,4 +173,6 @@ def serve(session: Session, *, port: int = 0, open_browser: bool = True) -> int:
         print("\n  Closed.")
     finally:
         server.server_close()
+        # Paired credentials live in a temporary directory; the session that owns them ends here.
+        session.close()
     return 0

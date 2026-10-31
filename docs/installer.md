@@ -139,6 +139,20 @@ POST /pair   (TLS)
 Run it with `python -m hermes_gateway.pairing_server --state <state> --dial tls://host:10702`, or
 `--check` to verify the words and certificate material without starting anything.
 
+It listens on **port 10704 by default, not the registry port**. Devices dial the registry on 10702;
+only a workbench pairing a device talks to this listener, and the two must not contend for the same
+socket. The gateway setup prints both numbers, and the installer asks for the pairing port.
+
+The response includes the gateway's **public certificate** as well as its pin, because the
+provisioning step recomputes the pin from the certificate rather than trusting a number. A workbench
+writes the four files the provisioner reads, named for the device's own identity:
+
+```
+client-ca.crt   <device>.crt   <device>.key   server.crt
+```
+
+That directory is created `0700`, the files `0600`, and it is removed when the session ends.
+
 Three rules are load-bearing, not decoration:
 
 - **The words are compared in constant time**, and they are never logged, echoed, or repeated in an
@@ -178,9 +192,14 @@ them as if they were:
 ## Status of this first draft
 
 Working: the profile contract and registry, the identity code, the pairing client with the
-confirmation gate, the credential store with the remember checkbox, the drivers for both devices
-(against their real scripts), the console flow, the web UI with its token-gated API, and 79 offline
-tests.
+confirmation gate, the pairing endpoint on the gateway, the credential store with the remember
+checkbox, the drivers for both devices (against their real scripts), device installation as two
+stages (flash, then stage Wi-Fi and credentials), the console flow, the web UI with its token-gated
+API, and 112 offline tests.
+
+A device setup is two stages because flashing is not staging: the flash writes the software, and the
+provision step puts Wi-Fi, the dial address, the credentials and the model where the device looks for
+them. Success means both.
 
 A session started in preview mode is a hard ceiling: no client request can turn it into a real run,
 and the gateway install is previewed before it is executed rather than after.

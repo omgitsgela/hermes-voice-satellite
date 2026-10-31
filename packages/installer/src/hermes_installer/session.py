@@ -111,18 +111,29 @@ class Session:
         import string
         import sys
 
+        from itertools import islice
+
         candidates: list[Path] = []
         if sys.platform == "win32":
             candidates = [Path(f"{letter}:\\") for letter in string.ascii_uppercase]
         else:
             home = Path.home()
-            for base in (Path("/run/media") / home.name, Path("/media") / home.name,
-                         Path("/media"), Path("/mnt")):
-                if base.is_dir():
-                    try:
-                        candidates += [child for child in base.iterdir() if child.is_dir()]
-                    except OSError:
-                        continue
+            roots = [Path("/run/media") / home.name, Path("/media") / home.name,
+                     Path("/media"), Path("/mnt")]
+            if sys.platform == "darwin":
+                roots.insert(0, Path("/Volumes"))
+            for base in roots:
+                if not base.is_dir():
+                    continue
+                try:
+                    # Bounded on the way in: a directory can hold thousands of entries, and each
+                    # probe stats a filesystem that may be a slow network mount.
+                    for child in islice((c for c in base.iterdir() if c.is_dir()), 40):
+                        candidates.append(child)
+                except OSError:
+                    continue
+                if len(candidates) >= 80:
+                    break
         found = []
         for candidate in candidates[:40]:
             try:
@@ -206,19 +217,30 @@ class Session:
         words: str,
         device_name: str,
         *,
+        device_id: str | None = None,
         expected_code: str | None = None,
         remember: bool = False,
     ) -> dict:
+        # `device_name` is the pet name a person chose; `device_id` is what the gateway issues the
+        # certificate for, and what provisioning later resolves files by. They are not the same
+        # thing, and conflating them produces a device the registry will not recognise.
+        enroll_as = device_id or device_name
         if not expected_code:
             # Pairing is two-phase on purpose: inspect_gateway() shows the code, the person confirms
             # it, and only then does this function run with the code they confirmed.
             return {"ok": False,
                     "error": "confirm the gateway's identity code before pairing"}
+        if self.dry_run:
+            # A practice run must not ask the gateway to issue a certificate, and must not touch the
+            # credential store. Pairing is not a preview-able operation: it changes the gateway.
+            return {"ok": True, "practice": True, "identity_code": expected_code,
+                    "dial_address": f"tls://{host}:{port}", "remembered_in": None,
+                    "certs_dir": None, "storage_error": None}
         try:
             credentials = pair_with_gateway(
                 GatewayRef(host, port),
                 words,
-                device_name,
+                enroll_as,
                 confirm=lambda code: False,  # unreachable: expected_code is set
                 expected_code=expected_code,
             )
@@ -262,32 +284,104 @@ class Session:
 
         directory = Path(tempfile.mkdtemp(prefix="hermes-pair-"))
         directory.chmod(0o700)
-        for name, contents in (
-            ("ca.crt", credentials.ca_pem),
-            ("client.crt", credentials.cert_pem),
-            ("client.key", credentials.key_pem),
-        ):
+        # The names are not a style choice: provision-device-tls.py reads exactly these four, and
+        # resolves the certificate and key by the device's own identity.
+        device = credentials.device_id or credentials.device_id
+        files = (
+            ("client-ca.crt", credentials.ca_pem),
+            (f"{device}.crt", credentials.cert_pem),
+            (f"{device}.key", credentials.key_pem),
+            ("server.crt", credentials.server_cert_pem),
+        )
+        for name, contents in files:
+            if not contents:
+                raise OSError(f"pairing did not return {name.replace('.crt', ' material')}")
             target = directory / name
             target.write_text(contents)
             target.chmod(0o600)
         self._certs_tmp = directory
         return str(directory)
 
+    def close(self) -> None:
+        """Remove the temporary credentials. A private key should not outlive the session."""
+        import shutil
+
+        if self._certs_tmp is not None:
+            shutil.rmtree(self._certs_tmp, ignore_errors=True)
+            self._certs_tmp = None
+        self.certs_dir = None
+
     # -- devices ------------------------------------------------------------------------------
 
-    def flash(self, device_id: str, **fields: Any) -> dict:
+    def device_identity(self, profile_id: str, *, port: str | None = None) -> dict:
+        """Ask the device what it calls itself. Not the friendly name: the identity it reports."""
+        import re
+
+        result = self.flash(profile_id, step="verify", port=port,
+                            dial_address="", device_name="identity", dry_run=self.dry_run)
+        if not result.get("ok"):
+            return {"ok": False, "error": result.get("error") or result.get("summary")}
+        output = str(result.get("output") or "")
+        found = re.findall(r"\b(?:esp32|pi)-[0-9a-zA-Z]{4,}\b", output)
+        if not found:
+            return {"ok": False,
+                    "error": "the device did not report an identity; connect it and try again"}
+        return {"ok": True, "device_id": found[0], "raw": output}
+
+    def install_device(self, profile_id: str, **fields: Any) -> dict:
+        """Flash the device, then stage what must be staged. Success means every stage succeeded."""
         try:
-            profile = self.registry.get(device_id)
-            driver = self.registry.driver(device_id)
+            self.registry.get(profile_id)
         except RegistryError as exc:
             return {"ok": False, "error": str(exc)}
+
+        first = self.flash(profile_id, **fields)
+        if not first.get("ok"):
+            return first
+
+        # A card's Wi-Fi is a saved network copied on; a cable device stages Wi-Fi, the dial address,
+        # credentials and the model in its own provision step.
+        wants_provision = bool(
+            fields.get("wifi_ssid") or fields.get("certs_dir") or fields.get("device_id")
+        )
+        if not wants_provision:
+            return first
+
+        second = self.flash(profile_id, **{**fields, "step": "provision"})
+        stages = [{"stage": "flash", **first}, {"stage": "provision", **second}]
+        return {
+            "ok": bool(first.get("ok")) and bool(second.get("ok")),
+            "summary": (
+                second.get("summary") if not second.get("ok")
+                else f"{first.get('summary', '')}; {second.get('summary', '')}".strip("; ")
+            ),
+            "dry_run": first.get("dry_run", False) or second.get("dry_run", False),
+            "commands": first.get("commands", []) + second.get("commands", []),
+            "stages": stages,
+            "output": "\n".join(filter(None, [first.get("output", ""), second.get("output", "")])),
+        }
+
+    def flash(self, profile_id: str, **fields: Any) -> dict:
+        try:
+            profile = self.registry.get(profile_id)
+            driver = self.registry.driver(profile_id)
+        except RegistryError as exc:
+            return {"ok": False, "error": str(exc)}
+
+        # Same ceiling as the gateway path: preview mode cannot be overridden by a client, and it
+        # decides whether a secret file is needed at all.
+        preview = self.dry_run or bool(fields.get("dry_run"))
+        name = str(fields.get("step", "flash"))
+        step: Callable[..., Any] = getattr(driver, name, None)  # type: ignore[assignment]
+        if step is None:
+            return {"ok": False, "error": f"driver has no step called {name!r}"}
 
         # A Wi-Fi passphrase typed into the form is written to a file only this user can read, handed
         # to the script by path, and deleted immediately afterwards. It is never an argument, never
         # in a log line, and never in the returned result.
         typed_password = fields.get("wifi_password")
         secret_path: str | None = None
-        if typed_password and not bool(fields.get("dry_run")):
+        if typed_password and not preview:
             handle, secret_path = tempfile.mkstemp(prefix="hermes-wifi-")
             with os.fdopen(handle, "w") as stream:
                 stream.write(str(typed_password))
@@ -310,13 +404,7 @@ class Session:
             wake_model=fields.get("wake_model"),
             extra=dict(fields.get("extra") or {}),
         )
-        # Same ceiling as the gateway path: preview mode cannot be overridden by a client.
-        runner = Runner(dry_run=self.dry_run or bool(fields.get("dry_run")),
-                        repo_root=self.repo_root)
-        name = fields.get("step", "flash")
-        step: Callable[..., Any] = getattr(driver, str(name), None)  # type: ignore[assignment]
-        if step is None:
-            return {"ok": False, "error": f"driver has no step called {name!r}"}
+        runner = Runner(dry_run=preview, repo_root=self.repo_root)
         try:
             result = step(request, runner)
         except UnsupportedOnThisPlatform as exc:

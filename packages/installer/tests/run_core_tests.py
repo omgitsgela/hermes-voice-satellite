@@ -115,6 +115,17 @@ class ProfileContract(unittest.TestCase):
             self.profile(flashing="telepathy")
         self.assertIn("flashing", str(caught.exception))
 
+    def test_a_quoted_false_is_not_a_boolean(self):
+        # "false" is a truthy string, so casting it before validation advertised a cable-only
+        # setting as remotely changeable.
+        with self.assertRaises(ValueError) as caught:
+            profile_from_dict({
+                "id": "x", "display_name": "X", "vendor": "V", "flashing": "usb_serial",
+                "wake_formats": ["microwakeword_tflite"], "voice": "none",
+                "settings": {"wifi": {"apply": "cable", "remote": "false"}},
+            })
+        self.assertIn("remote", str(caught.exception))
+
     def test_unknown_wake_format_is_refused(self):
         with self.assertRaises(ValueError):
             self.profile(wake_formats=("telepathy",))

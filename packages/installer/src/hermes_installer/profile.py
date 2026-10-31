@@ -118,7 +118,7 @@ def setting_from_dict(key: str, raw: Mapping[str, Any]) -> Setting:
         return Setting(
             key=key,
             apply=raw["apply"],
-            remote=bool(raw["remote"]),
+            remote=raw["remote"],
             help=str(raw.get("help", "")),
         )
     except KeyError as exc:

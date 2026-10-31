@@ -104,6 +104,83 @@ class CorrectWords(Base):
         self.assertEqual(self.enroller.calls, ["kitchen_2"])
 
 
+class ModuleStartup(unittest.TestCase):
+    """The documented command must work, not just the import.
+
+    The first version raised NameError on startup because the `__main__` guard sat above the
+    function it calls, which no import-based test would ever notice.
+    """
+
+    def test_python_dash_m_reaches_the_check(self):
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            tls = state / "registry-tls"
+            tls.mkdir()
+            (state / "enroll-token.txt").write_text(WORDS)
+            (tls / "client-ca.crt").write_text("CA")
+            (tls / "server.crt").write_bytes(SERVER_CERT_PEM)
+            (tls / "server.key").write_text("KEY")
+            env = {"PYTHONPATH": str(ROOT / "packages" / "gateway" / "src"), "PATH": "/usr/bin:/bin"}
+            finished = subprocess.run(
+                [__import__("sys").executable, "-m", "hermes_gateway.pairing_server",
+                 "--state", str(state), "--dial", "tls://example:10702", "--check"],
+                capture_output=True, text=True, env=env, timeout=60,
+            )
+        self.assertEqual(finished.returncode, 0, finished.stderr)
+        self.assertIn("check only", finished.stdout)
+
+
+class Hardening(Base):
+    def test_windows_reserved_names_are_refused_as_device_ids(self):
+        for reserved in ("con", "aux", "nul", "com1", "lpt9"):
+            with self.assertRaises(PairingRefused):
+                self.service.pair(WORDS, reserved, "s")
+        self.assertEqual(self.enroller.calls, [])
+
+    def test_a_trailing_newline_is_not_a_device_id(self):
+        with self.assertRaises(PairingRefused):
+            self.service.pair(WORDS, "kitchen\n", "s")
+
+    def test_the_source_map_is_bounded(self):
+        for index in range(self.service.MAX_TRACKED_SOURCES + 50):
+            self.clock.advance(1)
+            with self.assertRaises(PairingRefused):
+                self.service.pair("wrong", "kitchen-1", f"10.0.0.{index}")
+        self.assertLessEqual(len(self.service._sources), self.service.MAX_TRACKED_SOURCES + 1)
+
+    def test_enrolment_is_serialised(self):
+        import threading
+        import time
+
+        peak = {"now": 0, "max": 0}
+        guard = threading.Lock()
+        original = self.enroller.enroll
+
+        def slow_enroll(device_id):
+            with guard:
+                peak["now"] += 1
+                peak["max"] = max(peak["max"], peak["now"])
+            try:
+                time.sleep(0.05)
+                return original(device_id)
+            finally:
+                with guard:
+                    peak["now"] -= 1
+
+        self.enroller.enroll = slow_enroll
+        threads = [
+            threading.Thread(target=lambda i=i: self.service.pair(WORDS, f"device-{i}", f"src{i}"))
+            for i in range(4)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(peak["max"], 1, "two enrolments ran at the same time")
+
+
 class Refusals(Base):
     def test_wrong_words_are_refused_and_nothing_is_enrolled(self):
         with self.assertRaises(PairingRefused) as caught:

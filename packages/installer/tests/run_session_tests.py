@@ -132,6 +132,66 @@ class SessionBehaviour(unittest.TestCase):
             hermes_gateway.run_commands = original
         self.assertIs(seen.get("dry_run"), True, "a preview session asked to execute for real")
 
+    def test_a_practice_session_does_not_enrol_or_store_anything(self):
+        import hermes_installer.pairing as pairing_module
+
+        called = {"pair": 0}
+        original = pairing_module.pair
+
+        def spy(*args, **kwargs):
+            called["pair"] += 1
+            return original(*args, **kwargs)
+
+        pairing_module.pair = spy
+        try:
+            result = build_session(dry_run=True).pair(
+                "192.0.2.10", 10704, "a b c d e", "kitchen", expected_code="ABCD-EFGH",
+                remember=True,
+            )
+        finally:
+            pairing_module.pair = original
+        self.assertTrue(result["ok"])
+        self.assertTrue(result.get("practice"))
+        self.assertEqual(called["pair"], 0, "a practice session asked the gateway to enrol")
+        self.assertIsNone(build_session(dry_run=True).store.recall("192.0.2.10", 10704))
+
+    def test_installing_a_device_runs_the_staging_stage_too(self):
+        # Flashing alone leaves Wi-Fi and credentials unstaged, which is why the review flagged a
+        # device that "installs" and then cannot connect.
+        result = self.session.install_device(
+            "esp32-xvf3800", device_name="kitchen", device_id="esp32-0011223344",
+            dial_address="tls://192.0.2.10:10702", port="/dev/ttyACM0", wifi_ssid="home",
+            certs_dir="/tmp/certs", dry_run=True,
+        )
+        self.assertTrue(result["ok"])
+        stages = [s["stage"] for s in result.get("stages", [])]
+        self.assertEqual(stages, ["flash", "provision"])
+        actions = " ".join(" ".join(c["argv"]) for c in result["commands"])
+        self.assertIn("--flash", actions)
+        self.assertIn("--provision", actions)
+
+    def test_pairing_materialises_the_files_the_provisioner_reads(self):
+        import tempfile
+        from pathlib import Path
+
+        from hermes_installer.pairing import PairedCredentials
+
+        with tempfile.TemporaryDirectory() as tmp:
+            session = build_session(dry_run=False)
+            session.repo_root = Path(tmp)
+            credentials = PairedCredentials(
+                gateway=None, identity_code="ABCD-EFGH", ca_pem="CA", cert_pem="CERT",
+                key_pem="KEY", server_pin="PIN", dial_address="tls://h:10702",
+                server_cert_pem="SERVER", device_id="esp32-0011223344",
+            )
+            directory = Path(session._materialise_credentials(credentials))
+            names = sorted(p.name for p in directory.iterdir())
+            self.assertEqual(names, sorted([
+                "client-ca.crt", "esp32-0011223344.crt", "esp32-0011223344.key", "server.crt",
+            ]))
+            session.close()
+            self.assertFalse(directory.exists(), "temporary credentials outlived the session")
+
     def test_pairing_without_a_confirmed_code_is_refused(self):
         result = self.session.pair("192.0.2.10", 10702, "a b c d e", "kitchen")
         self.assertFalse(result["ok"])

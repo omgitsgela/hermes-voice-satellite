@@ -38,7 +38,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable, Protocol
 
-DEVICE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+DEVICE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
+
+#: Names Windows refuses to create, whatever the extension: CON, PRN, AUX, NUL, COM1-9, LPT1-9.
+RESERVED_NAMES = {"con", "prn", "aux", "nul"} | {
+    f"{stem}{digit}" for stem in ("com", "lpt") for digit in range(1, 10)
+}
+
+
+def valid_device_id(value: str) -> bool:
+    """A device id becomes a filename, so it is validated where it is used, not where it arrives."""
+    return bool(DEVICE_ID.fullmatch(value)) and value not in RESERVED_NAMES
 
 MAX_BODY_BYTES = 4096
 
@@ -119,7 +129,8 @@ class PairingService:
             config.enroll_script or Path("scripts") / "issue-registry-tls.py", config.state_dir
         )
         self._sources: dict[str, _SourceState] = {}
-        self._lock = threading.Lock()
+        # Re-entrant because pair() holds it across the whole attempt, including the rate helpers.
+        self._lock = threading.RLock()
 
     # -- the words ----------------------------------------------------------------------------
 
@@ -143,8 +154,17 @@ class PairingService:
 
     # -- rate limiting ------------------------------------------------------------------------
 
+    #: Beyond this many tracked sources, idle entries are dropped. A public endpoint sees many
+    #: addresses and must not turn that into unbounded memory.
+    MAX_TRACKED_SOURCES = 4096
+
     def _source_state(self, source: str) -> _SourceState:
         with self._lock:
+            if source not in self._sources and len(self._sources) >= self.MAX_TRACKED_SOURCES:
+                now = self.clock()
+                for key, state in list(self._sources.items()):
+                    if state.locked_until <= now and now - state.last_attempt > self.config.lockout_seconds:
+                        del self._sources[key]
             return self._sources.setdefault(source, _SourceState())
 
     def _check_rate(self, source: str) -> _SourceState:
@@ -175,19 +195,26 @@ class PairingService:
         """Return the payload a workbench needs, or raise PairingRefused with a safe message."""
         if not isinstance(words, str) or not words.strip():
             raise PairingRefused("the pairing words are missing")
-        if not isinstance(device_id, str) or not DEVICE_ID.match(device_id):
+        if not isinstance(device_id, str) or not valid_device_id(device_id):
             # The id becomes a filename, so it is checked before it can reach the filesystem.
             raise PairingRefused(
                 "a device name is required: lowercase letters, digits, hyphen or underscore"
             )
 
-        self._check_rate(source)
-        if not self._words_match(words):
-            self._record_failure(source)
-            # Deliberately identical to a missing token: nothing tells a guesser how close they are.
-            raise PairingRefused("the pairing words are not correct")
-
-        cert, key = self.enroller.enroll(device_id)
+        # One lock around the whole attempt: the rate decision and the record must not interleave
+        # with another attempt, and two enrolments must not write the shared credential registry at
+        # the same time (the second would silently drop the first device).
+        with self._lock:
+            self._check_rate(source)
+            if not self._words_match(words):
+                self._record_failure(source)
+                # Deliberately identical to a missing token: nothing tells a guesser how close
+                # they are.
+                raise PairingRefused("the pairing words are not correct")
+            cert, key = self.enroller.enroll(device_id)
+            # Recorded inside the same lock: a success must clear the counter before the next
+            # attempt is judged.
+            self._record_success(source)
         tls = self.config.tls_dir()
         payload = {
             "ok": True,
@@ -195,9 +222,11 @@ class PairingService:
             "cert_pem": Path(cert).read_text(),
             "key_pem": Path(key).read_text(),
             "server_pin": self.server_pin_hex(),
+            # Public material, and required by the provisioning step: it recomputes the pin from the
+            # certificate rather than trusting a number.
+            "server_cert_pem": (tls / "server.crt").read_text(),
             "dial_address": self.config.dial_address,
         }
-        self._record_success(source)
         return payload
 
     def server_pin_hex(self) -> str:
@@ -288,7 +317,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dial", required=True,
                         help="the address devices dial, e.g. tls://gateway.example:10702")
     parser.add_argument("--bind", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=10702)
+    parser.add_argument("--port", type=int, default=10704,
+                        help="the pairing port; devices keep dialling the registry port instead")
     parser.add_argument("--certfile", default=None, help="defaults to <state>/registry-tls/server.crt")
     parser.add_argument("--keyfile", default=None, help="defaults to <state>/registry-tls/server.key")
     parser.add_argument("--check", action="store_true",
@@ -318,6 +348,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  pairing words: present ({len(config.token_path().read_text().split())} words)")
     print(f"  device pin   : {service.server_pin_hex()}")
     print(f"  devices dial : {config.dial_address}")
+    print(f"  pairing at   : {args.bind}:{args.port} (this is the port the installer asks for)")
     if args.check:
         print("  check only: nothing started")
         return 0
@@ -325,15 +356,13 @@ def main(argv: list[str] | None = None) -> int:
                          certfile=certfile, keyfile=keyfile)
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
-
-
 def serve_pairing(
     service: PairingService,
     *,
     bind: str = "0.0.0.0",
-    port: int = 10702,
+    #: A separate port from the device registry, which already listens on its own. Devices dial the
+    #: registry; only a workbench pairing a device talks here, and the two must not contend.
+    port: int = 10704,
     certfile: Path,
     keyfile: Path,
 ) -> int:
@@ -350,3 +379,7 @@ def serve_pairing(
     finally:
         server.server_close()
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
