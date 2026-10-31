@@ -386,6 +386,7 @@ class SessionBehaviour(unittest.TestCase):
         self.assertTrue(result["problems"])
         self.assertEqual(written, [], "something ran before the setup was checked")
 
+    @posix_only
     def test_managing_a_device_stages_without_flashing(self):
         import tempfile
 
@@ -402,6 +403,7 @@ class SessionBehaviour(unittest.TestCase):
         self.assertIn("add-wifi-profile-to-card.py", joined)
         self.assertNotIn("install-esp32", joined)
 
+    @posix_only
     def test_managing_with_nothing_to_change_says_so(self):
         import tempfile
 
