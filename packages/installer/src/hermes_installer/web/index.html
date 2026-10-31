@@ -997,10 +997,12 @@ function deviceFields(dryRun) {
     certs_dir: state.paired ? state.paired.certs_dir : null,
     // A file the person supplies wins; otherwise the chosen entry's phrase, without its badge.
     wake_model: ($("wake-file").value || "").trim() || null,
+    // The model's identifier, never its display text: the catalogue shows "hey hermes" and the
+    // device needs "hey_hermes". Sending the phrase meant the installer did not recognise its own
+    // default and provisioned a different model than the one on screen.
     wake_word: (($("wake-file").value || "").trim()
       ? (($("wake-file").value || "").trim().split(/[\\/]/).pop() || "custom").replace(/\.[^.]+$/, "")
-      : (($("wake-select").selectedOptions[0] || {}).textContent || state.device.wake_default)
-          .replace(" (recommended)", "").trim()),
+      : ($("wake-select").value || state.device.wake_default)),
     voice: ($("voice-select").value || "en_US-hfc_female-medium"),
     dry_run: dryRun
   };

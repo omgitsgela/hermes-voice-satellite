@@ -12,6 +12,7 @@ script contracts wrong in ways that only reading the scripts could catch:
 """
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import unittest
@@ -196,6 +197,58 @@ class CardFlow(unittest.TestCase):
         result = pi.DRIVER.flash(self.request(card_mount=None), dry())
         self.assertFalse(result.ok)
         self.assertIn("SD card", result.summary)
+
+    @posix_only
+    def test_the_card_is_pointed_at_paths_that_exist_once_it_is_booted(self):
+        """The mount prefix is the workbench's view, not the Pi's.
+
+        Writing `<mount>/home/<user>/certs/...` into the environment produced a satellite that
+        booted, found no certificate, and could not authenticate -- while the files were on the card
+        exactly where they belonged.
+        """
+        certs = Path(str(self.mount)) / "issued"
+        certs.mkdir(parents=True, exist_ok=True)
+        identity = "pi-0011223344"
+        (certs / "client-ca.crt").write_text("ca")
+        (certs / f"{identity}.crt").write_text("cert")
+        (certs / f"{identity}.key").write_text("key")
+
+        runner = Runner(dry_run=False, executor=noop_executor, repo_root=ROOT)
+        result = pi.DRIVER.provision(
+            self.request(certs_dir=str(certs), device_id=identity), runner
+        )
+        self.assertTrue(result.ok, result.summary)
+
+        env = (Path(str(self.mount)) / "home" / "satellite" / "gateway-link.env").read_text()
+        device_home = os.path.join(os.sep, "home", "satellite")
+        self.assertIn(f"VOICE_GATEWAY_TLS_CA={device_home}/certs/ca.crt", env)
+        self.assertIn(f"VOICE_GATEWAY_TLS_CERT={device_home}/certs/cert.pem", env)
+        self.assertIn(f"VOICE_GATEWAY_TLS_KEY={device_home}/certs/key.pem", env)
+        self.assertNotIn(str(self.mount), env,
+                         "the card kept a workbench mount path it will never have again")
+
+    @posix_only
+    def test_a_chosen_wake_word_is_copied_onto_the_card(self):
+        """A wake word is a model file and a selector; staging only the selector leaves it deaf."""
+        model = self.mount / "chosen.onnx"
+        model.write_bytes(b"onnx-model-bytes")
+        runner = Runner(dry_run=False, executor=noop_executor, repo_root=ROOT)
+        result = pi.DRIVER.provision(
+            self.request(wake_word="kitchen_bell", wake_model=str(model)), runner
+        )
+        self.assertTrue(result.ok, result.summary)
+        staged = Path(str(self.mount)) / "home" / "satellite" / "wake-models" / "chosen.onnx"
+        self.assertEqual(staged.read_bytes(), b"onnx-model-bytes")
+        env = (Path(str(self.mount)) / "etc" / "voice-satellite" / "satellite.env").read_text()
+        self.assertIn("VS_WAKE_WORD=kitchen_bell", env)
+        self.assertIn(f"VS_WAKE_MODELS={os.path.join(os.sep, 'home', 'satellite')}/wake-models", env)
+
+    @posix_only
+    def test_a_wake_word_without_its_model_is_refused_not_faked(self):
+        runner = Runner(dry_run=False, executor=noop_executor, repo_root=ROOT)
+        result = pi.DRIVER.provision(self.request(wake_word="kitchen_bell"), runner)
+        self.assertFalse(result.ok)
+        self.assertIn("no wake word model called kitchen_bell", result.summary)
 
     @posix_only
     def test_wifi_provisioning_copies_a_saved_network_and_needs_elevation(self):

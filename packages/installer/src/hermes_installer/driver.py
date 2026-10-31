@@ -7,6 +7,7 @@ install testable on a machine with no device attached.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -135,6 +136,26 @@ class Runner:
         except OSError as exc:
             return StepResult(ok=False, summary=f"could not write {path}: {exc}")
         return StepResult(ok=True, summary=description, output=str(path))
+
+    def copy_file(
+        self, source: Path, destination: Path, *, mode: int = 0o644, description: str = ""
+    ) -> StepResult:
+        """Copy a file the install needs (a wake-word model), respecting dry-run.
+
+        ``write_file`` is text-only, and a model is a binary blob: decoding it as text would corrupt
+        it while still reporting success.
+        """
+        if self.dry_run:
+            return StepResult(
+                ok=True, summary=f"would: {description}", output=str(destination), dry_run=True
+            )
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+            os.chmod(destination, mode)
+        except OSError as exc:
+            return StepResult(ok=False, summary=f"could not copy to {destination}: {exc}")
+        return StepResult(ok=True, summary=description, output=str(destination))
 
     def run_all(self, commands: Sequence[Command]) -> StepResult:
         collected: list[Command] = []

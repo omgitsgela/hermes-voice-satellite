@@ -62,6 +62,26 @@ def build_session(dry_run=True):
                    dry_run=dry_run)
 
 
+class InterfaceSendsIdentifiers(unittest.TestCase):
+    """The interface must send what the device understands, not what the person reads.
+
+    The wake-word list shows "hey hermes" and the model is called "hey_hermes". Reading the selected
+    option's text sent the phrase, so the ESP32 driver did not recognise its own default and
+    provisioned a different model than the one on screen.
+    """
+
+    def test_the_wake_word_comes_from_the_option_value(self):
+        page = (Path(__file__).resolve().parents[1] / "src" / "hermes_installer" / "web"
+                / "index.html").read_text()
+        start = page.index("function deviceFields")
+        end = page.index("async function ensureWakeModel")
+        body = page[start:end]
+        self.assertIn('$("wake-select").value', body)
+        self.assertNotIn("selectedOptions[0]", body,
+                         "the display text is not an identifier")
+        self.assertNotIn("textContent", body)
+
+
 class SessionBehaviour(unittest.TestCase):
     def setUp(self):
         self.session = build_session()
@@ -253,8 +273,12 @@ class SessionBehaviour(unittest.TestCase):
         catalogue.download = fake_download
         try:
             with tempfile.TemporaryDirectory() as tmp:
+                # The voice is installed into the checkout's own voices/ directory, so the test has
+                # to own that directory: writing into the real checkout would pass here and leak.
+                session = build_session(dry_run=False)
+                session.repo_root = Path(tmp)
                 with mock_home(tmp):
-                    result = build_session(dry_run=False).download_voice("en_US-amy-medium")
+                    result = session.download_voice("en_US-amy-medium")
         finally:
             catalogue.download = original
 
@@ -262,6 +286,39 @@ class SessionBehaviour(unittest.TestCase):
         self.assertEqual(len(seen), 2, "the model and its config must both be fetched")
         self.assertIn("/en/en_US/amy/medium/en_US-amy-medium.onnx", seen[0])
         self.assertTrue(seen[1].endswith(".onnx.json"))
+
+    def test_the_default_voices_are_fetched_from_the_published_path(self):
+        """The speaker folder keeps its underscore: `hfc_female`, never `hfc/female`.
+
+        Splitting on the underscore built a URL that 404s for both voices we ship as defaults, so
+        previewing worked and downloading never did.
+        """
+        import tempfile
+
+        from hermes_installer import catalogue
+
+        seen = []
+
+        def fake_download(url, destination, **_kwargs):
+            seen.append(url)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"x")
+            return destination
+
+        original = catalogue.download
+        catalogue.download = fake_download
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp)
+                session = build_session(dry_run=False)
+                session.repo_root = repo
+                result = session.download_voice("en_US-hfc_female-medium")
+        finally:
+            catalogue.download = original
+
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(seen, "nothing was fetched")
+        self.assertIn("/en/en_US/hfc_female/medium/en_US-hfc_female-medium.onnx", seen[0])
 
     def test_applying_a_voice_points_the_gateway_at_it(self):
         import tempfile
@@ -284,13 +341,21 @@ class SessionBehaviour(unittest.TestCase):
                 with mock_home(str(repo / "home")):
                     result = session.download_voice("en_US-amy-medium", apply=True)
                 text = (repo / "satellite-gateway.env").read_text()
+                # The temporary directory is gone after this block, so record what landed inside it.
+                installed = (
+                    (repo / "voices" / "en_US-amy-medium.onnx").exists(),
+                    (repo / "voices" / "en_US-amy-medium.onnx.json").exists(),
+                )
         finally:
             catalogue.download = original
 
         self.assertTrue(result["ok"], result)
         self.assertIn("VOICE_PIPER_VOICE=en_US-amy-medium", text)
-        self.assertIn("VOICE_CONFIG=", text)
         self.assertIn("KEEP=me", text, "the rest of the environment file must survive")
+        # The service loads <checkout>/voices/<name>.onnx: the files have to be THERE, and the name
+        # is the only thing that selects them. VOICE_CONFIG was written for years and read by nothing.
+        self.assertEqual(installed, (True, True), result)
+        self.assertNotIn("VOICE_CONFIG=", text, "an inert key must not be written as if it selected the voice")
 
     def test_a_voice_file_must_arrive_with_its_config(self):
         import tempfile

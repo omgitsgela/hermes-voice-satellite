@@ -109,7 +109,11 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
         out("  Hermes is not installed on this machine.")
         out("  That only matters if this machine is meant to BE the gateway.")
         out("")
-        role = "A satellite, using a gateway that already exists"
+        role = prompt.choice(
+            "What are we setting up?",
+            ["A satellite, using a gateway that already exists",
+             "Change a device I have already set up"],
+        )
     else:
         out(f"  Found: {state['hermes_explained']}")
         for note in (state.get("platform") or {}).get("notes", []):
@@ -118,7 +122,7 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
         role = prompt.choice(
             "What are we setting up?",
             ["This machine as the gateway", "A satellite on this machine's card or cable",
-             "Both, gateway first"],
+             "Both, gateway first", "Change a device I have already set up"],
         )
 
     gateway_address = ""
@@ -176,7 +180,8 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
             for line in result.get("pairing_unit_instructions", []):
                 out(f"    {line}")
 
-    if role.startswith("A satellite") or role.startswith("Both"):
+    managing = role.startswith("Change")
+    if role.startswith("A satellite") or role.startswith("Both") or managing:
         devices = state["devices"]
         if not devices:
             out("  No device packages are installed, so there is nothing to set up.")
@@ -221,6 +226,47 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
             else:
                 out(f"  {identity.get('error')}")
                 return 1
+
+        if managing:
+            # The device already has its gateway, its credentials and its name, so this flow never
+            # pairs and never flashes. Only what lives on the card or the board is staged again --
+            # which is what "change a device" promised and what used to send people through a flash.
+            out("")
+            out("  Changing a device that is already set up. Its firmware is not touched.")
+            if card_device:
+                fields["wifi_ssid"] = prompt.text(
+                    "Copy which saved Wi-Fi network onto the card (blank to keep as it is)",
+                    default="") or None
+            else:
+                fields["wifi_ssid"] = prompt.text(
+                    "Wi-Fi network it should join (blank to keep as it is)", default="") or None
+                if fields["wifi_ssid"]:
+                    fields["wifi_password"] = prompt.secret("Wi-Fi password (used once, not stored)")
+            change = prompt.choice(
+                "What are you changing?",
+                ["The wake word", "Only the network above"],
+            )
+            # Not the profile default until it is actually chosen: staging an unchanged setting
+            # would be work the person did not ask for.
+            fields["wake_word"] = None
+            if change == "The wake word":
+                fields["wake_word"] = prompt.text("Wake word", default=profile["wake_default"])
+                fields["wake_model"] = prompt.text(
+                    "Model file to copy onto the device (blank if it already has this one)",
+                    default="") or None
+            result = session.manage_device(profile["id"], **fields)
+            if not result["ok"]:
+                out(f"  {result.get('summary') or result.get('error')}")
+                return 1
+            for command in result.get("commands", []):
+                marker = " (needs elevation)" if command["elevation"] else ""
+                out(f"    {command['description']}{marker}")
+                out(f"      {' '.join(command['argv'])}")
+            out("")
+            out(f"  {result['summary']}")
+            out("")
+            out("  Done.")
+            return 0
 
         host = prompt.text("Gateway address", default=gateway_address or None)
         port = int(prompt.text("Pairing port", default="10704"))

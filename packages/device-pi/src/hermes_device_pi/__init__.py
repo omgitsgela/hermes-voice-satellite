@@ -101,6 +101,24 @@ def render_bridge_env(existing: str, *, device_id: str, host: str, port: int, na
     return "\n".join(output) + "\n"
 
 
+def set_env_keys(existing: str, wanted: dict[str, str]) -> str:
+    """Set KEY=VALUE lines, keeping every other line (comments included) exactly as it was."""
+    lines = existing.splitlines() if existing else []
+    seen: set[str] = set()
+    output: list[str] = []
+    for line in lines:
+        key = line.split("=", 1)[0].strip()
+        if "=" in line and key in wanted and not line.lstrip().startswith("#"):
+            output.append(f"{key}={wanted[key]}")
+            seen.add(key)
+        else:
+            output.append(line)
+    for key, value in wanted.items():
+        if key not in seen:
+            output.append(f"{key}={value}")
+    return "\n".join(output) + "\n"
+
+
 def split_dial(dial_address: str) -> tuple[str, int]:
     """`tls://host:10701` becomes host and port, which is what the card's env file wants."""
     text = dial_address.split("://", 1)[-1]
@@ -186,6 +204,17 @@ class PiDriver:
             commands.extend(wifi.commands)
             staged.append(f"the Wi-Fi network {request.wifi_ssid}")
 
+        if request.wake_word or request.wake_model:
+            wake = self._stage_wake(request, runner)
+            if not wake.ok:
+                return wake
+            if wake.commands:
+                commands.extend(wake.commands)
+            # The default phrase stages nothing, and an empty label must not turn "nothing to
+            # stage" into "staged ".
+            if wake.summary:
+                staged.append(wake.summary)
+
         if not staged:
             return StepResult(ok=True, summary="nothing to stage: the card keeps its settings")
         return StepResult(ok=True, summary="staged " + " and ".join(staged),
@@ -226,14 +255,104 @@ class PiDriver:
         except OSError:
             existing = ""
         host, port = split_dial(request.dial_address)
+        # The files were WRITTEN through the mount, but the paths the booted device opens are its
+        # own: `<mount>/home/<user>/certs/...` does not exist once the card is in the Pi, so writing
+        # those paths produced a satellite that booted and could not authenticate.
+        on_device = Path("/home") / user / "certs"
         content = render_bridge_env(
             existing, device_id=identity, host=host, port=port, name=request.device_name,
-            tls={"ca": str(destination / "ca.crt"),
-                 "cert": str(destination / "cert.pem"),
-                 "key": str(destination / "key.pem")},
+            tls={"ca": str(on_device / "ca.crt"),
+                 "cert": str(on_device / "cert.pem"),
+                 "key": str(on_device / "key.pem")},
         )
         return runner.write_file(
             env_path, content, description="point the card's environment at its credentials"
+        )
+
+    def _stage_wake(self, request: DeviceRequest, runner: Runner) -> StepResult:
+        """Put the chosen wake word on the card: the model file, and the selector that uses it.
+
+        Settings applied later from the Satellite Gateway can switch the *selector*, but nothing
+        running on the device can add a model file. So a wake word chosen in the installer has to be
+        staged here or the device will be told to listen for a model it does not have.
+
+        The device reads `VS_WAKE_WORD` and `VS_WAKE_MODELS` from its own environment file; the card
+        is written through the mount at the same relative path.
+        """
+        mount = Path(str(request.card_mount))
+        user = request.card_user or "satellite"
+        # Built as segments, not as `mount / <absolute device path>`: an absolute right-hand side
+        # REPLACES the left, which silently wrote to the workbench's home directory instead of the
+        # card. The device path is assembled from parts because a literal absolute one must not
+        # appear in this repository (scripts/check-no-personal-data.sh refuses it).
+        home_on_device = str(Path("/home") / user)
+        models_on_card = mount / "home" / user / "wake-models"
+
+        word = (request.wake_word or "").strip()
+        model = Path(str(request.wake_model)) if request.wake_model else None
+        staged: list = []
+
+        if model is not None:
+            if not model.exists():
+                return StepResult(ok=False, summary=f"the wake word file chosen is not there: {model}")
+            if model.suffix.lower() != ".onnx":
+                return StepResult(
+                    ok=False,
+                    summary=(f"this device's wake word runs on the Pi itself, so it needs an ONNX "
+                             f"model; {model.name} is not one. Choose a compatible model or a "
+                             f"custom ONNX file."),
+                )
+            copied = runner.copy_file(
+                model, models_on_card / model.name, mode=0o644,
+                description=f"copy {model.name} onto the card",
+            )
+            if not copied.ok:
+                return copied
+            staged.append(copied)
+            word = word or model.stem
+
+        if not word:
+            return StepResult(ok=False, summary="a wake model was given but no wake word to select")
+
+        # The default phrase needs no staging: it is what the device image already listens for, and
+        # a run that changes nothing else must stay a no-op rather than invent work.
+        if model is None and word == PROFILE.wake_default:
+            return StepResult(ok=True, summary="", commands=())
+
+        # Any OTHER phrase without a model file would leave a satellite that never wakes, so it is
+        # refused rather than written as a selector pointing at nothing.
+        if model is None:
+            present = sorted(p.name for p in models_on_card.glob("*.onnx")) if models_on_card.is_dir() else []
+            matches = [name for name in present if Path(name).stem == word]
+            if not matches:
+                listed = ", ".join(present) if present else "none at all"
+                return StepResult(
+                    ok=False,
+                    summary=(f"the card has no wake word model called {word} (it has: {listed}). "
+                             f"Choose a model file to copy across, or pick a wake word the card "
+                             f"already holds."),
+                )
+
+        env_path = mount / "etc" / "voice-satellite" / "satellite.env"
+        try:
+            existing = env_path.read_text()
+        except OSError:
+            existing = ""
+        content = set_env_keys(
+            existing,
+            {"VS_WAKE_WORD": word, "VS_WAKE_MODELS": f"{home_on_device}/wake-models"},
+        )
+        written = runner.write_file(
+            env_path, content, mode=0o644,
+            description=f"tell the card to listen for {word}",
+        )
+        if not written.ok:
+            return written
+        staged.append(written)
+        return StepResult(
+            ok=True,
+            summary=f"the wake word {word}" + (f" and its model {model.name}" if model else ""),
+            commands=(),
         )
 
     def verify(self, request: DeviceRequest, runner: Runner) -> StepResult:

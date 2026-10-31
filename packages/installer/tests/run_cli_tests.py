@@ -86,6 +86,11 @@ class FakeSession:
         self.calls.append(("install", profile_id, fields))
         return {"ok": True, "summary": "installed", "commands": [], "dry_run": True}
 
+    def manage_device(self, profile_id, **fields):
+        self.calls.append(("manage", profile_id, fields))
+        return {"ok": True, "summary": "changed", "commands": [], "dry_run": True,
+                "mode": "manage"}
+
     def install_gateway(self, *args, **kwargs):  # pragma: no cover - not exercised here
         raise AssertionError("the gateway install should not run on the device route")
 
@@ -161,12 +166,31 @@ class LauncherDispatch(unittest.TestCase):
 class DeviceRoute(unittest.TestCase):
     def test_a_workbench_without_hermes_can_still_set_up_a_device(self):
         session = FakeSession(hermes="none")
-        # Device choice, port choice, address, port, code match, words, name, remember, wifi.
-        code, prompt, _ = drive(session, ["1", "1", "gateway.example", "10704", "y",
+        # Role (set one up), device choice, port choice, address, port, code match, words, name,
+        # remember, wifi. A workbench still gets asked WHICH job it is doing, because changing an
+        # existing device is the other thing this machine can do.
+        code, prompt, _ = drive(session, ["1", "1", "1", "gateway.example", "10704", "y",
                                           "amber lantern copper thrush meadow", "kitchen",
-                                          "n", ""])  # no route question: Hermes is absent
+                                          "n", ""])
         self.assertEqual(code, 0)
         self.assertTrue(any(call[0] == "install" for call in session.calls))
+
+    def test_changing_an_existing_device_never_flashes_it(self):
+        """The console promised this and did not have it: re-running routed an existing device
+        through a firmware flash instead of a configuration change."""
+        session = FakeSession(hermes="none")
+        code, prompt, _ = drive(session, [
+            "2",          # change a device already set up
+            "1",          # device
+            "1",          # port
+            "",           # keep the current Wi-Fi
+            "2",          # only the network above: nothing else
+        ])
+        self.assertEqual(code, 0)
+        names = [call[0] for call in session.calls]
+        self.assertIn("manage", names)
+        self.assertNotIn("install", names, "a configuration change must not reflash the device")
+        self.assertNotIn("pair", names, "an enrolled device does not pair again to change a setting")
 
     def test_the_device_identity_is_read_before_pairing(self):
         session = FakeSession()

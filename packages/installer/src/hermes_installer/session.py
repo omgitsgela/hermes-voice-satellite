@@ -583,15 +583,20 @@ class Session:
                     "applied": False,
                     "note": f"In a real run this would download {voice.size_mb} MB and select it."}
 
-        cache = Path.home() / ".cache" / "hermes-voice-satellite" / "voices"
-        model = cache / f"{voice.id}.onnx"
-        config = cache / f"{voice.id}.onnx.json"
+        # The service resolves a voice as <checkout>/voices/<VOICE_PIPER_VOICE>.onnx[.json]. A
+        # download into a cache, or a VOICE_CONFIG key nothing reads, leaves the Gateway speaking
+        # with the previous voice after its restart.
+        voices_dir = self.repo_root / "voices"
+        model = voices_dir / f"{voice.id}.onnx"
+        config = voices_dir / f"{voice.id}.onnx.json"
         # The Hugging Face layout is <lang>/<locale>/<name>/<quality>/<name>.onnx, where the folder
         # uses an underscore and the file uses a hyphen. Deriving it once, from the id, keeps the
         # catalogue and the URL from drifting apart.
         language, rest = voice.id.split("-", 1)
         name, quality = rest.rsplit("-", 1)
-        folder = name.replace("_", "/")
+        # The folder is the speaker name exactly as published: `hfc_female`, not `hfc/female`. The
+        # slash-splitting version built a URL that 404s for both shipped default voices.
+        folder = name
         base = (f"https://huggingface.co/rhasspy/piper-voices/resolve/main/"
                 f"{language[:2]}/{language}/{folder}/{quality}/{voice.id}.onnx")
 
@@ -621,8 +626,13 @@ class Session:
         env = self.repo_root / "satellite-gateway.env"
         if not env.exists():
             return "satellite-gateway.env was not found here, so the voice was downloaded but not selected"
+        if not model.exists():
+            return (f"the voice files are not in {model.parent}, so the Gateway cannot load them; "
+                    f"nothing was selected")
         lines = env.read_text().splitlines()
-        wanted = {"VOICE_PIPER_VOICE": voice_id, "VOICE_CONFIG": str(model)}
+        # VOICE_CONFIG used to be written here and read by nothing: the service derives the config
+        # path from the voice name. Only the name selects a voice.
+        wanted = {"VOICE_PIPER_VOICE": voice_id}
         seen = set()
         output = []
         for line in lines:
@@ -792,9 +802,9 @@ class Session:
             self.registry.get(profile_id)
         except RegistryError as exc:
             return {"ok": False, "error": str(exc)}
-        if not str(fields.get("dial_address") or "").strip():
-            return {"ok": False, "error": "pair with the gateway first: the device needs its address"}
         if not (fields.get("wifi_ssid") or fields.get("certs_dir") or fields.get("wake_model")):
+            # The address is NOT required here: the device already has one, and re-typing it is not
+            # a change. Only staging something new is.
             return {"ok": False,
                     "error": "nothing to change: choose a Wi-Fi network, a wake word, or pair again "
                              "to refresh the credentials"}
