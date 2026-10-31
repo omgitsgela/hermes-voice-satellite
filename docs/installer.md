@@ -288,7 +288,8 @@ identity code, the pairing client with its confirmation gate, the pairing endpoi
 rate limiting and explicit re-enrolment, the credential store with the remember checkbox, the drivers
 for both devices against their real scripts, device installation as two stages, the wake-word and
 voice catalogues including live community measurements and a verified voice download, the console
-flow, the web UI with its token-gated API, per-platform builds, and 146 offline tests.
+flow, the web UI with its token-gated API, per-platform builds, and 150 offline tests including
+one that pairs the shipping client with the real endpoint over real TLS.
 
 A device setup is two stages because flashing is not staging: the flash writes the software, and the
 provision step puts Wi-Fi, the dial address, the credentials and the model where the device looks for
@@ -297,10 +298,11 @@ them. Success means both.
 A session started in preview mode is a hard ceiling: no client request can turn it into a real run,
 and the gateway install is previewed before it is executed rather than after.
 
-What still needs **your** hardware rather than more code: pairing against a real second machine,
-flashing a real board, writing a real card, and hearing a downloaded voice through the gateway's
-speaker. CI covers Linux, Windows and macOS for the code paths it can reach without hardware; the
-device steps are tested at the argv boundary, which is as far as an emulator can honestly go.
+What still needs **your** hardware rather than more code: flashing a real board, writing a real card,
+and hearing a downloaded voice through the gateway's speaker. Pairing no longer needs a second machine
+to be *proved*: `run_e2e_pairing_tests.py` serves the endpoint with a generated certificate and pairs the
+shipping client against it over real TLS, which covers the wire contract and the certificate handshake.
+The device steps are tested at the argv boundary, which is as far as an emulator can honestly go.
 
 Delegation: the gateway and device steps currently run the existing `scripts/install-*.sh`, which
 are the engine and already idempotent with `--dry-run`. Absorbing them into the package is tracked
