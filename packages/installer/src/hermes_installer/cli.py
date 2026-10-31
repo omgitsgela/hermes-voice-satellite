@@ -169,10 +169,61 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
                 out("")
                 out("  You will be asked for the address, and to check the identity code,")
                 out("  when you set up each satellite.")
+        unit = result.get("pairing_unit") if isinstance(result, dict) else None
+        if unit:
+            out("")
+            out("  The pairing service is ready. Start it with:")
+            for line in result.get("pairing_unit_instructions", []):
+                out(f"    {line}")
 
     if role.startswith("A satellite") or role.startswith("Both"):
-        host = prompt.text("Gateway address for the satellite to dial", default=gateway_address or None)
-        port = int(prompt.text("Gateway port", default="10702"))
+        devices = state["devices"]
+        if not devices:
+            out("  No device packages are installed, so there is nothing to set up.")
+            return 1
+
+        # The device comes first, because pairing issues a certificate for the device's own identity
+        # and that identity can only be read from the device while it is connected.
+        labels = [f"{d['name']} ({d['vendor']})" for d in devices]
+        chosen = prompt.choice("Which device are you setting up?", labels)
+        profile = devices[labels.index(chosen)]
+        card_device = profile["needs_card_reader"]
+        fields: dict = {
+            "device_name": "",
+            "dial_address": "",
+            "wake_word": profile["wake_default"],
+            "dry_run": session.dry_run,
+        }
+
+        if card_device:
+            mounts = session.card_mounts()
+            if mounts:
+                options = [m["mount"] for m in mounts] + ["Type a path"]
+                picked = prompt.choice("Which mounted card is it?", options)
+                fields["card_mount"] = (prompt.text("Path to the card's root filesystem")
+                                        if picked == "Type a path" else picked)
+            else:
+                fields["card_mount"] = prompt.text("Path to the card's root filesystem")
+        else:
+            ports = session.usb_ports()
+            if ports:
+                options = [f"{p['device']}  {p['description']}".strip() for p in ports] + ["Type a port"]
+                picked = prompt.choice("Which connection is the device on?", options)
+                fields["port"] = (prompt.text("USB port", default="/dev/ttyACM0")
+                                  if picked == "Type a port"
+                                  else ports[options.index(picked)]["device"])
+            else:
+                fields["port"] = prompt.text("USB port the device is on", default="/dev/ttyACM0")
+            identity = session.device_identity(profile["id"], port=fields["port"])
+            if identity.get("ok"):
+                fields["device_id"] = identity["device_id"]
+                out(f"  This device calls itself {identity['device_id']}.")
+            else:
+                out(f"  {identity.get('error')}")
+                return 1
+
+        host = prompt.text("Gateway address", default=gateway_address or None)
+        port = int(prompt.text("Pairing port", default="10704"))
         inspected = session.inspect_gateway(host, port)
         if not inspected.get("ok"):
             out(f"  Could not reach {host}:{port}: {inspected.get('error')}")
@@ -185,8 +236,11 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
             out("  Stopped. Nothing was sent, and the words were not used.")
             return 1
         words = prompt.secret("Pairing words")
-        name = prompt.text("A name for this satellite", default="kitchen")
-        paired = session.pair(host, port, words, name, expected_code=code,
+        name = prompt.text("A name for this device", default="") or None
+        while not name:
+            name = prompt.text("A name for this device (for example kitchen)") or None
+        paired = session.pair(host, port, words, name, device_id=fields.get("device_id"),
+                              expected_code=code,
                               remember=prompt.yes_no("Remember these words on this machine?",
                                                      default=False))
         if not paired.get("ok"):
@@ -194,48 +248,28 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
             return 1
         out(f"  Paired. {'Remembered in ' + paired['remembered_in'] if paired.get('remembered_in') else 'Nothing was saved.'}")
 
-        devices = state["devices"]
-        if not devices:
-            out("  No device packages are installed, so there is nothing to flash.")
-            return 1
-        labels = [f"{d['name']} ({d['vendor']})" for d in devices]
-        chosen = prompt.choice("Which device are you setting up?", labels)
-        profile = devices[labels.index(chosen)]
-
-        fields = {"device_name": name, "dial_address": paired["dial_address"],
-                  "wake_word": profile["wake_default"], "dry_run": session.dry_run}
-        if profile["needs_card_reader"]:
-            fields["card_mount"] = prompt.text("Where is the card's root filesystem mounted?")
-            # A card gets a Wi-Fi network copied from one this computer already knows. There is no
-            # path from a typed passphrase to the card, so the prompt must not pretend there is.
+        # The device was chosen at the top of this block, before its identity could be read.
+        fields["device_name"] = name
+        fields["dial_address"] = paired["dial_address"]
+        fields["certs_dir"] = paired.get("certs_dir")
+        if card_device:
+            # A card gets a network copied from one this machine already knows. There is no path
+            # from a typed passphrase to a card, so the prompt must not pretend there is.
             fields["wifi_ssid"] = prompt.text(
-                "Copy which saved Wi-Fi network onto the card (blank to skip)", default=""
+                "Copy which saved Wi-Fi network onto the card (blank to keep as it is)", default=""
             ) or None
         else:
-            fields["port"] = prompt.text("Which USB port is the device on?", default="/dev/ttyACM0")
-            fields["wifi_ssid"] = prompt.text("Wi-Fi network it should join (blank to skip)",
-                                              default="") or None
-            fields["wifi_psk_file"] = prompt.text(
-                "Path to a file holding that network's passphrase (blank to skip)", default=""
-            ) or None
+            fields["wifi_ssid"] = prompt.text(
+                "Wi-Fi network it should join (blank to keep as it is)", default="") or None
+            if fields["wifi_ssid"]:
+                fields["wifi_password"] = prompt.secret("Wi-Fi password (used once, not stored)")
 
-        result = session.flash(profile["id"], **fields)
+        # Flash and staging are two stages: the software, then the Wi-Fi, dial address, credentials
+        # and model where the device looks for them.
+        result = session.install_device(profile["id"], **fields)
         if not result["ok"]:
             out(f"  {result.get('summary') or result.get('error')}")
             return 1
-        # A card device also needs its Wi-Fi network copied, which is a separate script. Running it
-        # only when a network was chosen keeps the flow honest for people who use Ethernet or a
-        # pre-provisioned image.
-        if profile["needs_card_reader"] and fields.get("wifi_ssid"):
-            wifi = session.flash(profile["id"], step="provision", **fields)
-            result = {
-                "ok": result["ok"] and wifi["ok"],
-                "summary": f"{result['summary']}. {wifi.get('summary', '')}".strip(),
-                "commands": result["commands"] + wifi.get("commands", []),
-            }
-            if not wifi["ok"]:
-                out(f"  {wifi.get('summary') or wifi.get('error')}")
-                return 1
         for command in result["commands"]:
             marker = " (needs elevation)" if command["elevation"] else ""
             out(f"    {command['description']}{marker}")

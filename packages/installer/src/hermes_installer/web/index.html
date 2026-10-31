@@ -557,6 +557,13 @@ $("install-gateway").onclick = async () => {
     ? `<div class="notice warn">Practice run: the gateway was not installed. This is what would
         have happened.</div>`
     : `<div class="notice ok">The gateway is installed on this computer.</div>`;
+  if (result.pairing_unit) {
+    $("gateway-status").insertAdjacentHTML("beforeend",
+      `<div class="notice"><strong>One more step to let devices pair.</strong>
+        <p style="margin:8px 0 0">The pairing service is written but not started. Run these:</p>
+        <pre>${(result.pairing_unit_instructions || []).map(escapeHtml).join("\n")}</pre>
+      </div>`);
+  }
   if (result.card) {
     $("gateway-card").classList.remove("hidden");
     $("card-address").textContent = result.card.dial_address;

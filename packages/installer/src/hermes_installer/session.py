@@ -173,7 +173,36 @@ class Session:
                   "dry_run": preview_only}
         if ok and not preview_only:
             result["card"] = self._card_from_state(dial_address)
+            unit = self._write_pairing_unit(dial_address, tls_port)
+            if unit:
+                result["pairing_unit"] = str(unit["path"])
+                result["pairing_unit_instructions"] = list(unit["instructions"])
         return result
+
+    def _write_pairing_unit(self, dial_address: str, tls_port: int) -> dict | None:
+        """Leave a startable pairing service behind, because an endpoint nobody starts is not an end.
+
+        Written as a systemd USER unit so it needs no root and lives with the rest of this user's
+        services. The installer prints how to enable it rather than enabling it silently.
+        """
+        import sys
+
+        from hermes_gateway.unit import UnitConfig, enable_instructions, write_unit
+
+        target = Path.home() / ".config" / "systemd" / "user" / "hermes-pairing.service"
+        try:
+            written = write_unit(
+                UnitConfig(
+                    python=Path(sys.executable),
+                    state_dir=self.repo_root / "state",
+                    dial_address=f"tls://{dial_address}:{tls_port}",
+                    working_directory=self.repo_root,
+                ),
+                target,
+            )
+        except (OSError, ValueError):
+            return None
+        return {"path": written, "instructions": enable_instructions(written)}
 
     def _card_from_state(self, dial_address: str) -> dict | None:
         """After a real install, the two things the person has to keep are on disk: show them."""

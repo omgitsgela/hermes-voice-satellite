@@ -38,3 +38,8 @@ skills/
 # and token copy are ours alone.
 /private/
 /upstream/
+
+# Installer build output: the standalone bundle and its intermediate work directory
+dist/
+build/
+.build-venv/

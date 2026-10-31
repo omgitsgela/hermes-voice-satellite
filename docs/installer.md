@@ -189,6 +189,34 @@ them as if they were:
   `bridge-link.env`, which the script deliberately never overwrites, so the driver fills it and then
   re-runs the script: the second run is what enables the unit, which keeps that rule in one place.
 
+## Running the pairing endpoint as a service
+
+`python -m hermes_gateway.pairing_server --write-unit <path>` renders a systemd user unit from the
+same configuration the endpoint uses, so the two cannot disagree about the state directory, the dial
+address or the port, and prints the three `systemctl --user` commands to enable it. Nobody should have
+to keep a long command alive in a terminal for a gateway to work.
+
+## Building the standalone installer
+
+```sh
+scripts/build-installer.sh --check   # what would be used
+scripts/build-installer.sh           # build into dist/hermes-installer/
+```
+
+The result runs with no Python, no virtualenv and no pip on the target machine. Measured on this
+checkout: **24 MB** as a directory, after stripping the bundled interpreter. Unstripped the same build
+was 241 MB, almost all of it symbols in the interpreter, which is why the spec sets `strip=True`.
+
+Two honest notes for whoever ships it:
+
+- **Windows and macOS need their own build**, run on that platform. PyInstaller does not cross-compile.
+- **Windows SmartScreen will warn on an unsigned build.** Options and current costs are in the review
+  notes: Store MSIX (free, needs a listing), Azure Artifact Signing (about $9.99/month for individuals
+  in the US and Canada), or an OV certificate ($150 to $300/year). EV no longer bypasses SmartScreen.
+
+The bundle contains the interface file as data, so a build that forgets `datas` produces an installer
+whose window is empty; `--status` in a clean environment is the check that catches it.
+
 ## Status of this first draft
 
 Working: the profile contract and registry, the identity code, the pairing client with the

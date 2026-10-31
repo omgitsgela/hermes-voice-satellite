@@ -170,6 +170,23 @@ class SessionBehaviour(unittest.TestCase):
         self.assertIn("--flash", actions)
         self.assertIn("--provision", actions)
 
+    def test_a_gateway_install_leaves_a_startable_pairing_unit(self):
+        import os
+        import tempfile
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"HOME": tmp}):
+                session = build_session(dry_run=False)
+                unit = session._write_pairing_unit("192.0.2.10", 10702)
+                self.assertIsNotNone(unit, "no pairing unit was written")
+                self.assertTrue(unit["path"].exists())
+                text = unit["path"].read_text()
+                self.assertIn("tls://192.0.2.10:10702", text)
+                self.assertIn("--port 10704", text)
+                joined = " ".join(unit["instructions"])
+                self.assertIn("systemctl --user enable --now hermes-pairing.service", joined)
+
     def test_pairing_materialises_the_files_the_provisioner_reads(self):
         import tempfile
         from pathlib import Path

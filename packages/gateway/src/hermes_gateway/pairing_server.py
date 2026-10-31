@@ -323,6 +323,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--keyfile", default=None, help="defaults to <state>/registry-tls/server.key")
     parser.add_argument("--check", action="store_true",
                         help="verify the state, the words and the certificate, then exit")
+    parser.add_argument("--write-unit", default=None, metavar="PATH",
+                        help="write a systemd user unit for this endpoint, then exit")
     args = parser.parse_args(argv)
 
     state = Path(args.state)
@@ -349,6 +351,20 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  device pin   : {service.server_pin_hex()}")
     print(f"  devices dial : {config.dial_address}")
     print(f"  pairing at   : {args.bind}:{args.port} (this is the port the installer asks for)")
+    if args.write_unit:
+        import sys
+
+        from .unit import UnitConfig, enable_instructions, write_unit
+
+        target = write_unit(
+            UnitConfig(python=Path(sys.executable), state_dir=state, dial_address=args.dial,
+                       working_directory=Path.cwd(), bind=args.bind, port=args.port),
+            Path(args.write_unit),
+        )
+        print(f"  wrote {target}")
+        for line in enable_instructions(target):
+            print(f"    {line}")
+        return 0
     if args.check:
         print("  check only: nothing started")
         return 0

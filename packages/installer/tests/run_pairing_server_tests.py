@@ -132,6 +132,55 @@ class ModuleStartup(unittest.TestCase):
         self.assertIn("check only", finished.stdout)
 
 
+class ServiceUnit(unittest.TestCase):
+    """The endpoint has to be startable by something other than a person typing a command."""
+
+    def config(self, **overrides):
+        from hermes_gateway.unit import UnitConfig
+
+        base = dict(
+            python=Path("/usr/bin/python3"), state_dir=Path("/srv/hermes/state"),
+            dial_address="tls://gateway.example:10702",
+            working_directory=Path("/srv/hermes"), port=10704,
+        )
+        base.update(overrides)
+        return UnitConfig(**base)
+
+    def test_the_unit_runs_the_documented_command(self):
+        from hermes_gateway.unit import render_unit
+
+        text = render_unit(self.config())
+        self.assertIn("-m hermes_gateway.pairing_server", text)
+        self.assertIn("--state /srv/hermes/state", text)
+        self.assertIn("--dial tls://gateway.example:10702", text)
+        self.assertIn("--port 10704", text)
+        self.assertIn("Restart=always", text)
+
+    def test_a_path_with_a_space_is_quoted_for_systemd(self):
+        from hermes_gateway.unit import render_unit
+
+        text = render_unit(self.config(state_dir=Path("/srv/my state")))
+        self.assertIn('--state "/srv/my state"', text)
+
+    def test_an_empty_dial_address_is_refused(self):
+        from hermes_gateway.unit import render_unit
+
+        with self.assertRaises(ValueError):
+            render_unit(self.config(dial_address=""))
+
+    def test_writing_it_reports_how_to_enable_it(self):
+        import tempfile
+
+        from hermes_gateway.unit import enable_instructions, write_unit
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = write_unit(self.config(), Path(tmp) / "hermes-pairing.service")
+            self.assertTrue(target.exists())
+            self.assertIn("Hermes voice pairing endpoint", target.read_text())
+            instructions = " ".join(enable_instructions(target))
+            self.assertIn("systemctl --user enable --now hermes-pairing.service", instructions)
+
+
 class Hardening(Base):
     def test_windows_reserved_names_are_refused_as_device_ids(self):
         for reserved in ("con", "aux", "nul", "com1", "lpt9"):
