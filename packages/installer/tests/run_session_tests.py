@@ -25,6 +25,13 @@ from hermes_installer.server import Handler  # noqa: E402
 from hermes_installer.session import Session  # noqa: E402
 
 
+def mock_home(path):
+    """Patch the function Path.home() calls, which honours HOME only on POSIX."""
+    from unittest import mock
+
+    return mock.patch("pathlib.Path.home", return_value=Path(path))
+
+
 class MemoryBackend:
     name = "memory"
 
@@ -216,6 +223,78 @@ class SessionBehaviour(unittest.TestCase):
             ]))
             session.close()
             self.assertFalse(directory.exists(), "temporary credentials outlived the session")
+
+    def test_a_voice_download_fetches_the_model_and_its_config(self):
+        import tempfile
+
+        from hermes_installer import catalogue
+
+        seen = []
+
+        def fake_download(url, destination, **_kwargs):
+            seen.append(url)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"x")
+            return destination
+
+        original = catalogue.download
+        catalogue.download = fake_download
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                with mock_home(tmp):
+                    result = self.session.download_voice("en_US-amy-medium")
+        finally:
+            catalogue.download = original
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(len(seen), 2, "the model and its config must both be fetched")
+        self.assertIn("/en/en_US/amy/medium/en_US-amy-medium.onnx", seen[0])
+        self.assertTrue(seen[1].endswith(".onnx.json"))
+
+    def test_applying_a_voice_points_the_gateway_at_it(self):
+        import tempfile
+
+        from hermes_installer import catalogue, session as session_module
+
+        def fake_download(url, destination, **_kwargs):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"x")
+            return destination
+
+        original = catalogue.download
+        catalogue.download = fake_download
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp)
+                (repo / "bridge.env").write_text("VOICE_PIPER_VOICE=en_US-hfc_female-medium\nKEEP=me\n")
+                session = build_session()
+                session.repo_root = repo
+                with mock_home(str(repo / "home")):
+                    result = session.download_voice("en_US-amy-medium", apply=True)
+                text = (repo / "bridge.env").read_text()
+        finally:
+            catalogue.download = original
+
+        self.assertTrue(result["ok"], result)
+        self.assertIn("VOICE_PIPER_VOICE=en_US-amy-medium", text)
+        self.assertIn("VOICE_CONFIG=", text)
+        self.assertIn("KEEP=me", text, "the rest of the environment file must survive")
+
+    def test_community_measurements_are_read_only(self):
+        from hermes_installer import catalogue
+
+        original = catalogue.refresh_measurements
+        catalogue.refresh_measurements = lambda query: [
+            {"id": 2654, "word": "Hey Hermes", "downloads": 35, "recall": 74.2,
+             "fa_per_hour": 0.87, "tflite": True}
+        ]
+        try:
+            result = self.session.community_wake_words("hermes")
+        finally:
+            catalogue.refresh_measurements = original
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["results"][0]["recall"], 74.2)
+        self.assertIn("account", result["note"])
 
     def test_pairing_without_a_confirmed_code_is_refused(self):
         result = self.session.pair("192.0.2.10", 10702, "a b c d e", "kitchen")

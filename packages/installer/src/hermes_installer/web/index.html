@@ -335,6 +335,19 @@
       <input id="wake-file" type="text" placeholder="path to a .tflite or .onnx file" />
       <p class="hint" style="margin-top:8px">Leave blank to use the choice above. A file you supply is
         used as-is and is not checked against anybody's measurements.</p>
+      <p class="hint hidden" id="wake-download-status" aria-live="polite"></p>
+
+      <details>
+        <summary>Compare community models for this phrase</summary>
+        <p class="hint" style="margin-top:10px">Reads published measurements from openwakeword.com.
+          Those models need an account to download, so this shows the figures only.</p>
+        <div class="row">
+          <div style="flex:2 1 240px"><input id="community-query" type="text"
+                 placeholder="a phrase, for example hey hermes" /></div>
+          <div style="flex:0 0 auto"><button id="community-search" class="ghost">Look up</button></div>
+        </div>
+        <div id="community-results" style="margin-top:12px"></div>
+      </details>
 
       <label class="field" for="voice-select">Voice</label>
       <div class="row">
@@ -342,7 +355,9 @@
         <div style="flex:0 0 auto"><button id="voice-preview" class="ghost">Listen</button></div>
       </div>
       <audio id="voice-audio" class="hidden"></audio>
+      <div class="actions"><button id="voice-download" class="ghost" disabled>Download this voice</button></div>
       <p class="hint" id="voice-note" style="margin-top:8px"></p>
+      <p class="hint hidden" id="voice-download-status" aria-live="polite"></p>
 
       <div id="speech-info" class="notice" style="margin-top:16px"></div>
 
@@ -787,7 +802,43 @@ function showWakeMetrics() {
 function showVoiceNote() {
   const voice = (state.voices || []).find((item) => item.id === $("voice-select").value);
   $("voice-preview").disabled = !(voice && voice.sample_url);
+  $("voice-download").disabled = !voice;
 }
+
+$("voice-download").onclick = async () => {
+  const id = $("voice-select").value;
+  const voice = (state.voices || []).find((item) => item.id === id);
+  if (!voice) return;
+  // A voice is tens of megabytes, so this asks first and says how much.
+  if (!window.confirm(`Download ${voice.name}? It is about ${voice.size_mb} MB.`)) return;
+  const status = $("voice-download-status");
+  status.classList.remove("hidden");
+  status.textContent = `Downloading ${voice.name}...`;
+  const result = await api("/api/voice", { voice: id, apply: true });
+  if (!result.ok) { status.textContent = result.error || "The download did not complete."; return; }
+  status.textContent = result.apply_note || "Downloaded.";
+  announce("Voice downloaded.");
+};
+
+$("community-search").onclick = async () => {
+  const query = ($("community-query").value || "").trim();
+  if (!query) { $("community-query").focus(); return; }
+  $("community-results").innerHTML = `<p class="hint">Looking up ${escapeHtml(query)}...</p>`;
+  const result = await api("/api/wake-words/community?q=" + encodeURIComponent(query));
+  if (!result.ok) { $("community-results").innerHTML =
+    `<div class="notice bad">${escapeHtml(result.error || "That lookup failed.")}</div>`; return; }
+  const rows = (result.results || []).map((row) =>
+    `<tr><td>${escapeHtml(row.word)}</td><td>${row.recall ?? "-"}%</td>` +
+    `<td>${row.fa_per_hour ?? "-"}</td><td>${row.downloads}</td></tr>`).join("");
+  $("community-results").innerHTML = rows
+    ? `<table style="width:100%;border-collapse:collapse;font-size:13.5px">
+         <thead><tr><th style="text-align:left">Word</th><th style="text-align:left">Recall</th>
+         <th style="text-align:left">False/hour</th><th style="text-align:left">Downloads</th></tr></thead>
+         <tbody>${rows}</tbody></table>
+         <p class="hint" style="margin-top:10px">${escapeHtml(result.note || "")}</p>
+         <p class="hint">${escapeHtml(result.caveat || "")}</p>`
+    : `<p class="hint">${escapeHtml(result.note || "Nothing found for that phrase.")}</p>`;
+};
 
 $("voice-preview").onclick = async () => {
   const voice = (state.voices || []).find((item) => item.id === $("voice-select").value);
@@ -891,8 +942,37 @@ function deviceFields(dryRun) {
   };
 }
 
+async function ensureWakeModel(dryRun) {
+  const typed = ($("wake-file").value || "").trim();
+  if (typed) return typed;
+  const id = $("wake-select").value;
+  const entry = (state.wakeEntries || []).find((item) => item.id === id);
+  // A first-party phrase is already on the device or provisioned by its installer.
+  if (!entry || entry.first_party) return null;
+  if (state.wakeModelFor === id && state.wakeModelPath) return state.wakeModelPath;
+  if (dryRun) {
+    $("wake-download-status").classList.remove("hidden");
+    $("wake-download-status").textContent =
+      `${entry.word} will be downloaded and verified during installation.`;
+    return null;
+  }
+  $("wake-download-status").classList.remove("hidden");
+  $("wake-download-status").textContent = `Fetching ${entry.word}...`;
+  const result = await api("/api/wake-word", { format: state.device.wake_format, model: id });
+  if (!result.ok) {
+    $("wake-download-status").textContent = result.error || "That model could not be fetched.";
+    return null;
+  }
+  state.wakeModelPath = result.path;
+  state.wakeModelFor = id;
+  $("wake-download-status").textContent = result.downloaded
+    ? "Downloaded and verified." : "Using the copy already on this computer.";
+  return result.path;
+}
+
 $("review-device").onclick = async () => {
   const fields = deviceFields(true);
+  fields.wake_model = await ensureWakeModel(true) || fields.wake_model;
   const result = await api("/api/flash", fields);
   if (!result.ok) { renderDeviceProblem(result); return; }
   $("device-review").classList.remove("hidden");
@@ -924,7 +1004,21 @@ $("install-device").onclick = async () => {
     : "Installing software on the device. Keep the USB cable connected.";
   announce(card ? "Writing the card." : "Installing the device software.");
 
-  const result = await api("/api/flash", deviceFields(false));
+  const fields = deviceFields(false);
+  // Install is the moment the model must actually exist: a chosen catalogue entry is fetched and
+  // verified here, and the device is written with that file.
+  const modelPath = await ensureWakeModel(false);
+  if (modelPath) fields.wake_model = modelPath;
+  else if (!$("wake-file").value.trim()) {
+    const entry = (state.wakeEntries || []).find((e) => e.id === $("wake-select").value);
+    if (entry && !entry.first_party && !state.wakeModelPath) {
+      button.disabled = false;
+      button.textContent = card ? "Write card setup" : "Install device software";
+      $("install-status").classList.add("hidden");
+      return;  // the status line already explains what went wrong
+    }
+  }
+  const result = await api("/api/flash", fields);
   $("install-status").classList.add("hidden");
   button.textContent = card ? "Write card setup" : "Install device software";
 

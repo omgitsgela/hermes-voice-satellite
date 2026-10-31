@@ -97,11 +97,17 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._json({"ok": True, "mounts": self.session.card_mounts()})
             return
+        if self.path.startswith("/api/wake-words/community"):
+            # Matched BEFORE the general wake-words prefix below, which would otherwise swallow it.
+            if not self._guard():
+                return
+            params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            self._json(self.session.community_wake_words((params.get("q") or [""])[0]))
+            return
         if self.path.startswith("/api/wake-words"):
             if not self._guard():
                 return
-            query = urllib.parse.urlparse(self.path).query
-            params = urllib.parse.parse_qs(query)
+            params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             fmt = (params.get("format") or [None])[0]
             search = (params.get("q") or [""])[0]
             self._json(self.session.wake_word_catalogue(fmt, search))
@@ -160,6 +166,11 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(self.session.flash(profile_id, **body))
                 else:
                     self._json(self.session.install_device(profile_id, **body))
+                return
+            if self.path == "/api/voice":
+                self._json(self.session.download_voice(
+                    str(body.get("voice", "")), apply=bool(body.get("apply", False))
+                ))
                 return
             if self.path == "/api/wake-word":
                 self._json(self.session.prepare_wake_word(

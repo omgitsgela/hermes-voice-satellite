@@ -375,6 +375,93 @@ class Session:
             "note": "Every voice can be heard before it is downloaded.",
         }
 
+    def community_wake_words(self, query: str, *, refresh: bool = True) -> dict:
+        """Measurements for community models, read from the public API.
+
+        Read-only on purpose: those models are downloadable only with an account, so this returns
+        figures for comparison and says so, rather than offering a download it cannot perform.
+        """
+        from . import catalogue
+
+        if not refresh:
+            return {"ok": True, "results": [], "note": "live lookup disabled"}
+        results = catalogue.refresh_measurements(query)
+        return {
+            "ok": True,
+            "results": results,
+            "caveat": catalogue.METRIC_CAVEAT,
+            "note": ("These are community models. Their measurements are shown so you can compare; "
+                     "downloading one needs an account on openwakeword.com, so the installer does not "
+                     "fetch them. A model file you supply yourself works instead."),
+        }
+
+    def download_voice(self, voice_id: str, *, apply: bool = False) -> dict:
+        """Fetch a Piper voice, and optionally make it the gateway's voice.
+
+        Two files are needed (the model and its config), and both are large, so this is a deliberate
+        action rather than something that happens because a list was scrolled.
+        """
+        from . import catalogue
+
+        voice = next((v for v in catalogue.voices() if v.id == voice_id), None)
+        if voice is None:
+            return {"ok": False, "error": f"no voice called {voice_id!r} in the catalogue"}
+
+        cache = Path.home() / ".cache" / "hermes-installer" / "voices"
+        model = cache / f"{voice.id}.onnx"
+        config = cache / f"{voice.id}.onnx.json"
+        # The Hugging Face layout is <lang>/<locale>/<name>/<quality>/<name>.onnx, where the folder
+        # uses an underscore and the file uses a hyphen. Deriving it once, from the id, keeps the
+        # catalogue and the URL from drifting apart.
+        language, rest = voice.id.split("-", 1)
+        name, quality = rest.rsplit("-", 1)
+        folder = name.replace("_", "/")
+        base = (f"https://huggingface.co/rhasspy/piper-voices/resolve/main/"
+                f"{language[:2]}/{language}/{folder}/{quality}/{voice.id}.onnx")
+
+        downloaded = []
+        for target, url in ((model, base), (config, base + ".json")):
+            if target.exists():
+                continue
+            try:
+                catalogue.download(url, target)
+            except Exception as exc:  # noqa: BLE001 - a failed download is an answer
+                return {"ok": False, "error": f"could not fetch {target.name}: {exc}"}
+            downloaded.append(str(target))
+
+        result = {"ok": True, "voice": voice.id, "model": str(model), "config": str(config),
+                  "downloaded": downloaded, "applied": False}
+        if apply:
+            result["applied"] = True
+            result["apply_note"] = self._set_gateway_voice(voice.id, model)
+        return result
+
+    def _set_gateway_voice(self, voice_id: str, model: Path) -> str:
+        """Point this gateway at a voice, by editing the bridge environment in place.
+
+        The bridge speaks with one voice today; per-device voices are issue #120. This sets the one it
+        has, and says so rather than implying more.
+        """
+        env = self.repo_root / "bridge.env"
+        if not env.exists():
+            return "bridge.env was not found here, so the voice was downloaded but not selected"
+        lines = env.read_text().splitlines()
+        wanted = {"VOICE_PIPER_VOICE": voice_id, "VOICE_CONFIG": str(model)}
+        seen = set()
+        output = []
+        for line in lines:
+            key = line.split("=", 1)[0]
+            if key in wanted and not line.lstrip().startswith("#"):
+                output.append(f"{key}={wanted[key]}")
+                seen.add(key)
+            else:
+                output.append(line)
+        for key, value in wanted.items():
+            if key not in seen:
+                output.append(f"{key}={value}")
+        env.write_text("\n".join(output) + "\n")
+        return "bridge.env now selects this voice for the gateway; restart the bridge to use it"
+
     def prepare_wake_word(self, fmt: str, model_id: str) -> dict:
         """Make a chosen wake word available locally, verifying any download before it is used."""
         from . import catalogue
