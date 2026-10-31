@@ -344,7 +344,15 @@ class DeviceIdentity:
 class IngressLimits:
     """Bounded ingress. Audio dominates the byte count, so both limits matter."""
 
-    max_events: int = 64
+    # 64 was far too small once the device started sending 10 ms chunks: that is 0.64 s of audio, so
+    # any brief spell where the bridge is busy (speech-to-text, a model call, streaming a reply)
+    # overflowed it and DROPPED LIVE AUDIO -- measured 2026-10-30, 39 drops in a few minutes, and the
+    # log line names it: "ingress full (64 events, 19840 bytes queued), dropped audio-chunk".
+    #
+    # The byte budget is the real guard and it was never the binding one: 256 KB at 320 bytes per
+    # 10 ms chunk is ~800 chunks, about 8 seconds of audio. The event count is now set to match that
+    # so the two limits agree instead of one silently strangling the other.
+    max_events: int = 800
     max_bytes: int = 256 * 1024
 
 

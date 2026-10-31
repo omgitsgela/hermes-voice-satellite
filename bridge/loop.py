@@ -694,8 +694,36 @@ class VoiceLoop:
                                          cpu_threads=self.stt_threads)
         return self._whisper
 
+    def _maybe_dump_utterance(self, audio: bytes) -> None:
+        """Write the utterance to a WAV when VOICE_DUMP_UTTERANCES is set.
+
+        A transcript that is missing its first word is indistinguishable from a clip that never
+        contained it, and the two have completely different fixes -- one is a capture/onset problem,
+        the other is the speech recogniser. Guessing between them costs a round trip with the person
+        holding still each time, so when this is on the evidence is kept on disk instead.
+        """
+        import os
+        import wave
+
+        if not os.environ.get("VOICE_DUMP_UTTERANCES"):
+            return
+        try:
+            from bridge.config import AUDIO_OUT
+
+            AUDIO_OUT.mkdir(parents=True, exist_ok=True)
+            path = AUDIO_OUT / f"utterance-{int(time.time() * 1000)}.wav"
+            with wave.open(str(path), "wb") as out:
+                out.setnchannels(1)
+                out.setsampwidth(2)
+                out.setframerate(16000)
+                out.writeframes(audio)
+            _LOGGER.info("dumped utterance: %s (%.2fs)", path, len(audio) / 32000)
+        except Exception as exc:  # noqa: BLE001 - a debug dump must never break a turn
+            _LOGGER.warning("could not dump the utterance: %s", exc)
+
     async def transcribe(self, audio: bytes) -> str:
         """Local transcription, off the event loop so the satellite stays serviced."""
+        self._maybe_dump_utterance(audio)
         model = self._model()
 
         def _run() -> str:

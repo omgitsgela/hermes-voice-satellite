@@ -549,6 +549,38 @@ async def t_configuration_report_control_event() -> None:
 
 # ---------------------------------------------------------------- runner
 
+@check("16", "a realistic audio burst does not overflow the DEFAULT ingress limits")
+async def t_default_ingress_holds_real_audio() -> None:
+    """The device sends 10 ms chunks; the bridge must not drop them while it is briefly busy.
+
+    Regression, 2026-10-30: the default event cap was 64, which at 320 bytes per 10 ms chunk is
+    0.64 s of audio. Any spell where the bridge was busy -- speech to text, a model call, streaming
+    a reply -- overflowed it, and the log recorded the damage: "ingress full (64 events, 19840 bytes
+    queued), dropped audio-chunk", 39 times in a few minutes. Dropped audio means eaten words.
+
+    Five seconds of device audio is the bar: comfortably longer than any stage of a turn.
+    """
+    h = Harness()                      # DEFAULT limits, unlike the bounded-queue check above
+    await h.start()
+    try:
+        dev = await h.device()
+        assert (await dev.register("kitchen-1")).type == REGISTER_OK_EVENT
+        connection = h.registry.get("kitchen-1").connection
+
+        chunks = 500                   # 500 x 10 ms = 5 s of microphone audio
+        for _ in range(chunks):
+            await dev.send("audio-chunk", {}, b"\x01" * 320)
+        await asyncio.sleep(0.3)
+
+        assert connection.stats.events_dropped == 0, (
+            f"5 s of audio must fit in the default ingress, dropped "
+            f"{connection.stats.events_dropped} event(s) of {connection.stats.events_received}")
+        assert connection.queued >= chunks, (
+            f"all {chunks} chunks must still be queued, saw {connection.queued}")
+    finally:
+        await h.stop()
+
+
 async def amain() -> int:
     failures = 0
     for number, description, fn in TESTS:
