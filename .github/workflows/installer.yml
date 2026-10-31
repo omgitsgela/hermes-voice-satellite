@@ -52,8 +52,12 @@ jobs:
         run: bash scripts/check-no-personal-data.sh
 
   build:
-    name: standalone build (linux)
-    runs-on: ubuntu-latest
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -65,22 +69,36 @@ jobs:
         shell: bash
         run: bash scripts/build-installer.sh
 
-      - name: It must run with no Python on PATH
+      - name: It must run with no Python on PATH (POSIX)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
-          # The whole promise is that a person does not install a runtime first. Prove it by
-          # running the bundle with an empty environment and no interpreter available.
+          # The whole promise is that a person does not install a runtime first. Prove it by running
+          # the bundle with an empty environment and no interpreter available.
           env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
             dist/hermes-installer/hermes-installer --status > "$RUNNER_TEMP/status.json"
-          python -c "import json,sys; d=json.load(open('$RUNNER_TEMP/status.json')); \
+          python -c "import json; d=json.load(open('$RUNNER_TEMP/status.json')); \
                      assert d['devices'], 'no devices discovered'; print('devices:', [x['id'] for x in d['devices']])"
+
+      - name: It must run with no Python on PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Same promise, different shell: strip PYTHON* from the environment and run the exe.
+          Get-ChildItem env: | Where-Object { $_.Name -like 'PYTHON*' } | Remove-Item
+          & "dist/hermes-installer/hermes-installer.exe" --status | Out-File -Encoding utf8 status.json
+          $devices = (Get-Content status.json -Raw | ConvertFrom-Json).devices
+          if (-not $devices) { throw "no devices discovered" }
+          Write-Host "devices:" ($devices | ForEach-Object { $_.id })
 
       - name: Record the size
         shell: bash
-        run: du -sh dist/hermes-installer | tee /tmp/size.txt
+        run: du -sh dist/hermes-installer | tee size.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: hermes-installer-linux
-          path: dist/hermes-installer/
+          name: hermes-installer-${{ runner.os }}
+          path: |
+            dist/hermes-installer/
+            size.txt
           retention-days: 14

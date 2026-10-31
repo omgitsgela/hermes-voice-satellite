@@ -222,8 +222,13 @@ A device is never silently replaced: taking over another device's identity has t
 ## Continuous integration
 
 `.github/workflows/installer.yml` runs all six suites on Linux, Windows and macOS at Python 3.11 and
-3.12, checks the public-data rule on Linux, and on Linux builds the standalone bundle and runs it with
-`env -i` and no Python on PATH, because that is the promise the packaging makes.
+3.12, checks the public-data rule on Linux, and **builds the standalone bundle on all three
+platforms**, uploading each as an artifact. Every build is then run with the Python environment
+stripped, because that is the promise the packaging makes.
+
+The first two runs of this workflow were red on Windows and both times the failures were real
+information: eleven tests had assumed a shell, and three more had baked a POSIX path or a POSIX `PATH`
+into an assertion. The product was right; the tests were parochial.
 
 ## Running the pairing endpoint as a service
 
