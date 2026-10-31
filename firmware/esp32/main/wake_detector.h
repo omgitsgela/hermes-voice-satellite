@@ -15,8 +15,8 @@
  *             usable real model it hands back a tiny safe placeholder so the deterministic
  *             scorer still runs -- never a garbage scorer.
  *   chime  -> the rendered local tone (D4): wy_chime_render + wy_session_local_play (the same
- *             speaker ring/amp the bridge answer uses).
- *   wake   -> wy_session_wake (the run-satellite flow the bridge already speaks).
+ *             speaker ring/amp the Satellite Gateway answer uses).
+ *   wake   -> wy_session_wake (the run-satellite flow the Satellite Gateway already speaks).
  *
  * Single-consumer: the capture task drives the detector on every mic chunk via
  * wake_detector_feed, which ALSO syncs the core's deaf guard (streaming edge -> cooldown, and
@@ -40,7 +40,7 @@ void wake_detector_start(void *session, void *user,
 
 /* Feed one downmixed mono16 chunk (16 kHz) to the detector. Called by the capture task on
  * every chunk, always. Before the wake the chunk goes only to the detector; after the wake it
- * goes to the detector and (while the session streams) on to the bridge. The call first syncs
+ * goes to the detector and (while the session streams) on to the Satellite Gateway. The call first syncs
  * the deaf guard from live session state, then scores the frame. */
 void wake_detector_feed(const int16_t *mono, size_t n);
 
@@ -54,6 +54,17 @@ void wake_detector_force_fire(void);
 
 /* A one-line status for the provisioning console: model/deaf/force state. */
 void wake_detector_status(char *out, size_t cap);
+
+/* Apply wake_threshold LIVE. Returns 0 when the running detector accepted it, -1 otherwise.
+ *
+ * The threshold is the second gate on every scored frame, so it can change while audio is flowing;
+ * a per-device value that only landed after a reboot would mean the fleet could not tune one
+ * device's sensitivity without restarting it, and the person holding the device gets no feedback
+ * that anything happened. Persisting is the caller's business (see the config apply path). */
+int wake_detector_set_threshold(double threshold);
+
+/* The threshold the detector is ACTUALLY using, so a settings report can be truthful. */
+double wake_detector_get_threshold(void);
 
 #endif
 

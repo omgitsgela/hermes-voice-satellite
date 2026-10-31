@@ -87,6 +87,10 @@ class WakeCoreTests(unittest.TestCase):
         lib.wy_wake_deaf.restype = C.c_bool
         lib.wy_wake_has_model.argtypes = [C.c_void_p]
         lib.wy_wake_has_model.restype = C.c_bool
+        lib.wy_wake_set_threshold.argtypes = [C.c_void_p, C.c_double]
+        lib.wy_wake_set_threshold.restype = C.c_int
+        lib.wy_wake_threshold.argtypes = [C.c_void_p]
+        lib.wy_wake_threshold.restype = C.c_double
         # D4 chime render (pure math).
         lib.wy_chime_render.argtypes = [C.c_void_p, C.c_size_t]
         lib.wy_chime_render.restype = C.c_size_t
@@ -240,6 +244,44 @@ class WakeCoreTests(unittest.TestCase):
         self.feed(lib, det)
         self.assertEqual(lib.td_get_wake_calls(), 1)
         self.assertEqual(lib.td_get_chime_calls(), 1)
+
+    def test_threshold_can_be_raised_and_lowered_while_armed(self):
+        """A per-device wake_threshold must take effect WITHOUT a reboot.
+
+        The fleet can tune one satellite's sensitivity from the config plane. While this was only
+        staged to NVS, a change silently waited for a power cycle the device never got, and the
+        fleet had no way to know. The threshold is a single comparison per scored frame, so it is
+        safe to move while the core is armed and streaming nothing.
+
+        A frame scoring 0.60 must NOT fire a core raised to 0.95, and must fire once it is lowered
+        back to 0.50.
+        """
+        lib = self.library()
+        det = self.detector(lib, [0.60, 0.60], threshold=0.50)
+        self.assertEqual(lib.wy_wake_set_threshold(det, 0.95), 0)
+        self.assertAlmostEqual(lib.wy_wake_threshold(det), 0.95, places=6)
+        self.feed(lib, det)
+        self.assertEqual(lib.td_get_wake_calls(), 0,
+                         'a frame below the RAISED threshold must not fire')
+        self.assertEqual(lib.wy_wake_set_threshold(det, 0.50), 0)
+        self.feed(lib, det)
+        self.assertEqual(lib.td_get_wake_calls(), 1,
+                         'lowering the threshold must make the same score fire immediately')
+
+    def test_threshold_refuses_values_that_would_break_the_detector(self):
+        """Out-of-range and NaN thresholds are refused, and the working value is kept.
+
+        A NaN would fail every comparison and leave the device permanently silent; a zero would
+        make it fire on noise. Both are rejected rather than clamped, so a bad config value cannot
+        quietly change behaviour.
+        """
+        lib = self.library()
+        det = self.detector(lib, [0.60], threshold=0.35)
+        for bad in (-0.5, 1.5, float('nan')):
+            self.assertEqual(lib.wy_wake_set_threshold(det, bad), -1,
+                             f'threshold {bad!r} must be refused')
+            self.assertAlmostEqual(lib.wy_wake_threshold(det), 0.35, places=6,
+                                   msg='a refused value must not change the working threshold')
 
     def test_above_threshold_fires_exactly_once(self):
         """A frame above the threshold fires exactly once: one chime and one

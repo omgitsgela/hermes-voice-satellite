@@ -18,15 +18,15 @@
  * real transport (Wi-Fi join, dial, TLS handshake) and a FreeRTOS sleep between WAIT steps.
  *
  * Two properties are non-negotiable and are what the tests pin down:
- *   1. A registered link is long-lived. The bridge keeps an idle link alive with TCP keepalive and
+ *   1. A registered link is long-lived. The Satellite Gateway keeps an idle link alive with TCP keepalive and
  *      sends no application-level ping, so an idle read is NOT a failure. Only transport EOF/error
  *      or a rejected frame ends a link. The supervisor never imposes an idle timeout of its own.
  *      Registration is different: the drive to registered is bounded by the link's own deadline
- *      (finite until on_registered lifts it), so a bridge that accepts a connection and then goes
+ *      (finite until on_registered lifts it), so a Satellite Gateway that accepts a connection and then goes
  *      silent cannot hold the device inside a handshake.
  *   2. Reconnect is bounded and observable. Backoff is exponential with a ceiling, a fresh
  *      successful registration resets the backoff, and every establish attempt, reconnect and
- *      terminal reason is counted so a device that cannot reach its bridge is legible rather than
+ *      terminal reason is counted so a device that cannot reach its Satellite Gateway is legible rather than
  *      a silent retry loop.
  *
  * Step-driven: `gateway_supervisor_step` advances the state machine by at most one transition and
@@ -40,7 +40,7 @@ enum {
     GW_OK = 0,        /* made progress; call step again to continue. */
     GW_WAIT = -1,     /* a backoff delay has not elapsed; sleep it and call again. Non-terminal. */
     GW_FAILED = -2,   /* terminal: the attempt budget is spent and no transport came up. */
-    GW_REFUSED = -4   /* terminal: the bridge refused the registration; not retrying is correct. */
+    GW_REFUSED = -4   /* terminal: the Satellite Gateway refused the registration; not retrying is correct. */
 };
 
 /* A live transport, as the supervisor sees it. The establish callback fills `read` and `write`
@@ -84,7 +84,7 @@ typedef struct {
     int64_t backoff_base_us;
     int64_t backoff_max_us;
     /* Number of establish attempts after which the supervisor gives up. 0 means "no limit": it
-     * keeps retrying forever, which is what a satellite wants (a dropped bridge must not mean a
+     * keeps retrying forever, which is what a satellite wants (a dropped Satellite Gateway must not mean a
      * dead device). Finite values exist so tests and diagnostics can observe a clean stop. */
     int max_attempts;
 
@@ -100,7 +100,7 @@ typedef struct {
     int events;             /* control events pumped while registered. */
     int attempts;           /* total establish attempts. */
     int reconnects;         /* successful re-registrations after the first. */
-    int refused;            /* 1 if the last registration was refused by the bridge. */
+    int refused;            /* 1 if the last registration was refused by the Satellite Gateway. */
     int64_t resume_at_us;   /* absolute time the current backoff ends; 0 when none is pending. */
     int64_t last_backoff_us;/* the most recent backoff that was chosen. */
     int consecutive_failures; /* establishes in a row without a registration; resets on success. */

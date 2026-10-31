@@ -35,7 +35,7 @@ int wy_audio_downmix_mono16(const int32_t *stereo, size_t frame_count, int16_t *
     return (int)take;
 }
 
-/* The playback resampler's ratio, one constant: 22050 Hz in (the bridge's SND_FORMAT) to
+/* The playback resampler's ratio, one constant: 22050 Hz in (the Satellite Gateway's SND_FORMAT) to
  * 16000 Hz out (the board's I2S clock). A double, because the fractional cursor must not drift
  * on an integer ratio. */
 #define WY_RESAMPLE_RATIO  (22050.0 / 16000.0)
@@ -280,8 +280,19 @@ size_t wy_decimate_48000_to_16000(wy_decimator *d, const int16_t *in, size_t n,
     return written;
 }
 
+int wy_volume_user_to_gain_percent(int user) {
+    /* USER 1 -> the audible floor, USER 100 -> full scale, every step in between distinct. */
+    if (user < 1) user = 1;
+    if (user > 100) user = 100;
+    int span = 100 - WY_VOLUME_FLOOR_PERCENT;
+    return WY_VOLUME_FLOOR_PERCENT + (int)llround((double)(user - 1) * (double)span / 99.0);
+}
+
 size_t wy_apply_volume(int16_t *pcm, size_t n, int percent) {
     if (!pcm || n == 0) return 0;
+    /* `percent` arrives on the USER scale; convert ONCE to the gain actually applied, so the whole
+     * user range is reachable instead of everything below the floor collapsing together. */
+    percent = wy_volume_user_to_gain_percent(percent);
     if (percent < WY_VOLUME_FLOOR_PERCENT) percent = WY_VOLUME_FLOOR_PERCENT;
     if (percent > 100) percent = 100;
     for (size_t i = 0; i < n; ++i) {
@@ -323,6 +334,92 @@ void wy_output_route_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int right, int ca
     out[2] = 2;                          /* two payload bytes: category, source */
     out[3] = (uint8_t)category;
     out[4] = (uint8_t)source;
+}
+
+void wy_output_upsample_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int left_upsample,
+                                int right_upsample) {
+    if (!out) return;
+    /* AUDIO_MGR_OP_UPSAMPLE: [resid 35, cmd 14, count 2, L, R] -- one flag per output channel.
+     *
+     * This is the control that decides whether the 48 kHz profile ever delivers 48 kHz to the
+     * speaker. The XMOS Programming Guide is explicit that in a 48 kHz configuration these flags
+     * are "set to 1 by default", and the guide's own host->device->host loopback test clears them
+     * first: "AUDIO_MGR_OP_UPSAMPLE 0 0 ... As the signals produced here are by definition at the
+     * I2S or USB sample rate, they do not require the use of the upsampler in the case of a 48 kHz
+     * connection, and therefore we explicitly unset the AUDIO_MGR_OP_UPSAMPLE flags."
+     *
+     * Left at the default 1, a 48 kHz far-end signal we carefully up-sampled from the Satellite Gateway's
+     * 22050 Hz is resampled down to the 16 kHz voice-DSP rate and back up to 48 kHz on its way to
+     * the DAC -- band-limiting it to 8 kHz, which destroys the entire reason for the 48 kHz
+     * profile. Clearing the flags and selecting category 10 (far end AT NATIVE RATE) is what keeps
+     * the full band on the wire all the way to the speaker. */
+    out[0] = XVF_I2C_RESID_AUDIO_MGR;
+    out[1] = XVF_I2C_CMD_OP_UPSAMPLE;
+    out[2] = 2;
+    out[3] = (uint8_t)(left_upsample ? 1 : 0);
+    out[4] = (uint8_t)(right_upsample ? 1 : 0);
+}
+
+/* Scalar (4-byte) control frames.
+ *
+ * The count field is 1 -- ONE VALUE -- while the payload is four bytes. That asymmetry is the
+ * whole point: byte-valued controls above pass count = number of payload bytes because each
+ * value occupies one byte, but a float or int32 value is four bytes wide. A writer that always
+ * sets count = payload length therefore cannot express these at all, and the chip's reaction to
+ * the malformed frame is to ACK it and change nothing. That is indistinguishable from success at
+ * the call site, which is how `mic_gain` has been a no-op. */
+static void wy_control_le32(uint8_t out[XVF_I2C_SET32_CMD_LEN], uint8_t resid, uint8_t cmd,
+                            uint32_t bits) {
+    if (!out) return;
+    out[0] = resid;
+    out[1] = cmd;
+    /* The count field is the PAYLOAD LENGTH IN BYTES, so a 32-bit value sends 4, not 1.
+     *
+     * Measured on the board on 2026-10-29: with count=1 the co-processor ACKs the frame and applies
+     * nothing -- every scalar control (mic gain, ASR gain, AGC) was silently inert for as long as
+     * this said 1. With count=4 the same value takes effect immediately: AEC_ASROUTGAIN 1.0 -> 32.0
+     * moved the measured room level from p90 58 to p90 1140 (a 30-40x jump, matching the requested
+     * 32x). An ACK is only a bus acknowledgement; XMOS requires a status query afterwards before a
+     * write can be considered applied, so this byte has to be right. */
+    out[2] = 4;
+    out[3] = (uint8_t)(bits & 0xFFu);
+    out[4] = (uint8_t)((bits >> 8) & 0xFFu);
+    out[5] = (uint8_t)((bits >> 16) & 0xFFu);
+    out[6] = (uint8_t)((bits >> 24) & 0xFFu);
+}
+
+void wy_control_i32_command(uint8_t out[XVF_I2C_SET32_CMD_LEN], uint8_t resid, uint8_t cmd,
+                            int32_t value) {
+    wy_control_le32(out, resid, cmd, (uint32_t)value);
+}
+
+float wy_mic_gain_multiple(int percent) {
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    /* CALIBRATED ON THE DEVICE, 2026-10-30. The fleet's default mic_gain is 78, and 78 has to mean
+     * UNITY -- the level this microphone was measured and tuned at.
+     *
+     * Derived from a clean measurement pair at the default setting (tap 7/3, real sentence): room
+     * p50 183, speech median 1278, gate 503, one clean transcript. The previous mapping made 78%
+     * mean 12.5x (clamped to 8x), which was measured at room p50 2112 and speech 9960 with peaks at
+     * 25609 -- a floor ABOVE the gate's 1000 ceiling, so the energy gate was passing everything and
+     * the VAD alone was holding the line, and the voice was close to clipping.
+     *
+     * So the scale is now relative to unity at WY_MIC_GAIN_UNITY_PERCENT, with the floor and ceiling
+     * still hard limits: no value can silence the microphone, and none can drive it to clipping. */
+    float multiple = (float)percent / (float)WY_MIC_GAIN_UNITY_PERCENT;
+    if (multiple < WY_MIC_GAIN_MIN_MULTIPLE) multiple = WY_MIC_GAIN_MIN_MULTIPLE;
+    if (multiple > WY_MIC_GAIN_MAX_MULTIPLE) multiple = WY_MIC_GAIN_MAX_MULTIPLE;
+    return multiple;
+}
+
+void wy_control_f32_command(uint8_t out[XVF_I2C_SET32_CMD_LEN], uint8_t resid, uint8_t cmd,
+                            float value) {
+    /* A union rather than memcpy so this stays free of <string.h> and the bit pattern is exact:
+     * the chip reads IEEE-754 single precision, and a float cast through int would truncate. */
+    union { float f; uint32_t u; } bits;
+    bits.f = value;
+    wy_control_le32(out, resid, cmd, bits.u);
 }
 
 void wy_amp_gpo_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int enabled) {

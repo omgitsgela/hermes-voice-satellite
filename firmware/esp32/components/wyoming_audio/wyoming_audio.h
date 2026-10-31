@@ -21,7 +21,7 @@
  * this rate before it reaches the ring, or it plays three times too fast and far too high. */
 #define WY_AUDIO_I2S_RATE_HZ 48000u
 
-/* One playback resampler per stream: the bridge's TTS arrives at 22050 Hz (SND_FORMAT) but
+/* One playback resampler per stream: the Satellite Gateway's TTS arrives at 22050 Hz (SND_FORMAT) but
  * the board's I2S clock is 16 kHz (shared with the capture), so the device resamples playback
  * down. It keeps an ABSOLUTE input cursor, so the output grid is independent of how the audio
  * is chunked: whether a second of speech arrives as one frame or many, the same input yields
@@ -55,7 +55,7 @@ void wy_resampler_reset(wy_resampler *r);   /* fresh stream: cursor and base bac
  * Two conversions are needed and they are NOT symmetric, which is the whole point of writing
  * both explicitly rather than parameterising one:
  *
- *   wy_resample_22050_to_48000   UP-samples the bridge's TTS. No anti-aliasing filter: up-
+ *   wy_resample_22050_to_48000   UP-samples the Satellite Gateway's TTS. No anti-aliasing filter: up-
  *                                sampling cannot alias, and running the 7400 Hz low-pass that
  *                                the 16 kHz path needs would throw away exactly the 7.4-11 kHz
  *                                content this profile exists to KEEP. Linear interpolation
@@ -80,7 +80,7 @@ typedef struct wy_upsampler {
     double ratio;         /* input samples per output sample (in_rate / out_rate) */
 } wy_upsampler;
 
-/* Reset for the bridge's TTS: 22050 Hz in, 48000 Hz out. */
+/* Reset for the Satellite Gateway's TTS: 22050 Hz in, 48000 Hz out. */
 void wy_upsampler_reset(wy_upsampler *u);
 
 /* Reset for any other rate pair. The local tones (chime, done tone) are rendered at 16 kHz by
@@ -108,10 +108,24 @@ size_t wy_decimate_48000_to_16000(wy_decimator *d, const int16_t *in, size_t n,
 
 /* Playback volume. The project rule (docs/volume.md): NO PATH MAY TAKE THE DEVICE TO SILENCE.
  * A value of 0, or a value below the floor, becomes the floor -- a small but non-zero gain --
- * so a bad or refused level cannot deafen the device. The floor matches the bridge's
+ * so a bad or refused level cannot deafen the device. The floor matches the Satellite Gateway's
  * conservative floor; the default level is a named constant the live test calibrates. */
 #define WY_VOLUME_DEFAULT_PERCENT 50   /* conservative default, below full */
 #define WY_VOLUME_FLOOR_PERCENT   25   /* never silent: a real, audible minimum */
+
+/* Map a USER level (1..100, where 1 is the quietest this hardware can be) onto the gain actually
+ * applied (floor..100 percent).
+ *
+ * The fleet's playback_volume is on the USER scale, and the Pi satellite spreads that scale across
+ * its whole usable range so every step is a real step. The ESP32 used the number directly as a gain
+ * percent, which silently compressed everything below the 25 percent floor into one identical level:
+ * asking for 5, 10, 20 or 25 produced exactly the same loudness, and the bottom quarter of the user
+ * scale did nothing at all. The number the user says and the number the device applies were only
+ * equal by accident in the upper range.
+ *
+ * This is the same curve the Satellite Gateway's volume.py applies (FLOOR + (user-1) * span / 99), so a level
+ * means the same thing whichever satellite is being talked to. */
+int wy_volume_user_to_gain_percent(int user);
 
 /* Scale n mono S16 samples by `percent` in place, clamping percent to
  * [WY_VOLUME_FLOOR_PERCENT, 100] first so no input (0, negative, or >100) yields silence.
@@ -146,14 +160,77 @@ void wy_amp_gpo_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int enabled);
  * MICROPHONE signal to the speaker, not what the host sends; the host's own playback is
  * "far end (reference) data" = category 4, source 0. Framing matches the GPO write above. */
 #define XVF_I2C_RESID_AUDIO_MGR 35   /* Audio Manager */
-#define XVF_I2C_CMD_OP_L        15   /* AUDIO_MGR_OP_L: left channel category + source */
-#define XVF_I2C_CMD_OP_R        19   /* AUDIO_MGR_OP_R: right channel category + source */
-#define XVF_I2C_CAT_FAR_END     4    /* far end (reference) data received over I2S */
+#define XVF_I2C_CMD_OP_L        15   /* AUDIO_MGR_OP_L: L channel category + source */
+#define XVF_I2C_CMD_OP_R        19   /* AUDIO_MGR_OP_R: R channel category + source */
+#define XVF_I2C_CMD_OP_UPSAMPLE 14   /* AUDIO_MGR_OP_UPSAMPLE: L/R output upsampling flags */
+#define XVF_I2C_CMD_MIC_GAIN     0   /* AUDIO_MGR_MIC_GAIN: float, pre-SHF microphone gain */
+#define XVF_I2C_CAT_FAR_END     4    /* far end (reference) data, post rate conversion to 16 kHz */
+#define XVF_I2C_CAT_FAR_END_NATIVE 10 /* far end AT NATIVE INTERFACE RATE (no conversion) */
 #define XVF_I2C_CAT_USER_CH     8    /* user chosen channels (the beamformed output) */
 
 /* Fill out[XVF_I2C_GPO_CMD_LEN] with an AUDIO_MGR_OP_L/R write. right selects OP_R instead of
  * OP_L. The DAC plays the left channel on both outputs, so OP_L is usually all that is needed. */
 void wy_output_route_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int right, int category, int source);
+
+/* Fill out[XVF_I2C_GPO_CMD_LEN] with an AUDIO_MGR_OP_UPSAMPLE write: one upsampling flag per
+ * output channel, payload [L, R]. In a 48 kHz interface configuration the chip defaults these
+ * flags to ON, which rate-converts a native-48 kHz far-end signal down to 16 kHz and back before
+ * it reaches the speaker. Clearing them, together with selecting category 10 (far end at native
+ * rate), is what makes the 48 kHz link actually deliver 48 kHz audio. */
+void wy_output_upsample_command(uint8_t out[XVF_I2C_GPO_CMD_LEN], int left_upsample,
+                                int right_upsample);
+
+/* ---- scalar (4-byte) controls: mic gain, AGC, limiter -------------------------------
+ *
+ * The XVF3800's float and int32 parameters take ONE value of FOUR bytes, so the I2C frame's
+ * count field is 1 while the payload is four bytes: [resid, cmd, 1, b0, b1, b2, b3]. That is
+ * NOT the shape of the byte-pair controls above, where every value is one byte and count equals
+ * the payload length. Getting it wrong is silent -- the write is ACKed and nothing changes --
+ * which is a very likely reason `mic_gain` has never actually moved the microphone.
+ *
+ * The PP Servicer (ResID 17) holds the co-processor's own AGC. It has never been touched by this
+ * firmware. At normal speaking distance the far-field array's output sits far below what the wake
+ * model wants, and the Satellite Gateway's own measurement says so: speech RMS ~220-700 while the room floor
+ * is ~300. Enabling AGC is the lever that fixes level without touching the link at all. */
+#define XVF_I2C_SET32_CMD_LEN   7    /* [resid, cmd, 1, b0, b1, b2, b3] */
+#define XVF_I2C_RESID_AEC       33   /* AEC Servicer: beamformer output taps */
+#define XVF_I2C_CMD_ASR_OUT_ONOFF 35 /* AEC_ASROUTONOFF: int32. 0 = AEC residuals (one channel per
+                                      * MICROPHONE, unprocessed) 1 = beamformed ASR output (one
+                                      * channel per BEAM). Seeed's I2S images route BOTH default
+                                      * I2S output channels to ASR beam 0, and XMOS documents that
+                                      * this tap is taken AFTER the beamformer and is NOT fed
+                                      * through the post-processor -- which is why the PP AGC has
+                                      * no effect on the audio we capture. */
+#define XVF_I2C_CMD_ASR_OUT_GAIN 36  /* AEC_ASROUTGAIN: float, 0.0-1000.0 linear, applied only
+                                      * when ASR_OUT_ONOFF is 1. This is the "configurable fixed
+                                      * gain" the datasheet describes for the ASR output, and it is
+                                      * the only gain that reaches the stream we capture. */
+
+#define XVF_I2C_RESID_PP        17   /* PP Servicer (AGC / noise / echo) */
+#define XVF_I2C_CMD_PP_AGCONOFF      10  /* int32: AGC switch (0,1) */
+#define XVF_I2C_CMD_PP_AGCMAXGAIN    11  /* float: AGC max gain [1.0 .. 1000.0] */
+#define XVF_I2C_CMD_PP_AGCDESIREDLEVEL 12 /* float: AGC target power [1e-8 .. 1.0] */
+#define XVF_I2C_CMD_PP_AGCGAIN       13  /* float: AGC current gain (read-back) */
+
+/* Little-endian 32-bit scalar as the chip expects; the float form is IEEE-754. */
+void wy_control_i32_command(uint8_t out[XVF_I2C_SET32_CMD_LEN], uint8_t resid, uint8_t cmd,
+                            int32_t value);
+void wy_control_f32_command(uint8_t out[XVF_I2C_SET32_CMD_LEN], uint8_t resid, uint8_t cmd,
+                            float value);
+
+/* Map the fleet's 0..100 mic_gain percentage onto the co-processor's multiplicative gain.
+ *
+ * Pure arithmetic, kept here so it is testable: the endpoints are the whole contract. A setting of
+ * 0 must NOT produce 0.0 (that would silence the microphone, and a dead microphone is
+ * indistinguishable from a hardware fault), and the top of the range must be the compile-time
+ * maximum rather than something the caller guessed. */
+/* 78 is the fleet default and the setting the device was measured and tuned at, so 78 means
+ * UNITY. The bounds are hard limits, not tuning: no value may silence the microphone (0 -> a real,
+ * audible floor) and none may drive the capture into clipping. */
+#define WY_MIC_GAIN_UNITY_PERCENT 78
+#define WY_MIC_GAIN_MAX_MULTIPLE  4.0f
+#define WY_MIC_GAIN_MIN_MULTIPLE  0.5f
+float wy_mic_gain_multiple(int percent);
 
 /* Serialize the audio-chunk data field for the given format into buffer (capacity bytes,
  * NUL-terminated on success). Returns the number of bytes written (excluding the NUL), or a

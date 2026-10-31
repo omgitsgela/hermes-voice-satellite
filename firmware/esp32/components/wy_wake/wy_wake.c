@@ -124,8 +124,20 @@ int wy_wake_init(wy_wake *w, double threshold, unsigned cooldown_ms, const char 
     return 0;
 }
 
-void wy_wake_destroy(wy_wake *w)
-{
+int wy_wake_set_threshold(wy_wake *w, double threshold) {
+    if (!w) return -1;
+    /* NaN fails both comparisons, which is exactly the behaviour we want: an unusable value is
+     * refused rather than silently making the detector deaf or hair-trigger. */
+    if (!(threshold >= 0.0) || !(threshold <= 1.0)) return -1;
+    w->threshold = threshold;
+    return WY_WAKE_OK;
+}
+
+double wy_wake_threshold(const wy_wake *w) {
+    return w ? w->threshold : 0.0;
+}
+
+void wy_wake_destroy(wy_wake *w) {
     if (w == NULL)
         return;
     /* The core owns no model memory (the loader does); the flags reset only. */
@@ -236,7 +248,7 @@ uint32_t wy_wake_playback_stall_frames(void)
 
 /* Is the device's own output still audible to its microphone?
  *
- * `active` is the bridge's stream flag; `queued_bytes` is what the ring still
+ * `active` is the Satellite Gateway's stream flag; `queued_bytes` is what the ring still
  * holds; `frames_since_queue_moved` is how many feed frames have passed since the
  * ring last SHRANK by any amount.
  *
@@ -249,7 +261,7 @@ int wy_wake_playback_sounds(int active, size_t queued_bytes,
                             uint32_t frames_since_queue_moved)
 {
     if (active)
-        return 1;   /* the bridge says it is sending audio: authoritative */
+        return 1;   /* the Satellite Gateway says it is sending audio: authoritative */
     if (queued_bytes == 0)
         return 0;
     return frames_since_queue_moved < WY_WAKE_STALL_FRAMES;

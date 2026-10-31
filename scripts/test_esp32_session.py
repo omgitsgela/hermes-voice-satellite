@@ -641,8 +641,9 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(lib.wy_session_local_play(C.byref(session), pcm, 4), 0)
         got = (C.c_int32 * 8)()
         self.assertEqual(lib.wy_session_playback_read(C.byref(session), got, 8 * 4), 8 * 4)
-        # 1000 at 50% volume -> ~500 -> 500 << 16 (the exact wy_apply_volume result).
-        expected = (1000 * 50 // 100) << 16
+        # USER 50 maps to a 62 percent gain (not 50), then expands to a 32-bit frame.
+        gain = self._user_to_gain(50)
+        expected = (1000 * gain // 100) << 16
         self.assertEqual(got[0], expected)
 
     def test_playback_audio_is_accepted_without_tearing_the_link(self):
@@ -1030,15 +1031,26 @@ class SessionTests(unittest.TestCase):
                 break
             mono.append(cubic(at(i0 - 1), at(i0), at(i0 + 1), at(i0 + 2), t))
             pos += R
-        vol = volume
-        if vol < 25: vol = 25
-        if vol > 100: vol = 100
+        # The configured level is a USER level (1..100); the firmware spreads it over the usable
+        # gain range before scaling. This reference used to treat the number as the gain itself,
+        # which is the bug that made everything below 25 identical.
+        vol = cls._user_to_gain(volume)
         mono = [cls._c_llround(m * vol / 100.0) for m in mono]
         frames = []
         for m in mono:
             frames.append(m << 16)
             frames.append(m << 16)
         return frames
+
+    @staticmethod
+    def _user_to_gain(user: int) -> int:
+        """USER level -> applied gain percent, mirroring wy_volume_user_to_gain_percent.
+
+        1 -> the 25 percent audible floor, 100 -> full scale, rounded half away from zero.
+        """
+        user = max(1, min(100, user))
+        span = 100 - 25
+        return 25 + int((user - 1) * span / 99.0 + 0.5)
 
     def test_playback_converts_a_canonical_answer_to_the_ring(self):
         """The full playback path, canonical Gateway -> device ring: an audio-start (22050/2/1),

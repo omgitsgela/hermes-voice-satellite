@@ -11,12 +11,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-/* The playback (bridge -> speaker) glue. The session core (the gateway task) converts each
+/* The playback (Satellite Gateway -> speaker) glue. The session core (the gateway task) converts each
  * inbound audio-chunk into the board's I2S format and appends the frames to its bounded ring
  * (wyoming_session.h); this file owns the other half: the I2S TX channel, a task that pumps the
  * ring to the I2S at realtime, and the amplifier's I2C GPO enable. The I2S DMA is the pacer: a
  * bounded blocking write pulls each chunk at exactly the rate the speaker plays it, so the
- * bridge's 2x send pace is absorbed by the ring and the speaker never runs ahead of it.
+ * Satellite Gateway's 2x send pace is absorbed by the ring and the speaker never runs ahead of it.
  *
  * The I2S TX is a channel on the SAME controller (I2S_NUM_0) with the SAME clock as the
  * capture RX: same WS (GPIO7), BCLK (GPIO8), rate (16 kHz), slot width (32-bit stereo). The I2S
@@ -47,10 +47,15 @@
 #define PLAYBACK_I2S_BCLK_PIN  GPIO_NUM_8
 #define PLAYBACK_I2S_WS_PIN    GPIO_NUM_7
 #define PLAYBACK_I2S_TX_PIN    GPIO_NUM_44
-/* 48 kHz I2S, per docs/audio-fidelity.md. This is the profile's real win: the bridge's TTS at
+/* 48 kHz I2S, per docs/audio-fidelity.md. This is the profile's real win: the Satellite Gateway's TTS at
  * 22050 Hz is now UP-sampled to 48 kHz instead of being low-passed at 7400 Hz and crushed into
  * 16 kHz. The voice keeps its full bandwidth. */
 #define PLAYBACK_I2S_RATE_HZ   48000
+/* CLOCK ROLE: SLAVE, matching the capture RX. Both directions must agree: the SDK pairs them into
+ * one full-duplex controller when the frame timing and BCLK/WS settings match, and a mix of roles
+ * on the same pins means one side drives the clock the other is trying to receive. The
+ * co-processor is the clock owner; we match its rate and consume its BCLK/WS. */
+#define PLAYBACK_I2S_ROLE      I2S_ROLE_SLAVE
 /* MCLK feeds the XVF3800 and, through it, the AIC3104: GPIO9 on the XIAO ESP32S3.
  * Seeed publishes this pin as part of the board's I2S pin map. */
 #define PLAYBACK_I2S_MCLK_PIN  GPIO_NUM_9
@@ -62,10 +67,24 @@
 #define XVF_I2C_SCL_PIN   GPIO_NUM_6
 #define XVF_I2C_SCL_HZ    400000
 
-#define PLAYBACK_TASK_PRIORITY  4u   /* the capture task's priority: the two share nothing but time */
+/* Above the gateway task on the shared core 0, so a TLS burst cannot starve the pump; capture
+ * remains above it in importance but lives on the other core, so the two never compete. */
+#define PLAYBACK_TASK_PRIORITY  6u
 #define PLAYBACK_TASK_STACK     6144u
-#define PLAYBACK_WRITE_MS       20u   /* ~2x the realtime length of a full batch */
-#define PLAYBACK_FRAME_BATCH    256u  /* int32 per I2S write = 128 stereo frames = 8 ms of audio */
+#define PLAYBACK_WRITE_MS       20u   /* 2x the realtime length of a full batch (10 ms) */
+/* One I2S write's worth of audio: 960 int32 = 480 STEREO FRAMES = 10 ms at 48 kHz.
+ *
+ * This MUST match the TX DMA descriptor size (channel.dma_frame_num, also 480). A write smaller
+ * than one descriptor delivers part of a descriptor and then waits for the descriptor cycle to
+ * complete, so playback gets paced by the driver's buffering granularity instead of by the audio
+ * clock -- the audio still plays, it just takes longer than it should, with no stall or drop to
+ * show for it.
+ *
+ * The previous value (256 int32 = 128 frames) was sized for a 16 kHz link, where 128 frames is
+ * 8 ms. At 48 kHz those same 128 frames are only 2.67 ms, a third of a descriptor. Measured with
+ * it: a local 3.000 s tone took 6.10 s to drain (2.03x slow) while the pump counters reported
+ * 0 stalled and 0 abandoned -- pacing, not loss. */
+#define PLAYBACK_FRAME_BATCH    960u
 
 /* With CONFIG_FREERTOS_HZ=100 a sub-10 ms delay rounds to 0 ticks, and vTaskDelay(0) is
  * "just forces a reschedule" -- it does not block. A polling loop that relied on it would
@@ -122,6 +141,20 @@ static int32_t playback_drain_ms;
  * rests during every gap then the next chunk re-arms it and replays the settling lead-in -- one
  * ~20ms dropout per chunk, which is exactly the choppiness heard in speech. playback_drain_ms is
  * sized to the DMA (a few hundred ms) and is far too short for this. */
+/* How much audio to buffer before the pump starts consuming.
+ *
+ * The Satellite Gateway paces at 2x realtime, but delivery is uneven by up to ~100 ms and occasionally worse.
+ * Playing the instant the first chunk lands turns every arrival gap into a hole in the audio. Two
+ * seconds of pre-roll absorbs that jitter, and the ring is large enough (6 MB, ~16 s at 48 kHz) that
+ * the cost is latency, not memory.
+ *
+ * The timeout matters as much as the threshold: if the producer is slower than the clock (or the
+ * clip is shorter than the pre-roll) the buffer never fills, and without a deadline the device
+ * would sit in silence forever. Play anyway after waiting this long. */
+#define PLAYBACK_PREROLL_MS      400u
+#define PLAYBACK_PREROLL_BYTES   ((size_t)PLAYBACK_PREROLL_MS * 48u * 8u / 1000u)
+#define PLAYBACK_PREROLL_MAX_MS  1200u
+
 #define PLAYBACK_AMP_HOLD_MS 1500
 
 void audio_playback_set_session(void *s) { session = s; }
@@ -154,8 +187,19 @@ int audio_playback_play_mono(const int16_t *mono, size_t n) {
  * produces nothing at all regardless of what the XVF3800 routes to it. Register meanings and
  * values follow Seeed's own example for this board (XIAO ESP32S3 + XVF3800). */
 /* Codec DAC digital volume: 0.5 dB attenuation steps, 0x00 = 0 dB (max).
- * 0x0C = -6 dB. Raise toward 0x00 for louder, lower for quieter. */
-#define DAC_VOLUME_STEP 0x0C
+ *
+ * 0x00 AT FULL SCALE, chosen by ear on 2026-10-30. It was 0x0C (-6 dB) because at some earlier
+ * point 0 dB "sounded overmodulated" -- but that measurement predates the calibrated input path and
+ * native 48 kHz playback, so it was re-tested rather than trusted:
+ *
+ *   0x0C (-6 dB)  the shipping level
+ *   0x06 (-3 dB)  clearly louder on the internal speaker, clean. Approved.
+ *   0x00 (0 dB)   louder again, still clean on speech with loud syllables. Approved as the ceiling.
+ *
+ * The audible ceiling of this board is now the codec at full scale: the user volume scale tops out
+ * at unity, so 0 dB here means 10/10 is genuinely the loudest the hardware can do through this path.
+ * Anything more has to come from the amplifier stage, which has no gain control on this board. */
+#define DAC_VOLUME_STEP 0x00
 
 #define AIC3104_ADDR            0x18
 #define AIC3104_PAGE_CTRL       0x00
@@ -225,6 +269,112 @@ int audio_xvf_write(uint8_t resid, uint8_t cmd, const uint8_t *params, size_t np
     return xvf_control_write_at(XVF_I2C_ADDRESS, buf, 3 + nparams, "xvf write");
 }
 
+/* Send a frame that is already in the chip's wire format.
+ *
+ * The scalar controls need [resid, cmd, 1, b0, b1, b2, b3]: one value, four bytes. The
+ * convenience wrapper above cannot produce that shape, because it derives count from the payload
+ * length. Keeping this separate means the odd count field is explicit at the call site instead of
+ * being a special case hidden inside a function whose name promises "n params". */
+int audio_xvf_write_frame(const uint8_t *frame, size_t len) {
+    if (!frame || len < 3 || len > 19) return -1;
+    return xvf_control_write_at(XVF_I2C_ADDRESS, frame, len, "xvf write32");
+}
+
+/* ---- co-processor audio front end: AGC + microphone gain -------------------------------
+ *
+ * Measured before this existed, on this board: speech RMS ~219 against a room floor of ~334 --
+ * the talker arriving quieter than the room. The wake model crossed its cutoff only intermittently
+ * and the Satellite Gateway's energy gate rejected every speech frame it saw (87 of 87).
+ *
+ * Both controls live on the co-processor and both were unreachable until the 4-byte scalar
+ * framing was fixed (count = 1 with a four-byte payload); a writer that derived count from the
+ * payload length sent count = 4, which the chip acknowledges and ignores.
+ *
+ * Everything set here is VOLATILE on the chip. A co-processor restart -- every power cycle, every
+ * firmware write -- restores its defaults, so this must run on every boot rather than once at
+ * provisioning, or the device silently reverts to being hard of hearing. */
+/* AGC max gain: how far it may lift a quiet talker.
+ *
+ * AGC TARGET POWER, not gain: 0.003 aimed at about -25 dBFS and the measured result was the
+ * opposite of the intent -- the Satellite Gateway's room floor fell from 334 to 67 and speech medians came in
+ * around 275 against a gate threshold of 400, so every utterance was rejected as too quiet. A
+ * target that low makes the AGC ATTENUATE towards it rather than lift speech. 0.05 sits near
+ * -13 dBFS, which is a normal speech level for this gate. */
+#define XVF_AGC_MAX_GAIN   60.0f
+#define XVF_AGC_TARGET     0.05f
+
+static int xvf_scalar_i32(uint8_t resid, uint8_t cmd, int32_t value) {
+    uint8_t frame[XVF_I2C_SET32_CMD_LEN];
+    wy_control_i32_command(frame, resid, cmd, value);
+    return audio_xvf_write_frame(frame, sizeof(frame));
+}
+
+static int xvf_scalar_f32(uint8_t resid, uint8_t cmd, float value) {
+    uint8_t frame[XVF_I2C_SET32_CMD_LEN];
+    wy_control_f32_command(frame, resid, cmd, value);
+    return audio_xvf_write_frame(frame, sizeof(frame));
+}
+
+int audio_xvf_set_mic_gain(int mic_gain_percent) {
+    /* The fleet's mic_gain drives the ASR output gain, because that is the only gain with a
+     * measured effect on the stream we capture (see audio_xvf_apply_frontend). Someone changing
+     * mic_gain in the fleet config therefore changes the thing that actually happens. */
+    float multiple = wy_mic_gain_multiple(mic_gain_percent);
+    if (multiple > XVF_ASR_GAIN_MAX) multiple = XVF_ASR_GAIN_MAX;
+    if (multiple < 1.0f) multiple = 1.0f;
+    int rc = xvf_scalar_i32(XVF_I2C_RESID_AEC, XVF_I2C_CMD_ASR_OUT_ONOFF, 1);
+    rc |= xvf_scalar_f32(XVF_I2C_RESID_AEC, XVF_I2C_CMD_ASR_OUT_GAIN, multiple);
+    return rc;
+}
+
+int audio_xvf_apply_frontend(int mic_gain_percent) {
+    int rc = 0;
+    /* Level control on the tap we actually capture: the AEC Servicer's ASR output.
+     *
+     * Two findings drive this, both from the XMOS documentation and both verified on the board:
+     *
+     * 1. Seeed's I2S images route BOTH default I2S output channels to ASR beam 0, and XMOS states
+     *    that "the ASR audio is extracted after the beamformer, and it is not fed into the post
+     *    processor". The post-processor is where the noise suppression and the PP AGC live, so the
+     *    PP AGC cannot change this stream -- which is exactly what the board showed: enabling it
+     *    with max gain 60 and target 0.05 left the room level at 73-75 where it had been 75-77.
+     *    Writing it was harmless but pointless, so it is no longer written.
+     *
+     * 2. The ASR tap has its OWN documented fixed gain, AEC_ASROUTGAIN (33/36, 0.0-1000.0 linear,
+     *    applied only while ASR_OUT_ONOFF is 1). Measured: 1.0 -> 32.0 moved the room from p90 58
+     *    to p90 1140, a 30-40x jump matching the 32x requested. This is the only gain that reaches
+     *    the audio we capture, so the fleet's mic_gain now drives THIS, not AUDIO_MGR_MIC_GAIN.
+     *
+     * AUDIO_MGR_MIC_GAIN (pre-SHF) is held at unity: it sits upstream of the beamformer, and a
+     * second, unrelated gain in front of a beamformer that is already being fed a clean signal only
+     * buys clipping. The ASR gain is the one knob with a measured effect at the point of capture.
+     *
+     * The gain is fixed rather than adaptive on purpose: the wake model and the gateway's energy
+     * gate both want a predictable level, and an adaptive stage underneath them made the same voice
+     * pass and fail from one minute to the next. */
+    float asr_gain = wy_mic_gain_multiple(mic_gain_percent);
+    if (asr_gain > XVF_ASR_GAIN_MAX) asr_gain = XVF_ASR_GAIN_MAX;
+    if (asr_gain < 1.0f) asr_gain = 1.0f;
+    rc |= xvf_scalar_i32(XVF_I2C_RESID_AEC, XVF_I2C_CMD_ASR_OUT_ONOFF, 1);
+    rc |= xvf_scalar_f32(XVF_I2C_RESID_AEC, XVF_I2C_CMD_ASR_OUT_GAIN, asr_gain);
+    /* AUDIO_MGR_MIC_GAIN (pre-SHF) is deliberately NOT written.
+     *
+     * It was briefly written as 1.0 "for unity", on the theory that a second gain ahead of the
+     * beamformer only buys clipping. With the count byte still broken that write was inert and
+     * harmless. The moment the count byte was fixed it took effect -- and the microphone went from
+     * a working level to near-silence (speech gone, room p50 76 -> 5), because the image's own
+     * pre-SHF default is far above 1.0. Writing unity to a control whose default is high is not a
+     * neutral act. The chip's default is the right value; leave it alone. */
+    if (rc != 0)
+        ESP_LOGW("plb", "front end: co-processor control write failed (%d); the microphone stays "
+                        "quiet and wake detection may only work intermittently", rc);
+    else
+        ESP_LOGI("plb", "front end: ASR tap on, fixed ASR gain %.2fx (mic_gain %.0f%%), "
+                        "pre-SHF gain left at the image default",
+                 (double)asr_gain, (double)mic_gain_percent);
+    return rc;
+}
+
 /* Read an arbitrary XVF3800 control register. The caller sends the command bytes already
  * marked as a read (cmd | 0x80) and sized; the reply is [status, ...data]. This is the same
  * shape the bring-up probe uses for VERSION, which is the verified part of the pattern. Used
@@ -265,6 +415,12 @@ int audio_xvf_route_output(int right, int category, int source) {
     uint8_t cmd[XVF_I2C_GPO_CMD_LEN];
     wy_output_route_command(cmd, right, category, source);
     return xvf_control_write_at(XVF_I2C_ADDRESS, cmd, sizeof(cmd), right ? "route R" : "route L");
+}
+
+int audio_xvf_output_upsample(int left_on, int right_on) {
+    uint8_t cmd[XVF_I2C_GPO_CMD_LEN];
+    wy_output_upsample_command(cmd, left_on, right_on);
+    return xvf_control_write_at(XVF_I2C_ADDRESS, cmd, sizeof(cmd), "route upsample");
 }
 
 static int aic_write(uint8_t reg, uint8_t val) {
@@ -439,9 +595,38 @@ int audio_playback_amp(int enabled) {
 
 static int pump_logged;
 
+/* Playback health counters, per answer.
+ *
+ * "Stuttering, especially towards the end" is a symptom with several possible mechanisms —
+ * the ring running dry, the DMA refusing writes, or the upsampler falling behind realtime — and
+ * they are indistinguishable by ear. These counters tell them apart in one playback:
+ *
+ *   writes      batches accepted by the DMA
+ *   empty       times the ring had nothing while the stream was still active: STARVATION
+ *   stalled     writes that made no progress (DMA full / channel not accepting): the TX side
+ *   abandoned   batches whose tail was given up on after the idle limit: AUDIBLE LOSS
+ *
+ * A clean answer has empty ~= the count of chunks the Satellite Gateway had not yet delivered, and
+ * stalled/abandoned at zero. Reported once per answer, at the same moment `played` is sent. */
+static uint32_t pump_writes, pump_empty, pump_stalled, pump_abandoned;
+/* Frames actually removed from the ring, and when the first/last of them went out.
+ *
+ * This is the number that settles "is playback chopping": frames removed divided by the elapsed
+ * time is the EFFECTIVE consumption rate. At a true 48 kHz link it must come out at ~48000 Hz.
+ * Anything lower means the pump was not feeding the DMA at the clock rate -- the DMA keeps
+ * shifting regardless, transmitting zeros it was given, so no write ever fails and no counter
+ * above moves. A downstream fault (codec, co-processor) cannot produce this: I2S has no
+ * backpressure, so nothing downstream can slow the ring drain. */
+static uint32_t pump_frames;
+static TickType_t pump_first_tick, pump_last_tick;
+static int pump_active_prev;   /* for the rising-edge reset above */
+static int preroll_done;       /* this answer has buffered enough to start */
+static TickType_t preroll_start;
+static size_t preroll_last_bytes;
+
 /* Where to report `played`, and whether this answer has already been reported.
  *
- * `played` is the device saying its speaker finished. Without it the bridge waits
+ * `played` is the device saying its speaker finished. Without it the Satellite Gateway waits
  * after every reply for an event that never arrives, which measured as ~20 s of
  * dead air per turn. The link pointers are refreshed on every bind, exactly like
  * the capture path: a reconnect hands back the same pump with a new transport. */
@@ -529,15 +714,30 @@ static void playback_task_fn(void *argument) {
              * the keepalive below runs unconditionally. */
         }
         /* A stream that has ENDED and a ring that has DRAINED means the speaker is
-         * finished: say so exactly once. Re-armed by the rising edge of the bridge's
+         * finished: say so exactly once. Re-armed by the rising edge of the Satellite Gateway's
          * playback flag, so the next answer is reported too. */
-        if (wy_session_playback_active(s)) {
+        /* Edge-triggered, deliberately. This block used to run on EVERY iteration while the stream
+         * was active, which reset the counters continuously: the summary then described the last
+         * loop pass rather than the answer, and reported 31 writes / 210 ms for a 16 s clip. A
+         * measurement that silently describes the wrong window is worse than no measurement. */
+        int active_now = wy_session_playback_active(s) ? 1 : 0;
+        if (active_now && !pump_active_prev) {
             played_reported = 0;
             done_queued = 0;
+            pump_writes = pump_empty = pump_stalled = pump_abandoned = 0;
+            pump_frames = 0;
+            pump_first_tick = pump_last_tick = 0;
+            pump_logged = 0;
+            preroll_done = 0;
+            preroll_start = 0;
+            preroll_last_bytes = 0;
+        }
+        pump_active_prev = active_now;
+        if (active_now) {
         } else if (!played_reported && wy_session_playback_ended(s) &&
                    wy_session_playback_bytes(s) == 0 && !done_queued) {
             /* The answer has finished sounding: mark it with the done tone BEFORE saying
-             * `played`, so the bridge's wait ends after the room has heard the closing
+             * `played`, so the Satellite Gateway's wait ends after the room has heard the closing
              * gesture too. One tone per answer, never per chunk. */
             if (!done_tone_samples) {
                 size_t need = wy_done_render(NULL, 0);
@@ -551,6 +751,21 @@ static void playback_task_fn(void *argument) {
             done_queued = 1;
         } else if (!played_reported && done_queued && wy_session_playback_ended(s) &&
                    wy_session_playback_bytes(s) == 0) {
+            {
+                /* The decisive figure: frames removed / elapsed. A true 48 kHz link must show
+                 * ~48000 Hz here. Lower means the pump was late and the DMA played zeros in the
+                 * meantime -- which no write-failure counter can see. */
+                unsigned elapsed_ms = 0;
+                if (pump_last_tick > pump_first_tick)
+                    elapsed_ms = (unsigned)((pump_last_tick - pump_first_tick) * 1000u
+                                            / configTICK_RATE_HZ);
+                unsigned rate = elapsed_ms ? (unsigned)(((uint64_t)pump_frames * 1000u) / elapsed_ms)
+                                           : 0u;
+                ESP_LOGI("plb", "playback stats: %u writes, %u frames, %u ms, effective %u Hz "
+                                 "(48 kHz expected), %u empty-ring, %u stalled, %u abandoned",
+                         (unsigned)pump_writes, (unsigned)pump_frames, elapsed_ms, rate,
+                         (unsigned)pump_empty, (unsigned)pump_stalled, (unsigned)pump_abandoned);
+            }
             if (playback_write &&
                 wy_session_send_played(s, playback_write, playback_user) == WY_OK) {
                 ESP_LOGI("plb", "played: reported to the gateway");
@@ -560,8 +775,36 @@ static void playback_task_fn(void *argument) {
             }
             played_reported = 1;
         }
+        /* Pre-roll: buffer before playing, so arrival jitter is absorbed instead of heard. */
+        /* Never pre-roll a device-generated tone: it is already complete and in the ring, and
+         * buffering it just delays and chops the feedback the user is listening for. */
+        if (active_now && !preroll_done && !wy_session_local_pending(s)) {
+            size_t have = wy_session_playback_bytes(s);
+            preroll_last_bytes = have;
+            TickType_t now_tick = xTaskGetTickCount();
+            if (preroll_start == 0) preroll_start = now_tick;
+            unsigned waited_ms = (unsigned)((now_tick - preroll_start) * 1000u / configTICK_RATE_HZ);
+            if (have >= PLAYBACK_PREROLL_BYTES || waited_ms >= PLAYBACK_PREROLL_MAX_MS) {
+                preroll_done = 1;
+                ESP_LOGI("plb", "pre-roll done after %u ms: %u bytes buffered (%.2f s)%s",
+                         waited_ms, (unsigned)have, (double)have / (48000.0 * 8.0),
+                         have < PLAYBACK_PREROLL_BYTES ? " -- TIMED OUT, producer behind the clock" : "");
+            } else {
+                /* Keep the DMA fed with real silence while the buffer fills. */
+                size_t silence_written = 0;
+                i2s_channel_write(tx, playback_silence, sizeof(playback_silence),
+                                  &silence_written, PLAYBACK_WRITE_MS);
+                continue;
+            }
+        }
         size_t n = wy_session_playback_read(s, frame, sizeof(frame));   /* bytes, <= sizeof(frame) */
         if (n == 0) {
+            /* The ring is empty, so no local tone can still be sounding. */
+            wy_session_local_done();
+            /* An empty ring WHILE A STREAM IS ACTIVE is starvation: the room hears a gap. An
+             * empty ring after the stream ended is just the tail of a finished answer and is
+             * not counted, or every answer would report a false fault. */
+            if (wy_session_playback_active(s)) pump_empty++;
             /* Keepalive: push one batch of real zeros rather than idling the DMA. The write's
              * own timeout is the pacing, so this yields exactly like the delay did. */
             size_t silence_written = 0;
@@ -570,6 +813,7 @@ static void playback_task_fn(void *argument) {
             continue;
         }
         if (!pump_logged) { ESP_LOGI("plb", "pump: first %u frames to I2S", (unsigned)n); pump_logged = 1; }
+        pump_writes++;
         size_t written = 0;
         if (tx) {
             /* The driver converts its timeout_ms to ticks itself (xQueueReceive(pdMS_TO_TICKS
@@ -590,6 +834,11 @@ static void playback_task_fn(void *argument) {
                 written = 0;
                 esp_err_t wrc = i2s_channel_write(tx, (const uint8_t *)frame + off, n - off,
                                                  &written, PLAYBACK_WRITE_MS);
+                /* 8 bytes per stereo-32 frame: this is the only place that counts what the
+                 * speaker actually consumed, as opposed to what was queued. */
+                pump_frames += (uint32_t)(written / 8u);
+                if (pump_writes == 1 && pump_first_tick == 0) pump_first_tick = xTaskGetTickCount();
+                pump_last_tick = xTaskGetTickCount();
                 off += written;
                 /* A zero-progress write means "the DMA is full", NOT "discard the rest".
                  * Breaking there silently deleted the tail of every batch that timed out -- a
@@ -603,7 +852,9 @@ static void playback_task_fn(void *argument) {
                  * started turn, then "Connection reset by peer" as the board came back up.
                  * Retrying is correct; retrying without a limit is a crash. */
                 if (written == 0) {
+                    pump_stalled++;
                     if (++idle_tries >= PLAYBACK_WRITE_MAX_IDLE) {
+                        pump_abandoned++;
                         ESP_LOGW("plb", "pump: abandoning %u unwritten bytes after %d idle "
                                  "writes (rc=%d); the channel is not accepting data",
                                  (unsigned)(n - off), idle_tries, (int)wrc);
@@ -634,12 +885,48 @@ int audio_playback_start(void) {
     /* The codec that drives the 3.5 mm jack powers up muted. Bring it up before anything plays,
      * or every answer is silent regardless of the routing and the ring state. */
     audio_dac_init();
-    i2s_chan_config_t channel = I2S_CHANNEL_DEFAULT_CONFIG(PLAYBACK_I2S_PORT, I2S_ROLE_MASTER);
+    /* The co-processor's AGC and mic gain are volatile chip state: a co-processor restart wipes
+     * them, so they are re-armed here on every boot. Without this the device comes up hard of
+     * hearing and the wake word only fires sometimes, with nothing in the log to say why. */
+    audio_xvf_apply_frontend(XVF_MIC_GAIN_DEFAULT_PERCENT);
+
+    /* ---- Output routing: LEFT AT THE IMAGE DEFAULTS, deliberately. ----
+     *
+     * This used to clear AUDIO_MGR_OP_UPSAMPLE (0 0) and route the far end with category 10
+     * "native rate", on a reading of the XMOS Programming Guide's host-to-host loopback test. Two
+     * things were wrong with that, and both are now measured rather than argued:
+     *
+     * 1. Those exact commands ARE the guide's far-end loopback test -- "to loop back any data
+     *    received". Category 10 is FAR-END audio, not a microphone tap. Once the scalar count byte
+     *    was corrected and writes began to take effect, the captured microphone stream collapsed:
+     *    speech RMS fell from ~1100 to a median of 16, because the output was carrying the (silent)
+     *    far end instead of the processed voice.
+     *
+     * 2. The 48 kHz playback argument also does not survive the datasheet: the voice pipeline runs
+     *    at 16 kHz INTERNALLY and a 48 kHz interface inserts a sample-rate converter, so the
+     *    "full band" premise was about the far end only, while the microphone range is 80 Hz-8 kHz
+     *    either way.
+     *
+     * The defaults are what the image ships and what the board demonstrably worked with: room
+     * p50 ~250 against speech ~1100 with the ASR gain applied. Nothing here is written unless a
+     * future change can measure an improvement over the default, one control at a time.
+     *
+     * NOTE for anyone tempted to reinstate category 6 (post-processed communications output, which
+     * does include the 25 dB noise suppression): the OP mux feeds the DAC channel as well, so
+     * sending microphone audio there is acoustic feedback. Change the low/high output selects
+     * (35/15, 35/19) only, and measure the room floor before and after. */
+    i2s_chan_config_t channel = I2S_CHANNEL_DEFAULT_CONFIG(PLAYBACK_I2S_PORT, PLAYBACK_I2S_ROLE);
     /* Clear each TX DMA buffer as soon as it has been played. The SDK default leaves this OFF,
      * which means a buffer that is replayed without being refilled repeats STALE audio instead of
      * silence -- so any momentary underrun becomes an audible glitch rather than a quiet gap.
      * Underrun protection costs one memset per completed buffer. */
     channel.auto_clear_after_cb = true;
+    /* Same reasoning as capture, on the transmit side: ~38 ms of DMA depth (10 descriptors x 480
+     * frames x 8 bytes) so a scheduling hiccup becomes a slightly late write instead of an audible
+     * gap. With auto_clear on, an underrun that does happen is silence rather than a replayed
+     * stale buffer, which is the difference between a small dropout and a machine-gun glitch. */
+    channel.dma_desc_num = 10;
+    channel.dma_frame_num = 480;
     if (i2s_new_channel(&channel, &tx, NULL) != ESP_OK) {
         /* The usual cause is the capture RX already owning I2S_NUM_0 in a state the driver will
          * not pair with. Silent failure here means an answer is produced, sent, and never played,
@@ -707,8 +994,18 @@ int audio_playback_start(void) {
      * says an answer is playing, so starting the channel early (at registration, before the
      * first wake) is what makes the first answer start clean: the DMA is already primed. */
     stopping = 0;
-    if (xTaskCreate(playback_task_fn, "plb_task", PLAYBACK_TASK_STACK, NULL,
-                    PLAYBACK_TASK_PRIORITY, &task) != pdPASS) {
+    /* Core 0, NOT the capture core.
+     *
+     * The capture task runs the wake-model inference on every 10 ms frame at priority 6. Pinning the
+     * pump to the same core (priority 5, i.e. below it) starved playback catastrophically: a 0.31 s
+     * chime took 4.6 s to drain, about 7% of realtime, heard as a chime arriving late and then
+     * stuttering. The two must not share a core.
+     *
+     * So: capture + inference own core 1; the pump joins the network/UI core at a priority above the
+     * gateway task, so a TLS burst cannot starve it either. The pump blocks on the DMA most of its
+     * life, so sharing with the radio costs the radio little. */
+    if (xTaskCreatePinnedToCore(playback_task_fn, "plb_task", PLAYBACK_TASK_STACK, NULL,
+                    PLAYBACK_TASK_PRIORITY, &task, 0) != pdPASS) {
         i2s_channel_disable(tx);
         i2s_del_channel(tx);
         tx = NULL;

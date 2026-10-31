@@ -4,12 +4,12 @@
 #include "wyoming_audio.h"
 /* State: the host's request to run (RUN_REQUESTED) is the armed state -- the device is
  * listening for its wake word. `streaming` (below) means the mic is being forwarded to the
- * bridge right now, between a wake and the bridge's transcript. */
+ * Satellite Gateway right now, between a wake and the Satellite Gateway's transcript. */
 enum { WY_SESSION_DESCRIBE = 0, WY_SESSION_ACK = 1, WY_SESSION_REGISTERED = 2,
        WY_SESSION_RUN_REQUESTED = 3, WY_SESSION_REFUSED = 4, WY_SESSION_FAILED = 5 };
 enum { WY_REFUSED = -4 };
 /* The wake word name this device reports in the detection event. The local wake detector
- * (the device glue) and the bridge's wake-now both report this SAME name, so the bridge's
+ * (the device glue) and the Satellite Gateway's wake-now both report this SAME name, so the Satellite Gateway's
  * capture path sees one wake word whether it was heard locally or requested over the link.
  * It is the DEFAULT detection name: the glue may override it per device with the model's own
  * name (the config-plane wake_word) via wy_session_set_identity, which is what makes the two
@@ -18,7 +18,7 @@ enum { WY_REFUSED = -4 };
  * wake_word (e.g. hey_hermes); the detection event reports that same model name. */
 #define WYAKE_WORD_NAME "hey-hermes"
 
-/* The device's identity as the bridge and the house know it: the same fields the Pi reads from
+/* The device's identity as the Satellite Gateway and the house know it: the same fields the Pi reads from
  * env (VOICE_DEVICE_NAME / VOICE_DEVICE_AREA / VOICE_FIRMWARE_VERSION) and the model name it
  * reports as the detection name. Set once by the device glue (from NVS + the loaded model);
  * the session core keeps them across re-init and uses them in its registration, describe/info
@@ -32,7 +32,7 @@ typedef struct {
 
 typedef struct {
     int state;
-    int streaming;        /* 1 while the mic stream is being forwarded to the bridge */
+    int streaming;        /* 1 while the mic stream is being forwarded to the Satellite Gateway */
     uint32_t stream_frames;   /* chunks forwarded on this stream; bounds it (WY_STREAM_MAX_FRAMES) */
     int paused;           /* 1 after pause-satellite; run-satellite clears it */
     char device_id[65];
@@ -50,7 +50,7 @@ typedef struct {
     int (*lock_writer)(void *user);
     int (*unlock_writer)(void *user);
     void *writer_lock_user;
-    /* The playback (bridge -> speaker) side: a bounded byte ring of I2S-ready stereo-32 frames
+    /* The playback (Satellite Gateway -> speaker) side: a bounded byte ring of I2S-ready stereo-32 frames
      * the session core (the gateway task) writes as each inbound audio-chunk is converted, and
      * the playback task reads at realtime. The ring is caller-provided (PSRAM on the device);
      * the conversion buffers are internal. Active from audio-start to audio-stop; `ended` marks
@@ -58,8 +58,8 @@ typedef struct {
     int playback_active;  /* 1 between audio-start and audio-stop */
     int playback_ended;   /* 1 after audio-stop (the ring still drains) */
     int playback_volume;  /* percent, the no-silence floor applied in wy_apply_volume */
-    int playback_rate;    /* the stream's rate, from audio-start (the bridge's 22050) */
-    /* The bridge's TTS is 22050 Hz and the link is WY_AUDIO_I2S_RATE_HZ, so playback is
+    int playback_rate;    /* the stream's rate, from audio-start (the Satellite Gateway's 22050) */
+    /* The Satellite Gateway's TTS is 22050 Hz and the link is WY_AUDIO_I2S_RATE_HZ, so playback is
      * up-sampled. wy_upsampler, not wy_resampler: see wyoming_audio.h for why the up-sampler
      * needs its own state. */
     wy_upsampler playback_rs;
@@ -115,11 +115,11 @@ int wy_session_state(const wy_session *session);
  * deadlines. Close the transport on every non-OK result; init a fresh session on reconnect.
  * A well-formed control event this device does not implement (config, or an unknown type) is
  * safely ignored and the call returns OK: the frame already passed the strict decode above,
- * and a real bridge sends several of these -- starting with desired state immediately after
+ * and a real Satellite Gateway sends several of these -- starting with desired state immediately after
  * registration -- so tearing the link on the first one would make it unusable. Inbound
  * playback audio (audio-start / audio-chunk / audio-stop) is accepted and its payload drained
  * off the wire: the speaker path is a later increment, but refusing the frame the way the old
- * core refused every payload killed the link the first time the bridge spoke. Only a malformed
+ * core refused every payload killed the link the first time the Satellite Gateway spoke. Only a malformed
  * frame, an UNKNOWN event carrying a payload, or a refused registration fails. */
 int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_fn, void *ctx);
 /* Install the config-plane handler (the device glue wires in the config agent). The session
@@ -141,11 +141,11 @@ int wy_session_set_config(wy_session *session,
  *
  * `wake_level` (issue #32 arbitration): what the device heard, on the wake core's fixed
  * 0..100 scale (wy_wake.h), or -1 for "no measurement" -- with -1 the detection frame is the
- * historical shape (no context at all), which the bridge reads as level-less and arbitrates by
+ * historical shape (no context at all), which the Satellite Gateway reads as level-less and arbitrates by
  * its documented fallbacks. A level attaches to the detection as
- * `context.wake_level`; the bridge never compares levels across utterances or installations,
+ * `context.wake_level`; the Satellite Gateway never compares levels across utterances or installations,
  * only devices within one claim window. `wake_score` is the crossing score (the core's
- * fired_score, [0,1]) and rides as `context.wake_score` for the bridge's tiebreaker; a score
+ * fired_score, [0,1]) and rides as `context.wake_score` for the Satellite Gateway's tiebreaker; a score
  * outside (0, 1] or a level-less wake sends no score -- the historical shape again. */
 int wy_session_wake(wy_session *session, const char *wake_word, int wake_level,
                     float wake_score, wy_write_fn write_fn, void *ctx);
@@ -154,10 +154,10 @@ int wy_session_wake(wy_session *session, const char *wake_word, int wake_level,
  * under the writer lock, so the link never carries two frames at once. Returns INVALID when
  * the stream is not running (the mic is closed and the audio is dropped, exactly like the
  * reference satellite's event_from_mute path). */
-/* Report that playback finished, so the bridge stops waiting on `played`. */
+/* Report that playback finished, so the Satellite Gateway stops waiting on `played`. */
 /* One microphone chunk is 10 ms of audio, so this bounds an open stream at 30 s: far longer
  * than any utterance, short enough that a lost `transcript` cannot leave the room miked up
- * indefinitely. The bridge closes the stream normally; this is the device-side backstop. */
+ * indefinitely. The Satellite Gateway closes the stream normally; this is the device-side backstop. */
 #define WY_STREAM_MAX_FRAMES 3000u
 
 int wy_session_send_played(wy_session *session,
@@ -167,7 +167,7 @@ int wy_session_send_audio(wy_session *session, const void *pcm, size_t length,
                           wy_write_fn write_fn, void *ctx);
 int wy_session_streaming(const wy_session *session);
 
-/* Playback (bridge -> speaker). configure wires a caller-provided ring (bytes) and the volume
+/* Playback (Satellite Gateway -> speaker). configure wires a caller-provided ring (bytes) and the volume
  * into the session before the link is driven; the device calls it once at startup (PSRAM ring).
  * The core converts each inbound audio-chunk -- resample to 16 kHz, apply the volume (no
  * silence floor), expand to the I2S TX's stereo 32-bit full-scale -- and appends the frames to
@@ -183,12 +183,18 @@ int wy_session_playback_configure(wy_session *session, int32_t *ring, size_t rin
  * use, so the setter cannot silence the speaker. INVALID on a NULL session. */
 int wy_session_set_playback_volume(wy_session *session, int volume);
 /* The device's own local tone (the wake chime, D4): write n 16 kHz mono S16 samples into the
- * playback ring, the same speaker path as a bridge answer. No resample (the chime is rendered
+ * playback ring, the same speaker path as a Satellite Gateway answer. No resample (the chime is rendered
  * at the board's 16 kHz), but the SAME volume (the config plane's level) and stereo-32 expand,
  * appended under the ring lock like the inbound audio-chunk path. INVALID on a NULL session or
  * pcm, or when no ring is configured (local audio has nowhere to go). The pump task's
  * amplifier policy (armed while the ring is not empty) carries it to the speaker. */
 int wy_session_local_play(wy_session *session, const int16_t *mono, size_t n);
+
+/* Is device-generated audio (chime / done tone) still pending in the ring? The playback pump must
+ * not pre-roll it: pre-roll exists to buffer NETWORK audio, and gating a local tone delays and
+ * chops the very feedback that confirms a wake. Cleared when the ring empties. */
+int wy_session_local_pending(wy_session *session);
+void wy_session_local_done(void);
 int wy_session_playback_active(const wy_session *session);
 int wy_session_playback_ended(const wy_session *session);
 size_t wy_session_playback_bytes(const wy_session *session);

@@ -17,7 +17,7 @@
 int tls_credentials_load(tls_credentials *out, char *reason, size_t reason_capacity);
 
 /* Report what is in the region without dialling anything, for the console: what was provisioned,
- * for which bridge, and with which pinned fingerprint. Returns 0 when an intact blob is there and
+ * for which Satellite Gateway, and with which pinned fingerprint. Returns 0 when an intact blob is there and
  * fills `out` when a caller wants the details; `reason` explains anything that is not intact. */
 int tls_credentials_probe(tls_credentials *out, char *reason, size_t reason_capacity);
 

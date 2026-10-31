@@ -5,6 +5,7 @@
 #include "wifi_station.h"
 #include "audio_bringup.h"
 #include "audio_playback.h"
+#include "wyoming_audio.h"   /* the scalar-control frame encoders (wy_control_f32/i32_command) */
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -125,7 +126,13 @@ static void profile_key(char *out, size_t capacity, int index, const char *field
 static int count_profiles(void *ctx) {
     if (!*(bool *)ctx) return -1;
     nvs_handle_t handle;
-    if (nvs_open("hermes_wifi", NVS_READONLY, &handle) != ESP_OK) return -1;
+    /* A namespace that does not exist yet means nothing has been saved, which is the state of every
+     * board before its first network. Treating it as an error made WIFI_PROFILE_SAVE fail on a fresh
+     * device, so the very first profile could never be stored. load_wifi() already reads it this
+     * way; this is the same rule for the count. */
+    esp_err_t opened = nvs_open("hermes_wifi", NVS_READONLY, &handle);
+    if (opened == ESP_ERR_NVS_NOT_FOUND) return 0;
+    if (opened != ESP_OK) return -1;
     uint8_t count = 0;
     esp_err_t result = nvs_get_u8(handle, "prof_n", &count);
     nvs_close(handle);
@@ -696,7 +703,7 @@ void provisioning_console_run(void) {
                 continue;  /* this branch replies for itself */
             } else if (!strcmp(line.data, "TLS_STATUS")) {
                 /* What is provisioned, without dialling anything: the full fingerprint is printed
-                 * because comparing it against the bridge's own value is the whole check, and a
+                 * because comparing it against the Satellite Gateway's own value is the whole check, and a
                  * truncated one would make that comparison guesswork. */
                 static tls_credentials credentials;
                 static char reason[96];
@@ -732,6 +739,144 @@ void provisioning_console_run(void) {
                     snprintf(response, sizeof(response), "OK DEVICE_ID %s", device_id);
                 else
                     snprintf(response, sizeof(response), "ERR DEVICE_ID UNREADABLE");
+            } else if (!strncmp(line.data, "XVF_UPSAMPLE ", 13)) {
+                /* "XVF_UPSAMPLE <L> <R>" -- set the Audio Manager's per-channel output upsampling
+                 * flags. In a 48 kHz interface configuration the chip defaults these to 1, which
+                 * rate-converts our already-48 kHz playback down to 16 kHz and back before it
+                 * reaches the speaker, band-limiting answers to 8 kHz. Try:
+                 *   XVF_UPSAMPLE 1 1   (the chip's default)
+                 *   XVF_UPSAMPLE 0 0   (keep the native 48 kHz all the way to the DAC)
+                 * paired with "XVF_OP 4 0" versus "XVF_OP 10 0", and compare the tone test by ear:
+                 * the difference between the two pairs is the top octave of the voice. */
+                int lo = 0, ro = 0;
+                if (sscanf(line.data, "XVF_UPSAMPLE %d %d", &lo, &ro) != 2 ||
+                    (lo != 0 && lo != 1) || (ro != 0 && ro != 1)) {
+                    snprintf(response, sizeof(response),
+                             "ERR XVF_UPSAMPLE usage: XVF_UPSAMPLE <0|1> <0|1>");
+                } else {
+                    int rc = audio_xvf_output_upsample(lo, ro);
+                    snprintf(response, sizeof(response), "%s XVF_UPSAMPLE L=%d R=%d",
+                             rc == 0 ? "OK" : "ERR", lo, ro);
+                }
+            } else if (!strncmp(line.data, "XVF_READ ", 9)) {
+                /* "XVF_READ <resid> <cmd> [bytes]" -- query any XVF3800 control and print the
+                 * raw reply. Byte 0 of the reply is the status (0 = ok, 64 = the chip asked to be
+                 * retried). Two reads matter for the 48 kHz work:
+                 *   XVF_READ 35 24 1   -> I2S_INACTIVE: 0 = the co-processor's I2S path is ALIVE,
+                 *                         1 = inactive. This is the direct answer to "is the link
+                 *                         running at all", with no logic analyzer involved.
+                 *   XVF_READ 20 18 4   -> DOA_VALUE: DOA angle (0-359) plus a speech-detection
+                 *                         flag, computed by the co-processor from its own microphones.
+                 *                         If it reports speech while our wake scorer never crosses its
+                 *                         cutoff, the fault is in the link or the samples; if it reports
+                 *                         silence, the microphone front end is the suspect.
+                 * Command IDs 18/24 are version-dependent (DOA_VALUE and LED_RING_COLOR swapped at
+                 * image v1.0.8), so read the version first: XVF_READ 48 0 4. */
+                unsigned r = 0, cm = 0, nbytes = 1;
+                int got = sscanf(line.data, "XVF_READ %u %u %u", &r, &cm, &nbytes);
+                if (got < 2 || nbytes < 1 || nbytes > 16) {
+                    snprintf(response, sizeof(response),
+                             "ERR XVF_READ usage: XVF_READ <resid> <cmd> [bytes 1-16]");
+                } else {
+                    uint8_t cmd[3] = { (uint8_t)r, (uint8_t)(cm | 0x80), (uint8_t)nbytes };
+                    uint8_t reply[17] = {0};
+                    int rc = audio_xvf_read(cmd, sizeof(cmd), reply, (size_t)nbytes + 1u);
+                    if (rc != 0) {
+                        snprintf(response, sizeof(response), "ERR XVF_READ %u %u bus=%d", r, cm, rc);
+                    } else {
+                        /* Status first, then the data, so a retry (64) is not misread as a value. */
+                        int used = snprintf(response, sizeof(response), "OK XVF %u/%u st=%u",
+                                            r, cm, reply[0]);
+                        for (int i = 1; i <= (int)nbytes && used < (int)sizeof(response) - 4; ++i)
+                            used += snprintf(response + used, sizeof(response) - (size_t)used,
+                                             " %02x", reply[i]);
+                    }
+                }
+            } else if (!strncmp(line.data, "XVF_SET32 ", 10) || !strncmp(line.data, "XVF_SETF ", 9)) {
+                /* "XVF_SET32 <resid> <cmd> <value>"  -> int32 scalar
+                 * "XVF_SETF  <resid> <cmd> <value>"  -> IEEE-754 float scalar
+                 *
+                 * Both send [resid, cmd, 1, b0, b1, b2, b3]: ONE value, FOUR bytes. That count
+                 * field is what the chip requires for its float and int32 parameters, and it is
+                 * exactly what XVF_WRITE cannot produce (it always sets count = the number of
+                 * bytes supplied), so until now these controls were unreachable from the console.
+                 *
+                 * The PP Servicer (ResID 17) holds the co-processor's own AGC, which this
+                 * firmware has never enabled. Measured on this board, speech arrives at RMS
+                 * ~220-700 while the room floor is ~300 -- quieter than the room -- which is why
+                 * the wake word only fires sometimes. The live levers:
+                 *   XVF_SET32 17 10 1       AGC on
+                 *   XVF_SETF  17 11 30.0    AGC max gain  [1.0 .. 1000.0]
+                 *   XVF_SETF  17 12 0.001   AGC target power [1e-8 .. 1.0]
+                 * Audio Manager mic gain is the same shape:
+                 *   XVF_SETF  35 0 4.0
+                 * The reply echoes the bytes actually sent, so a malformed frame is visible. */
+                unsigned r = 0, cm = 0;
+                double v = 0.0;
+                int is_float = !strncmp(line.data, "XVF_SETF ", 9);
+                int got = is_float ? sscanf(line.data, "XVF_SETF %u %u %lf", &r, &cm, &v)
+                                   : sscanf(line.data, "XVF_SET32 %u %u %lf", &r, &cm, &v);
+                if (got != 3 || r > 255 || cm > 255) {
+                    snprintf(response, sizeof(response), "ERR usage: %s <resid> <cmd> <value>",
+                             is_float ? "XVF_SETF" : "XVF_SET32");
+                } else {
+                    uint8_t frame[XVF_I2C_SET32_CMD_LEN];
+                    if (is_float)
+                        wy_control_f32_command(frame, (uint8_t)r, (uint8_t)cm, (float)v);
+                    else
+                        wy_control_i32_command(frame, (uint8_t)r, (uint8_t)cm, (int32_t)v);
+                    int rc = audio_xvf_write_frame(frame, sizeof(frame));
+                    snprintf(response, sizeof(response),
+                             "%s %s %u/%u = %g  [%02x %02x %02x %02x %02x %02x %02x]",
+                             rc == 0 ? "OK" : "ERR", is_float ? "SETF" : "SET32", r, cm, v,
+                             frame[0], frame[1], frame[2], frame[3], frame[4], frame[5], frame[6]);
+                }
+            } else if (!strncmp(line.data, "XVF_BYTES ", 10)) {
+                /* "XVF_BYTES <resid> <cmd> <b0> [b1 ... b15]" -- write a raw byte payload.
+                 *
+                 * Needed for AUDIO_MGR_OP_ALL (ResID 35, CmdID 23, 12 bytes), which is how the
+                 * XMOS native-rate far end is ACTUALLY configured. The Programming Guide's own
+                 * native loopback test sets all six selections at once:
+                 *   XVF_BYTES 35 23 10 0 10 2 10 4 10 1 10 3 10 5
+                 * Setting only OP_L/OP_R changes two of the six; with native-rate output selected
+                 * the untouched selections still carry their old categories, so unrelated or
+                 * stale signals interleave into the output. That is a candidate explanation for
+                 * the native 48 kHz tap being far rougher than the band-limited one. */
+                unsigned r = 0, cm = 0;
+                int consumed = 0;
+                if (sscanf(line.data, "XVF_BYTES %u %u%n", &r, &cm, &consumed) != 2 ||
+                    r > 255 || cm > 255) {
+                    snprintf(response, sizeof(response),
+                             "ERR usage: XVF_BYTES <resid> <cmd> <b0> [b1 ... b15]");
+                } else {
+                    uint8_t frame[19];
+                    int nb = 0;
+                    const char *p = line.data + consumed;
+                    while (*p && nb < 16) {
+                        int v = 0, span = 0;
+                        if (sscanf(p, " %d%n", &v, &span) != 1) break;
+                        if (v < 0 || v > 255) break;
+                        frame[3 + nb] = (uint8_t)v;
+                        nb++;
+                        p += span;
+                    }
+                    if (nb == 0) {
+                        snprintf(response, sizeof(response),
+                                 "ERR XVF_BYTES needs at least one payload byte");
+                    } else {
+                        frame[0] = (uint8_t)r;
+                        frame[1] = (uint8_t)cm;
+                        frame[2] = (uint8_t)nb;
+                        int rc = audio_xvf_write_frame(frame, (size_t)(3 + nb));
+                        int used = snprintf(response, sizeof(response),
+                                            "%s XVF_BYTES %u/%u (%d bytes)%s",
+                                            rc == 0 ? "OK" : "ERR", r, cm, nb, nb ? ":" : "");
+                        for (int i = 0; i < nb && used < (int)sizeof(response) - 4; ++i)
+                            used += snprintf(response + used,
+                                             sizeof(response) - (size_t)used, " %02x",
+                                             frame[3 + i]);
+                    }
+                }
             } else if (!strncmp(line.data, "XVF_WRITE ", 10)) {
                 /* "XVF_WRITE <resid> <cmd> <p0> [p1 ...]" -- probe any XVF3800 control.
                  * ResID 35 (Audio Manager) cmd 27 is I2S_DAC_DSP_ENABLE, the switch that
@@ -906,7 +1051,7 @@ void provisioning_console_run(void) {
             } else if (!strncmp(line.data, "SET_NAME ", 9) ||
                        !strncmp(line.data, "SET_AREA ", 9) ||
                        !strncmp(line.data, "SET_FIRMWARE_VERSION ", 22)) {
-                /* The device identity the bridge and the house know it by. The name and area are
+                /* The device identity the Satellite Gateway and the house know it by. The name and area are
                  * what describe/info and the registration report; firmware_version is the build
                  * label. Staged to NVS like the Wi-Fi profile, so a re-flash keeps them. */
                 const char *key = !strncmp(line.data, "SET_NAME ", 9) ? "device_name"
@@ -915,6 +1060,16 @@ void provisioning_console_run(void) {
                 const char *value = strchr(line.data, ' ');
                 value = value ? value + 1 : "";
                 if (save_identity_field(&storage_ready, key, value) == 0)
+                    snprintf(response, sizeof(response), "OK SAVED STAGED");
+                else
+                    snprintf(response, sizeof(response), "ERR STORAGE");
+            } else if (!strncmp(line.data, "SET_WAKE ", 9)) {
+                /* The model SELECTOR: the detector loads the model whose header name equals this
+                 * string, so a new model provisioned without it is quietly discarded in favour of
+                 * the previous one and the satellite stops waking. Setting the model and the
+                 * selector in the same cable session is what keeps them agreeing. */
+                const char *value = line.data + 9;
+                if (save_identity_field(&storage_ready, "wake_word", value) == 0)
                     snprintf(response, sizeof(response), "OK SAVED STAGED");
                 else
                     snprintf(response, sizeof(response), "ERR STORAGE");

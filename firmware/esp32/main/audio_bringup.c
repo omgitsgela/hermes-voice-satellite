@@ -20,8 +20,12 @@
 #define XVF_I2S_TX_PIN         GPIO_NUM_44
 #define XVF_I2S_RX_PIN         GPIO_NUM_43
 /* The 48 kHz profile: the I2S link runs at 48 kHz in both directions, matching the Seeed
- * reference (docs/audio-fidelity.md). The ESP32 is the clock MASTER and the XVF3800 PLLs its
- * own MCLK from BCLK, so this constant is what sets the whole board's rate. */
+ * reference (docs/audio-fidelity.md). CLOCK OWNER: the XVF3800 co-processor, not us. Upstream's
+ * I2S images are either a 48 kHz MASTER (it drives BCLK/WS, the host must be a slave) or a 16 kHz
+ * SLAVE (the host drives them); "the two devices must use complementary roles" -- two masters
+ * contend for the clock, two slaves leave the bus unclocked. This probe is a slave so it measures
+ * the same arrangement the live channels use. */
+#define XVF_I2S_ROLE_PROBE     I2S_ROLE_SLAVE
 #define XVF_I2S_RATE_HZ        48000
 
 /* Application Servicer (system) VERSION read: resid 48, cmd 0, three bytes. The I2C read protocol
@@ -36,7 +40,7 @@
  * initialized to standard mode, which is the interface bring-up; it is not started, so no stream
  * runs. It is deleted on every exit path. */
 static int i2s_interface_up(void) {
-    i2s_chan_config_t channel = I2S_CHANNEL_DEFAULT_CONFIG(XVF_I2S_PORT, I2S_ROLE_MASTER);
+    i2s_chan_config_t channel = I2S_CHANNEL_DEFAULT_CONFIG(XVF_I2S_PORT, XVF_I2S_ROLE_PROBE);
     i2s_chan_handle_t tx = NULL;
     i2s_chan_handle_t rx = NULL;
     if (i2s_new_channel(&channel, &tx, &rx) != ESP_OK) return AUDIO_I2S_FAIL;

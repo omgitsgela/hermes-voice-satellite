@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "cJSON.h"
 
-/* Health of the last apply attempt, exactly the vocabulary the bridge's config-plane
+/* Health of the last apply attempt, exactly the vocabulary the Satellite Gateway's config-plane
  * report() accepts: unknown | healthy | degraded | error. */
 enum { WY_CFG_HEALTH_UNKNOWN = 0, WY_CFG_HEALTH_HEALTHY = 1,
        WY_CFG_HEALTH_DEGRADED = 2, WY_CFG_HEALTH_ERROR = 3 };
@@ -29,7 +29,7 @@ enum { WY_CFG_HEALTH_UNKNOWN = 0, WY_CFG_HEALTH_HEALTHY = 1,
  *                       NOT in `actual` yet (nothing to apply to), remembered as pending.
  *   - mic_gain, led_brightness : the XMOS codec / APA102 strip -- no adapter installed
  *                       yet; not in `actual`, contribute `degraded`.
- *   - locale, update_channel : not device-applied (bridge: next_turn / next_update_check);
+ *   - locale, update_channel : not device-applied (Satellite Gateway: next_turn / next_update_check);
  *                       recorded, not in `actual`. */
 typedef struct wy_config wy_config;
 size_t wy_config_size(void);

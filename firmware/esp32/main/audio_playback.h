@@ -46,6 +46,9 @@ int audio_playback_amp(int enabled);
 /* Set the XVF3800 output mux (which signal the DAC plays). Returns 0 on success. */
 int audio_xvf_route_output(int right, int category, int source);
 
+/* Clear/set the Audio Manager's per-channel output upsampling flags (AUDIO_MGR_OP_UPSAMPLE). */
+int audio_xvf_output_upsample(int left_on, int right_on);
+
 /* Power up and unmute the AIC3104 codec driving the 3.5 mm jack. */
 int audio_dac_init(void);
 
@@ -54,6 +57,35 @@ int audio_dac_read(uint8_t reg, uint8_t *value);
 
 /* Write an arbitrary XVF3800 control register. */
 int audio_xvf_write(uint8_t resid, uint8_t cmd, const uint8_t *params, size_t nparams);
+
+/* Write a PRE-BUILT XVF control frame verbatim: [resid, cmd, count, payload...].
+ *
+ * Needed for the scalar controls, whose count field is 1 while the payload is four bytes.
+ * audio_xvf_write() always sets count = payload length, so it cannot express those at all --
+ * which is why a 4-byte value written through it is acknowledged and silently ignored. */
+int audio_xvf_write_frame(const uint8_t *frame, size_t len);
+
+/* Bring the co-processor's audio front end up: AGC on, its max gain and target level set, and the
+ * microphone gain applied. These are VOLATILE settings on the chip -- a co-processor restart wipes
+ * them -- so this must run on every boot, not once at provisioning.
+ *
+ * Why it exists: measured on this hardware before it did, speech arrived at RMS ~219 against a room
+ * floor of ~334, i.e. the talker was quieter than the room. The wake model then crossed its cutoff
+ * only intermittently and the Satellite Gateway's energy gate rejected every speech frame (87 of 87). */
+int audio_xvf_apply_frontend(int mic_gain_percent);
+
+/* Just the microphone gain, for the live config path (fleet `mic_gain`). Same 0..100 scale. */
+int audio_xvf_set_mic_gain(int mic_gain_percent);
+
+/* Ceiling on the ASR output gain actually applied (AEC_ASROUTGAIN). The register allows up to
+ * 1000x, which would only clip; 8x is +18 dB, ample for a far-field talker and well inside the
+ * limiter. */
+#define XVF_ASR_GAIN_MAX 4.0f
+
+/* The gain the microphone path needs, as a percentage of the compile-time maximum. The fleet
+ * default is 78, which maps to about 12.5x before the ASR ceiling clamps it to 8x. */
+#define XVF_MIC_GAIN_DEFAULT_PERCENT 78
+#define XVF_MIC_GAIN_PERCENT_MAX     100
 
 /* Read an arbitrary XVF3800 control register. The caller marks the command as a read (cmd|0x80)
  * and sizes the reply; byte 0 of the reply is the status. */

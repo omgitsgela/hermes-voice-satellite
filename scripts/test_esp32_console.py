@@ -374,11 +374,60 @@ int audio_dac_write(uint8_t reg, uint8_t value) { (void)reg; (void)value; return
 int audio_xvf_write(uint8_t resid, uint8_t cmd, const uint8_t *params, size_t nparams) {
     (void)resid; (void)cmd; (void)params; (void)nparams; return 0;
 }
+/* The scalar-control path sends a pre-built frame, because its count field is 1 while the
+ * payload is four bytes -- a shape audio_xvf_write() cannot express. */
+int audio_xvf_write_frame(const uint8_t *frame, size_t len) {
+    (void)frame; (void)len; return 0;
+}
+/* Same encoding the firmware's wyoming_audio.c uses, so the console's echoed frame is
+ * meaningful here. Byte-exactness of the encoders themselves is pinned against the real
+ * implementation in test_esp32_audio.py; this harness proves parsing and dispatch. */
+static void harness_le32(uint8_t out[7], uint8_t resid, uint8_t cmd, uint32_t bits) {
+    out[0] = resid; out[1] = cmd; out[2] = 1;
+    out[3] = (uint8_t)(bits & 0xFFu);
+    out[4] = (uint8_t)((bits >> 8) & 0xFFu);
+    out[5] = (uint8_t)((bits >> 16) & 0xFFu);
+    out[6] = (uint8_t)((bits >> 24) & 0xFFu);
+}
+void wy_control_i32_command(uint8_t out[7], uint8_t resid, uint8_t cmd, int32_t value) {
+    harness_le32(out, resid, cmd, (uint32_t)value);
+}
+void wy_control_f32_command(uint8_t out[7], uint8_t resid, uint8_t cmd, float value) {
+    union { float f; uint32_t u; } bits;
+    bits.f = value;
+    harness_le32(out, resid, cmd, bits.u);
+}
 int wake_detector_play_chime(void) { return 0; }
 int audio_playback_amp(int enabled) { (void)enabled; return 0; }
 void audio_playback_amp_lock(int locked) { (void)locked; }
 int audio_xvf_route_output(int right, int category, int source) {
     (void)right; (void)category; (void)source; return 0;
+}
+
+/* Records what the console's diagnostic writes actually asked for, so a test can prove the
+ * upsampling flags are CLEARED (0 0) rather than merely "some write happened", and that a read
+ * request is framed with the read bit set. Same rationale as the other stubs above: the console's
+ * dispatch and framing are what this harness proves. */
+static int xvf_upsample_calls, xvf_upsample_l, xvf_upsample_r;
+int audio_xvf_output_upsample(int left_on, int right_on) {
+    xvf_upsample_calls += 1; xvf_upsample_l = left_on; xvf_upsample_r = right_on;
+    const char *record = getenv("XVF_UPSAMPLE_RECORD");
+    if (record) {
+        FILE *log = fopen(record, "w");
+        if (log) { fprintf(log, "calls=%d l=%d r=%d\n", xvf_upsample_calls, left_on, right_on); fclose(log); }
+    }
+    return 0;
+}
+static int xvf_read_calls, xvf_read_resid, xvf_read_cmd;
+int audio_xvf_read(const uint8_t *cmd, size_t cmdlen, uint8_t *reply, size_t replylen) {
+    xvf_read_calls += 1;
+    if (cmdlen >= 2) { xvf_read_resid = cmd[0]; xvf_read_cmd = cmd[1]; }
+    /* A plausible reply: status 0 then data, so the framing test sees real-shaped bytes. */
+    if (reply && replylen > 0) {
+        reply[0] = 0;
+        for (size_t i = 1; i < replylen; ++i) reply[i] = (uint8_t)(0x10 + i);
+    }
+    return 0;
 }
 
 static int wake_force_fired;
@@ -511,6 +560,7 @@ int usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);
         executable = tmp / 'console'
         compiled = subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror',
                                    '-I' + str(tmp), '-I' + str(CORE), '-I' + str(MAIN),
+                                   '-I' + str(ROOT / 'firmware/esp32/components/wyoming_audio'),
                                    '-I' + str(ROOT / 'firmware/esp32/components/audio_report'),
                                    '-I' + str(ROOT / 'firmware/esp32/components/report_tail'),
                                    str(tmp / 'runner.c'), str(MAIN / 'provisioning_console.c'),
@@ -546,6 +596,48 @@ int usb_serial_jtag_write_bytes(const void *, size_t, uint32_t);
                                       **{flag: '1'})
                 self.assertIn('PROVISION ERR STORAGE', output)
                 self.assertNotIn('OK SAVED', output)
+
+    def test_scalar_control_console_commands_emit_count_one(self):
+        """XVF_SET32 / XVF_SETF exist because the co-processor's float and int32 parameters take
+        ONE value of FOUR bytes: the frame is [resid, cmd, 1, b0..b3].
+
+        The reply echoes the bytes actually emitted, and that is the assertion -- a writer that
+        set count=4 for a 4-byte payload would put 04 in byte 3 and the chip would ACK it and
+        change nothing, which is exactly how `mic_gain` stayed a no-op. Pinned for an int32
+        (AGC on) and a float (mic gain 1.0 = 00 00 80 3f)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = self.build(tmp)
+            output = self.console(executable, 'XVF_SET32 17 10 1\nXVF_SETF 35 0 1.0\n')
+            # ResID 17 prints as 0x11: the echo is the frame as bytes, not as decimal fields.
+            self.assertIn('[11 0a 01 01 00 00 00]', output,
+                          'int32 scalar: count byte must be 01, value little-endian')
+            self.assertIn('[23 00 01 00 00 80 3f]', output,
+                          'float scalar must be IEEE-754 little-endian, not an int cast')
+            self.assertIn('OK SET32 17/10', output)
+            self.assertIn('OK SETF 35/0', output)
+            # a bad line must not emit a frame
+            bad = self.console(executable, 'XVF_SETF 35\n')
+            self.assertIn('ERR usage', bad)
+
+    def test_raw_byte_payload_command_emits_every_byte(self):
+        """AUDIO_MGR_OP_ALL (ResID 35, CmdID 23) is 12 payload bytes and is how the XMOS native-rate
+        far end is actually configured -- the guide's loopback test sets all six selections at once.
+        Setting only OP_L/OP_R leaves four selections on their old categories, which interleave
+        into the output when native rate is selected.
+
+        The command has to carry a count of 12 and all twelve bytes verbatim; anything that
+        truncates at four (as the int-parameter command does) would silently half-configure it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = self.build(tmp)
+            output = self.console(
+                executable, 'XVF_BYTES 35 23 10 0 10 2 10 4 10 1 10 3 10 5\n')
+            self.assertIn('OK XVF_BYTES 35/23 (12 bytes)', output)
+            self.assertIn('0a 00 0a 02 0a 04 0a 01 0a 03 0a 05', output,
+                          'all six (category, source) pairs must reach the wire')
+            bad = self.console(executable, 'XVF_BYTES 35\n')
+            self.assertIn('ERR usage', bad)
+            self.assertIn('ERR XVF_BYTES needs at least one payload byte',
+                          self.console(executable, 'XVF_BYTES 35 23\n'))
 
     def test_wifi_credentials_stage_through_the_console(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -24,6 +24,16 @@
  * contracts, so audio_capture_send_chunk decimates 3:1 after the downmix; everything downstream
  * of that point is unchanged and still speaks 16 kHz. */
 #define CAPTURE_I2S_RATE_HZ    48000
+/* CLOCK ROLE: SLAVE. The link rate is not ours to declare -- the XMOS co-processor owns it.
+ * Upstream's I2S variants run either as an I2S MASTER at 48 kHz or an I2S SLAVE at 16 kHz, and
+ * the two sides "must use complementary roles: connecting two masters causes clock contention,
+ * while connecting two slaves leaves the bus without a clock source"
+ * (reSpeaker_XVF3800_USB_4MIC_ARRAY, xmos_firmwares/i2s/readme.md). Driving 48 kHz from the
+ * ESP32 while the co-processor still held its pre-48 kHz image left the satellite registered,
+ * armed and sampling, yet structurally deaf (docs/audio-fidelity.md, open hardware unknown #1).
+ * So the ESP32 takes its bit clock and word select FROM the co-processor and only matches its
+ * rate. */
+#define CAPTURE_I2S_ROLE       I2S_ROLE_SLAVE
 /* Same MCLK as the playback side: capture and playback share one I2S port in
  * full-duplex, so there is one master clock for both. */
 #define CAPTURE_I2S_MCLK_PIN   GPIO_NUM_9
@@ -35,7 +45,14 @@
  * registers), the init runs here more often and a 6 KB stack overflowed into a reboot loop
  * (a stack overflow in task aud_cap). 12 KB gives the interpreter build room to breathe. */
 #define CAPTURE_TASK_STACK     12288
-#define CAPTURE_TASK_PRIORITY  4
+/* Capture outranks playback, and both outrank everything cosmetic.
+ *
+ * Measured on this board: with capture and playback both at the same priority, the mic accounting
+ * read exactly 16000 samples/s while idle and then 15,200-15,920 the moment playback started,
+ * returning to exactly 16000 when it stopped. Losing up to 5% of the microphone only while
+ * transmitting is a scheduling symptom, not a clock one -- the RX DMA overruns while the audio
+ * tasks and the TLS/WiFi stack compete for the core. */
+#define CAPTURE_TASK_PRIORITY  6
 #define CAPTURE_READ_TIMEOUT_MS 10   /* 10 ms of silence is a tick, not a fault */
 /* i2s_channel_read takes its timeout in MILLISECONDS and converts to ticks itself, so the
  * call below passes CAPTURE_READ_TIMEOUT_MS (ms), not ticks -- that is already correct. */
@@ -98,7 +115,7 @@ void audio_capture_install_writer_lock(void *session) {
 
 /* Accounting for where the microphone audio actually goes.
  *
- * "The device is streaming but the bridge hears nothing" cannot be diagnosed by
+ * "The device is streaming but the Satellite Gateway hears nothing" cannot be diagnosed by
  * looking at either end alone: the chunk can be dropped here (stream closed, a
  * writer-lock timeout, a link error) or lost after it leaves. These counters make
  * the boundary visible, so one wake says which side to look at instead of both. */
@@ -132,12 +149,12 @@ void audio_capture_send_chunk(const int32_t *frames, size_t frame_count) {
     if (!samples) return;   /* fewer than three input samples since the last chunk: nothing yet */
     /* D1 (increment 4): every downmixed chunk feeds the LOCAL wake detector first, always --
      * before the wake the chunk goes only to the detector (the reference's "audio goes to the
-     * wake engine, not to the bridge"). The detector is driven from this task alone (its
+     * wake engine, not to the Satellite Gateway"). The detector is driven from this task alone (its
      * per-chunk sync keeps the deaf guard current). */
     wake_detector_feed(mono, samples);
     /* The session decides whether the microphone is open: a frame sent while the stream is
      * closed is dropped there, which is what keeps the pre-wake chime out of the next
-     * utterance. After a wake opens the stream, the same chunks also go to the bridge. */
+     * utterance. After a wake opens the stream, the same chunks also go to the Satellite Gateway. */
     int sent = wy_session_send_audio(capture.session, mono, samples * 2,
                                      capture.write, capture.user);
     if (sent == WY_OK) {
@@ -172,7 +189,7 @@ static void capture_task_fn(void *argument) {
                  * the I2S port is shared with playback (the TX joins the same controller as a
                  * full-duplex pair when a reply is armed), so a capture read failure at exactly
                  * that moment is a live candidate for the link dying during a reply -- and from
-                 * the bridge all such failures look identical to a device that reset. Report the
+                 * the Satellite Gateway all such failures look identical to a device that reset. Report the
                  * driver error so the two can be told apart. */
                 ESP_LOGW("capio", "capture read failed: %s (0x%x); capture task exiting",
                          esp_err_to_name(result), (unsigned)result);
@@ -226,7 +243,14 @@ int audio_capture_start(void *session, void *user,
     }
     audio_capture_install_writer_lock(session);
 
-    i2s_chan_config_t channel = I2S_CHANNEL_DEFAULT_CONFIG(CAPTURE_I2S_PORT, I2S_ROLE_MASTER);
+    i2s_chan_config_t channel = I2S_CHANNEL_DEFAULT_CONFIG(CAPTURE_I2S_PORT, CAPTURE_I2S_ROLE);
+    /* DMA depth is the real underrun protection, because priority alone cannot beat the WiFi and
+     * TLS tasks (which run well above any application task). The defaults give roughly 11 ms of
+     * slack at 48 kHz stereo 32-bit -- less than one scheduling hiccup. This is ~46 ms:
+     * 12 descriptors x 480 frames x 8 bytes. Dropped microphone samples are permanent (the DMA
+     * has already overwritten them), so headroom here is worth the 46 KB. */
+    channel.dma_desc_num = 12;
+    channel.dma_frame_num = 480;
     if (i2s_new_channel(&channel, NULL, &capture.rx) != ESP_OK) {
         /* The usual cause is the other half of the full-duplex pair still owning the controller
          * (a playback channel that has not finished tearing down). Without this line the
@@ -268,8 +292,10 @@ int audio_capture_start(void *session, void *user,
      * capture task is the sole reader of the decimator, and a task START is the moment a new
      * stream begins. Resetting it per wake or from another task would corrupt a live stream. */
     audio_capture_reset_decimator();
-    if (xTaskCreate(capture_task_fn, "aud_cap", CAPTURE_TASK_STACK, NULL,
-                    CAPTURE_TASK_PRIORITY, &capture.task) != pdPASS || !capture.task) {
+    /* Pinned to core 1. WiFi, lwIP and TLS all run on core 0, and the capture task must not
+     * compete with them for the same core: a late I2S read is an unrecoverable lost sample. */
+    if (xTaskCreatePinnedToCore(capture_task_fn, "aud_cap", CAPTURE_TASK_STACK, NULL,
+                    CAPTURE_TASK_PRIORITY, &capture.task, 1) != pdPASS || !capture.task) {
         capture.task = NULL;
         i2s_channel_disable(capture.rx);
         i2s_del_channel(capture.rx);

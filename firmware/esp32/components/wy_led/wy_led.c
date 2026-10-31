@@ -259,7 +259,13 @@ int wy_led_listening(wy_led *led)
 {
     if (!led) return -1;
     if (red_owns(led)) return 0;   /* red is already saying something more important */
-    return show_doa(led, WY_LED_STATE_LISTENING, 1);
+    /* STEADY colour, not the direction-of-arrival pattern.
+     *
+     * "Is it ready for me?" is the only question a person asks at this moment, and a DOA pattern
+     * answers a different one -- it moves with the room, and with no clear direction it looks like
+     * the device is doing something private rather than waiting for you. A solid ring means exactly
+     * one thing: the microphone is open and it is your turn. Direction can be shown while idle. */
+    return show_single(led, WY_LED_STATE_LISTENING, WY_LED_BLUE_R, WY_LED_BLUE_G, WY_LED_BLUE_B, 1);
 }
 
 int wy_led_voice_started(wy_led *led)

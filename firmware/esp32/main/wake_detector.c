@@ -18,7 +18,7 @@
 
 /* The config-plane wake settings, staged to NVS by inc3's cfg_apply (cfg_stage_wake). The keys
  * live in the hermes_cfg namespace next to the agent's state blob. When a key is absent (first
- * boot, or the bridge never sent the setting) the schema defaults below are used -- the same
+ * boot, or the Satellite Gateway never sent the setting) the schema defaults below are used -- the same
  * defaults wyoming_config.c validates against. wake_threshold is stored as a "%f" string and
  * wake_word as the model SELECTOR string (underscore form, e.g. okay_nabu), NOT the detection
  * name (WYAKE_WORD_NAME). See the plan's D5. */
@@ -222,7 +222,7 @@ static int model_load(void *user, const char *model_name, void **out_model, size
     return 0;
 }
 
-/* D4: play the rendered "awake" tone through the speaker ring (the same path a bridge answer
+/* D4: play the rendered "awake" tone through the speaker ring (the same path a Satellite Gateway answer
  * takes, so the amp policy -- armed while the ring is non-empty -- carries it). The chime is
  * counted down in the feed so the detector stays deaf while its own tone is sounding. */
 static int chime_play(void *user) {
@@ -261,6 +261,15 @@ static int chime_play(void *user) {
  * machine. The two must be tested separately.
  *
  * Returns 0 on a queued chime, -1 otherwise. */
+int wake_detector_set_threshold(double threshold) {
+    if (!wd.core) return -1;
+    return wy_wake_set_threshold(wd.core, threshold) == WY_WAKE_OK ? 0 : -1;
+}
+
+double wake_detector_get_threshold(void) {
+    return wd.core ? wy_wake_threshold(wd.core) : WAKE_DEFAULT_THRESHOLD;
+}
+
 int wake_detector_play_chime(void) {
     return chime_play(NULL);
 }

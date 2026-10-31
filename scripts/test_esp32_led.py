@@ -338,7 +338,11 @@ class LedHarness(unittest.TestCase):
         self.assertEqual(self.effect_of(), 4, 'and then it points at the speaker')
 
     def test_direction_mode_pairs_a_quiet_ring_with_a_bright_marker(self):
-        self.lib.wy_led_listening(self.buf)
+        # Direction is no longer what LISTENING shows (the ring must answer "is it ready for me"),
+        # but it is still a live pattern on the voice-start path, which goes yellow and then points
+        # at the speaker. Drive it there so the DOA encoding keeps its coverage.
+        self.lib.wy_led_voice_started(self.buf)
+        self.tick(501)
         doa = self.last(17)
         self.assertEqual(len(doa.params), 6, 'two RGB colours: base then marker')
         self.assertEqual(doa.params[:3], bytes([0, 0, 0]), 'the ring itself stays quiet')
@@ -347,7 +351,9 @@ class LedHarness(unittest.TestCase):
     def test_listening_is_idempotent_with_the_sweep(self):
         self.lib.wy_led_wake(self.buf)
         self.lib.wy_led_listening(self.buf)
-        self.assertEqual(self.effect_of(), 4)
+        # Listening is a STEADY colour (effect 3), not the DOA pattern (4): the ring has to answer
+        # "is it ready for me", and a direction display answers a different question.
+        self.assertEqual(self.effect_of(), 3)
 
     # --- the rest of the lifecycle ---
 
