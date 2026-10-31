@@ -100,6 +100,7 @@ class Esp32Commands(unittest.TestCase):
         self.assertIn("rom-mac", argv)
         self.assertEqual(argv[argv.index("--port") + 1], "/dev/ttyACM0")
 
+    @posix_only
     def test_certs_use_the_real_flag_name(self):
         argv = esp32.DRIVER.flash(self.request(certs_dir="/certs"), dry()).commands[0].argv
         self.assertIn("--tls-certs", argv)

@@ -482,16 +482,19 @@ class GatewayInstallCommand(unittest.TestCase):
         commands = gateway_module.install_commands(
             base="/opt/checkout", device_reachable_as="192.0.2.10"
         )
-        self.assertEqual(
-            commands[0][0], "/opt/checkout/scripts/install-gateway.sh", commands
-        )
+        # Compared as a Path, because Windows renders the same resolution with a drive and
+        # backslashes; the POSIX literal in the old assertion failed there for no real reason.
+        expected = Path("/opt/checkout").resolve() / "scripts" / "install-gateway.sh"
+        self.assertEqual(Path(commands[0][0]), expected, commands)
 
     def test_a_relative_base_still_yields_an_absolute_script(self):
         commands = gateway_module.install_commands(
             base=".", device_reachable_as="192.0.2.10"
         )
-        self.assertTrue(Path(commands[0][0]).is_absolute(), commands[0][0])
-        self.assertTrue(commands[0][0].endswith("/scripts/install-gateway.sh"), commands[0][0])
+        script = Path(commands[0][0])
+        self.assertTrue(script.is_absolute(), commands[0][0])
+        self.assertEqual(script.parent.name, "scripts", script)
+        self.assertEqual(script.name, "install-gateway.sh", script)
 
     def test_commands_run_inside_that_checkout(self):
         import tempfile
