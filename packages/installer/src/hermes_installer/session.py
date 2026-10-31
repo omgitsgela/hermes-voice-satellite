@@ -43,6 +43,11 @@ class Session:
             self.registry.discover()
         self.store = store or CredentialStore()
         self.dry_run = dry_run
+        # Set by a successful pairing: the credentials themselves, and a private directory the
+        # provisioning scripts can read them from.
+        self.credentials = None
+        self.certs_dir: str | None = None
+        self._certs_tmp: Path | None = None
         self.state = SessionState()
         self.state.hermes_shape = gateway_module.detect_hermes()
 
@@ -105,11 +110,25 @@ class Session:
             )
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
-        preview_only = self.dry_run if dry_run is None else dry_run
+        # Session dry-run is a CEILING, not a default: a client asking for a real run cannot
+        # override a session that was started in preview mode.
+        preview_only = True if self.dry_run else bool(dry_run)
         ok, output = gateway_module.run_commands(commands, dry_run=preview_only)
         self.state.log.append(output)
-        return {"ok": ok, "log": output, "commands": [list(c) for c in commands],
-                "dry_run": preview_only}
+        result = {"ok": ok, "log": output, "commands": [list(c) for c in commands],
+                  "dry_run": preview_only}
+        if ok and not preview_only:
+            result["card"] = self._card_from_state(dial_address)
+        return result
+
+    def _card_from_state(self, dial_address: str) -> dict | None:
+        """After a real install, the two things the person has to keep are on disk: show them."""
+        cert = self.repo_root / "state" / "registry-tls" / "server.crt"
+        words_file = self.repo_root / "state" / "enroll-token.txt"
+        if not (cert.exists() and words_file.exists()):
+            return None
+        card = self.pairing_card(str(cert), words_file.read_text().strip(), dial_address)
+        return card if card.get("ok") else None
 
     def pairing_card(self, certificate_path: str, words: str, dial_address: str) -> dict:
         try:
@@ -164,7 +183,16 @@ class Session:
             return {"ok": False, "error": str(exc), "cancelled": True}
         except PairingError as exc:
             return {"ok": False, "error": str(exc)}
-        backend = self.store.apply_choice(host, port, words, remember)
+        storage_error = None
+        try:
+            backend = self.store.apply_choice(host, port, words, remember)
+        except Exception as exc:  # noqa: BLE001 - pairing succeeded; the store did not
+            backend = None
+            storage_error = str(exc)
+        # The credentials are the point of pairing: without them no device can be provisioned for
+        # authenticated use. Hold them for the session, in a directory only this user can read.
+        self.credentials = credentials
+        self.certs_dir = self._materialise_credentials(credentials)
         self.state.paired = {
             "host": host, "port": port, "identity_code": credentials.identity_code,
             "dial_address": credentials.dial_address,
@@ -174,7 +202,33 @@ class Session:
             "identity_code": credentials.identity_code,
             "dial_address": credentials.dial_address,
             "remembered_in": backend,
+            "storage_error": storage_error,
+            "certs_dir": self.certs_dir,
         }
+
+    def _materialise_credentials(self, credentials) -> str | None:
+        """Write the paired credentials where the provisioning scripts expect to find them.
+
+        A directory only this user can read (0700), removed when the session ends. The alternative
+        is passing certificate text through a command line, which is how private keys end up in a
+        process list.
+        """
+        if self.dry_run:
+            return None
+        import tempfile
+
+        directory = Path(tempfile.mkdtemp(prefix="hermes-pair-"))
+        directory.chmod(0o700)
+        for name, contents in (
+            ("ca.crt", credentials.ca_pem),
+            ("client.crt", credentials.cert_pem),
+            ("client.key", credentials.key_pem),
+        ):
+            target = directory / name
+            target.write_text(contents)
+            target.chmod(0o600)
+        self._certs_tmp = directory
+        return str(directory)
 
     # -- devices ------------------------------------------------------------------------------
 
@@ -194,10 +248,17 @@ class Session:
             card_mount=fields.get("card_mount"),
             wifi_ssid=fields.get("wifi_ssid"),
             wifi_psk_file=fields.get("wifi_psk_file"),
+            # Device-specific inputs must survive the session, or a third-party driver can never
+            # receive anything the shared UI did not happen to know about.
+            device_id=fields.get("device_id"),
+            card_user=str(fields.get("card_user") or "satellite"),
             certs_dir=fields.get("certs_dir"),
             wake_model=fields.get("wake_model"),
+            extra=dict(fields.get("extra") or {}),
         )
-        runner = Runner(dry_run=bool(fields.get("dry_run", self.dry_run)))
+        # Same ceiling as the gateway path: preview mode cannot be overridden by a client.
+        runner = Runner(dry_run=self.dry_run or bool(fields.get("dry_run")),
+                        repo_root=self.repo_root)
         name = fields.get("step", "flash")
         step: Callable[..., Any] = getattr(driver, str(name), None)  # type: ignore[assignment]
         if step is None:

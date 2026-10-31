@@ -6,6 +6,7 @@ Loopback only. The window is a browser or a `pywebview` shell pointed at it; eit
 from __future__ import annotations
 
 import json
+import secrets
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,6 +19,30 @@ WEB_ROOT = Path(__file__).resolve().parent / "web"
 
 class Handler(BaseHTTPRequestHandler):
     session: Session  # set by serve()
+    token: str = ""   # set by serve(): per-launch, unguessable
+
+    #: Requests that change the machine must prove they came from the page this process served.
+    #: Binding to loopback is not authorisation: any page in the same browser can POST to it, and a
+    #: DNS-rebinding request can carry a hostile Host header. A token, a Host check and a strict
+    #: content type close all three.
+    ALLOWED_HOSTS = ("127.0.0.1", "localhost", "[::1]")
+
+    def _host_ok(self) -> bool:
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
+        return host in self.ALLOWED_HOSTS
+
+    def _token_ok(self) -> bool:
+        supplied = self.headers.get("X-Installer-Token") or ""
+        return bool(self.token) and secrets.compare_digest(supplied, self.token)
+
+    def _guard(self) -> bool:
+        if not self._host_ok():
+            self._json({"error": "unexpected Host header"}, 403)
+            return False
+        if not self._token_ok():
+            self._json({"error": "missing or wrong installer token"}, 403)
+            return False
+        return True
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002 - stdlib signature
         pass  # a desktop installer should not narrate HTTP requests
@@ -51,14 +76,27 @@ class Handler(BaseHTTPRequestHandler):
             if not page.exists():  # pragma: no cover - packaging error
                 self._json({"error": "the interface file is missing from the package"}, 500)
                 return
-            self._send(200, page.read_bytes(), "text/html; charset=utf-8")
+            html = page.read_text().replace(
+                "</head>", f'<script>window.INSTALLER_TOKEN="{self.token}";</script></head>', 1
+            )
+            self._send(200, html.encode(), "text/html; charset=utf-8")
             return
         if self.path == "/api/status":
+            if not self._guard():
+                return
             self._json(self.session.status())
             return
         self._json({"error": "not found"}, 404)
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib naming
+        if not self._guard():
+            return
+        content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if content_type != "application/json":
+            # A form-encoded or text/plain body can be sent cross-origin without a preflight, which
+            # is exactly how a hostile page would reach these endpoints.
+            self._json({"error": "expected application/json"}, 415)
+            return
         body = self._read_json()
         try:
             if self.path == "/api/gateway":
@@ -100,7 +138,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def serve(session: Session, *, port: int = 0, open_browser: bool = True) -> int:
     """Run the interface until interrupted. Returns a process exit code."""
-    handler = type("BoundHandler", (Handler,), {"session": session})
+    handler = type("BoundHandler", (Handler,),
+                   {"session": session, "token": secrets.token_urlsafe(32)})
     server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     url = f"http://127.0.0.1:{server.server_port}/"
     print(f"  Hermes voice installer is running at {url}")

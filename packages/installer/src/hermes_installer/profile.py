@@ -37,6 +37,10 @@ class Setting:
     help: str = ""
 
     def __post_init__(self) -> None:
+        # A string "false" is truthy, so a profile could claim a cable-only setting was remote by
+        # quoting the word. Require an actual boolean.
+        if not isinstance(self.remote, bool):
+            raise ValueError(f"{self.key}: remote must be true or false, not {self.remote!r}")
         if self.apply not in APPLY_MODES:
             raise ValueError(f"{self.key}: apply must be one of {APPLY_MODES}, not {self.apply!r}")
         if self.apply == "cable" and self.remote:
@@ -74,9 +78,14 @@ class DeviceProfile:
         for fmt in self.wake_formats:
             if fmt not in WAKE_FORMATS:
                 raise ValueError(f"{self.id}: unknown wake format {fmt!r}")
-        unknown = set(self.settings) - set(self.settings)
-        if unknown:  # pragma: no cover - kept as a guard if the schema gains a key set
-            raise ValueError(f"{self.id}: unknown settings {sorted(unknown)}")
+        # The mapping key and the setting's own key must agree, or the UI would label one setting
+        # with another's capability. This replaces an earlier guard that compared a set with itself
+        # and therefore could never fail.
+        for key, setting in self.settings.items():
+            if key != setting.key:
+                raise ValueError(
+                    f"{self.id}: setting registered as {key!r} calls itself {setting.key!r}"
+                )
 
     # -- what the UI asks a profile ------------------------------------------------------------
 

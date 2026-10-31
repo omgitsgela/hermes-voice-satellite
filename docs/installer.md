@@ -123,11 +123,38 @@ when a device is plugged in. **USB provisioning needs no credentials at all**: p
 device is ownership of it, which also means nobody can lock themselves out of their own gateway by
 running the installer locally.
 
+## The local interface proves itself
+
+The interface is served on loopback, but loopback is not authorisation: any page in the same browser
+can POST to it, and a DNS-rebinding request can arrive with a hostile `Host`. So every API call
+carries a per-launch token that exists only in this process and in the page it served, the `Host`
+header must be a loopback name, and a JSON body is required with the JSON content type, because form
+and text encodings can be sent cross-origin without a preflight. A request without the token gets
+403, and the wrong content type gets 415.
+
+## What each device actually runs
+
+The device scripts are not interchangeable, and the first draft of this installer treated two of
+them as if they were:
+
+- **ESP32**: `scripts/install-esp32.sh --port <usb> --flash|--provision ...`. The port flag is
+  `--port`, an explicit action is required, and provisioning also needs `--device-id`, the board's
+  own identity rather than the friendly name.
+- **Pi**: `scripts/deploy-to-card.sh <mount> [user]` writes onto the mounted card. `install-pi.sh` is
+  the *on-device* installer: it writes into `/etc/systemd/system` and calls the host's `systemctl`,
+  so pointing it at a mounted card is wrong. The card's real values live in
+  `bridge-link.env`, which the script deliberately never overwrites, so the driver fills it and then
+  re-runs the script: the second run is what enables the unit, which keeps that rule in one place.
+
 ## Status of this first draft
 
 Working: the profile contract and registry, the identity code, the pairing client with the
-confirmation gate, the credential store with the remember checkbox, the drivers for both devices,
-the console flow, the web UI, and 63 offline tests.
+confirmation gate, the credential store with the remember checkbox, the drivers for both devices
+(against their real scripts), the console flow, the web UI with its token-gated API, and 79 offline
+tests.
+
+A session started in preview mode is a hard ceiling: no client request can turn it into a real run,
+and the gateway install is previewed before it is executed rather than after.
 
 Not yet: the **pairing endpoint on the gateway** (the client exists, the server side does not), the
 wake-word and voice catalogues, Piper voice previews, and the packaging into per-OS executables.

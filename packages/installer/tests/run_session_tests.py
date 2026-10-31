@@ -100,6 +100,25 @@ class SessionBehaviour(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("esp32-xvf3800", result["error"])
 
+    def test_a_preview_session_cannot_be_talked_into_a_real_run(self):
+        # The session's dry-run is a ceiling. A client sending dry_run:false must not beat it, so
+        # this intercepts the one function that would actually execute.
+        import hermes_gateway
+
+        seen = {}
+        original = hermes_gateway.run_commands
+
+        def spy(commands, dry_run=False, executor=None):
+            seen["dry_run"] = dry_run
+            return True, "preview"
+
+        hermes_gateway.run_commands = spy
+        try:
+            build_session(dry_run=True).install_gateway("192.0.2.10", dry_run=False)
+        finally:
+            hermes_gateway.run_commands = original
+        self.assertIs(seen.get("dry_run"), True, "a preview session asked to execute for real")
+
     def test_pairing_without_a_confirmed_code_is_refused(self):
         result = self.session.pair("192.0.2.10", 10702, "a b c d e", "kitchen")
         self.assertFalse(result["ok"])
@@ -112,7 +131,8 @@ class HttpInterface(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         session = build_session()
-        handler = type("Bound", (Handler,), {"session": session})
+        cls.token = "test-token-not-a-secret"
+        handler = type("Bound", (Handler,), {"session": session, "token": cls.token})
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -124,13 +144,18 @@ class HttpInterface(unittest.TestCase):
         cls.server.server_close()
 
     def get_json(self, path):
-        with urllib.request.urlopen(self.base + path, timeout=10) as response:
+        request = urllib.request.Request(
+            self.base + path, headers={"X-Installer-Token": self.token}
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
             return json.loads(response.read())
 
-    def post_json(self, path, payload):
+    def post_json(self, path, payload, token=None, content_type="application/json"):
         request = urllib.request.Request(
             self.base + path, data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"}, method="POST",
+            headers={"Content-Type": content_type,
+                     "X-Installer-Token": self.token if token is None else token},
+            method="POST",
         )
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
@@ -165,7 +190,25 @@ class HttpInterface(unittest.TestCase):
             "dry_run": True,
         })
         self.assertTrue(result["ok"])
-        self.assertIn("install-pi.sh", result["commands"][0]["argv"][0])
+        # The card writer, not the on-device installer: install-pi.sh writes to the running
+        # machine's /etc and would have installed services on the workbench.
+        self.assertIn("deploy-to-card.sh", result["commands"][0]["argv"][0])
+
+    def test_a_request_without_the_token_is_refused(self):
+        # Binding to loopback is not authorisation: any page in the same browser can POST here.
+        result = self.post_json("/api/gateway", {"dial_address": "192.0.2.10"}, token="")
+        self.assertEqual(result.get("error"), "missing or wrong installer token")
+
+    def test_a_form_encoded_body_is_refused(self):
+        # text/plain and form encodings can be sent cross-origin without a preflight.
+        result = self.post_json("/api/gateway", {"dial_address": "192.0.2.10"},
+                                content_type="text/plain")
+        self.assertEqual(result.get("error"), "expected application/json")
+
+    def test_the_served_page_carries_the_token_for_its_own_scripts(self):
+        with urllib.request.urlopen(self.base + "/", timeout=10) as response:
+            body = response.read().decode()
+        self.assertIn(f'window.INSTALLER_TOKEN="{self.token}"', body)
 
     def test_unknown_route_is_404(self):
         with self.assertRaises(urllib.error.HTTPError) as caught:

@@ -7,7 +7,9 @@ name = "hermes-voice-gateway-install"
 version = "0.1.0"
 description = "Gateway install logic and the pairing artefacts for the Hermes voice installer"
 requires-python = ">=3.10"
-dependencies = ["hermes-voice-installer"]
+# Deliberately no dependency on the installer: the installer imports this package, and a cycle
+# between two distributions is unresolvable.
+dependencies = []
 
 [tool.setuptools.packages.find]
 where = ["src"]

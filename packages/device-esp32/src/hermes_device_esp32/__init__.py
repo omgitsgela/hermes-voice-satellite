@@ -1,16 +1,28 @@
 """The ESP32 XVF3800 satellite: a profile, and a driver that builds commands.
 
-Flags below are the ones `scripts/install-esp32.sh` actually accepts: `--device`, `--endpoint`,
-`--tls-certs`, `--model`, `--model-name`, `--wifi-ssid`, `--wifi-psk-file`, `--provision`. The wake
-word is not a flag of its own: it is the model's detection name, so a chosen wake word travels as
-`--model` plus `--model-name`.
+Flags below are the ones `scripts/install-esp32.sh` actually parses: `--port`, `--flash`,
+`--provision`, `--device-id`, `--device-name`, `--endpoint`, `--tls-certs`, `--model`,
+`--model-name`, `--wifi-ssid`, `--wifi-psk-file`.
 
-Everything here is data plus argv. No subprocess starts unless the runner is told to run, which is
-what lets the whole flow be tested with no board attached.
+Two details the first draft got wrong, both found by reading the script rather than by testing it:
+
+- the port flag is `--port`, not `--device`;
+- `--port` alone does nothing. The script needs an explicit `--flash` or `--provision` action, and
+  provisioning refuses to run without `--device-id`, which is the board's own identity and not the
+  friendly name a person chooses.
+
+The wake word is not a flag of its own: it is the model's detection name, so a chosen wake word
+travels as `--model` plus `--model-name`.
 """
 from __future__ import annotations
 
-from hermes_installer.driver import Command, DeviceRequest, Runner, StepResult
+from hermes_installer.driver import (
+    Command,
+    DeviceRequest,
+    Runner,
+    StepResult,
+    require_posix,
+)
 from hermes_installer.profile import DeviceProfile, Setting
 
 PROFILE = DeviceProfile(
@@ -23,8 +35,8 @@ PROFILE = DeviceProfile(
     wake_default="hey_hermes",
     first_party=True,
     description=(
-        "A USB-C satellite with a four-mic array and its own speaker. The audio processing runs on "
-        "the array's co-processor, so the ESP32 only carries the stream."
+        "A small box with a four-microphone array and its own speaker. The audio processing runs on "
+        "the array itself, so the board only carries the stream."
     ),
     settings={
         "playback_volume": Setting("playback_volume", "immediate", remote=True,
@@ -50,19 +62,20 @@ INSTALL_SCRIPT = "scripts/install-esp32.sh"
 PROVISION_SCRIPT = "scripts/esp32_provision.py"
 
 
-def _base_argv(request: DeviceRequest) -> list[str]:
-    argv = [
-        INSTALL_SCRIPT,
-        "--device", request.port or "",
-        "--endpoint", request.dial_address,
-    ]
+def _argv(request: DeviceRequest, action: str) -> tuple[str, ...]:
+    argv = [INSTALL_SCRIPT, "--port", request.port or "", action, "--endpoint",
+            request.dial_address]
+    if request.device_id:
+        argv += ["--device-id", request.device_id]
+    if request.device_name:
+        argv += ["--device-name", request.device_name]
     if request.certs_dir:
         argv += ["--tls-certs", request.certs_dir]
     if request.wake_model:
         argv += ["--model", request.wake_model, "--model-name", request.wake_word]
     if request.wifi_ssid and request.wifi_psk_file:
         argv += ["--wifi-ssid", request.wifi_ssid, "--wifi-psk-file", request.wifi_psk_file]
-    return argv
+    return tuple(argv)
 
 
 class Esp32Xvf3800Driver:
@@ -73,21 +86,31 @@ class Esp32Xvf3800Driver:
             return StepResult(ok=False, summary="no USB port selected for this device")
         if not request.dial_address:
             return StepResult(ok=False, summary="no gateway address has been chosen yet")
-        command = Command(
-            tuple(_base_argv(request)),
-            f"write the firmware and point the device at {request.dial_address}",
-            secret_file=request.wifi_psk_file,
+        require_posix("Flashing the board")
+        return runner.run(
+            Command(
+                _argv(request, "--flash"),
+                f"write the firmware and point the device at {request.dial_address}",
+                secret_file=request.wifi_psk_file,
+            )
         )
-        return runner.run(command)
 
     def provision(self, request: DeviceRequest, runner: Runner) -> StepResult:
         """A later run: change the staged settings without reflashing the application."""
         if not request.port:
             return StepResult(ok=False, summary="no USB port selected for this device")
-        argv = tuple(_base_argv(request) + ["--provision"])
+        if not request.device_id:
+            return StepResult(
+                ok=False,
+                summary="the board's own identity is needed to stage settings, and it has not "
+                        "been read yet. Read it from the device first.",
+            )
         return runner.run(
-            Command(argv, "stage the gateway address, Wi-Fi and model on the device",
-                    secret_file=request.wifi_psk_file)
+            Command(
+                _argv(request, "--provision"),
+                "stage the gateway address, Wi-Fi and model on the device",
+                secret_file=request.wifi_psk_file,
+            )
         )
 
     def verify(self, request: DeviceRequest, runner: Runner) -> StepResult:
@@ -95,8 +118,8 @@ class Esp32Xvf3800Driver:
             return StepResult(ok=False, summary="no USB port selected for this device")
         return runner.run(
             Command(
-                (PROVISION_SCRIPT, "--port", request.port, "status"),
-                "read the device's own report",
+                (PROVISION_SCRIPT, "--port", request.port, "device-id"),
+                "read the board's own identity",
             )
         )
 

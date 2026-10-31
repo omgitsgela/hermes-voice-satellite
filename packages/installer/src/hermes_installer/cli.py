@@ -102,21 +102,22 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
     out("  Sets up a voice gateway, a satellite, or both.")
     out("")
 
+    # A workbench does not need Hermes. Setting up a satellite from a laptop that will never run
+    # the gateway is a supported shape (the gateway may be a VPS), so a missing Hermes only blocks
+    # the gateway role, not the whole program.
     if state["hermes"] == "none":
-        out("  Hermes was not found on this machine.")
+        out("  Hermes is not installed on this machine.")
+        out("  That only matters if this machine is meant to BE the gateway.")
         out("")
-        out("  Install Hermes first (the desktop app, or the service install), then run this again.")
-        out("  Nothing has been changed.")
-        return 2
-
-    out(f"  Found: {state['hermes_explained']}")
-    out("")
-
-    role = prompt.choice(
-        "What are we setting up?",
-        ["This machine as the gateway", "A satellite on this machine's card or cable",
-         "Both, gateway first"],
-    )
+        role = "A satellite, using a gateway that already exists"
+    else:
+        out(f"  Found: {state['hermes_explained']}")
+        out("")
+        role = prompt.choice(
+            "What are we setting up?",
+            ["This machine as the gateway", "A satellite on this machine's card or cable",
+             "Both, gateway first"],
+        )
 
     gateway_address = ""
     if role.startswith("This machine") or role.startswith("Both"):
@@ -125,12 +126,15 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
         )
         ports = prompt.text("Ports (registry:tls)", default="10701:10702")
         registry_port, _, tls_port = ports.partition(":")
+        # Preview first, always. The old order ran the install and then asked permission, which is
+        # not a preview at all: by the time the question appeared the machine had changed.
         preview = session.install_gateway(
             gateway_address, registry_port=int(registry_port or 10701),
             tls_port=int(tls_port or 10702), skip_hermes=role.startswith("Both"),
+            dry_run=True,
         )
-        if not preview["ok"]:
-            out(f"  Could not continue: {preview['error']}")
+        if not preview.get("ok"):
+            out(f"  Could not continue: {preview.get('error') or preview.get('log')}")
             return 1
         out("")
         out("  About to run:")
@@ -140,9 +144,18 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
             out("  Nothing was changed.")
             return 0
         if session.dry_run:
-            out("  (dry run: commands were not executed)")
+            out("  (dry run: nothing was executed)")
+            result = preview
         else:
-            out(preview["log"])
+            result = session.install_gateway(
+                gateway_address, registry_port=int(registry_port or 10701),
+                tls_port=int(tls_port or 10702), skip_hermes=role.startswith("Both"),
+                dry_run=False,
+            )
+            out(result.get("log") or "")
+        if not result.get("ok"):
+            out(f"  The gateway install failed: {result.get('error') or result.get('log')}")
+            return 1
         base = session.repo_root
         cert = base / "state" / "registry-tls" / "server.crt"
         words_file = base / "state" / "enroll-token.txt"
@@ -193,17 +206,36 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
                   "wake_word": profile["wake_default"], "dry_run": session.dry_run}
         if profile["needs_card_reader"]:
             fields["card_mount"] = prompt.text("Where is the card's root filesystem mounted?")
+            # A card gets a Wi-Fi network copied from one this computer already knows. There is no
+            # path from a typed passphrase to the card, so the prompt must not pretend there is.
+            fields["wifi_ssid"] = prompt.text(
+                "Copy which saved Wi-Fi network onto the card (blank to skip)", default=""
+            ) or None
         else:
             fields["port"] = prompt.text("Which USB port is the device on?", default="/dev/ttyACM0")
-        fields["wifi_ssid"] = prompt.text("Wi-Fi network it should join (blank to skip)", default="")
-        fields["wifi_psk_file"] = prompt.text(
-            "Path to a file holding that network's passphrase (blank to skip)", default=""
-        ) or None
+            fields["wifi_ssid"] = prompt.text("Wi-Fi network it should join (blank to skip)",
+                                              default="") or None
+            fields["wifi_psk_file"] = prompt.text(
+                "Path to a file holding that network's passphrase (blank to skip)", default=""
+            ) or None
 
         result = session.flash(profile["id"], **fields)
         if not result["ok"]:
             out(f"  {result.get('summary') or result.get('error')}")
             return 1
+        # A card device also needs its Wi-Fi network copied, which is a separate script. Running it
+        # only when a network was chosen keeps the flow honest for people who use Ethernet or a
+        # pre-provisioned image.
+        if profile["needs_card_reader"] and fields.get("wifi_ssid"):
+            wifi = session.flash(profile["id"], step="provision", **fields)
+            result = {
+                "ok": result["ok"] and wifi["ok"],
+                "summary": f"{result['summary']}. {wifi.get('summary', '')}".strip(),
+                "commands": result["commands"] + wifi.get("commands", []),
+            }
+            if not wifi["ok"]:
+                out(f"  {wifi.get('summary') or wifi.get('error')}")
+                return 1
         for command in result["commands"]:
             marker = " (needs elevation)" if command["elevation"] else ""
             out(f"    {command['description']}{marker}")

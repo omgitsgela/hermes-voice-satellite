@@ -136,9 +136,12 @@
         <label for="dial">Address devices dial</label>
         <input id="dial" type="text" placeholder="192.0.2.10 or gateway.example.com" />
       </div>
-      <div>
-        <label for="ports">Ports (registry:tls)</label>
-        <input id="ports" type="text" value="10701:10702" />
+      <div style="flex:0 0 100%">
+        <details>
+          <summary class="muted" style="cursor:pointer;font-size:13px">Advanced: ports</summary>
+          <label for="ports">Ports (registry:tls)</label>
+          <input id="ports" type="text" value="10701:10702" />
+        </details>
       </div>
     </div>
     <div class="actions">
@@ -194,8 +197,8 @@
           <div><label for="mount">Card root (card devices)</label><input id="mount" type="text" placeholder="/media/user/rootfs" /></div>
         </div>
         <div class="row">
-          <div><label for="ssid">Wi-Fi network</label><input id="ssid" type="text" placeholder="leave blank to skip" /></div>
-          <div><label for="psk">Passphrase file</label><input id="psk" type="text" placeholder="path to a file holding it" /></div>
+          <div><label for="ssid" id="ssid-label">Wi-Fi network</label><input id="ssid" type="text" placeholder="leave blank to skip" /></div>
+          <div id="psk-box"><label for="psk">Passphrase file</label><input id="psk" type="text" placeholder="path to a file holding it" /></div>
         </div>
         <div class="actions"><button id="preview-flash">Preview</button><button id="run-flash" class="ghost" disabled>Flash it</button></div>
       </div>
@@ -203,7 +206,7 @@
     </div>
   </div>
 
-  <footer>Served locally &middot; nothing leaves this machine except the pairing words you choose to send</footer>
+  <footer>Everything here runs on this machine.</footer>
 </div>
 
 <script>
@@ -211,9 +214,12 @@ const $ = (id) => document.getElementById(id);
 let STATUS = null, SELECTED = null, PAIRED = null;
 
 async function api(path, body) {
-  const options = body === undefined ? {} : {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
-  };
+  const headers = { "X-Installer-Token": window.INSTALLER_TOKEN || "" };
+  let options = { headers };
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+    options = { method: "POST", headers, body: JSON.stringify(body) };
+  }
   const response = await fetch(path, options);
   return response.json();
 }
@@ -235,16 +241,16 @@ function renderDevices(devices) {
   for (const device of devices) {
     const el = document.createElement("div");
     el.className = "device";
-    const remote = device.remote_settings.map((s) => `<span class="badge remote">${s} · remote</span>`).join("");
-    const cable = device.cable_settings.map((s) => `<span class="badge cable">${s} · cable</span>`).join("");
+    const connect = device.needs_card_reader
+      ? `<span class="badge cable">Needs a card reader</span>`
+      : `<span class="badge remote">Needs a USB cable</span>`;
     el.innerHTML = `
       <div class="icon">${icon(device)}</div>
       <div style="flex:1">
         <b>${device.name}</b>
         <span class="badge">${device.vendor}</span>
-        <span class="badge">${device.wake_default}</span>
+        ${connect}
         <p>${device.description || ""}</p>
-        <div>${remote}${cable}</div>
       </div>`;
     el.onclick = () => {
       SELECTED = device;
@@ -253,6 +259,10 @@ function renderDevices(devices) {
       $("device-form").classList.remove("hidden");
       $("port").closest("div").style.display = device.flashing === "usb_serial" ? "" : "none";
       $("mount").closest("div").style.display = device.needs_card_reader ? "" : "none";
+      // A card copies a network this computer already knows; it cannot take a typed passphrase.
+      $("psk-box").style.display = device.needs_card_reader ? "none" : "";
+      $("ssid-label").textContent = device.needs_card_reader
+        ? "Copy which saved Wi-Fi network" : "Wi-Fi network";
       $("run-flash").disabled = true;
       $("run-flash").className = "ghost";
     };

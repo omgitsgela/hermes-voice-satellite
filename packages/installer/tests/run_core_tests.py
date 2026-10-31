@@ -274,6 +274,152 @@ class RememberBox(unittest.TestCase):
         self.assertEqual(backend.data, {})
 
 
+class CredentialStoreSafety(unittest.TestCase):
+    def test_the_file_fallback_really_is_owner_only(self):
+        import os
+        import stat
+        import tempfile
+
+        from hermes_installer.secrets import FileBackend
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "creds.json"
+            backend = FileBackend(path)
+            backend.save("gw", "secret")
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+            if os.name == "posix":
+                self.assertEqual(mode, 0o600)
+                self.assertIn("0600", backend.name)
+            self.assertEqual(backend.load("gw"), "secret")
+
+    def test_a_failing_store_cannot_claim_the_words_were_forgotten(self):
+        from hermes_installer.secrets import CredentialStore, StoreError
+
+        class BrokenBackend:
+            name = "broken"
+
+            def save(self, account, secret):
+                raise StoreError("locked")
+
+            def load(self, account):
+                return None
+
+            def forget(self, account):
+                raise StoreError("could not remove")
+
+        store = CredentialStore(backend=BrokenBackend())
+        with self.assertRaises(StoreError):
+            store.apply_choice("gw", 10702, "words", remember=False)
+
+    def test_an_unusable_keyring_falls_back_instead_of_failing_mid_pairing(self):
+        import sys
+        import types
+
+        from hermes_installer.secrets import CredentialStore, FileBackend
+
+        class LockedKeyring(types.ModuleType):
+            def set_password(self, *args):
+                raise RuntimeError("keyring is locked")
+
+            def get_password(self, *args):
+                return None
+
+            def delete_password(self, *args):
+                raise RuntimeError("keyring is locked")
+
+        original = sys.modules.get("keyring")
+        sys.modules["keyring"] = LockedKeyring("keyring")
+        try:
+            store = CredentialStore()
+        finally:
+            if original is None:
+                sys.modules.pop("keyring", None)
+            else:
+                sys.modules["keyring"] = original
+        self.assertIsInstance(store.backend, FileBackend)
+
+    def test_the_read_modify_write_region_is_mutually_exclusive(self):
+        # The bug this pins: a save reads the file, another request deletes an account, the save
+        # writes its stale snapshot back, and the deleted secret returns. Counting overlapping
+        # read-to-write regions across threads measures that property directly instead of hoping a
+        # race reproduces.
+        import tempfile
+        import threading
+        import time
+
+        from hermes_installer.secrets import FileBackend
+
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = FileBackend(Path(tmp) / "creds.json")
+            backend.save("seed", "x")
+
+            state = {"active": 0, "peak": 0}
+            guard = threading.Lock()
+            original_read, original_write = backend._read, backend._write
+
+            def tagged_read():
+                with guard:
+                    state["active"] += 1
+                    state["peak"] = max(state["peak"], state["active"])
+                return original_read()
+
+            def tagged_write(data):
+                try:
+                    return original_write(data)
+                finally:
+                    with guard:
+                        state["active"] -= 1
+
+            backend._read, backend._write = tagged_read, tagged_write
+
+            def worker(index):
+                for step in range(25):
+                    backend.save(f"gw{index}-{step}", "v")
+                    if step % 5 == 0:
+                        backend.forget(f"gw{index}-{step}")
+                    time.sleep(0.001)
+
+            threads = [threading.Thread(target=worker, args=(i,)) for i in range(3)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            self.assertEqual(state["peak"], 1,
+                             "two read-modify-write regions overlapped, so a delete can be undone")
+
+    def test_a_keyring_delete_that_fails_is_reported_not_swallowed(self):
+        from hermes_installer.secrets import KeyringBackend, StoreError
+
+        class Stub:
+            def delete_password(self, service, account):
+                raise RuntimeError("keyring daemon went away")
+
+            def set_password(self, *args):
+                pass
+
+            def get_password(self, *args):
+                return None
+
+        backend = object.__new__(KeyringBackend)
+        backend._keyring = Stub()
+        with self.assertRaises(StoreError):
+            backend.forget("gw")
+
+    def test_a_keyring_entry_that_is_already_absent_is_not_an_error(self):
+        from hermes_installer.secrets import KeyringBackend
+
+        class PasswordDeleteError(Exception):
+            pass
+
+        class Stub:
+            def delete_password(self, service, account):
+                raise PasswordDeleteError("no such entry")
+
+        backend = object.__new__(KeyringBackend)
+        backend._keyring = Stub()
+        backend.forget("gw")  # must not raise: absence is the desired end state
+
+
 class Discovery(unittest.TestCase):
     def test_duplicate_ids_are_refused(self):
         registry = DeviceRegistry()

@@ -161,7 +161,11 @@ def run_commands(
         if executor is not None:
             code, output = executor(command)
         else:
-            finished = subprocess.run(list(command), capture_output=True, text=True)
+            try:
+                finished = subprocess.run(list(command), capture_output=True, text=True)
+            except OSError as exc:
+                # A missing script, or one that Windows cannot execute, is an outcome to report.
+                return False, f"could not run {command[0]}: {exc}"
             code, output = finished.returncode, (finished.stdout or "") + (finished.stderr or "")
         outputs.append(output)
         if code != 0:

@@ -1,13 +1,19 @@
 """Offline checks for the device packages: the exact commands each driver builds.
 
-No board, no card, no gateway. A driver's whole job is to produce the right argv and the right
-refusal when something is missing, and both are assertable.
+No board, no card, no gateway. A driver's whole job is to produce argv the real scripts accept, and
+the right refusal when something is missing. These tests exist because the first draft got the
+script contracts wrong in ways that only reading the scripts could catch:
+
+- `install-esp32.sh` takes `--port` (not `--device`) and needs an explicit `--flash` or `--provision`;
+- `install-pi.sh --base` is the software directory on the device, NOT a mounted card. The card
+  writer is `deploy-to-card.sh`, which copies files onto the mount and writes a placeholder env.
 
     python packages/installer/tests/run_device_tests.py
 """
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -21,7 +27,12 @@ import hermes_device_pi as pi  # noqa: E402
 
 
 def dry() -> Runner:
-    return Runner(dry_run=True)
+    return Runner(dry_run=True, repo_root=ROOT)
+
+
+def noop_executor(argv, cwd):
+    """Pretends every command succeeded, so a card flow can be exercised without hardware."""
+    return 0, "ok"
 
 
 class Esp32Commands(unittest.TestCase):
@@ -31,37 +42,39 @@ class Esp32Commands(unittest.TestCase):
             dial_address="tls://gateway.example:10702",
             wake_word="hey_hermes",
             port="/dev/ttyACM0",
+            device_id="esp32-0011223344",
         )
         base.update(overrides)
         return DeviceRequest(**base)
 
-    def test_flash_uses_the_flags_the_script_actually_has(self):
-        result = esp32.DRIVER.flash(self.request(), dry())
-        self.assertTrue(result.ok)
-        argv = result.commands[0].argv
-        self.assertIn("scripts/install-esp32.sh", argv)
-        self.assertEqual(argv[argv.index("--device") + 1], "/dev/ttyACM0")
-        self.assertEqual(argv[argv.index("--endpoint") + 1], "tls://gateway.example:10702")
-        # The wake word is the model's detection name, not a flag of its own.
-        self.assertNotIn("--wake-word", argv)
+    def test_flash_uses_the_port_flag_and_an_explicit_action(self):
+        argv = esp32.DRIVER.flash(self.request(), dry()).commands[0].argv
+        self.assertIn("scripts/install-esp32.sh", argv[0])
+        self.assertEqual(argv[argv.index("--port") + 1], "/dev/ttyACM0")
+        # `--port` alone does nothing in the script: it needs an action.
+        self.assertIn("--flash", argv)
+        # The flag the first draft invented; the script rejects it outright.
+        self.assertNotIn("--device", argv)
+
+    def test_flash_carries_the_board_identity_and_the_friendly_name(self):
+        argv = esp32.DRIVER.flash(self.request(), dry()).commands[0].argv
+        self.assertEqual(argv[argv.index("--device-id") + 1], "esp32-0011223344")
+        self.assertEqual(argv[argv.index("--device-name") + 1], "kitchen")
 
     def test_a_chosen_wake_word_travels_as_model_plus_name(self):
-        result = esp32.DRIVER.flash(
+        argv = esp32.DRIVER.flash(
             self.request(wake_model="models/wake.tflite", wake_word="hey_hermes"), dry()
-        )
-        argv = result.commands[0].argv
+        ).commands[0].argv
         self.assertEqual(argv[argv.index("--model") + 1], "models/wake.tflite")
         self.assertEqual(argv[argv.index("--model-name") + 1], "hey_hermes")
+        self.assertNotIn("--wake-word", argv)
 
     def test_wifi_is_staged_with_the_passphrase_in_a_file_never_an_argument(self):
-        result = esp32.DRIVER.flash(
-            self.request(wifi_ssid="home", wifi_psk_file="/tmp/psk"), dry()
-        )
+        result = esp32.DRIVER.flash(self.request(wifi_ssid="home", wifi_psk_file="/run/psk"), dry())
         argv = result.commands[0].argv
         self.assertEqual(argv[argv.index("--wifi-ssid") + 1], "home")
-        self.assertEqual(argv[argv.index("--wifi-psk-file") + 1], "/tmp/psk")
-        self.assertNotIn("secretpass", " ".join(argv))
-        self.assertEqual(result.commands[0].secret_file, "/tmp/psk")
+        self.assertEqual(argv[argv.index("--wifi-psk-file") + 1], "/run/psk")
+        self.assertEqual(result.commands[0].secret_file, "/run/psk")
 
     def test_certs_use_the_real_flag_name(self):
         argv = esp32.DRIVER.flash(self.request(certs_dir="/certs"), dry()).commands[0].argv
@@ -78,44 +91,85 @@ class Esp32Commands(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn("gateway address", result.summary)
 
-    def test_provision_reuses_install_with_the_provision_flag(self):
+    def test_provision_requires_the_board_identity(self):
+        result = esp32.DRIVER.provision(self.request(device_id=None), dry())
+        self.assertFalse(result.ok)
+        self.assertIn("identity", result.summary)
+
+    def test_provision_uses_the_provision_action(self):
         argv = esp32.DRIVER.provision(self.request(), dry()).commands[0].argv
         self.assertIn("--provision", argv)
+        self.assertNotIn("--flash", argv)
 
-    def test_verify_reads_the_device_report(self):
+    def test_verify_reads_the_board_identity(self):
         argv = esp32.DRIVER.verify(self.request(), dry()).commands[0].argv
-        self.assertEqual(argv[0], "scripts/esp32_provision.py")
-        self.assertEqual(argv[-1], "status")
+        self.assertTrue(argv[0].endswith("scripts/esp32_provision.py"))
+        self.assertEqual(argv[-1], "device-id")
 
 
-class PiCommands(unittest.TestCase):
+class CardFlow(unittest.TestCase):
+    """The Pi is set up by writing a card, and the card writer is deploy-to-card.sh."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.mount = Path(self._tmp.name)
+        (self.mount / "etc").mkdir()
+        (self.mount / "home" / "satellite").mkdir(parents=True)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
     def request(self, **overrides) -> DeviceRequest:
         base = dict(
             device_name="bedroom",
             dial_address="tls://gateway.example:10702",
             wake_word="hey_hermes",
-            card_mount="/media/user/rootfs",
+            card_mount=str(self.mount),
         )
         base.update(overrides)
         return DeviceRequest(**base)
 
-    def test_profile_says_the_card_must_come_out(self):
-        self.assertTrue(pi.PROFILE.needs_card_reader)
-        self.assertIn("openwakeword_onnx", pi.PROFILE.wake_formats)
+    def test_flash_uses_the_card_writer_not_the_on_device_installer(self):
+        result = pi.DRIVER.flash(self.request(), dry())
+        argv = result.commands[0].argv
+        self.assertTrue(argv[0].endswith("scripts/deploy-to-card.sh"))
+        # install-pi.sh installs systemd units into /etc on the RUNNING machine and is therefore
+        # never the right script for a mounted card.
+        self.assertNotIn("install-pi.sh", " ".join(argv))
+        self.assertEqual(argv[1], str(self.mount))
 
-    def test_flash_targets_the_mounted_card_with_the_pi_flags(self):
-        argv = pi.DRIVER.flash(self.request(), dry()).commands[0].argv
-        self.assertEqual(argv[0], "scripts/install-pi.sh")
-        self.assertEqual(argv[argv.index("--base") + 1], "/media/user/rootfs")
-        self.assertEqual(argv[argv.index("--wake-word") + 1], "hey_hermes")
-        self.assertEqual(argv[argv.index("--device-name") + 1], "bedroom")
+    def test_flash_fills_the_env_file_the_card_needs(self):
+        result = pi.DRIVER.flash(self.request(), dry())
+        self.assertTrue(result.ok)
+        # A dry run must not write anything.
+        self.assertFalse((self.mount / "home" / "satellite" / "bridge-link.env").exists())
+
+    def test_a_real_run_fills_the_env_and_keeps_other_values(self):
+        env = self.mount / "home" / "satellite" / "bridge-link.env"
+        env.write_text("VOICE_DEVICE_ID=CHANGE-ME\nVOICE_DEVICE_AREA=hallway\n")
+        runner = Runner(dry_run=False, executor=noop_executor, repo_root=ROOT)
+        result = pi.DRIVER.flash(self.request(), runner)
+        self.assertTrue(result.ok, result.summary)
+        text = env.read_text()
+        self.assertIn("VOICE_BRIDGE_HOST=gateway.example", text)
+        self.assertIn("VOICE_BRIDGE_PORT=10702", text)
+        self.assertIn("VOICE_DEVICE_NAME=bedroom", text)
+        self.assertNotIn("CHANGE-ME", text)
+        # A line the driver does not own must survive untouched.
+        self.assertIn("VOICE_DEVICE_AREA=hallway", text)
+
+    def test_the_card_writer_runs_twice_so_the_unit_can_be_enabled(self):
+        runner = Runner(dry_run=False, executor=noop_executor, repo_root=ROOT)
+        result = pi.DRIVER.flash(self.request(), runner)
+        deploys = [c for c in result.commands if c.argv[0].endswith("deploy-to-card.sh")]
+        self.assertEqual(len(deploys), 2)
 
     def test_a_missing_card_is_a_refusal(self):
         result = pi.DRIVER.flash(self.request(card_mount=None), dry())
         self.assertFalse(result.ok)
         self.assertIn("SD card", result.summary)
 
-    def test_wifi_provisioning_needs_elevation_and_names_the_network(self):
+    def test_wifi_provisioning_copies_a_saved_network_and_needs_elevation(self):
         result = pi.DRIVER.provision(self.request(wifi_ssid="home"), dry())
         self.assertTrue(result.ok)
         command = result.commands[0]
@@ -132,10 +186,41 @@ class PiCommands(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn("not the card's root filesystem", result.summary)
 
-    def test_verify_accepts_a_linux_root(self):
-        # / has an etc directory, which is the shape check this verb performs.
-        result = pi.DRIVER.verify(self.request(card_mount="/"), Runner(dry_run=False))
-        self.assertTrue(result.ok)
+    def test_verify_refuses_a_card_that_still_says_change_me(self):
+        env = self.mount / "home" / "satellite" / "bridge-link.env"
+        env.write_text("VOICE_DEVICE_ID=CHANGE-ME\n")
+        result = pi.DRIVER.verify(self.request(), Runner(dry_run=False))
+        self.assertFalse(result.ok)
+        self.assertIn("CHANGE-ME", result.summary)
+
+    def test_verify_accepts_a_filled_in_card(self):
+        env = self.mount / "home" / "satellite" / "bridge-link.env"
+        env.write_text("VOICE_DEVICE_ID=satellite\nVOICE_BRIDGE_HOST=gateway.example\n")
+        result = pi.DRIVER.verify(self.request(), Runner(dry_run=False))
+        self.assertTrue(result.ok, result.summary)
+
+
+class EnvRendering(unittest.TestCase):
+    def test_dial_address_is_split_into_host_and_port(self):
+        self.assertEqual(pi.split_dial("tls://gateway.example:10702"),
+                         ("gateway.example", 10702))
+        self.assertEqual(pi.split_dial("gateway.example:10704"), ("gateway.example", 10704))
+
+    def test_rendering_sets_keys_without_duplicating_them(self):
+        rendered = pi.render_bridge_env(
+            "VOICE_BRIDGE_HOST=CHANGE-ME\nVOICE_BRIDGE_PORT=10701\n",
+            device_id="kitchen", host="gw", port=10702, name="kitchen",
+        )
+        self.assertEqual(rendered.count("VOICE_BRIDGE_HOST="), 1)
+        self.assertIn("VOICE_BRIDGE_HOST=gw", rendered)
+        self.assertIn("VOICE_BRIDGE_PORT=10702", rendered)
+
+    def test_commented_keys_are_not_treated_as_settings(self):
+        rendered = pi.render_bridge_env(
+            "# VOICE_BRIDGE_HOST=CHANGE-ME\n", device_id="k", host="gw", port=10702, name="k"
+        )
+        self.assertIn("# VOICE_BRIDGE_HOST=CHANGE-ME", rendered)
+        self.assertIn("\nVOICE_BRIDGE_HOST=gw", rendered)
 
 
 class ProfilesAgree(unittest.TestCase):
@@ -144,7 +229,8 @@ class ProfilesAgree(unittest.TestCase):
         self.assertEqual(esp32.PROFILE.wake_default, "hey_hermes")
 
     def test_the_wake_formats_differ_and_that_is_the_point(self):
-        self.assertNotEqual(esp32.PROFILE.wake_catalogue_format(), pi.PROFILE.wake_catalogue_format())
+        self.assertNotEqual(esp32.PROFILE.wake_catalogue_format(),
+                            pi.PROFILE.wake_catalogue_format())
 
     def test_both_report_which_settings_need_a_cable(self):
         for profile in (esp32.PROFILE, pi.PROFILE):

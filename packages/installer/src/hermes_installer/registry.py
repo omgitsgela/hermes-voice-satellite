@@ -62,6 +62,12 @@ class DeviceRegistry:
                 profile = getattr(loaded_object, "PROFILE", None)
                 if profile is None:
                     raise RegistryError(f"{entry.name}: no PROFILE")
+                existing = self._profiles.get(profile.id)
+                if existing is not None and existing == profile:
+                    # The same first-party device found twice: by import and by entry point. That is
+                    # the normal installed case, not a conflict.
+                    loaded += 1
+                    continue
                 self.register(profile, driver=getattr(loaded_object, "DRIVER", None))
                 loaded += 1
             except Exception as exc:  # noqa: BLE001 - one bad plugin must not be fatal
