@@ -4,23 +4,13 @@ name: installer
 # three platforms. This workflow exists so "it passes" means more than "it passed on the machine
 # where it was written".
 
+# No `paths:` filter, deliberately. An allowlist of files was tried and it meant three commits went
+# in unverified: a docs sweep, a changed test script, and the personal-data guard failing on a file the
+# list did not name. The jobs here read the whole tree (the guard greps every tracked file, the suites
+# run scripts/ and the packages), so the workflow runs on every push and every pull request.
 on:
   push:
-    paths:
-      - "packages/**"
-      - "packaging/**"
-      - "scripts/test-installer.sh"
-      - "scripts/build-installer.sh"
-      - "scripts/check-no-personal-data.sh"
-      - "docs/installer.md"
-      - ".github/workflows/installer.yml"
   pull_request:
-    paths:
-      - "packages/**"
-      - "packaging/**"
-      - "scripts/test-installer.sh"
-      - "scripts/build-installer.sh"
-      - ".github/workflows/installer.yml"
   workflow_dispatch:
 
 jobs:
