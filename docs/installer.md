@@ -189,6 +189,42 @@ them as if they were:
   `bridge-link.env`, which the script deliberately never overwrites, so the driver fills it and then
   re-runs the script: the second run is what enables the unit, which keeps that rule in one place.
 
+## Choosing a wake word, and choosing a voice
+
+`hermes_installer.catalogue` is a checked-in snapshot of what can be chosen, so the installer works
+with no network at all.
+
+- **A device is only offered wake words in its own format.** openWakeWord ONNX for a Pi, microWakeWord
+  TFLite for an ESP32. They are not interchangeable, and the catalogue refuses a model in the wrong
+  format rather than letting it fail on the device.
+- **Both figures are shown, never one score.** Recall and false activations per hour, with the caveat
+  that both were measured by the trainer on their own audio. A single quality number would imply a
+  precision nobody has.
+- **Our own phrase is first, and says so.** `hey hermes` exists in both formats, is the default, and
+  carries no third-party trademark problem. The rest are listed honestly: `alexa` and `hey jarvis` are
+  named as other people's marks, not recommendations.
+- **A download is verified or discarded.** Entries may carry a SHA-256; a mismatch deletes the file
+  rather than leaving something half-trusted to flash into a device.
+- **Voices default to HFC female**, with HFC male beside it, and every voice offers a published sample
+  so it can be heard before 60 MB is downloaded. Samples are fetched on demand rather than committed
+  here, because the licences belong to the voice models, not to this project.
+
+The public API at `openwakeword.com/api` is used for *measurements only*: search and detail are
+anonymous, while downloading a model from that library needs an account. Its numbers are surfaced for
+comparison; the download path stays on the free sources.
+
+## Re-enrolling a device
+
+A device that was reflashed has no certificate of its own any more, and the enrolment script refuses an
+existing id. Pairing therefore takes an explicit `"replace": true`, which is passed through as `--force`.
+A device is never silently replaced: taking over another device's identity has to be asked for.
+
+## Continuous integration
+
+`.github/workflows/installer.yml` runs all six suites on Linux, Windows and macOS at Python 3.11 and
+3.12, checks the public-data rule on Linux, and on Linux builds the standalone bundle and runs it with
+`env -i` and no Python on PATH, because that is the promise the packaging makes.
+
 ## Running the pairing endpoint as a service
 
 `python -m hermes_gateway.pairing_server --write-unit <path>` renders a systemd user unit from the

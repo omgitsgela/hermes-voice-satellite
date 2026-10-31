@@ -77,7 +77,7 @@ class PairingConfig:
 class Enroller(Protocol):
     """Signs a device certificate and returns where the certificate and key landed."""
 
-    def enroll(self, device_id: str) -> tuple[Path, Path]: ...
+    def enroll(self, device_id: str, *, replace: bool = False) -> tuple[Path, Path]: ...
 
 
 class ScriptEnroller:
@@ -87,12 +87,17 @@ class ScriptEnroller:
         self.script = Path(script)
         self.state_dir = Path(state_dir)
 
-    def enroll(self, device_id: str) -> tuple[Path, Path]:
+    def enroll(self, device_id: str, *, replace: bool = False) -> tuple[Path, Path]:
+        # A device that was reflashed has no certificate of its own any more, and `--new` refuses an
+        # existing id. Replacement is deliberate and only happens when the caller asked for it, so a
+        # mistyped name cannot quietly take over another device's identity.
         command = [
             "python3", str(self.script),
             "--state", str(self.state_dir),
             "enroll", "--new", device_id,
         ]
+        if replace:
+            command.append("--force")
         finished = subprocess.run(command, capture_output=True, text=True, timeout=120)
         if finished.returncode != 0:
             raise PairingRefused(
@@ -191,7 +196,8 @@ class PairingService:
 
     # -- pairing ------------------------------------------------------------------------------
 
-    def pair(self, words: str, device_id: str, source: str = "unknown") -> dict:
+    def pair(self, words: str, device_id: str, source: str = "unknown",
+             replace: bool = False) -> dict:
         """Return the payload a workbench needs, or raise PairingRefused with a safe message."""
         if not isinstance(words, str) or not words.strip():
             raise PairingRefused("the pairing words are missing")
@@ -211,7 +217,7 @@ class PairingService:
                 # Deliberately identical to a missing token: nothing tells a guesser how close
                 # they are.
                 raise PairingRefused("the pairing words are not correct")
-            cert, key = self.enroller.enroll(device_id)
+            cert, key = self.enroller.enroll(device_id, replace=replace)
             # Recorded inside the same lock: a success must clear the counter before the next
             # attempt is judged.
             self._record_success(source)
@@ -290,7 +296,8 @@ class PairingHandler(BaseHTTPRequestHandler):
         source = self.client_address[0] if self.client_address else "unknown"
         try:
             payload = self.service.pair(
-                str(body.get("words", "")), str(body.get("device", "")), source
+                str(body.get("words", "")), str(body.get("device", "")), source,
+                replace=bool(body.get("replace", False)),
             )
         except PairingRefused as exc:
             message = str(exc)

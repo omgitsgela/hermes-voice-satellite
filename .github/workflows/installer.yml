@@ -1,0 +1,86 @@
+name: installer
+
+# The installer is the part of this project a person runs before anything else works, and it spans
+# three platforms. This workflow exists so "it passes" means more than "it passed on the machine
+# where it was written".
+
+on:
+  push:
+    paths:
+      - "packages/**"
+      - "packaging/**"
+      - "scripts/test-installer.sh"
+      - "scripts/build-installer.sh"
+      - "scripts/check-no-personal-data.sh"
+      - "docs/installer.md"
+      - ".github/workflows/installer.yml"
+  pull_request:
+    paths:
+      - "packages/**"
+      - "packaging/**"
+      - "scripts/test-installer.sh"
+      - "scripts/build-installer.sh"
+      - ".github/workflows/installer.yml"
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: tests (${{ matrix.os }}, python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install the one runtime dependency the installer uses
+        run: python -m pip install --upgrade pip pyserial
+
+      - name: Offline suites
+        shell: bash
+        run: bash scripts/test-installer.sh
+
+      - name: No installation-specific values in tracked files
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/check-no-personal-data.sh
+
+  build:
+    name: standalone build (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the bundled installer
+        shell: bash
+        run: bash scripts/build-installer.sh
+
+      - name: It must run with no Python on PATH
+        shell: bash
+        run: |
+          # The whole promise is that a person does not install a runtime first. Prove it by
+          # running the bundle with an empty environment and no interpreter available.
+          env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
+            dist/hermes-installer/hermes-installer --status > "$RUNNER_TEMP/status.json"
+          python -c "import json,sys; d=json.load(open('$RUNNER_TEMP/status.json')); \
+                     assert d['devices'], 'no devices discovered'; print('devices:', [x['id'] for x in d['devices']])"
+
+      - name: Record the size
+        shell: bash
+        run: du -sh dist/hermes-installer | tee /tmp/size.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hermes-installer-linux
+          path: dist/hermes-installer/
+          retention-days: 14

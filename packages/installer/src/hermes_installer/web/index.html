@@ -324,6 +324,26 @@
           to a temporary file only you can read, given to the device, and deleted immediately.</p>
       </div>
 
+      <h3>Voice and wake word</h3>
+      <label class="field" for="wake-select">Wake word</label>
+      <div class="row">
+        <div style="flex:2 1 260px"><select id="wake-select" aria-describedby="wake-caveat"></select></div>
+      </div>
+      <p class="hint" id="wake-metrics" style="margin-top:8px"></p>
+      <p class="hint" id="wake-caveat" style="margin-top:6px"></p>
+      <label class="field" for="wake-file">Or a model file on this computer</label>
+      <input id="wake-file" type="text" placeholder="path to a .tflite or .onnx file" />
+      <p class="hint" style="margin-top:8px">Leave blank to use the choice above. A file you supply is
+        used as-is and is not checked against anybody's measurements.</p>
+
+      <label class="field" for="voice-select">Voice</label>
+      <div class="row">
+        <div style="flex:2 1 260px"><select id="voice-select"></select></div>
+        <div style="flex:0 0 auto"><button id="voice-preview" class="ghost">Listen</button></div>
+      </div>
+      <audio id="voice-audio" class="hidden"></audio>
+      <p class="hint" id="voice-note" style="margin-top:8px"></p>
+
       <div id="speech-info" class="notice" style="margin-top:16px"></div>
 
       <div class="actions">
@@ -729,9 +749,60 @@ function prepareTransport() {
   if (card) loadMounts(); else loadPorts();
 }
 
+async function loadChoices() {
+  if (!state.device) return;
+  const wake = await api("/api/wake-words?format=" + encodeURIComponent(state.device.wake_format));
+  const select = $("wake-select");
+  if (wake.ok) {
+    select.innerHTML = wake.wake_words.map((entry) => {
+      const label = entry.first_party ? `${entry.word} (recommended)` : entry.word;
+      return `<option value="${escapeHtml(entry.id)}">${escapeHtml(label)}</option>`;
+    }).join("");
+    state.wakeEntries = wake.wake_words;
+    showWakeMetrics();
+    $("wake-caveat").textContent = wake.caveat;
+    select.onchange = showWakeMetrics;
+  } else {
+    select.innerHTML = `<option value="">${escapeHtml(wake.error || "no wake words")}</option>`;
+  }
+
+  const voices = await api("/api/voices");
+  if (voices.ok) {
+    const voiceSelect = $("voice-select");
+    voiceSelect.innerHTML = voices.voices.map((voice) =>
+      `<option value="${escapeHtml(voice.id)}"${voice.default ? " selected" : ""}>${
+        escapeHtml(voice.name)} · ${voice.size_mb} MB</option>`).join("");
+    state.voices = voices.voices;
+    $("voice-note").textContent = voices.note;
+    voiceSelect.onchange = showVoiceNote;
+    showVoiceNote();
+  }
+}
+
+function showWakeMetrics() {
+  const entry = (state.wakeEntries || []).find((item) => item.id === $("wake-select").value);
+  $("wake-metrics").textContent = entry ? entry.metrics_line : "";
+}
+
+function showVoiceNote() {
+  const voice = (state.voices || []).find((item) => item.id === $("voice-select").value);
+  $("voice-preview").disabled = !(voice && voice.sample_url);
+}
+
+$("voice-preview").onclick = async () => {
+  const voice = (state.voices || []).find((item) => item.id === $("voice-select").value);
+  if (!voice || !voice.sample_url) return;
+  const audio = $("voice-audio");
+  audio.src = voice.sample_url;
+  try { await audio.play(); }
+  catch (error) { $("voice-note").textContent =
+    "This browser would not play the preview. The voice can still be chosen."; }
+};
+
 function prepareInstallPanel() {
   if (!state.device) return;
   const card = state.device.needs_card_reader;
+  loadChoices();
   $("wifi-password-box").classList.toggle("hidden", card);
   $("ssid-label").textContent = card ? "Copy which saved Wi-Fi network" : "Wi-Fi network";
   $("install-device").textContent = card ? "Write card setup" : "Install device software";
@@ -809,6 +880,13 @@ function deviceFields(dryRun) {
     wifi_ssid: ssid || null,
     wifi_password: (!card && ssid) ? ($("wifi-password").value || null) : null,
     certs_dir: state.paired ? state.paired.certs_dir : null,
+    // A file the person supplies wins; otherwise the chosen entry's phrase, without its badge.
+    wake_model: ($("wake-file").value || "").trim() || null,
+    wake_word: (($("wake-file").value || "").trim()
+      ? (($("wake-file").value || "").trim().split(/[\\/]/).pop() || "custom").replace(/\.[^.]+$/, "")
+      : (($("wake-select").selectedOptions[0] || {}).textContent || state.device.wake_default)
+          .replace(" (recommended)", "").trim()),
+    voice: ($("voice-select").value || "en_US-hfc_female-medium"),
     dry_run: dryRun
   };
 }
@@ -825,7 +903,9 @@ $("review-device").onclick = async () => {
     <dt>Connection</dt><dd>${state.device.needs_card_reader
       ? "card in a reader" : "USB cable"}</dd>
     <dt>Wi-Fi</dt><dd>${fields.wifi_ssid ? escapeHtml(fields.wifi_ssid)
-      : "keep the current settings"}</dd>`;
+      : "keep the current settings"}</dd>
+    <dt>Wake word</dt><dd>${escapeHtml(fields.wake_word)}</dd>
+    <dt>Voice</dt><dd>${escapeHtml(fields.voice)}</dd>`;
   $("device-commands").textContent = (result.commands || [])
     .map((c) => c.argv.join(" ")).join("\n");
   $("install-device").disabled = false;

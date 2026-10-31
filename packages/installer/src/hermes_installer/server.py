@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import secrets
 import threading
+import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -96,6 +97,20 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._json({"ok": True, "mounts": self.session.card_mounts()})
             return
+        if self.path.startswith("/api/wake-words"):
+            if not self._guard():
+                return
+            query = urllib.parse.urlparse(self.path).query
+            params = urllib.parse.parse_qs(query)
+            fmt = (params.get("format") or [None])[0]
+            search = (params.get("q") or [""])[0]
+            self._json(self.session.wake_word_catalogue(fmt, search))
+            return
+        if self.path == "/api/voices":
+            if not self._guard():
+                return
+            self._json(self.session.voice_catalogue())
+            return
         self._json({"error": "not found"}, 404)
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib naming
@@ -145,6 +160,11 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(self.session.flash(profile_id, **body))
                 else:
                     self._json(self.session.install_device(profile_id, **body))
+                return
+            if self.path == "/api/wake-word":
+                self._json(self.session.prepare_wake_word(
+                    str(body.get("format", "")), str(body.get("model", ""))
+                ))
                 return
             if self.path == "/api/device-id":
                 self._json(self.session.device_identity(

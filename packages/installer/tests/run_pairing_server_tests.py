@@ -49,8 +49,8 @@ class StubEnroller:
         self.tls_dir = tls_dir
         self.calls: list[str] = []
 
-    def enroll(self, device_id: str) -> tuple[Path, Path]:
-        self.calls.append(device_id)
+    def enroll(self, device_id: str, *, replace: bool = False) -> tuple[Path, Path]:
+        self.calls.append((device_id, replace))
         cert = self.tls_dir / f"{device_id}.crt"
         key = self.tls_dir / f"{device_id}.key"
         cert.write_text("DEVICE CERT")
@@ -101,7 +101,7 @@ class CorrectWords(Base):
 
     def test_the_enroller_is_called_with_the_validated_id(self):
         self.service.pair(WORDS, "kitchen_2", "s")
-        self.assertEqual(self.enroller.calls, ["kitchen_2"])
+        self.assertEqual(self.enroller.calls, [("kitchen_2", False)])
 
 
 class ModuleStartup(unittest.TestCase):
@@ -181,6 +181,41 @@ class ServiceUnit(unittest.TestCase):
             self.assertIn("systemctl --user enable --now hermes-pairing.service", instructions)
 
 
+class ReEnrolment(Base):
+    """A reflashed device has no certificate. Replacement must be asked for, not assumed."""
+
+    def test_a_normal_pairing_does_not_replace_an_existing_device(self):
+        self.service.pair(WORDS, "kitchen-1", "s")
+        self.assertEqual(self.enroller.calls[-1], ("kitchen-1", False))
+
+    def test_replacement_is_only_requested_when_asked(self):
+        self.service.pair(WORDS, "kitchen-1", "s", replace=True)
+        self.assertEqual(self.enroller.calls[-1], ("kitchen-1", True))
+
+    def test_the_http_body_can_ask_for_replacement(self):
+        import json as _json
+        import threading as _threading
+        import urllib.request as _url
+        from http.server import ThreadingHTTPServer
+
+        handler = type("BoundPairing", (PairingHandler,), {"service": self.service})
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        thread = _threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            request = _url.Request(
+                f"http://127.0.0.1:{server.server_port}/pair",
+                data=_json.dumps({"words": WORDS, "device": "kitchen-9", "replace": True}).encode(),
+                headers={"Content-Type": "application/json"}, method="POST",
+            )
+            with _url.urlopen(request, timeout=10) as response:
+                self.assertEqual(response.status, 200)
+        finally:
+            server.shutdown()
+            server.server_close()
+        self.assertEqual(self.enroller.calls[-1], ("kitchen-9", True))
+
+
 class Hardening(Base):
     def test_windows_reserved_names_are_refused_as_device_ids(self):
         for reserved in ("con", "aux", "nul", "com1", "lpt9"):
@@ -207,13 +242,13 @@ class Hardening(Base):
         guard = threading.Lock()
         original = self.enroller.enroll
 
-        def slow_enroll(device_id):
+        def slow_enroll(device_id, **kwargs):
             with guard:
                 peak["now"] += 1
                 peak["max"] = max(peak["max"], peak["now"])
             try:
                 time.sleep(0.05)
-                return original(device_id)
+                return original(device_id, **kwargs)
             finally:
                 with guard:
                     peak["now"] -= 1

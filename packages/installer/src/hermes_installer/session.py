@@ -12,6 +12,7 @@ from typing import Any, Callable, Mapping
 
 import os
 import tempfile
+import urllib.parse
 
 import hermes_gateway as gateway_module
 
@@ -339,6 +340,67 @@ class Session:
             shutil.rmtree(self._certs_tmp, ignore_errors=True)
             self._certs_tmp = None
         self.certs_dir = None
+
+    # -- what can be chosen -------------------------------------------------------------------
+
+    def wake_word_catalogue(self, fmt: str | None = None, query: str = "") -> dict:
+        from . import catalogue
+
+        try:
+            entries = catalogue.wake_words(fmt, query)
+        except catalogue.CatalogueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {
+            "ok": True,
+            "caveat": catalogue.METRIC_CAVEAT,
+            "wake_words": [
+                {"id": e.id, "word": e.word, "format": e.format, "first_party": e.first_party,
+                 "recall": e.recall, "fa_per_hour": e.fa_per_hour, "note": e.note,
+                 "licence": e.licence, "metrics_line": e.metrics_line}
+                for e in entries
+            ],
+        }
+
+    def voice_catalogue(self) -> dict:
+        from . import catalogue
+
+        return {
+            "ok": True,
+            "default": catalogue.default_voice().id,
+            "voices": [
+                {"id": v.id, "name": v.name, "language": v.language, "size_mb": v.size_mb,
+                 "sample_url": v.sample_url, "default": v.default}
+                for v in catalogue.voices()
+            ],
+            "note": "Every voice can be heard before it is downloaded.",
+        }
+
+    def prepare_wake_word(self, fmt: str, model_id: str) -> dict:
+        """Make a chosen wake word available locally, verifying any download before it is used."""
+        from . import catalogue
+
+        try:
+            entry = catalogue.find(model_id, fmt)
+        except catalogue.CatalogueError as exc:
+            return {"ok": False, "error": str(exc)}
+
+        if entry.first_party or not entry.source_url.startswith("http"):
+            local = self.repo_root / entry.source_url
+            if local.exists():
+                return {"ok": True, "path": str(local), "word": entry.word, "downloaded": False}
+            # A first-party entry that is provisioned by an installer rather than a file.
+            return {"ok": True, "path": None, "word": entry.word, "downloaded": False,
+                    "note": entry.note or "provided by the device installer"}
+
+        suffix = Path(urllib.parse.urlparse(entry.source_url).path).suffix or ".tflite"
+        target = Path.home() / ".cache" / "hermes-installer" / "models" / f"{entry.id}{suffix}"
+        if target.exists():
+            return {"ok": True, "path": str(target), "word": entry.word, "downloaded": False}
+        try:
+            catalogue.download(entry.source_url, target, expect_sha256=entry.sha256)
+        except Exception as exc:  # noqa: BLE001 - a failed download is an answer
+            return {"ok": False, "error": f"could not fetch {entry.id}: {exc}"}
+        return {"ok": True, "path": str(target), "word": entry.word, "downloaded": True}
 
     # -- devices ------------------------------------------------------------------------------
 
