@@ -155,8 +155,10 @@ class ServiceUnit(unittest.TestCase):
         from hermes_gateway.unit import render_unit
 
         text = render_unit(self.config())
+        # Compare against how this platform renders the path: a POSIX literal in the assertion
+        # failed on Windows, where the same Path is written with backslashes.
         self.assertIn("-m hermes_gateway.pairing_server", text)
-        self.assertIn("--state /srv/hermes/state", text)
+        self.assertIn(f"--state {Path('/srv/hermes/state')}", text)
         self.assertIn("--dial tls://gateway.example:10702", text)
         self.assertIn("--port 10704", text)
         self.assertIn("Restart=always", text)
@@ -164,8 +166,9 @@ class ServiceUnit(unittest.TestCase):
     def test_a_path_with_a_space_is_quoted_for_systemd(self):
         from hermes_gateway.unit import render_unit
 
-        text = render_unit(self.config(state_dir=Path("/srv/my state")))
-        self.assertIn('--state "/srv/my state"', text)
+        spaced = Path("/srv/my state")
+        text = render_unit(self.config(state_dir=spaced))
+        self.assertIn(f'--state "{spaced}"', text)
 
     def test_an_empty_dial_address_is_refused(self):
         from hermes_gateway.unit import render_unit
