@@ -10,6 +10,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+import os
+import tempfile
+
 import hermes_gateway as gateway_module
 
 from .driver import DeviceRequest, Runner, UnsupportedOnThisPlatform
@@ -76,6 +79,7 @@ class Session:
                     "wake_format": p.wake_catalogue_format(),
                     "wake_default": p.wake_default,
                     "description": p.description,
+                    "identify": p.identify,
                     "remote_settings": list(p.remote_settings),
                     "cable_settings": list(p.cable_settings),
                     "settings": {
@@ -88,6 +92,45 @@ class Session:
             "load_errors": self.registry.load_errors,
             "credentials_backend": self.store.backend_name,
         }
+
+    # -- what is plugged in -------------------------------------------------------------------
+
+    def usb_ports(self) -> list[dict]:
+        """Serial ports this machine can see, so nobody has to guess /dev/ttyACM0."""
+        try:
+            from serial.tools import list_ports
+        except Exception:  # noqa: BLE001 - pyserial absent is not an error worth failing over
+            return []
+        found = []
+        for port in list_ports.comports():
+            found.append({"device": port.device, "description": port.description or ""})
+        return sorted(found, key=lambda p: p["device"])
+
+    def card_mounts(self) -> list[dict]:
+        """Candidate mounted root filesystems for a card, identified by having an etc directory."""
+        import string
+        import sys
+
+        candidates: list[Path] = []
+        if sys.platform == "win32":
+            candidates = [Path(f"{letter}:\\") for letter in string.ascii_uppercase]
+        else:
+            home = Path.home()
+            for base in (Path("/run/media") / home.name, Path("/media") / home.name,
+                         Path("/media"), Path("/mnt")):
+                if base.is_dir():
+                    try:
+                        candidates += [child for child in base.iterdir() if child.is_dir()]
+                    except OSError:
+                        continue
+        found = []
+        for candidate in candidates[:40]:
+            try:
+                if (candidate / "etc").is_dir():
+                    found.append({"mount": str(candidate)})
+            except OSError:
+                continue
+        return found
 
     # -- gateway ------------------------------------------------------------------------------
 
@@ -239,6 +282,17 @@ class Session:
         except RegistryError as exc:
             return {"ok": False, "error": str(exc)}
 
+        # A Wi-Fi passphrase typed into the form is written to a file only this user can read, handed
+        # to the script by path, and deleted immediately afterwards. It is never an argument, never
+        # in a log line, and never in the returned result.
+        typed_password = fields.get("wifi_password")
+        secret_path: str | None = None
+        if typed_password and not bool(fields.get("dry_run")):
+            handle, secret_path = tempfile.mkstemp(prefix="hermes-wifi-")
+            with os.fdopen(handle, "w") as stream:
+                stream.write(str(typed_password))
+            os.chmod(secret_path, 0o600)
+
         request = DeviceRequest(
             device_name=str(fields.get("device_name") or ""),
             dial_address=str(fields.get("dial_address") or ""),
@@ -247,7 +301,7 @@ class Session:
             port=fields.get("port"),
             card_mount=fields.get("card_mount"),
             wifi_ssid=fields.get("wifi_ssid"),
-            wifi_psk_file=fields.get("wifi_psk_file"),
+            wifi_psk_file=secret_path or fields.get("wifi_psk_file"),
             # Device-specific inputs must survive the session, or a third-party driver can never
             # receive anything the shared UI did not happen to know about.
             device_id=fields.get("device_id"),
@@ -268,6 +322,12 @@ class Session:
         except UnsupportedOnThisPlatform as exc:
             # A platform that cannot do this is an answer, not a crash.
             return {"ok": False, "error": str(exc), "unsupported": True}
+        finally:
+            if secret_path:
+                try:
+                    os.unlink(secret_path)
+                except OSError:
+                    pass
         return {
             "ok": result.ok,
             "summary": result.summary,

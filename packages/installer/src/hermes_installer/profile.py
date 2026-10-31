@@ -62,6 +62,9 @@ class DeviceProfile:
     settings: Mapping[str, Setting] = field(default_factory=dict)
     image: str | None = None
     description: str = ""
+    #: How a person tells this device apart from the others: where the model is printed, what the
+    #: board looks like. Empty is allowed; the list then shows the name only.
+    identify: str = ""
     wake_default: str = "hey_hermes"
     #: Device classes whose firmware is ours to ship, as opposed to a third party's.
     first_party: bool = False
@@ -154,6 +157,7 @@ def profile_from_dict(raw: Mapping[str, Any]) -> DeviceProfile:
         settings=settings,
         image=raw.get("image"),
         description=str(raw.get("description", "")),
+        identify=str(raw.get("identify", "")),
         wake_default=str(raw.get("wake_default", "hey_hermes")),
         first_party=bool(raw.get("first_party", False)),
     )

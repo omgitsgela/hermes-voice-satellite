@@ -38,6 +38,10 @@ PROFILE = DeviceProfile(
         "A small box with a four-microphone array and its own speaker. The audio processing runs on "
         "the array itself, so the board only carries the stream."
     ),
+    identify=(
+        "Look for XIAO ESP32S3 printed on the board next to the USB socket, with a round "
+        "four-microphone array and a small speaker underneath."
+    ),
     settings={
         "playback_volume": Setting("playback_volume", "immediate", remote=True,
                                    help="How loud it speaks."),

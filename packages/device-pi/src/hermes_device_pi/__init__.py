@@ -40,6 +40,10 @@ PROFILE = DeviceProfile(
         "A small computer running Linux. Its wake word runs on the Pi itself, so the model format "
         "differs from the smaller boxes even when the phrase is the same."
     ),
+    identify=(
+        "A green board about the size of a matchbox, with the microSD slot on one narrow end. "
+        "The card comes out of that slot."
+    ),
     settings={
         "playback_volume": Setting("playback_volume", "immediate", remote=True),
         "mic_gain": Setting("mic_gain", "immediate", remote=True),

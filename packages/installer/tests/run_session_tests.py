@@ -179,8 +179,10 @@ class HttpInterface(unittest.TestCase):
     def test_the_page_is_served(self):
         with urllib.request.urlopen(self.base + "/", timeout=10) as response:
             body = response.read().decode()
-        self.assertIn("Hermes voice installer", body)
+        self.assertIn("Set up Hermes voice", body)
         self.assertIn("identity code", body)
+        # The first screen must not tell a person they can set up a gateway they cannot.
+        self.assertIn("Hermes was not found on this computer", body)
 
     def test_status_is_json(self):
         status = self.get_json("/api/status")

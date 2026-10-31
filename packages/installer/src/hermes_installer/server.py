@@ -86,6 +86,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._json(self.session.status())
             return
+        if self.path == "/api/ports":
+            if not self._guard():
+                return
+            self._json({"ok": True, "ports": self.session.usb_ports()})
+            return
+        if self.path == "/api/mounts":
+            if not self._guard():
+                return
+            self._json({"ok": True, "mounts": self.session.card_mounts()})
+            return
         self._json({"error": "not found"}, 404)
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib naming
