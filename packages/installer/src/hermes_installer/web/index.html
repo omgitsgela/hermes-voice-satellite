@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hermes voice installer</title>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --panel: #141821;
+    --panel-2: #1a1f2b;
+    --line: #242b3a;
+    --text: #e8ecf4;
+    --muted: #a9b3c7;
+    --accent: #6ea8fe;
+    --accent-2: #9b8cff;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --radius: 16px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background:
+      radial-gradient(900px 500px at 12% -10%, #1b2a4a 0%, transparent 60%),
+      radial-gradient(700px 400px at 95% 0%, #2a1b4a 0%, transparent 55%),
+      var(--bg);
+    color: var(--text);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .shell { max-width: 880px; margin: 0 auto; padding: 48px 24px 80px; }
+  header { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
+  .dot { width: 12px; height: 12px; border-radius: 50%;
+         background: linear-gradient(135deg, var(--accent), var(--accent-2));
+         box-shadow: 0 0 18px #6ea8fe88; }
+  h1 { font-size: 22px; font-weight: 620; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); margin: 0 0 28px 26px; font-size: 14px; }
+  .steps { display: flex; gap: 8px; margin: 0 0 28px 0; flex-wrap: wrap; }
+  .tab { padding: 7px 13px; border-radius: 999px; font-size: 12.5px; color: #b3bdd1;
+         border: 1px solid var(--line); background: #11151d; }
+  .tab.on { color: var(--text); border-color: #3b4b6b; background: #182135; }
+  .card {
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 24px; margin-bottom: 18px;
+    box-shadow: 0 1px 0 #ffffff08 inset, 0 18px 40px -30px #000;
+  }
+  h2 { font-size: 16.5px; margin: 0 0 6px; font-weight: 600; }
+  .hint { color: var(--muted); font-size: 13.5px; margin: 0 0 18px; }
+  label { display: block; font-size: 12.5px; color: var(--muted); margin: 14px 0 6px;
+          text-transform: uppercase; letter-spacing: .06em; }
+  input[type=text], input[type=number], input[type=password], select {
+    width: 100%; padding: 11px 13px; border-radius: 10px; color: var(--text);
+    background: #0d1118; border: 1px solid var(--line); font-size: 14.5px;
+  }
+  input:focus, select:focus { outline: 2px solid #2d4a7a; border-color: #3a5a8f; }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .row > div { flex: 1 1 200px; }
+  button {
+    font: inherit; padding: 11px 18px; border-radius: 10px; cursor: pointer;
+    border: 1px solid #33456a; color: #eaf1ff; background: linear-gradient(180deg, #2a3f66, #23334f);
+    transition: filter .15s ease, transform .05s ease;
+  }
+  button:hover { filter: brightness(1.12); }
+  button:active { transform: translateY(1px); }
+  button.ghost { background: #131822; border-color: #2f3a4e; color: #cdd7ea; }
+  button.go { background: linear-gradient(180deg, #3d7bf0, #2c5ec2); border-color: #4a80e8;
+              color: #fff; font-weight: 560; box-shadow: 0 8px 24px -14px #3d7bf0; }
+  button.primary { background: linear-gradient(180deg, #3f6fc4, #2f5fae); }
+  button[disabled] { opacity: .5; cursor: not-allowed; }
+  .actions { display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap; }
+  .badge { display: inline-block; font-size: 11.5px; padding: 3px 9px; border-radius: 999px;
+           border: 1px solid var(--line); color: var(--muted); margin-right: 6px; }
+  .badge.remote { color: #a7f3d0; border-color: #245c46; background: #10241c; }
+  .badge.cable { color: #fcd34d; border-color: #5c4a1e; background: #241f10; }
+  .device { display: flex; gap: 16px; align-items: flex-start; padding: 16px; border-radius: 12px;
+            border: 1px solid var(--line); background: #10141c; cursor: pointer; margin-bottom: 10px; }
+  .device:hover { border-color: #3b4b6b; }
+  .device.sel { border-color: #4f7ad1; background: #131c2c; }
+  .device .icon { width: 54px; height: 54px; border-radius: 12px; flex: 0 0 54px;
+                  display: grid; place-items: center; font-size: 24px;
+                  background: linear-gradient(135deg, #1d2740, #131a29); border: 1px solid var(--line); }
+  .device b { font-weight: 600; }
+  .device p { margin: 4px 0 8px; color: var(--muted); font-size: 13.5px; }
+  pre { background: #0a0d13; border: 1px solid var(--line); border-radius: 10px;
+        padding: 14px; overflow-x: auto; font-size: 12.5px; color: #d6e0f2;
+        white-space: pre-wrap; word-break: break-word; line-height: 1.6;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 30px;
+          letter-spacing: .14em; color: #cfe0ff; }
+  .notice { border-left: 3px solid var(--accent); padding: 12px 14px; background: #101a2b;
+            border-radius: 8px; font-size: 13.5px; color: #c7d5ee; }
+  .notice.bad { border-color: var(--bad); background: #221114; color: #ffd8d8; }
+  .notice.warn { border-color: var(--warn); background: #241f10; color: #f7e3b0; }
+  .muted { color: var(--muted); }
+  .hidden { display: none; }
+  .check { display: flex; align-items: center; gap: 10px; margin-top: 16px; font-size: 14px; }
+  .check input { width: 16px; height: 16px; }
+  footer { color: #8f9ab0; font-size: 12px; text-align: center; margin-top: 28px; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header><span class="dot"></span><h1>Hermes voice installer</h1></header>
+  <p class="sub">Sets up a voice gateway and the satellites that talk to it.</p>
+
+  <div class="steps">
+    <span class="tab on" id="tab-1">1 &middot; This machine</span>
+    <span class="tab" id="tab-2">2 &middot; Gateway</span>
+    <span class="tab" id="tab-3">3 &middot; Satellite</span>
+  </div>
+
+  <div id="blocked" class="card hidden">
+    <h2>Hermes was not found on this machine</h2>
+    <p class="hint">This installer sets up the voice side that sits beside Hermes, so Hermes has to be here first.</p>
+    <div class="notice">Install Hermes (the desktop app, or the service install), then run this installer again. Nothing on this machine has been changed.</div>
+  </div>
+
+  <div id="step1" class="card">
+    <h2>What we found</h2>
+    <p class="hint" id="hermes-line">Checking this machine...</p>
+    <div id="dryrun-notice" class="notice hidden">
+      Dry run: every command is shown, and none of them are executed.
+    </div>
+    <div class="actions">
+      <button id="to-gateway">Set up the gateway here</button>
+      <button id="to-satellite" class="ghost">Set up a satellite</button>
+    </div>
+  </div>
+
+  <div id="step2" class="card hidden">
+    <h2>The gateway</h2>
+    <p class="hint">The gateway is the machine Hermes runs on. Satellites connect to it, so the address below must be one they can reach.</p>
+    <div class="row">
+      <div>
+        <label for="dial">Address devices dial</label>
+        <input id="dial" type="text" placeholder="192.0.2.10 or gateway.example.com" />
+      </div>
+      <div>
+        <label for="ports">Ports (registry:tls)</label>
+        <input id="ports" type="text" value="10701:10702" />
+      </div>
+    </div>
+    <div class="actions">
+      <button id="preview-gw">Preview the install</button>
+      <button id="run-gw" class="ghost" disabled>Run it</button>
+    </div>
+    <div id="gw-out" class="hidden" style="margin-top:18px">
+      <pre id="gw-log"></pre>
+      <div id="card-out" class="hidden">
+        <h2 style="margin-top:18px">Write this down</h2>
+        <p class="hint">You will need the address and the identity code when you set up each satellite.</p>
+        <div class="notice"><div class="code" id="card-code">----</div>
+          <div class="muted" style="margin-top:8px" id="card-words"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="step3" class="card hidden">
+    <h2>Pair with the gateway</h2>
+    <p class="hint">Type the gateway's address. We will show its identity code, and you check it against the one you were given.</p>
+    <div class="row">
+      <div>
+        <label for="gwhost">Gateway address</label>
+        <input id="gwhost" type="text" placeholder="192.0.2.10" />
+      </div>
+      <div>
+        <label for="gwport">Port</label>
+        <input id="gwport" type="text" value="10702" />
+      </div>
+    </div>
+    <div class="actions"><button id="inspect">Check the gateway</button></div>
+    <div id="code-box" class="hidden" style="margin-top:18px">
+      <p class="hint">That gateway's identity code is</p>
+      <div class="code" id="shown-code">----</div>
+      <p class="hint" style="margin-top:10px">This proves you are talking to your own gateway and not another machine.
+        Compare it with the code you were given when the gateway was set up.</p>
+      <label for="words">Pairing words</label>
+      <input id="words" type="password" placeholder="five words" />
+      <label for="devname">A name for this satellite</label>
+      <input id="devname" type="text" placeholder="kitchen" value="kitchen" />
+      <div class="check"><input id="remember" type="checkbox" /><span>Remember these words on this machine</span></div>
+      <div class="actions"><button id="do-pair">It matches, pair</button></div>
+    </div>
+    <div id="pair-out" style="margin-top:16px"></div>
+
+    <div id="devices-box" class="hidden" style="margin-top:26px">
+      <h2>Which satellite?</h2>
+      <p class="hint">Each entry is described by its own package, including what can be changed later without a cable.</p>
+      <div id="devices"></div>
+      <div id="device-form" class="hidden" style="margin-top:18px">
+        <div class="row">
+          <div><label for="port">USB port (cable devices)</label><input id="port" type="text" value="/dev/ttyACM0" /></div>
+          <div><label for="mount">Card root (card devices)</label><input id="mount" type="text" placeholder="/media/user/rootfs" /></div>
+        </div>
+        <div class="row">
+          <div><label for="ssid">Wi-Fi network</label><input id="ssid" type="text" placeholder="leave blank to skip" /></div>
+          <div><label for="psk">Passphrase file</label><input id="psk" type="text" placeholder="path to a file holding it" /></div>
+        </div>
+        <div class="actions"><button id="preview-flash">Preview</button><button id="run-flash" class="ghost" disabled>Flash it</button></div>
+      </div>
+      <div id="flash-out" style="margin-top:16px"></div>
+    </div>
+  </div>
+
+  <footer>Served locally &middot; nothing leaves this machine except the pairing words you choose to send</footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let STATUS = null, SELECTED = null, PAIRED = null;
+
+async function api(path, body) {
+  const options = body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  };
+  const response = await fetch(path, options);
+  return response.json();
+}
+
+function show(step) {
+  for (const n of [1, 2, 3]) {
+    $("step" + n).classList.toggle("hidden", n !== step);
+    $("tab-" + n).classList.toggle("on", n === step);
+  }
+}
+
+function icon(device) {
+  return device.flashing === "sd_card" ? "\u{1F4BE}" : "\u{1F50C}";
+}
+
+function renderDevices(devices) {
+  const box = $("devices");
+  box.innerHTML = "";
+  for (const device of devices) {
+    const el = document.createElement("div");
+    el.className = "device";
+    const remote = device.remote_settings.map((s) => `<span class="badge remote">${s} · remote</span>`).join("");
+    const cable = device.cable_settings.map((s) => `<span class="badge cable">${s} · cable</span>`).join("");
+    el.innerHTML = `
+      <div class="icon">${icon(device)}</div>
+      <div style="flex:1">
+        <b>${device.name}</b>
+        <span class="badge">${device.vendor}</span>
+        <span class="badge">${device.wake_default}</span>
+        <p>${device.description || ""}</p>
+        <div>${remote}${cable}</div>
+      </div>`;
+    el.onclick = () => {
+      SELECTED = device;
+      [...box.children].forEach((child) => child.classList.remove("sel"));
+      el.classList.add("sel");
+      $("device-form").classList.remove("hidden");
+      $("port").closest("div").style.display = device.flashing === "usb_serial" ? "" : "none";
+      $("mount").closest("div").style.display = device.needs_card_reader ? "" : "none";
+      $("run-flash").disabled = true;
+      $("run-flash").className = "ghost";
+    };
+    box.appendChild(el);
+  }
+}
+
+function renderFlash(result) {
+  const out = $("flash-out");
+  if (!result.ok) { out.innerHTML = `<div class="notice bad">${result.error || result.summary}</div>`; return; }
+  const lines = (result.commands || []).map((c) =>
+    `<div class="muted">${c.description}${c.elevation ? " (needs elevation)" : ""}</div><pre>${
+      c.argv.map((a) => a.replace(/</g, "&lt;")).join(" ")}</pre>`).join("");
+  out.innerHTML = `<div class="notice ${result.dry_run ? "warn" : ""}">${result.summary}</div>${lines}`;
+}
+
+async function boot() {
+  STATUS = await api("/api/status");
+  $("hermes-line").textContent = STATUS.hermes_explained;
+  if (STATUS.dry_run) $("dryrun-notice").classList.remove("hidden");
+  if (STATUS.hermes === "none") {
+    $("step1").classList.add("hidden");
+    $("blocked").classList.remove("hidden");
+    return;
+  }
+  renderDevices(STATUS.devices);
+}
+
+$("to-gateway").onclick = () => show(2);
+$("to-satellite").onclick = async () => {
+  await boot();
+  show(3);
+};
+
+$("preview-gw").onclick = async () => {
+  const [registry, tls] = ($("ports").value || "10701:10702").split(":");
+  const result = await api("/api/gateway", {
+    dial_address: $("dial").value, registry_port: Number(registry || 10701),
+    tls_port: Number(tls || 10702), dry_run: true
+  });
+  $("gw-out").classList.remove("hidden");
+  $("gw-log").textContent = result.ok
+    ? (result.commands || []).map((c) => c.join(" ")).join("\n")
+    : (result.error || result.log);
+  $("run-gw").disabled = !result.ok;
+  $("run-gw").className = result.ok ? "go" : "ghost";
+};
+
+$("run-gw").onclick = async () => {
+  const [registry, tls] = ($("ports").value || "10701:10702").split(":");
+  const result = await api("/api/gateway", {
+    dial_address: $("dial").value, registry_port: Number(registry || 10701),
+    tls_port: Number(tls || 10702), dry_run: false
+  });
+  $("gw-log").textContent = result.log || (result.error || "");
+  if (result.card) {
+    $("card-out").classList.remove("hidden");
+    $("card-code").textContent = result.card.identity_code;
+    $("card-words").textContent = "Pairing words: " + result.card.words;
+  }
+};
+
+$("inspect").onclick = async () => {
+  const result = await api("/api/inspect", {
+    host: $("gwhost").value, port: Number($("gwport").value || 10702)
+  });
+  if (!result.ok) {
+    $("pair-out").innerHTML = `<div class="notice bad">${result.error}</div>`;
+    return;
+  }
+  $("code-box").classList.remove("hidden");
+  $("shown-code").textContent = result.identity_code;
+};
+
+$("do-pair").onclick = async () => {
+  const result = await api("/api/pair", {
+    host: $("gwhost").value, port: Number($("gwport").value || 10702),
+    words: $("words").value, device_name: $("devname").value,
+    expected_code: $("shown-code").textContent, remember: $("remember").checked
+  });
+  if (!result.ok) {
+    $("pair-out").innerHTML = `<div class="notice bad">${result.error}</div>`;
+    return;
+  }
+  PAIRED = result;
+  $("pair-out").innerHTML = `<div class="notice">Paired with ${result.identity_code}. ` +
+    (result.remembered_in ? `Words saved in ${result.remembered_in}.` : "Nothing was saved.") + `</div>`;
+  $("devices-box").classList.remove("hidden");
+};
+
+$("preview-flash").onclick = async () => {
+  if (!SELECTED) return;
+  const result = await api("/api/flash", {
+    device_id: SELECTED.id, device_name: $("devname").value,
+    dial_address: (PAIRED && PAIRED.dial_address) || "",
+    port: $("port").value, card_mount: $("mount").value,
+    wifi_ssid: $("ssid").value || null, wifi_psk_file: $("psk").value || null,
+    dry_run: true
+  });
+  renderFlash(result);
+  $("run-flash").disabled = !result.ok;
+  $("run-flash").className = result.ok ? "go" : "ghost";
+};
+
+$("run-flash").onclick = async () => {
+  if (!SELECTED) return;
+  const result = await api("/api/flash", {
+    device_id: SELECTED.id, device_name: $("devname").value,
+    dial_address: (PAIRED && PAIRED.dial_address) || "",
+    port: $("port").value, card_mount: $("mount").value,
+    wifi_ssid: $("ssid").value || null, wifi_psk_file: $("psk").value || null,
+    dry_run: false
+  });
+  renderFlash(result);
+};
+
+boot();
+</script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-voice-installer"
+version = "0.1.0"
+description = "Installer and configuration tool for Hermes voice gateways and satellites"
+requires-python = ">=3.10"
+dependencies = ["pyserial>=3.5", "cryptography>=42"]
+
+[project.optional-dependencies]
+gui = ["pywebview>=5.0"]
+keyring = ["keyring>=25"]
+
+[project.scripts]
+hermes-installer = "hermes_installer.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+hermes_installer = ["web/*"]
