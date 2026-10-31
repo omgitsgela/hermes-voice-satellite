@@ -96,6 +96,7 @@ class Esp32Commands(unittest.TestCase):
         self.assertIn("--tls-certs", argv)
         self.assertNotIn("--certs", argv)
 
+    @posix_only
     def test_the_registry_record_travels_with_the_certificates(self):
         # The provisioner refuses without it, so a paired device would flash and then fail to stage.
         argv = esp32.DRIVER.flash(
