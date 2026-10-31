@@ -21,9 +21,19 @@ ROOT = Path(__file__).resolve().parents[3]
 for package in ("installer", "device-esp32", "device-pi"):
     sys.path.insert(0, str(ROOT / "packages" / package / "src"))
 
-from hermes_installer.driver import DeviceRequest, Runner  # noqa: E402
+from hermes_installer.driver import (  # noqa: E402
+    DeviceRequest,
+    Runner,
+    UnsupportedOnThisPlatform,
+)
 import hermes_device_esp32 as esp32  # noqa: E402
 import hermes_device_pi as pi  # noqa: E402
+
+#: The device scripts are shell and systemd work, so a driver refuses on Windows rather than
+#: half-running. Tests that assert a command was built are therefore POSIX-only; the refusal itself is
+#: asserted on both platforms.
+POSIX = sys.platform != "win32"
+posix_only = unittest.skipUnless(POSIX, "device operations run the repository's shell scripts")
 
 
 def dry() -> Runner:
@@ -47,6 +57,7 @@ class Esp32Commands(unittest.TestCase):
         base.update(overrides)
         return DeviceRequest(**base)
 
+    @posix_only
     def test_flash_uses_the_port_flag_and_an_explicit_action(self):
         argv = esp32.DRIVER.flash(self.request(), dry()).commands[0].argv
         self.assertIn("scripts/install-esp32.sh", argv[0])
@@ -56,11 +67,13 @@ class Esp32Commands(unittest.TestCase):
         # The flag the first draft invented; the script rejects it outright.
         self.assertNotIn("--device", argv)
 
+    @posix_only
     def test_flash_carries_the_board_identity_and_the_friendly_name(self):
         argv = esp32.DRIVER.flash(self.request(), dry()).commands[0].argv
         self.assertEqual(argv[argv.index("--device-id") + 1], "esp32-0011223344")
         self.assertEqual(argv[argv.index("--device-name") + 1], "kitchen")
 
+    @posix_only
     def test_a_chosen_wake_word_travels_as_model_plus_name(self):
         argv = esp32.DRIVER.flash(
             self.request(wake_model="models/wake.tflite", wake_word="hey_hermes"), dry()
@@ -69,6 +82,7 @@ class Esp32Commands(unittest.TestCase):
         self.assertEqual(argv[argv.index("--model-name") + 1], "hey_hermes")
         self.assertNotIn("--wake-word", argv)
 
+    @posix_only
     def test_wifi_is_staged_with_the_passphrase_in_a_file_never_an_argument(self):
         result = esp32.DRIVER.flash(self.request(wifi_ssid="home", wifi_psk_file="/run/psk"), dry())
         argv = result.commands[0].argv
@@ -76,6 +90,7 @@ class Esp32Commands(unittest.TestCase):
         self.assertEqual(argv[argv.index("--wifi-psk-file") + 1], "/run/psk")
         self.assertEqual(result.commands[0].secret_file, "/run/psk")
 
+    @posix_only
     def test_certs_use_the_real_flag_name(self):
         argv = esp32.DRIVER.flash(self.request(certs_dir="/certs"), dry()).commands[0].argv
         self.assertIn("--tls-certs", argv)
@@ -96,6 +111,7 @@ class Esp32Commands(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn("identity", result.summary)
 
+    @posix_only
     def test_provision_uses_the_provision_action(self):
         argv = esp32.DRIVER.provision(self.request(), dry()).commands[0].argv
         self.assertIn("--provision", argv)
@@ -129,6 +145,7 @@ class CardFlow(unittest.TestCase):
         base.update(overrides)
         return DeviceRequest(**base)
 
+    @posix_only
     def test_flash_uses_the_card_writer_not_the_on_device_installer(self):
         result = pi.DRIVER.flash(self.request(), dry())
         argv = result.commands[0].argv
@@ -138,12 +155,14 @@ class CardFlow(unittest.TestCase):
         self.assertNotIn("install-pi.sh", " ".join(argv))
         self.assertEqual(argv[1], str(self.mount))
 
+    @posix_only
     def test_flash_fills_the_env_file_the_card_needs(self):
         result = pi.DRIVER.flash(self.request(), dry())
         self.assertTrue(result.ok)
         # A dry run must not write anything.
         self.assertFalse((self.mount / "home" / "satellite" / "bridge-link.env").exists())
 
+    @posix_only
     def test_a_real_run_fills_the_env_and_keeps_other_values(self):
         env = self.mount / "home" / "satellite" / "bridge-link.env"
         env.write_text("VOICE_DEVICE_ID=CHANGE-ME\nVOICE_DEVICE_AREA=hallway\n")
@@ -158,6 +177,7 @@ class CardFlow(unittest.TestCase):
         # A line the driver does not own must survive untouched.
         self.assertIn("VOICE_DEVICE_AREA=hallway", text)
 
+    @posix_only
     def test_the_card_writer_runs_twice_so_the_unit_can_be_enabled(self):
         runner = Runner(dry_run=False, executor=noop_executor, repo_root=ROOT)
         result = pi.DRIVER.flash(self.request(), runner)
@@ -169,6 +189,7 @@ class CardFlow(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn("SD card", result.summary)
 
+    @posix_only
     def test_wifi_provisioning_copies_a_saved_network_and_needs_elevation(self):
         result = pi.DRIVER.provision(self.request(wifi_ssid="home"), dry())
         self.assertTrue(result.ok)
@@ -221,6 +242,33 @@ class EnvRendering(unittest.TestCase):
         )
         self.assertIn("# VOICE_BRIDGE_HOST=CHANGE-ME", rendered)
         self.assertIn("\nVOICE_BRIDGE_HOST=gw", rendered)
+
+
+class PlatformRefusal(unittest.TestCase):
+    """Neither driver pretends to work where the shell scripts cannot run."""
+
+    def test_writing_a_card_refuses_on_windows(self):
+        if POSIX:
+            self.skipTest("this assertion is about Windows")
+        with self.assertRaises(UnsupportedOnThisPlatform):
+            pi.DRIVER.flash(DeviceRequest(device_name="x", dial_address="tls://h:10702",
+                                          card_mount="D:\\"), Runner(dry_run=True, repo_root=ROOT))
+
+    def test_flashing_a_board_refuses_on_windows(self):
+        if POSIX:
+            self.skipTest("this assertion is about Windows")
+        with self.assertRaises(UnsupportedOnThisPlatform):
+            esp32.DRIVER.flash(DeviceRequest(device_name="x", dial_address="tls://h:10702",
+                                             port="COM3"), Runner(dry_run=True, repo_root=ROOT))
+
+    def test_the_refusal_names_a_way_forward(self):
+        from hermes_installer.driver import require_posix
+
+        if POSIX:
+            self.skipTest("this assertion is about Windows")
+        with self.assertRaises(UnsupportedOnThisPlatform) as caught:
+            require_posix("Flashing")
+        self.assertIn("WSL", str(caught.exception))
 
 
 class ProfilesAgree(unittest.TestCase):
