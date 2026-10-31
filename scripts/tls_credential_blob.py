@@ -17,7 +17,7 @@ Layout (little-endian, fixed 132-byte header, then the payload):
     20      4     client certificate PEM length
     24      4     client key PEM length
     28      4     server port (informational, and what the report line prints)
-    32      32    SHA-256 of the bridge's server certificate (DER)
+    32      32    SHA-256 of the Gateway's server certificate (DER)
     64      64    server host, NUL-padded (informational)
     128     4     CRC-32 (IEEE) over the payload
     132     ...   payload: CA PEM, client cert PEM, client key PEM

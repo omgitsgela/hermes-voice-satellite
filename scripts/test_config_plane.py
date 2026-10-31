@@ -9,7 +9,7 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.config_plane import (  # noqa: E402
+from satellite_gateway.config_plane import (  # noqa: E402
     ConfigConflict,
     ConfigPlane,
     ConfigValidationError,

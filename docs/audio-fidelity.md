@@ -50,9 +50,9 @@ interpolation, do not add the 7400 Hz low-pass back.
                     │                            FIR at 7.5 kHz)   │
                     └────────────────────────────────────────────┘
 
-   gateway ──48000 Hz──► (no conversion) ──► volume ──► stereo-32 ──► ring ──► I2S TX
+   Satellite Gateway ──48000 Hz──► (no conversion) ──► volume ──► stereo-32 ──► ring ──► I2S TX
    (native)             copy → scale → expand
-   gateway ──22050 Hz──► cubic up-sample ──48 kHz──► volume ──► stereo-32 ──► ring ──► I2S TX
+   Satellite Gateway ──22050 Hz──► cubic up-sample ──48 kHz──► volume ──► stereo-32 ──► ring ──► I2S TX
    (legacy host)                                        ▲
    local tones ──16 kHz──► cubic up-sample ──48 kHz──────┘  (never pre-rolled: they are complete)
 ```
@@ -130,13 +130,13 @@ comment did not describe them. Do not "fix" the register to match the old commen
 
 ### The device may not need to convert at all
 
-The rate a satellite should be *sent* belongs to the satellite, not to the gateway: a fleet is one
-gateway plus any number of satellites in any mix of hardware. A device reports `snd_rate` as a
-capability and the gateway converts to that rate for it. The ESP32 reports 48000, so its stream
+The rate a satellite should be *sent* belongs to the satellite, not to the Satellite Gateway: a fleet is one
+Satellite Gateway plus any number of satellites in any mix of hardware. A device reports `snd_rate` as a
+capability and the Satellite Gateway converts to that rate for it. The ESP32 reports 48000, so its stream
 arrives at the link rate and the sample path is copy -> scale -> expand with **no interpolation
 stage at all**; a Pi satellite reports 22050 and keeps receiving Piper's native rate.
 
-Where the conversion happens is a real trade, not a preference: doing it on the gateway makes the
+Where the conversion happens is a real trade, not a preference: doing it on the Satellite Gateway makes the
 wire payload ~2.18x larger, and the ESP32's TLS receive path is a measured bottleneck. On this
 hardware arrival still sat at 190-220% of realtime, so it was affordable — but measure it rather
 than assuming either way. Upsampling itself is not lossy; it cannot add information and discards
@@ -170,7 +170,7 @@ clocks, both conversions, the chunk size, the buffer sizing and the codec regist
 | Capture decimation | `audio_capture.c` → `audio_capture_send_chunk`, `capture_decim` |
 | Playback up-sample | `wyoming_session.c` → `playback_rs`, `WY_PLAYBACK_IN_MAX` |
 | Local tone up-sample | `wyoming_session.c` → `wy_session_local_play` |
-| Rate negotiation | device reports `snd_rate` (`gateway_task.c`); gateway picks it in `bridge/satellite.py` → `out_format` |
+| Rate negotiation | device reports `snd_rate` (`gateway_task.c`); Satellite Gateway picks it in `bridge/satellite.py` → `out_format` |
 | Pre-roll (jitter buffer) | `audio_playback.c` → `PLAYBACK_PREROLL_MS`, skipped for local tones |
 | Host tests | `scripts/test_48k_resample.py`, `scripts/test_esp32_audio.py` |
 

@@ -10,7 +10,7 @@ downloader rejects by name pattern. Those voices need a fetch path that:
     whatever the host URL serves on the day,
   * enforces the audio contract before installing (22,050 Hz — see docs/audio-fidelity.md;
     every Piper English voice emits it, and the satellite's format contract depends on it),
-  * lands files under exactly the names `bridge/config.py` builds (`{VOICE_PIPER_VOICE}.onnx`
+  * lands files under exactly the names `satellite_gateway/config.py` builds (`{VOICE_PIPER_VOICE}.onnx`
     + `.onnx.json`), so the rest of the system does not care where a voice came from,
   * is idempotent: re-running hash-checks what is already there instead of refetching.
 
@@ -41,7 +41,7 @@ from pathlib import Path
 REQUIRED_SAMPLE_RATE = 22050
 
 # Curated external voices: name -> license note + files with url and the sha256 of the
-# published bytes. The file keys MUST match the names bridge/config.py builds from
+# published bytes. The file keys MUST match the names satellite_gateway/config.py builds from
 # VOICE_PIPER_VOICE. Hashes pinned 2026-10-26 against the published files.
 EXTERNAL_VOICES = {
     "clean100": {

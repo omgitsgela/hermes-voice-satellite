@@ -23,7 +23,7 @@ restarted with it: a value written to the env file but whose restart failed stay
   group. Durability is deliberate: a value written to the env file survives a reboot, so a
   setting the operator chose does not silently revert on the next power cycle.
 
-**Idempotency against the full profile.** The bridge transmits the complete merged desired
+**Idempotency against the full profile.** The Gateway transmits the complete merged desired
 state on every delivery, not just the change that triggered it. So this adapter must not
 treat "the setting is present in the profile" as "the setting changed." It compares each
 setting against the state that is currently in force (the hardware level for the immediate
@@ -31,12 +31,12 @@ tier; the env file, plus what this process has already brought it to, for the re
 tier) and acts only when the desired value actually differs. A volume-only fleet write
 therefore never touches the LED or wake services. Without this, every single delivery - even
 one that changed only the volume - would bounce the whole fleet's audio stack, which is
-precisely what the bridge's pacing of restart-class writes is meant to prevent.
+precisely what the Gateway's pacing of restart-class writes is meant to prevent.
 
 **Why the coupled group, and why this process survives it.** The audio services form a
 dependency cycle and must be restarted together, one group, or the restart leaves a unit dead
 (a real, past failure). `outbound-satellite` - the process running this code - is *not* in that
-group: it dials the bridge and its relay re-arms through a satellite restart, so it can restart
+group: it dials the Gateway and its relay re-arms through a satellite restart, so it can restart
 the audio group from the outside and still hold the configuration connection that carries this
 very report back. That separation is what makes a device-side restart adapter safe at all.
 """
@@ -161,7 +161,7 @@ def make_apply_adapter(
     models_dir = Path(wake_models_dir) if wake_models_dir is not None else _DEFAULT_MODELS_DIR
     run_systemctl = systemctl or subprocess.run
 
-    # What this process has already brought each restart-class setting to. The bridge re-sends
+    # What this process has already brought each restart-class setting to. The Gateway re-sends
     # the full profile on every delivery, so "present in the profile" is not "changed": a
     # setting whose desired value equals what is already in force is skipped. On the first
     # touch of a setting this process has not handled, the env file is the fair authority for
@@ -261,7 +261,7 @@ def make_apply_adapter(
                     hard.append(f"playback_volume: {exc}")
                 else:
                     # Report back on the user scale, so the number means the same thing on the
-                    # bridge as it does on the device and convergence compares like with like.
+                    # Gateway as it does on the device and convergence compares like with like.
                     applied_user = alsa.raw_to_user(applied_raw)
                     applied["playback_volume"] = applied_user
                     if applied_user != requested:

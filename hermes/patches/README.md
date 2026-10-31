@@ -18,7 +18,7 @@ reasons the tool patches existed:
 
 - **Widening removed two.** The `model_tools` empty-catalogue guard only mattered when every tool on the
   surface was core, and the `toolsets.py` core-tool lines only existed to keep four plugin tools out of
-  the `tool_search` bridge. With a real deferrable catalogue, the bridge is legitimate and the detour is
+  the `tool_search` bridge. With a real deferrable catalogue, the Gateway is legitimate and the detour is
   accepted, so both went.
 - **Dropping the pinned voice model removed one.** The api_server `extra_body` re-scope was only
   triggered by a `model_routes` entry pointing at a different provider than the global default. With no

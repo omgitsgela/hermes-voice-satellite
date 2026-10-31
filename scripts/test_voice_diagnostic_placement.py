@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class DiagnosticTests(unittest.TestCase):
     def test_unexpected_turn_errors_are_logged_in_one_turn(self):
-        tree = ast.parse((ROOT / 'bridge/loop.py').read_text())
+        tree = ast.parse((ROOT / 'satellite_gateway/loop.py').read_text())
         function = next(n for n in ast.walk(tree)
                         if isinstance(n, ast.AsyncFunctionDef) and n.name == 'one_turn')
         handlers = [n for n in ast.walk(function) if isinstance(n, ast.ExceptHandler)
@@ -22,7 +22,7 @@ class DiagnosticTests(unittest.TestCase):
                         'one_turn needs its own unexpected-failure traceback')
 
     def test_followup_retry_does_not_have_shadowed_handlers(self):
-        tree = ast.parse((ROOT / 'bridge/loop.py').read_text())
+        tree = ast.parse((ROOT / 'satellite_gateway/loop.py').read_text())
         function = next(n for n in ast.walk(tree)
                         if isinstance(n, ast.AsyncFunctionDef) and n.name == '_reinforce_wake_now')
         for statement in ast.walk(function):

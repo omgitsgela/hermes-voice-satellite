@@ -11,9 +11,9 @@ from unittest.mock import AsyncMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from bridge import tts
-from bridge.config import SND_FORMAT
-from bridge.satellite import SatelliteClient
+from satellite_gateway import tts
+from satellite_gateway.config import SND_FORMAT
+from satellite_gateway.satellite import SatelliteClient
 from wyoming.audio import AudioChunk
 from wyoming.event import Event, write_event
 

@@ -140,9 +140,9 @@ _WORKING = (150, 70, 255)
 LED_BUSY_EVENT = "led-busy"
 LED_IDLE_EVENT = "led-idle"
 LED_FOLLOWUP_EVENT = "led-followup"
-# The bridge asking for the microphone to be opened so a follow-up window has audio to listen to. It
+# The Gateway asking for the microphone to be opened so a follow-up window has audio to listen to. It
 # arrives here because the satellite forwards unrecognised server events to this service, which is the
-# only path the bridge has to anything on this Pi. Loopback only: nothing new on the LAN.
+# only path the Gateway has to anything on this Pi. Loopback only: nothing new on the LAN.
 WAKE_NOW_EVENT = "wake-now"
 SHIM_CONTROL_ADDRESS = ("127.0.0.1", 10402)
 SHIM_CONTROL_TIMEOUT = 4.0
@@ -185,7 +185,7 @@ def _boot_pulse_wanted(args: argparse.Namespace) -> bool:
 
 
 # The green connect flash is for "the device just came up and found its host", not for every
-# reconnection. 2026-09-23: the bridge refreshed its link once an hour overnight and the
+# reconnection. 2026-09-23: the Gateway refreshed its link once an hour overnight and the
 # flash ran every time. Same /run marker trick as the boot pulse, so a service restart does not
 # replay it and a real reboot does.
 _FIRST_CONNECT_MARKER = Path("/run/wyoming-led-first-connect")
@@ -361,7 +361,7 @@ class LEDsEventHandler(AsyncEventHandler):
             await self.controller.set_color(_GREEN)
             await asyncio.sleep(1.0)  # show for 1 sec
         elif StreamingStopped.is_type(event.type):
-            # Dark, and NOT the start of the working pulse. The bridge owns that state and
+            # Dark, and NOT the start of the working pulse. The Gateway owns that state and
             # publishes it explicitly, because this event also fires for a rejected blip or an
             # empty transcript, where no work follows. Starting the pulse here on 2026-09-22
             # left the lights breathing after a blip and was reverted the same day.

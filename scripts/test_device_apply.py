@@ -5,7 +5,7 @@ The adapter is what turns desired settings into hardware change. The property th
 matters most here is honesty: it must never report a setting as applied when it was not,
 and it must never report a level it did not set.
 
-Every hardware dependency is faked so the test runs on the bridge host with no Pi: a fake
+Every hardware dependency is faked so the test runs on the Gateway host with no Pi: a fake
 `amixer`, a fake env file on disk, a fake `systemctl`, and a fake mic-gain control.
 """
 from __future__ import annotations
@@ -699,7 +699,7 @@ with tempfile.TemporaryDirectory() as tmp:
 
 # ---------------------------------------------------------------- idempotency against the full profile (review F1)
 
-# The bridge re-sends the complete merged profile on every delivery. A volume-only change
+# The Gateway re-sends the complete merged profile on every delivery. A volume-only change
 # must not bounce the LED or wake services just because those settings happen to be present
 # (unchanged) in the profile - that is exactly what would restart the whole fleet's audio
 # stack on every volume change.

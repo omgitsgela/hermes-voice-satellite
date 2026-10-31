@@ -3,21 +3,21 @@
 The whole system, end to end, in the order you actually build it:
 
 1. a host that runs **Hermes** (the agent your voice talks to)
-2. the **gateway** on that host (the bridge: speech, sessions, and the registry that devices dial)
+2. the **gateway** on that host (the Satellite Gateway: speech, sessions, and the registry that devices dial)
 3. one or more **satellites**: an ESP32 board (Seeed XVF3800) and/or a Raspberry Pi
 4. **prebuilt images** where a build toolchain would be a tax
 
 Each installer has a `--dry-run` that prints exactly what it would do without writing (the gateway
-dry-run is the one exception: it edits a throwaway copy of `bridge.env` so it can show you the
-file you will end up with). Re-running an installer does not clobber a tuned `bridge.env` or a
-live registry CA — the managed `bridge.env` keys move in place to the current flag values and the
+dry-run is the one exception: it edits a throwaway copy of `satellite-gateway.env` so it can show you the
+file you will end up with). Re-running an installer does not clobber a tuned `satellite-gateway.env` or a
+live registry CA — the managed `satellite-gateway.env` keys move in place to the current flag values and the
 CA is reused, never regenerated, because a regenerated CA strands every enrolled device. The
 venv/dependencies step rebuilds only when its import check fails, so it is conditional rather than
 strictly idempotent. The installers live in `scripts/`:
 
 | Script | Where it runs | What it does |
 |---|---|---|
-| `install-gateway.sh` | the gateway host, next to Hermes | venv, `bridge.env`, registry TLS, user unit, Hermes plugin + config |
+| `install-gateway.sh` | the gateway host, next to Hermes | venv, `satellite-gateway.env`, registry TLS, user unit, Hermes plugin + config |
 | `install-esp32.sh` | a machine with the ESP32 attached by USB | build, bundle, flash, and provision a board |
 | `install-pi.sh` | the Pi itself (as root) | venv, units, `satellite.env`, the registry link, services |
 | `issue-registry-tls.py` | the gateway host | mint the CA / server certificate, enroll devices, verify the set |
@@ -42,7 +42,7 @@ gateway's five-word setup code (see *Set up a board (plug and play)* below).
 ## 1. Install Hermes
 
 The gateway talks to Hermes through its HTTP API and its plugin system; it does not need
-`hermes-agent` inside the bridge virtualenv. You need a current Hermes Agent install (desktop app or
+`hermes-agent` inside the Satellite Gateway virtualenv. You need a current Hermes Agent install (desktop app or
 CLI) on the host, at a release within a few of the current one.
 
 ```sh
@@ -61,15 +61,15 @@ side*, for what those keys do and why the surface deliberately has no toolset ov
 On the host that stays on:
 
 ```sh
-git clone https://github.com/omgitsgela/hermes-voice-satellite.git ~/hermes-voice-bridge
-cd ~/hermes-voice-bridge
+git clone https://github.com/omgitsgela/hermes-voice-satellite.git ~/hermes-voice-satellite
+cd ~/hermes-voice-satellite
 
 # look first: what would it do
-scripts/install-gateway.sh --base ~/hermes-voice-bridge \
+scripts/install-gateway.sh --base ~/hermes-voice-satellite \
     --device-reachable-as 192.0.2.10 --dry-run
 
 # then for real
-scripts/install-gateway.sh --base ~/hermes-voice-bridge --device-reachable-as 192.0.2.10
+scripts/install-gateway.sh --base ~/hermes-voice-satellite --device-reachable-as 192.0.2.10
 ```
 
 `--device-reachable-as` is the address a satellite will dial on this host: the LAN IP, or a name the
@@ -78,20 +78,20 @@ certificate no device could ever pin.
 
 What the installer does, in order:
 
-1. **venv** — `~/hermes-voice-bridge/.venv` with `requirements.txt` (faster-whisper, Piper,
+1. **venv** — `~/hermes-voice-satellite/.venv` with `requirements.txt` (faster-whisper, Piper,
    wyoming, silero VAD) plus the Piper voice `en_US-hfc_male-medium` from the catalog (a curated
    external voice is fetched instead by `scripts/fetch-voice.py` with pinned checksums; its
    speaker is selected by `VOICE_PIPER_SPEAKER`; see `docs/switching-voices.md`). To change the
-   voice after install, run `scripts/switch-voice.py <voice>` — it updates both the bridge and
+   voice after install, run `scripts/switch-voice.py <voice>` — it updates both the Satellite Gateway and
    the Hermes gateway, validates the 22,050 Hz audio contract, and can `--rollback`.
-2. **bridge.env** — from `bridge.env.example`, with the registry link values appended: the listener
+2. **satellite-gateway.env** — from `satellite-gateway.env.example`, with the registry link values appended: the listener
    enabled, bound to the reachable address, the TLS certificate paths, and the satellite dial
    (`VOICE_SATELLITE_HOST/PORT`, loopback by default for the old shape).
-3. **registry TLS** — `scripts/issue-registry-tls.py init` mints the client CA and the bridge's
+3. **registry TLS** — `scripts/issue-registry-tls.py init` mints the client CA and the Satellite Gateway's
    server certificate (SAN = the reachable address) under `state/registry-tls/`, then `verify`
    re-checks the set. A re-run reuses the CA: regenerating it would strand every enrolled device.
-4. **systemd user unit** — `hermes-voice-bridge.service` installed to `~/.config/systemd/user/`,
-   enabled and started, plus lingering so it survives logout. The unit reads `bridge.env` as its
+4. **systemd user unit** — `hermes-voice-satellite-gateway.service` installed to `~/.config/systemd/user/`,
+   enabled and started, plus lingering so it survives logout. The unit reads `satellite-gateway.env` as its
    `EnvironmentFile`, so the step-2 values are already visible to the service: no drop-in needed.
 5. **Hermes side** — the plugin installed and enabled, the voice-surface keys applied to
    `~/.hermes/config.yaml` (with a timestamped backup, and no key the installer does not manage is
@@ -110,13 +110,13 @@ provision. The issuer signs the first two and prints the command for the third:
 That prints the exact `install-esp32.sh --provision` / `install-pi.sh` command for that device. The
 registry's credential file (`state/device-credentials.json`) is updated with the device
 certificate's fingerprint, computed the same way the provisioner computes it, so a device enrolled
-here is accepted by the exact lookup the bridge's registry builds.
+here is accepted by the exact lookup the Satellite Gateway's registry builds.
 
 ### Verifying the gateway
 
 ```sh
-systemctl --user status hermes-voice-bridge
-journalctl --user -u hermes-voice-bridge -n 30
+systemctl --user status hermes-voice-satellite-gateway.service
+journalctl --user -u hermes-voice-satellite-gateway.service -n 30
 ss -ltnup | grep -E '1070[0-9]|8765'
 ```
 
@@ -169,13 +169,13 @@ scripts/install-esp32.sh --provision --port /dev/ttyACM0 \
 ```
 
 `--tls-certs` must point at a directory holding `client-ca.crt`, this device's `<id>.crt` and
-`<id>.key`, with the bridge's `device-credentials.json` beside that directory. This is the manual
+`<id>.key`, with the Satellite Gateway's `device-credentials.json` beside that directory. This is the manual
 way -- the automation path, and exactly what the guided flow falls back to when the gateway cannot
-be reached. On the gateway host those live in `~/hermes-voice-bridge/state/`; on a separate
+be reached. On the gateway host those live in `~/hermes-voice-satellite/state/`; on a separate
 flashing machine (the usual case -- the gateway stays on, the board is flashed from a laptop),
 copy them there first, e.g.
-`scp gateway:~/hermes-voice-bridge/state/registry-tls/{client-ca.crt,<id>.crt,<id>.key} ./registry-tls/`
-and `scp gateway:~/hermes-voice-bridge/state/device-credentials.json ./`. The device's `<id>` is
+`scp gateway:~/hermes-voice-satellite/state/registry-tls/{client-ca.crt,<id>.crt,<id>.key} ./registry-tls/`
+and `scp gateway:~/hermes-voice-satellite/state/device-credentials.json ./`. The device's `<id>` is
 printed by the board itself (`python3 scripts/esp32_provision.py --port /dev/ttyACM0 status`) and is
 the identity the gateway enrolls it under (`scripts/issue-registry-tls.py enroll --new <id>`, or
 automatically via the setup code above).
@@ -195,7 +195,7 @@ model file, the Wi-Fi passphrase file — never through argv.
 The four things staged to the board:
 
 1. **TLS credential region** — the client CA, this device's certificate and key, the pinned
-   fingerprint of the bridge's server certificate, and the host:port. Written straight into flash
+   fingerprint of the Satellite Gateway's server certificate, and the host:port. Written straight into flash
    by `scripts/provision-device-tls.py` (never through the console, because the console echoes what
    it is sent, and a private key through a line protocol is a private key in a log), and read back
    to prove the write.
@@ -210,7 +210,7 @@ The four things staged to the board:
 On reboot the board associates, dials the endpoint, registers as its identity, and the registry
 accepts it by certificate fingerprint. The wake word is detected **on the device**: the firmware
 runs the MicroWakeWord model through TFLite-Micro (the log-mel microfrontend, a streaming inference
-window, and a sliding-window cutoff), so the board does not need the bridge to notice a wake. The
+window, and a sliding-window cutoff), so the board does not need the Satellite Gateway to notice a wake. The
 `WAKE_FIRE` console command still forces a single detection, to exercise the chime-and-wake path
 without speaking. On-board acoustic behaviour is proven only by actually speaking the wake word in
 a quiet room.
@@ -248,20 +248,36 @@ manifest instead:
 # manifest check: all files match
 ```
 
-A reviewed bundle can be flashed without the build tree, because esptool writes the one file
-straight to `0x0` (the same invocation `install-esp32.sh --flash` uses):
+A reviewed bundle can be flashed without the build tree, because the bundler writes each named
+region to the offset the manifest gives it:
 
 ```sh
-python -m esptool --chip esp32s3 --baud 460800 --before default-reset --after hard-reset \
-    write_flash --flash_mode dio --flash_size 8MB --flash_freq 80m \
-    0x0 flash.bundle.bin
+scripts/install-esp32.sh --flash --port /dev/ttyACM0 --bundle flash.bundle.bin
 ```
 
-**Flash rules.** One file, to `0x0`, DIO flash at 8 MB and 80 MHz (the partition table the app was
-built against). No chip erase: the TLS credential region and the wake model live in their own
-partitions, and erasing the chip would wipe a provisioned satellite back to a dead board. No
-partition-table change: the offsets in the bundle are the build's flash map, and a different map is
-a different app.
+**Flash rules, and one that is easy to get wrong.** Write the bundle's regions at their offsets, DIO
+flash at 8 MB and 80 MHz (the partition table the app was built against). No chip erase: the TLS
+credential region and the wake model live in their own partitions, and erasing the chip would wipe a
+provisioned satellite back to a dead board. No partition-table change: the offsets in the bundle are
+the build's flash map, and a different map is a different app.
+
+**Never write the merged image at `0x0`.** A merged image is padded with `0xFF` between the parts it
+contains, and those gaps are exactly where the board keeps its saved settings: NVS (the endpoint, the
+bound Wi-Fi profiles, the wake selector and the device name) and the PHY calibration data sit before
+the application. Writing one file from `0x0` overwrites them, so an update performed "the simple way"
+silently returns a configured satellite to an unconfigured board -- with no `erase_flash` anywhere in
+the command. If you need to do it by hand rather than with the script, extract the bundle first and
+write each offset the manifest lists:
+
+```sh
+.venv/bin/python scripts/bundle-esp32-flash.py --extract flash.extracted \
+    --bundle flash.bundle.bin --check flash.manifest.txt
+# then, for each line of the manifest, one write_flash of that file at that offset
+```
+
+The wake model is a separate write to its own partition, described below, and the wake selector has
+to agree with it: a model whose header name does not match the board's `wake_word` is ignored at boot
+and the satellite stops waking.
 
 The wake model is a second, separate write to the `model` partition — that is what
 `install-esp32.sh --provision` does, and it is why the model swap never required an app rebuild.
@@ -286,7 +302,7 @@ the satellite's `examples/` directory (where the audio units' `ExecStart` and th
 #    with its venv at $VS_BASE/.venv and script/run. This is a prerequisite the audio units assume.
 
 # 2. Bring the enrolled certificate files onto the Pi -- they live on the gateway host, not the Pi:
-scp 192.0.2.10:~/hermes-voice-bridge/state/registry-tls/{client-ca.crt,kitchen-pi.crt,kitchen-pi.key} \
+scp 192.0.2.10:~/hermes-voice-satellite/state/registry-tls/{client-ca.crt,kitchen-pi.crt,kitchen-pi.key} \
     /etc/voice-satellite/registry-tls/
 
 # 3. Install, from a checkout of THIS repository. --base is the wyoming-satellite root; --tls-certs
@@ -298,7 +314,7 @@ sudo scripts/install-pi.sh --base /opt/wyoming-satellite --device-name kitchen-p
 ```
 
 `install-pi.sh` builds the satellite venv, installs the nine `pi/*.py` device modules into
-`$BASE/examples/`, renders `satellite.env` (identity, wake word, and the `VOICE_BRIDGE_*` registry
+`$BASE/examples/`, renders `satellite.env` (identity, wake word, and the `VOICE_GATEWAY_*` registry
 link that `outbound-satellite` reads), installs the coupled audio units **and** `outbound-satellite`
 (rendered from its `.in` template: the env file, the venv python, the runner path), and enables them
 as one group. Two things it refuses: `--tls-certs` without `--endpoint` (credentials with nowhere to
@@ -316,28 +332,28 @@ minutes, which is why the installer is the unit of distribution rather than an S
 
 ```sh
 # gateway host
-journalctl --user -u hermes-voice-bridge -f      # watch a device register
+journalctl --user -u hermes-voice-satellite -f      # watch a device register
 
 # device (ESP32: the provisioning console; Pi: the journal)
 python3 scripts/esp32_provision.py --port /dev/ttyACM0 status
 journalctl -u wyoming-satellite -u outbound-satellite -n 40
 ```
 
-A device that registers shows up in the bridge log with its identity; a device that cannot reach
-the bridge shows a dial failure with the host and port it is trying. Speaking to the device is the
+A device that registers shows up in the Satellite Gateway log with its identity; a device that cannot reach
+the Satellite Gateway shows a dial failure with the host and port it is trying. Speaking to the device is the
 only real test of the wake word, and see *Verify* in `README.md` for the surface checks.
 
 ## Where things live
 
 | Thing | Path |
 |---|---|
-| Gateway venv | `~/hermes-voice-bridge/.venv` |
-| Bridge config | `~/hermes-voice-bridge/bridge.env` |
-| Registry TLS | `~/hermes-voice-bridge/state/registry-tls/` |
-| Credential file | `~/hermes-voice-bridge/state/device-credentials.json` |
+| Gateway venv | `~/hermes-voice-satellite/.venv` |
+| Gateway config | `~/hermes-voice-satellite/satellite-gateway.env` |
+| Registry TLS | `~/hermes-voice-satellite/state/registry-tls/` |
+| Credential file | `~/hermes-voice-satellite/state/device-credentials.json` |
 | Enrolment setup code | `~/.config/hermes-voice-satellite/enroll-token` (optional; typed once) |
 | Board certificates (fetched) | `~/.config/hermes-voice-satellite/certs/` |
-| Bridge unit | `~/.config/systemd/user/hermes-voice-bridge.service` |
+| Gateway unit | `~/.config/systemd/user/hermes-voice-satellite-gateway.service` |
 | ESP32 flash bundle | the reviewed `flash.bundle.bin` + `flash.manifest.txt` |
 | ESP32 wake model | staged to the board's `model` partition |
 | Pi satellite env | `/etc/voice-satellite/satellite.env` |

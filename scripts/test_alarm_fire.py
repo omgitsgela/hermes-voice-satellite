@@ -11,7 +11,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-# The child interpreter: the repo's own venv when there is one (it carries the bridge's deps),
+# The child interpreter: the repo's own venv when there is one (it carries the Gateway's deps),
 # otherwise the interpreter running THIS test -- a fresh clone or an isolated worktree has no
 # repo-local .venv, and the suite must still run there (sys.executable is what the other
 # subprocess-based tests here spawn children with).

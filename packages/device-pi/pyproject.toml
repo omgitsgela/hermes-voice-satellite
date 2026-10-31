@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-voice-satellite-device-pi"
+version = "0.1.0"
+description = "Raspberry Pi satellites for the Hermes voice installer"
+requires-python = ">=3.10"
+dependencies = ["hermes-voice-satellite-installer"]
+
+[project.entry-points."hermes_installer.devices"]
+pi-respeaker-2mic = "hermes_device_pi"
+
+[tool.setuptools.packages.find]
+where = ["src"]

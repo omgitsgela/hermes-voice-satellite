@@ -28,7 +28,7 @@ from 1.0-2.1 s (2026-09-22, working) to 0.4-0.7 s.
 Two invariants, one per clock:
 
 1. the total window stays at or under the measured-good bound, so the onset is never clipped;
-2. the bridge's ignore window is no longer than the device's mute, because a drain that outlasts
+2. the Gateway's ignore window is no longer than the device's mute, because a drain that outlasts
    the mute discards audio the device is already sending (that is how the first word vanished).
 
     .venv/bin/python scripts/test_wake_mute_timing.py
@@ -43,7 +43,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from bridge.config import WAKE_QUIET_SECONDS  # noqa: E402
+from satellite_gateway.config import WAKE_QUIET_SECONDS  # noqa: E402
 
 # Measured-good total from 2026-09-22, with a little room for a deliberate retune. 408 ms gave a
 # natural onset; 708 ms clipped it on 2026-09-29. Nothing may push the window back over this.
@@ -93,9 +93,9 @@ def main() -> int:
     check(f"total device deaf window ({total:.3f}s) is within the measured-good bound",
           total <= MAX_TOTAL_DEAF_SECONDS, True)
 
-    # Invariant 2: the bridge must not listen less than the device is willing to talk. A drain that
+    # Invariant 2: the Gateway must not listen less than the device is willing to talk. A drain that
     # runs past the mute throws away live audio, which is exactly how the first word disappeared.
-    check(f"the bridge's ignore window ({WAKE_QUIET_SECONDS:.3f}s) does not outlast the mute",
+    check(f"the Gateway's ignore window ({WAKE_QUIET_SECONDS:.3f}s) does not outlast the mute",
           WAKE_QUIET_SECONDS <= total, True)
     check("  and the ignore window still exists", WAKE_QUIET_SECONDS > 0.0, True)
 

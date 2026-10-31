@@ -24,7 +24,7 @@ CONFIG_REPORTED_EVENT = "hermes.config.reported"
 _DEVICE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _WAKE_WORD = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
-# Kept deliberately small and identical to bridge.config_plane schema v1.
+# Kept deliberately small and identical to gateway.config_plane schema v1.
 SUPPORTED: dict[str, dict[str, Any]] = {
     "wake_word": {"type": "string", "pattern": _WAKE_WORD},
     "wake_threshold": {"type": "number", "minimum": 0.05, "maximum": 0.99},

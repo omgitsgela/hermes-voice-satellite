@@ -4,7 +4,7 @@ client, in one run.
 
 Both halves were written against a written contract, and a contract can be misread the same way by
 both sides -- two mocks that agree with each other prove nothing about the real pair. So this
-drives the real service (`bridge/enroll.py`, minting through the real `scripts/issue-registry-tls.py`)
+drives the real service (`gateway/enroll.py`, minting through the real `scripts/issue-registry-tls.py`)
 against the real client (`scripts/enroll_device.py` as a subprocess), and asserts on the files the
 board would actually be provisioned from.
 
@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT))
 
 from aiohttp import web  # noqa: E402
 
-from bridge.enroll import EnrollmentService  # noqa: E402
+from satellite_gateway.enroll import EnrollmentService  # noqa: E402
 
 PY = sys.executable
 ENROLL = ROOT / "scripts" / "enroll_device.py"
@@ -61,7 +61,7 @@ class ServiceThread:
 
     async def _serve(self) -> None:
         app = web.Application()
-        self.service.register(app)          # also generates the token lazily, like the bridge
+        self.service.register(app)          # also generates the token lazily, like the Gateway
         runner = web.AppRunner(app, access_log=None)
         await runner.setup()
         await web.TCPSite(runner, "127.0.0.1", self.port).start()
@@ -86,7 +86,7 @@ class CrossSideTests(unittest.TestCase):
         self.credentials = self.state / "device-credentials.json"
         self.token_file = self.state / "enroll-token.txt"
         self.out = self.tmp / "certs"
-        # The real issuer mints the CA + the bridge's own server certificate.
+        # The real issuer mints the CA + the Gateway's own server certificate.
         result = subprocess.run(
             [PY, "-B", str(ISSUER), "--state", str(self.state), "init", "--san", "localhost"],
             capture_output=True, text=True)
@@ -142,7 +142,7 @@ class CrossSideTests(unittest.TestCase):
         mode = (self.out / f"{DEVICE_ID}.key").stat().st_mode & 0o777
         self.assertEqual(mode, 0o600, f"the device key is mode {oct(mode)}")
 
-        # The credential record is the bridge's own shape: sha256 over the certificate DER.
+        # The credential record is the Gateway's own shape: sha256 over the certificate DER.
         credentials = json.loads((self.out / "device-credentials.json").read_text())
         self.assertEqual(list(credentials.values()), [DEVICE_ID])
         self.assertTrue(list(credentials)[0].startswith("sha256:"))

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Install the voice GATEWAY on a host that already runs Hermes: the bridge virtualenv, the
-# bridge.env, the registry TLS material, the systemd user unit, and the Hermes-side plugin +
+# Install the voice GATEWAY on a host that already runs Hermes: the gateway virtualenv, the
+# satellite-gateway.env, the registry TLS material, the systemd user unit, and the Hermes-side plugin +
 # config keys.
 #
 # This is the host-side counterpart of scripts/install-esp32.sh / install-pi.sh. A gateway host
 # becomes a gateway in five steps, each visible and idempotent:
 #
-#   1. venv     -- the bridge's own virtualenv (faster-whisper, piper, wyoming, ...).
-#   2. env      -- bridge.env from the committed template, with the registry link values filled
-#                  in so the bridge listens the moment the unit starts.
+#   1. venv     -- the Gateway's own virtualenv (faster-whisper, piper, wyoming, ...).
+#   2. env      -- satellite-gateway.env from the committed template, with the registry link values filled
+#                  in so the Gateway listens the moment the unit starts.
 #   3. tls      -- the registry's CA + server certificate and the credential file, minted by
 #                  scripts/issue-registry-tls.py (idempotent; an existing CA is never regenerated).
 #                  This step also generates the five-word satellite enrolment token (printed ONCE).
@@ -17,19 +17,19 @@
 #                  applied to the Hermes config, one pass, with a backup.
 #
 # Usage:
-#   scripts/install-gateway.sh --base ~/hermes-voice-bridge --device-reachable-as 192.0.2.10 \
+#   scripts/install-gateway.sh --base ~/hermes-voice-satellite --device-reachable-as 192.0.2.10 \
 #       [--registry-port 10701] [--tls-port 10702] [--registry-bind 0.0.0.0] \
 #       [--satellite-host 192.0.2.20:10700] [--skip-hermes] [--dry-run]
 #   scripts/install-gateway.sh            # GUIDED setup: detect, prompt, confirm, then run
 #   scripts/install-gateway.sh --guided --dry-run   # the guided flow, previewing only
 #
-# --device-reachable-as is the address a device reaches THIS bridge on: it becomes the server
+# --device-reachable-as is the address a device reaches THIS Gateway on: it becomes the server
 # certificate's SAN and the endpoint a device is provisioned with, so it must be the address the
 # device can actually route to (LAN IP or a name it resolves), never 127.0.0.1 or 0.0.0.0. It is
 # the DIAL address, not the bind address: the registry listener binds 0.0.0.0 by default (override
-# with --registry-bind) so a device can reach it on any interface, and a bridge on a host with
+# with --registry-bind) so a device can reach it on any interface, and a Gateway on a host with
 # several addresses is reachable without re-provisioning.
-# --satellite-host is the old shape (bridge dials the device) and defaults to loopback: it is set
+# --satellite-host is the old shape (Gateway dials the device) and defaults to loopback: it is set
 # for deployments that still dial out, and the registry link is the standard path.
 #
 # GUIDED mode: run with NO arguments (or --guided) and the script detects what it can (host LAN
@@ -39,7 +39,7 @@
 # yes/no before writing anything. A non-interactive stdin refuses the guided flow -- pass the
 # flags for automation. --guided --dry-run previews the guided answers without writing.
 #
-# Idempotence: a re-run reports what it already did and changes nothing. The bridge.env's managed
+# Idempotence: a re-run reports what it already did and changes nothing. The satellite-gateway.env's managed
 # registry/satellite keys move in place to the current flag values (the rest of the file is
 # untouched); the Hermes config is backed up before the one edit; and the registry CA is reused,
 # never regenerated, because a regenerated CA strands every enrolled device.
@@ -57,7 +57,7 @@ REACHABLE_AS=""               # the address devices route to on this host
 REGISTRY_PORT="10701"         # the registry listener (plaintext, trusted LAN)
 TLS_PORT=""                   # defaults to REGISTRY_PORT+1; the TLS listener devices pin
 REGISTRY_BIND="0.0.0.0"       # the address the registry listener BINDS to (the dial address is the cert SAN)
-SATELLITE_HOST="127.0.0.1:10700"   # the old shape: where the bridge dials the satellite
+SATELLITE_HOST="127.0.0.1:10700"   # the old shape: where the Gateway dials the satellite
 SKIP_HERMES=0
 DRY_RUN=0
 HERMES_BIN="hermes"
@@ -132,7 +132,7 @@ if [ "$GUIDED" = 1 ]; then
     else
         echo "  host LAN IP:      not detected (type the address a device routes to)"
     fi
-    if [ -d "$REPO_ROOT/bridge" ] && [ -f "$REPO_ROOT/bridge.env.example" ] && [ -f "$REPO_ROOT/requirements.txt" ]; then
+    if [ -d "$REPO_ROOT/satellite_gateway" ] && [ -f "$REPO_ROOT/satellite-gateway.env.example" ] && [ -f "$REPO_ROOT/requirements.txt" ]; then
         echo "  checkout:         $REPO_ROOT (looks like this repository)"
     else
         echo "  checkout:         $REPO_ROOT (incomplete; the gateway must run from a full clone)"
@@ -150,7 +150,7 @@ if [ "$GUIDED" = 1 ]; then
     echo
 
     guided_prompt BASE "Gateway base directory (the clone this gateway runs from)" "${BASE:-$REPO_ROOT}"
-    guided_prompt REACHABLE_AS "Address a device reaches THIS bridge on (LAN IP or resolvable name)" "${REACHABLE_AS:-$LAN_IP}" guided_valid_reachable_as
+    guided_prompt REACHABLE_AS "Address a device reaches THIS Gateway on (LAN IP or resolvable name)" "${REACHABLE_AS:-$LAN_IP}" guided_valid_reachable_as
     guided_prompt REGISTRY_PORT "Registry plaintext listener port" "${REGISTRY_PORT:-10701}" guided_valid_number
     guided_prompt TLS_PORT "Registry TLS listener port (the one devices pin)" "${TLS_PORT:-$((REGISTRY_PORT + 1))}" guided_valid_number
     guided_prompt REGISTRY_BIND "Address the registry listener BINDS to" "${REGISTRY_BIND:-0.0.0.0}"
@@ -169,7 +169,7 @@ if [ "$GUIDED" = 1 ]; then
     else
         echo "  hermes side:    SKIPPED"
     fi
-    echo "  1. bridge virtualenv   2. bridge.env   3. registry TLS   3b. enrolment token   4. systemd user unit   5. Hermes side"
+    echo "  1. gateway virtualenv   2. satellite-gateway.env   3. registry TLS   3b. enrolment token   4. systemd user unit   5. Hermes side"
     GUIDED_ARGS=(--base "$BASE" --device-reachable-as "$REACHABLE_AS" --registry-port "$REGISTRY_PORT"
                  --tls-port "$TLS_PORT" --registry-bind "$REGISTRY_BIND" --satellite-host "$SATELLITE_HOST")
     if [ "$HERMES_YN" != y ]; then GUIDED_ARGS+=(--skip-hermes); fi
@@ -181,18 +181,18 @@ if [ "$GUIDED" = 1 ]; then
 fi
 
 [ -n "$BASE" ] || die "--base is required (the clone of this repository the gateway runs from)"
-[ -n "$REACHABLE_AS" ] || die "--device-reachable-as is required (the address a device reaches this bridge on)"
+[ -n "$REACHABLE_AS" ] || die "--device-reachable-as is required (the address a device reaches this Gateway on)"
 case "$REACHABLE_AS" in
     127.0.0.1*|::1|localhost*|0.0.0.0*) die "--device-reachable-as must be an address a device can route to, not $REACHABLE_AS (loopback/any never receives a device's dial)" ;;
 esac
-[ "$DRY_RUN" = 1 ] || [ -d "$BASE/bridge" ] || die "no bridge/ under $BASE -- is --base the repository clone?"
-[ -f "$BASE/bridge.env.example" ] || die "no bridge.env.example at $BASE"
+[ "$DRY_RUN" = 1 ] || [ -d "$BASE/satellite_gateway" ] || die "no satellite_gateway/ under $BASE -- is --base the repository clone?"
+[ -f "$BASE/satellite-gateway.env.example" ] || die "no satellite-gateway.env.example at $BASE"
 [ -f "$BASE/requirements.txt" ] || die "no requirements.txt at $BASE"
 
 TLS_PORT="${TLS_PORT:-$((REGISTRY_PORT + 1))}"
 SATELLITE_HOST_ADDR="$(printf '%s' "$SATELLITE_HOST" | sed 's#:.*$##')"
 SATELLITE_HOST_PORT="$(printf '%s' "$SATELLITE_HOST" | sed 's#.*:##')"
-# A host named without a port (or a malformed value) leaves the port half empty; the bridge does
+# A host named without a port (or a malformed value) leaves the port half empty; the Gateway does
 # int(VOICE_SATELLITE_PORT) at startup, so refuse it here with a usable message instead of a crash.
 case "$SATELLITE_HOST_PORT" in ''|*[!0-9]*) die "satellite host is not host:port: $SATELLITE_HOST" ;; esac
 if [ "$SATELLITE_HOST_PORT" -lt 1 ] || [ "$SATELLITE_HOST_PORT" -gt 65535 ]; then
@@ -203,7 +203,13 @@ STATE_DIR="$BASE/state"
 PY="$BASE/.venv/bin/python"
 
 # ---------------------------------------------------------------- 1. venv
-echo "== 1. bridge virtualenv ($BASE/.venv) =="
+echo "== 1. gateway virtualenv ($BASE/.venv) =="
+# The Satellite Gateway runs inside its own virtualenv, so this role needs a Python 3 to build one.
+# Checking here turns a mid-install "python3: not found" into one sentence about a prerequisite.
+# Flashing a device does NOT need this: a standalone bundle carries its own runtime for that.
+if [ "$DRY_RUN" = 0 ] && ! command -v python3 >/dev/null 2>&1; then
+    die "installing the Satellite Gateway needs Python 3 on this machine, because the service runs in its own virtualenv. Install python3, or run this step on the machine that will host it."
+fi
 if [ "$DRY_RUN" = 0 ] && [ -x "$BASE/.venv/bin/python" ] && \
    "$BASE/.venv/bin/python" -c 'import wyoming, faster_whisper' 2>/dev/null; then
     echo "   venv already has wyoming + faster-whisper; leaving it alone"
@@ -211,37 +217,37 @@ else
     run python3 -m venv "$BASE/.venv"
     run "$BASE/.venv/bin/python" -m pip install -r "$BASE/requirements.txt"
     run "$BASE/.venv/bin/python" -m pip check
-    # The Piper voice the bridge speaks with (not committed; the unit's WorkingDirectory expects
-    # voices/ next to bridge/). The name follows the installation's configuration — the same
-    # VOICE_PIPER_VOICE resolution bridge/config.py uses: an existing bridge.env wins, otherwise
+    # The Piper voice the Gateway speaks with (not committed; the unit's WorkingDirectory expects
+    # voices/ next to gateway/). The name follows the installation's configuration — the same
+    # VOICE_PIPER_VOICE resolution satellite_gateway/config.py uses: an existing satellite-gateway.env wins, otherwise
     # the code default. Changing the voice is docs/switching-voices.md; this line must not grow
-    # its own default. bridge/config.py needs only the stdlib, so either interpreter can read it.
+    # its own default. satellite_gateway/config.py needs only the stdlib, so either interpreter can read it.
     VOICE_PY=""
     if [ -x "$BASE/.venv/bin/python" ]; then VOICE_PY="$BASE/.venv/bin/python"; else VOICE_PY="python3"; fi
     PIPER_VOICE_NAME="$("$VOICE_PY" -c '
 import sys; sys.path.insert(0, sys.argv[1])
-from bridge.config import PIPER_VOICE_NAME
+from satellite_gateway.config import PIPER_VOICE_NAME
 print(PIPER_VOICE_NAME)' "$BASE" 2>/dev/null || true)"
     if [ -z "$PIPER_VOICE_NAME" ]; then
-        echo "   could not read the configured voice name from bridge/config.py; skipping the voice download" >&2
+        echo "   could not read the configured voice name from satellite_gateway/config.py; skipping the voice download" >&2
     elif "$VOICE_PY" "$BASE/scripts/fetch-voice.py" --is-external "$PIPER_VOICE_NAME" >/dev/null 2>&1; then
         # Voices outside the Piper catalog (clean100): fetched with pinned sha256 and a
         # 22,050 Hz contract check, because piper.download_voices cannot know them.
-        echo "   bridge voice: $PIPER_VOICE_NAME (curated external voice, hash-pinned)"
+        echo "   Gateway voice: $PIPER_VOICE_NAME (curated external voice, hash-pinned)"
         run "$VOICE_PY" "$BASE/scripts/fetch-voice.py" "$PIPER_VOICE_NAME" --download-dir "$BASE/voices"
     else
-        echo "   bridge voice: $PIPER_VOICE_NAME"
+        echo "   Gateway voice: $PIPER_VOICE_NAME"
         run "$BASE/.venv/bin/python" -m piper.download_voices --download-dir "$BASE/voices" "$PIPER_VOICE_NAME"
     fi
 fi
 
-# ---------------------------------------------------------------- 2. bridge.env
-echo "== 2. bridge.env ($BASE/bridge.env) =="
-ENV="$BASE/bridge.env"
+# ---------------------------------------------------------------- 2. satellite-gateway.env
+echo "== 2. satellite-gateway.env ($BASE/satellite-gateway.env) =="
+ENV="$BASE/satellite-gateway.env"
 # The keys the installer owns, as KEY=VALUE. VOICE_REGISTRY_HOST is the listener's BIND address
 # (REGISTRY_BIND, default 0.0.0.0 -- the address devices route to is the certificate's SAN, not
 # this); it is intentionally NOT $REACHABLE_AS, because binding to one interface would break
-# devices that reach the host on another. The credentials file path is NOT a key: the bridge
+# devices that reach the host on another. The credentials file path is NOT a key: the Gateway
 # derives it from its own repo root (state/device-credentials.json), so writing it here would be
 # inert.
 REGISTRY_KEYS=(
@@ -259,20 +265,20 @@ REGISTRY_KEYS=(
 # performs), so the printed file below is exactly what a real run would leave. In a real run it is
 # the live file itself.
 if [ "$DRY_RUN" = 1 ]; then
-    ENV_EDIT="$(mktemp "${TMPDIR:-/tmp}/bridge-env.XXXXXX")"
+    ENV_EDIT="$(mktemp "${TMPDIR:-/tmp}/satellite-gateway-env.XXXXXX")"
     if [ -f "$ENV" ]; then
         cp "$ENV" "$ENV_EDIT"
     else
-        cp "$BASE/bridge.env.example" "$ENV_EDIT"
+        cp "$BASE/satellite-gateway.env.example" "$ENV_EDIT"
     fi
 else
     ENV_EDIT="$ENV"
-    [ -f "$ENV_EDIT" ] || cp "$BASE/bridge.env.example" "$ENV_EDIT"
+    [ -f "$ENV_EDIT" ] || cp "$BASE/satellite-gateway.env.example" "$ENV_EDIT"
 fi
 # Set each managed key in place: an existing live KEY=... line is replaced (the rest of the file
 # is untouched, so a tuned file is never clobbered), and a key with no live line is appended. The
 # template's CHANGE-ME satellite value is thereby filled and its commented registry block
-# activated, so the bridge listens the moment the unit starts and no value is left a placeholder.
+# activated, so the Gateway listens the moment the unit starts and no value is left a placeholder.
 for kv in "${REGISTRY_KEYS[@]}"; do
     key="${kv%%=*}"; value="${kv#*=}"
     if grep -qE "^[[:space:]]*${key}=" "$ENV_EDIT"; then
@@ -286,7 +292,7 @@ if [ "$DRY_RUN" = 1 ]; then
     sed 's/^/  /' "$ENV_EDIT"
     rm -f "$ENV_EDIT"
 else
-    echo "   bridge.env written: $ENV"
+    echo "   satellite-gateway.env written: $ENV"
 fi
 
 # ---------------------------------------------------------------- 3. registry TLS
@@ -304,7 +310,7 @@ fi
 
 # ---------------------------------------------------------------- 3b. enrolment token
 # The five-word token a new satellite is set up with: generated once here, printed ONCE, and
-# stored 0600 at state/enroll-token.txt (the bridge regenerates it lazily if this step never
+# stored 0600 at state/enroll-token.txt (the Gateway regenerates it lazily if this step never
 # ran, but then nobody has seen it). Never re-printed on a re-run and never overwritten: a new
 # token would strand every satellite already enrolled under the old one.
 echo "== 3b. satellite enrolment token ($STATE_DIR/enroll-token.txt) =="
@@ -331,32 +337,32 @@ else
 fi
 
 # ---------------------------------------------------------------- 4. systemd user unit
-echo "== 4. systemd user unit (hermes-voice-bridge.service) =="
+echo "== 4. systemd user unit (hermes-voice-satellite-gateway.service) =="
 UNIT_DIR="$HOME/.config/systemd/user"
-UNIT_TEMPLATE="$REPO_ROOT/hermes/systemd/hermes-voice-bridge.service.in"
+UNIT_TEMPLATE="$REPO_ROOT/hermes/systemd/hermes-voice-satellite-gateway.service.in"
 # The unit is rendered from its .in template so its WorkingDirectory / EnvironmentFile / ExecStart
 # all point at $BASE -- wherever the gateway actually runs from -- rather than a hardcoded
-# %h/hermes-voice-bridge. (The committed hermes-voice-bridge.service is the same unit pinned to the
+# %h/hermes-voice-satellite. (The committed hermes-voice-satellite-gateway.service is the same unit pinned to the
 # documented clone location, for a manual install per the README.)
 render_unit() {
     sed "s|__BASE__|$BASE|g" "$UNIT_TEMPLATE"
 }
 if [ "$DRY_RUN" = 1 ]; then
-    echo "DRY-RUN: render $UNIT_TEMPLATE -> $UNIT_DIR/hermes-voice-bridge.service (WorkingDirectory/ExecStart = $BASE)"
-    echo "DRY-RUN: systemctl --user daemon-reload && systemctl --user enable --now hermes-voice-bridge.service"
+    echo "DRY-RUN: render $UNIT_TEMPLATE -> $UNIT_DIR/hermes-voice-satellite-gateway.service (WorkingDirectory/ExecStart = $BASE)"
+    echo "DRY-RUN: systemctl --user daemon-reload && systemctl --user enable --now hermes-voice-satellite-gateway.service"
     echo "DRY-RUN: loginctl enable-linger \$USER (so the unit survives logout)"
 else
-    # The unit reads bridge.env as its EnvironmentFile, so the registry values written in step 2
+    # The unit reads satellite-gateway.env as its EnvironmentFile, so the registry values written in step 2
     # are already visible to the service: no drop-in is needed (and a drop-in with the same values
     # would be a second place to edit, which is how configuration drifts).
     mkdir -p "$UNIT_DIR"
-    render_unit > "$UNIT_DIR/hermes-voice-bridge.service"
-    chmod 644 "$UNIT_DIR/hermes-voice-bridge.service"
+    render_unit > "$UNIT_DIR/hermes-voice-satellite-gateway.service"
+    chmod 644 "$UNIT_DIR/hermes-voice-satellite-gateway.service"
     systemctl --user daemon-reload
-    systemctl --user enable --now hermes-voice-bridge.service
+    systemctl --user enable --now hermes-voice-satellite-gateway.service
     loginctl enable-linger "$USER" 2>/dev/null || echo "   note: enable lingering manually (loginctl enable-linger $USER)"
     echo "   unit status:"
-    systemctl --user --no-pager status hermes-voice-bridge.service | head -6
+    systemctl --user --no-pager status hermes-voice-satellite-gateway.service | head -6
 fi
 
 # ---------------------------------------------------------------- 5. the Hermes side

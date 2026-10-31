@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Offline tests for how the registration handler ends.
 
-Run with the bridge's own interpreter:
+Run with the Gateway's own interpreter:
 
-    ~/hermes-voice-bridge/.venv/bin/python scripts/test_registry_disconnect.py
+    ~/hermes-voice-satellite/.venv/bin/python scripts/test_registry_disconnect.py
 
 Why this exists. A satellite that roams loses its uplink for ordinary reasons, and when the route to
 it disappears the kernel fails the read with `OSError: [Errno 113] No route to host` rather than
@@ -38,7 +38,7 @@ from typing import Awaitable, Callable
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.registry import RegistrationHandler, SatelliteRegistry  # noqa: E402
+from satellite_gateway.registry import RegistrationHandler, SatelliteRegistry  # noqa: E402
 
 TESTS: list[tuple[str, str, Callable[[], Awaitable[None]]]] = []
 

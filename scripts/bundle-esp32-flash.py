@@ -232,6 +232,13 @@ def main():
                              'refuses a bundle that merely agrees with its own manifest')
     args = parser.parse_args()
 
+    # `--extract DIR --bundle FILE` is the form the installation guide uses for the region-wise
+    # fallback. Extraction still verifies the bundle against the manifest first; it just should not
+    # demand `--build`, because the whole point of that path is not having a build tree.
+    if args.extract and args.bundle and not args.verify:
+        args.verify = args.bundle
+        if not args.check:
+            parser.error('--extract needs --check MANIFEST (the manifest carrying bundle_sha256)')
     if args.verify:
         if not args.check:
             parser.error('--verify needs --check MANIFEST (the manifest carrying bundle_sha256)')

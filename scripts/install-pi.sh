@@ -18,14 +18,14 @@
 # Usage:
 #   scripts/install-pi.sh --base /opt/wyoming-satellite --device-name kitchen \
 #       --wake-word hey_hermes --endpoint tls://192.0.2.10:10702 \
-#       --tls-certs /srv/bridge/state/registry-tls [--user pi] [--dry-run]
+#       --tls-certs /srv/gateway/state/registry-tls [--user pi] [--dry-run]
 #   scripts/install-pi.sh                     # GUIDED setup: detect, prompt, confirm, then run
 #   scripts/install-pi.sh --guided --dry-run  # the guided flow, previewing only
 #
 # --endpoint and --tls-certs configure the registry link that outbound-satellite carries. The
-# endpoint's scheme is the transport (tls:// or tcp://) and its host:port become VOICE_BRIDGE_HOST
-# / VOICE_BRIDGE_PORT; the TLS file set (client CA + this device's certificate and key) becomes the
-# VOICE_BRIDGE_TLS_* paths the outbound satellite reads. Without them the device runs for local
+# endpoint's scheme is the transport (tls:// or tcp://) and its host:port become VOICE_GATEWAY_HOST
+# / VOICE_GATEWAY_PORT; the TLS file set (client CA + this device's certificate and key) becomes the
+# VOICE_GATEWAY_TLS_* paths the outbound satellite reads. Without them the device runs for local
 # testing only and never reaches the registry.
 #
 # satellite.env is written from the committed template with the <...> placeholders filled from
@@ -149,7 +149,7 @@ if [ "$GUIDED" = 1 ]; then
     fi
     REGISTRY_TLS="$(guided_first_dir_with client-ca.crt \
         "$REPO_ROOT/state/registry-tls" \
-        "$HOME/hermes-voice-bridge/state/registry-tls")"
+        "$HOME/hermes-voice-satellite/state/registry-tls")"
     if [ -n "$REGISTRY_TLS" ]; then
         echo "  registry TLS dir:  $REGISTRY_TLS (has client-ca.crt; default for --tls-certs)"
     else
@@ -168,7 +168,7 @@ if [ "$GUIDED" = 1 ]; then
     echo
 
     guided_prompt BASE "Where the satellite software is installed" "${BASE:-/opt/wyoming-satellite}"
-    guided_prompt DEVICE_NAME "Device name (the identity the bridge knows)" "${DEVICE_NAME:-$(hostname -s 2>/dev/null || echo satellite)}"
+    guided_prompt DEVICE_NAME "Device name (the identity the Gateway knows)" "${DEVICE_NAME:-$(hostname -s 2>/dev/null || echo satellite)}"
     guided_prompt WAKE_WORD "Wake word / detection name" "${WAKE_WORD:-hey_hermes}"
     guided_prompt DEVICE_USER "User the satellite services run as" "${DEVICE_USER:-${SUDO_USER:-pi}}"
     # Just the IP address or host name is enough: the scheme and port are filled in and the
@@ -241,7 +241,7 @@ if [ "$GUIDED" = 1 ]; then
 fi
 
 [ -n "$BASE" ] || die "--base is required (where the satellite software is installed)"
-[ -n "$DEVICE_NAME" ] || die "--device-name is required (the identity the bridge knows)"
+[ -n "$DEVICE_NAME" ] || die "--device-name is required (the identity the Gateway knows)"
 [ -d "$UNITS_DIR" ] || die "no units directory at $UNITS_DIR"
 VENV="$BASE/.venv"
 
@@ -350,12 +350,12 @@ if [ "$DO_CONFIG" = 1 ]; then
         if [ -n "$ENDPOINT" ]; then
             echo "DRY-RUN: append registry link:"
             echo "  VOICE_DEVICE_ID=$DEVICE_NAME"
-            echo "  VOICE_BRIDGE_HOST=$ENDPOINT_HOST"
-            echo "  VOICE_BRIDGE_PORT=$ENDPOINT_PORT"
+            echo "  VOICE_GATEWAY_HOST=$ENDPOINT_HOST"
+            echo "  VOICE_GATEWAY_PORT=$ENDPOINT_PORT"
             if [ -n "$TLS_CERTS_DIR" ]; then
-                echo "  VOICE_BRIDGE_TLS_CA=$TLS_CERTS_DIR/client-ca.crt"
-                echo "  VOICE_BRIDGE_TLS_CERT=$TLS_CERTS_DIR/$DEVICE_NAME.crt"
-                echo "  VOICE_BRIDGE_TLS_KEY=$TLS_CERTS_DIR/$DEVICE_NAME.key"
+                echo "  VOICE_GATEWAY_TLS_CA=$TLS_CERTS_DIR/client-ca.crt"
+                echo "  VOICE_GATEWAY_TLS_CERT=$TLS_CERTS_DIR/$DEVICE_NAME.crt"
+                echo "  VOICE_GATEWAY_TLS_KEY=$TLS_CERTS_DIR/$DEVICE_NAME.key"
             fi
         fi
     else
@@ -374,14 +374,14 @@ if [ "$DO_CONFIG" = 1 ]; then
                 echo ""
                 echo "# Registry link (written by install-pi.sh; outbound-satellite reads it)."
                 printf 'VOICE_DEVICE_ID=%s\n' "$DEVICE_NAME"
-                printf 'VOICE_BRIDGE_HOST=%s\n' "$ENDPOINT_HOST"
-                printf 'VOICE_BRIDGE_PORT=%s\n' "$ENDPOINT_PORT"
+                printf 'VOICE_GATEWAY_HOST=%s\n' "$ENDPOINT_HOST"
+                printf 'VOICE_GATEWAY_PORT=%s\n' "$ENDPOINT_PORT"
             } >> "$ENV_PATH"
             if [ -n "$TLS_CERTS_DIR" ]; then
                 {
-                    printf 'VOICE_BRIDGE_TLS_CA=%s\n' "$TLS_CERTS_DIR/client-ca.crt"
-                    printf 'VOICE_BRIDGE_TLS_CERT=%s\n' "$TLS_CERTS_DIR/$DEVICE_NAME.crt"
-                    printf 'VOICE_BRIDGE_TLS_KEY=%s\n' "$TLS_CERTS_DIR/$DEVICE_NAME.key"
+                    printf 'VOICE_GATEWAY_TLS_CA=%s\n' "$TLS_CERTS_DIR/client-ca.crt"
+                    printf 'VOICE_GATEWAY_TLS_CERT=%s\n' "$TLS_CERTS_DIR/$DEVICE_NAME.crt"
+                    printf 'VOICE_GATEWAY_TLS_KEY=%s\n' "$TLS_CERTS_DIR/$DEVICE_NAME.key"
                 } >> "$ENV_PATH"
             fi
         fi

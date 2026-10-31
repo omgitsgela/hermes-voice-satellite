@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline regression test for fail-closed NAS pruning (issue #53).
 
-Run with the bridge venv:
+Run with the Gateway venv:
 
     .venv/bin/python scripts/test_prune_nas_mirror.py
 """
@@ -28,7 +28,7 @@ class FailedGitResult:
 
 with tempfile.TemporaryDirectory() as tmp:
     mirror = pathlib.Path(tmp)
-    ordinary_file = mirror / "bridge" / "important.py"
+    ordinary_file = mirror / "Gateway" / "important.py"
     ordinary_file.parent.mkdir()
     ordinary_file.write_text("irreplaceable backup data\n")
 
@@ -75,9 +75,9 @@ print(f"prune failure checks: {4 - phase_one_failures}/4 passed")
 # to inspection of the constant.
 with tempfile.TemporaryDirectory() as tmp:
     mirror = pathlib.Path(tmp)
-    (mirror / "bridge").mkdir()
-    (mirror / "bridge" / "tracked.py").write_text("still tracked\n")
-    (mirror / "bridge" / "stale.py").write_text("no longer tracked\n")
+    (mirror / "Gateway").mkdir()
+    (mirror / "Gateway" / "tracked.py").write_text("still tracked\n")
+    (mirror / "Gateway" / "stale.py").write_text("no longer tracked\n")
     protected = [
         "private/device-images/satellite-sdcard.img.zst",
         "private/device-images/token-copy.txt",
@@ -94,7 +94,7 @@ with tempfile.TemporaryDirectory() as tmp:
 
     protected_failures = 0
     mod.mirror_root = lambda: mirror
-    mod.tracked_files = lambda: {"bridge/tracked.py"}
+    mod.tracked_files = lambda: {"gateway/tracked.py"}
     sys.argv = [str(HERE / "prune-nas-mirror.py"), "--apply"]
     try:
         with contextlib.redirect_stdout(io.StringIO()):
@@ -105,10 +105,10 @@ with tempfile.TemporaryDirectory() as tmp:
     if result != 0:
         failures.append("apply returned failure while a protected file existed")
         protected_failures += 1
-    if not (mirror / "bridge" / "tracked.py").is_file():
+    if not (mirror / "Gateway" / "tracked.py").is_file():
         failures.append("apply deleted a file the repository still tracks")
         protected_failures += 1
-    if (mirror / "bridge" / "stale.py").exists():
+    if (mirror / "Gateway" / "stale.py").exists():
         failures.append("apply kept a file the repository no longer tracks")
         protected_failures += 1
     for rel in protected + generated:

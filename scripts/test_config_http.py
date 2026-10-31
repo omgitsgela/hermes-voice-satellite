@@ -10,8 +10,8 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.announce import Announcer  # noqa: E402
-from bridge.config_plane import ConfigPlane  # noqa: E402
+from satellite_gateway.announce import Announcer  # noqa: E402
+from satellite_gateway.config_plane import ConfigPlane  # noqa: E402
 
 
 class FakeRequest:

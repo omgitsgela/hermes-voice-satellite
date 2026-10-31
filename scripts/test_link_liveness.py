@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """Offline tests that every long-lived voice link can notice a dead peer.
 
-Run with the bridge's own interpreter:
+Run with the Gateway's own interpreter:
 
-    ~/hermes-voice-bridge/.venv/bin/python scripts/test_link_liveness.py
+    ~/hermes-voice-satellite/.venv/bin/python scripts/test_link_liveness.py
 
 Why this exists. An idle TCP connection has no timeout of its own, and neither end of the voice
 transport says anything while it waits for the other. A peer that dies without closing — a power cut,
 a lost route — therefore leaves a socket that still reads ESTAB, and the surviving end goes on
 believing it is connected to something that is gone. Measured on 2026-09-25/26:
 
-* the device dialled in, sat idle, and the bridge held the socket for hours;
-* the Pi was power-cycled, and the bridge did not notice at all. The accepted socket stayed ESTAB for
+* the device dialled in, sat idle, and the Gateway held the socket for hours;
+* the Pi was power-cycled, and the Gateway did not notice at all. The accepted socket stayed ESTAB for
   the whole outage and was only cleaned up because the returning device displaced it. Had the Pi
   stayed off, the registration and lease would have been held indefinitely.
 
 The protocol cannot help here: the satellite does not answer application-level pings (measured
 2026-09-22, a Ping draws no Pong). Kernel keepalive is the only cheap liveness signal, so it has to be
 on for EVERY link, in both directions — the device's outbound socket (already covered by
-`test_outbound_runner.py` check 13), the bridge's dialled client, and the bridge's accepted registry
+`test_outbound_runner.py` check 13), the Gateway's dialled client, and the Gateway's accepted registry
 sockets. The last of those was the gap.
 
 The checks:
@@ -43,19 +43,19 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from wyoming.event import Event, async_read_event, async_write_event  # noqa: E402
 
-from bridge.net import (  # noqa: E402
+from satellite_gateway.net import (  # noqa: E402
     KEEPALIVE_IDLE_SECONDS,
     KEEPALIVE_INTERVAL_SECONDS,
     KEEPALIVE_PROBES,
     enable_tcp_keepalive,
 )
-from bridge.registry import (  # noqa: E402
+from satellite_gateway.registry import (  # noqa: E402
     PROTOCOL_VERSION,
     REGISTER_EVENT,
     RegistryServer,
     SatelliteRegistry,
 )
-from bridge.satellite import SatelliteClient  # noqa: E402
+from satellite_gateway.satellite import SatelliteClient  # noqa: E402
 
 TIMEOUT = 10.0
 
@@ -76,7 +76,7 @@ def free_port() -> int:
 
 
 def assert_keepalive(sock, label: str) -> None:
-    """The one place the expected timings are written down on the bridge side."""
+    """The one place the expected timings are written down on the Gateway side."""
     assert sock is not None, f"{label}: the stream must expose its socket"
     assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE) == 1, (
         f"{label}: an idle link must not survive a vanished peer indefinitely"

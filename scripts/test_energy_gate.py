@@ -14,7 +14,7 @@ is what a person does, and a frame at 190 must never be treated as speech no mat
 activity detector thinks of it. That matters because webrtcvad decides on spectral content, not
 energy, and a fan's blips are spectrally speech-like - twelve of them across one day, 0.08 s each.
 
-Run with the bridge venv:
+Run with the Gateway venv:
 
     .venv/bin/python scripts/test_energy_gate.py
 """
@@ -25,8 +25,8 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import bridge.config as config_module  # noqa: E402
-from bridge.endpointing import Endpointer  # noqa: E402
+import gateway.config as config_module  # noqa: E402
+from satellite_gateway.endpointing import Endpointer, EnergyGate  # noqa: E402
 
 checks = 0
 failures: list[str] = []
@@ -122,8 +122,15 @@ def main() -> int:
     ep = build([False] * 200)
     feed(ep, FAN_RMS, 100)
     threshold = ep.gate.threshold
-    check("threshold is above the loudest fan frame", threshold > 422, True)
-    check("threshold is above the loudest video frame", threshold > VIDEO_RMS, True)
+    # Retuned 2026-10-29. These used to assert the threshold cleared the fan's PEAKS (422) and the
+    # loudest video frame (871). On the ESP32 satellite the person's speech measures median 317 --
+    # BELOW both -- and no device-side gain exists to raise it (AUDIO_MGR_MIC_GAIN and the PP AGC
+    # are both acknowledged and inert, measured). Insisting on clearing the peaks therefore meant
+    # rejecting the person, which is the failure mode this file exists to prevent.
+    #
+    # So the gate now clears the fan's MEDIAN, and peak rejection is duration's job: one leaked
+    # frame is 0.02 s against a 0.25 s minimum. That trade is asserted at the video case below.
+    check("threshold is above the fan's median", threshold > 191, True)
     check("speech clears the threshold at the floor it learns",
           SPEECH_RMS / (142 * ratio) >= 2.0, True)
     check("speech clears the threshold at the default floor",
@@ -141,7 +148,7 @@ def main() -> int:
     # A silent room must not drive the floor to zero and the threshold with it.
     ep = build([False] * 100)
     feed(ep, 0, 100)
-    check("a dead-silent room leaves a sane threshold", ep.gate.threshold >= 400, True)
+    check("a dead-silent room leaves a sane threshold", ep.gate.threshold >= 200, True)
 
     # ---------------------------------------------------------------- a busy office
     # Measured from three samples on 2026-09-25, a computer centre with a fan and other
@@ -181,10 +188,19 @@ def main() -> int:
     LEARNED_FLOOR = 142     # what the gate actually learns from this room's fan audio
     check("the shipped default floor is the measured fan level",
           round(shipped["floor_default"]), 190)
-    # The requirement is the fan, and the fan must be cleared with real margin: at ratio 6 the
-    # threshold is 852 against a fan peak of 422, which is 2x.
-    check("the shipped ratio clears the loudest fan frame by 2x",
-          shipped["ratio"] * LEARNED_FLOOR >= 422 * 2.0, True)
+    # The requirement is the fan's ordinary level, not its peaks (see the note above): the shipped
+    # pair must put the threshold above the fan's 191 median and below the person's 317 median.
+    check("the shipped ratio clears the fan's median",
+          shipped["ratio"] * LEARNED_FLOOR > 191, True)
+    # Measured with a WORKING gain (2026-10-29, after the co-processor count-byte fix):
+    # room p50 251 at the same moment speech measured median 1103.
+    ROOM_WORKING_GAIN = 251
+    SPEECH_WORKING_GAIN = 1103
+    effective = max(shipped["threshold_min"], shipped["ratio"] * 60.0)
+    check("the room at working gain stays below the gate",
+          ROOM_WORKING_GAIN < effective, True)
+    check("and the person at working gain clears it with headroom",
+          SPEECH_WORKING_GAIN / effective >= 2.0, True)
     # A video is explicitly NOT the gate's job: its loudest frame (871) sits just over that threshold,
     # and a louder video would put more frames over it. What has to hold is that a leaked frame cannot
     # become a turn - that is the 0.25 s minimum doing the work, so one frame is at worst a blip.
@@ -199,6 +215,33 @@ def main() -> int:
           SPEECH_RMS / (LEARNED_FLOOR * shipped["ratio"]) >= 3.0, True)
     check("speech clears the threshold at the default floor by 2.5x",
           SPEECH_RMS / (shipped["floor_default"] * shipped["ratio"]) >= 2.5, True)
+
+    # ------------------------------------------------------------------ warmup
+    # Regression, found on a live device on 2026-10-29. The gate starts from `floor_default`
+    # because it has not measured this room yet. With the shipped numbers that default times the
+    # ratio (190 * 6 = 1140) lands ABOVE `threshold_max`, so the ceiling pinned the gate to 1000 --
+    # its loudest possible setting -- for the first `min_samples` frames of every stream (0.8 s).
+    # That is exactly the window in which someone says "hello": the log recorded speech at median
+    # RMS 628 rejected 35 frames out of 37 and the turn abandoned as "nothing said after the wake
+    # word". A default is not a measurement and must not be able to raise the gate.
+    cold = EnergyGate(**shipped)
+    for _ in range(shipped["min_samples"] - 5):
+        cold.observe(frame_at(200), detector_says_speech=False)
+    check("an unmeasured floor cannot push the gate to its ceiling",
+          cold.threshold, shipped["threshold_min"])
+    check("the gate reports that the floor is not yet measured",
+          cold.stats()["floor_measured"], False)
+    check("speech at 628 RMS passes before the floor is measured",
+          cold.passes_rms(628.0), True)
+
+    # Once the room IS measured, a noisy room still raises the gate toward the ceiling: the fix must
+    # bound the warmup, not disarm the gate.
+    warm = EnergyGate(**shipped)
+    for _ in range(shipped["min_samples"] + 20):
+        warm.observe(frame_at(540), detector_says_speech=False)
+    check("a measured noisy room still raises the gate", warm.threshold > shipped["threshold_min"], True)
+    check("a measured room reports its floor as measured", warm.stats()["floor_measured"], True)
+    check("the ceiling still bounds a measured room", warm.threshold <= shipped["threshold_max"], True)
 
     print(f"energy gate checks: {checks - len(failures)}/{checks} passed")
     for failure in failures:

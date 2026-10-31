@@ -2,12 +2,12 @@
 """Mirror this repository to the NAS. One-way: GitHub is authoritative, this is the backup.
 
 Why this exists: one copy in one place is a single point of failure. GitHub holds the authoritative
-history, this holds a second copy on local hardware, and the live tree at ~/hermes-voice-bridge
+history, this holds a second copy on local hardware, and the live tree at ~/hermes-voice-satellite
 is a checkout of the same repository.
 
 Design notes, each of them learned the hard way:
   * the file list comes from `git ls-files`, so the mirror is exactly "what the repo tracks". Nothing
-    is matched by filename, because a filename match once wrote the bridge's client over the
+    is matched by filename, because a filename match once wrote the Gateway's client over the
     satellite's core.
   * shutil.copyfile, not copy2: GVFS/SMB rejects the permission and timestamp copies that copy2 does,
     and it raises after the bytes are already written, which looks like a failed copy.

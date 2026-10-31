@@ -46,7 +46,7 @@ def main():
     if mirror is None:
         print("prune: pass the NAS parent directory or set VOICE_NAS_MOUNT", file=sys.stderr)
         return 1
-    if not (mirror / 'bridge').is_dir():
+    if not (mirror / 'Gateway').is_dir():
         print(f"prune: NAS mirror not found at {mirror}, nothing done", file=sys.stderr)
         return 1
     tracked = tracked_files()

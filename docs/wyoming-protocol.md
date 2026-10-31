@@ -4,7 +4,7 @@
 
 Reviewed 2026-09-23 against the protocol repository **`github.com/OHF-Voice/wyoming`** (note the org:
 this project lived under `rhasspy` when we adopted it). Our Python dependency is `wyoming` 1.5.4, pinned
-in the satellite's venv. This is the transport for everything we do: the bridge talks to the satellite,
+in the satellite's venv. This is the transport for everything we do: the Satellite Gateway talks to the satellite,
 and the satellite talks to the wake engine and the LED service, all in this protocol.
 
 The protocol is a peer-to-peer TCP protocol, effectively JSONL plus PCM audio: a JSON header line, then
@@ -31,19 +31,19 @@ Three consequences for us:
 ## Who dials whom, and why that is changing
 
 The protocol is symmetric in its events but not in its connections: one side listens, the other dials. Until
-now **the device has been the server**: `wyoming-satellite` listens on `tcp://0.0.0.0:10700`, the bridge
+now **the device has been the server**: `wyoming-satellite` listens on `tcp://0.0.0.0:10700`, the Satellite Gateway
 dials it, and the device is inert until a client sends `run-satellite`. The device's only client role is
 toward its wake engine, where `--wake-uri` points at the local wake service.
 
-**Decided 2026-09-24 (issue #61): the direction inverts.** Satellites open the connection to the bridge, the
-bridge runs a Wyoming server, and it keeps a registry of the devices connected to it. Reasons: the end user
+**Decided 2026-09-24 (issue #61): the direction inverts.** Satellites open the connection to the Satellite Gateway, the
+gateway runs a Wyoming server, and it keeps a registry of the devices connected to it. Reasons: the end user
 then manages one set of configuration, on the device; nothing has to reach the device, so there is no port
 forwarding to arrange on either side; and it is the shape a fleet needs, because identity arrives with the
 connection.
 
 | Relationship | Server | Client | Notes |
 |---|---|---|---|
-| Bridge ↔ satellite | **bridge** (after the change) | **device** | today this is the other way round: the device listens and the bridge dials |
+| Gateway ↔ satellite | **gateway** (after the change) | **device** | today this is the other way round: the device listens and the Satellite Gateway dials |
 | Satellite ↔ wake engine | wake service | device | unchanged, and stays on the device's loopback through the wake shim |
 | Satellite ↔ LED service | LED service | satellite | unchanged, loopback only |
 
@@ -70,14 +70,14 @@ connection that says nothing.
 
 | Event | Direction | Carries |
 |---|---|---|
-| `hermes.register` | device → bridge | `device_id`, `name`, `area`, `firmware_version`, `protocol_version`, `capabilities`, `boot_id` |
-| `hermes.register.ok` | bridge → device | the accepted `device_id`, `protocol_version`, `name`, `area` |
-| `hermes.register.refused` | bridge → device | a human-readable `reason` |
-| `hermes.config.desired` | bridge → device | `schema_version`, `device_id`, `generation`, `settings` |
-| `hermes.config.reported` | device → bridge | `generation`, `actual`, `health`, `error` |
+| `hermes.register` | device → gateway | `device_id`, `name`, `area`, `firmware_version`, `protocol_version`, `capabilities`, `boot_id` |
+| `hermes.register.ok` | gateway → device | the accepted `device_id`, `protocol_version`, `name`, `area` |
+| `hermes.register.refused` | gateway → device | a human-readable `reason` |
+| `hermes.config.desired` | gateway → device | `schema_version`, `device_id`, `generation`, `settings` |
+| `hermes.config.reported` | device → gateway | `generation`, `actual`, `health`, `error` |
 
 The two configuration events ride the same socket once registration has succeeded. They are the reason
-the inverted shape can be configured at all without giving the Pi a listening port of its own: the bridge
+the inverted shape can be configured at all without giving the Pi a listening port of its own: the Satellite Gateway
 already owns this connection, so desired state travels down it and reported state comes back.
 
 **They are handled out of band.** A `hermes.config.*` event is routed to a control callback and never
@@ -91,12 +91,12 @@ model — is `docs/configuration-plane.md`. Do not restate it here; that documen
 
 The order on a new connection:
 
-1. The bridge sends the standard **`describe`**. The device answers **`info`**, which is where the
+1. The Satellite Gateway sends the standard **`describe`**. The device answers **`info`**, which is where the
    protocol's own metadata arrives (`satellite.name`, `satellite.area`, `active_wake_words`).
 2. The device sends **`hermes.register`** with its identity claim.
-3. The bridge checks that claim against whatever the transport proved. It answers
+3. The Satellite Gateway checks that claim against whatever the transport proved. It answers
    **`hermes.register.ok`** or **`hermes.register.refused`**.
-4. **`run-satellite`** is sent only once the bridge is actually ready to consume events. Registration
+4. **`run-satellite`** is sent only once the Satellite Gateway is actually ready to consume events. Registration
    alone does not arm a device, and `describe`/`info` never did: the device is inert until it is told to
    run.
 
@@ -118,7 +118,7 @@ Rules that are part of the contract:
   issue #61 and is not built.
 - **Registration is time-bound** (ten seconds by default). A socket that connects and claims nothing is
   closed.
-- **A version mismatch is refused with a reason** naming the version the bridge speaks, so an old device is
+- **A version mismatch is refused with a reason** naming the version the Satellite Gateway speaks, so an old device is
   told what is wrong rather than connecting into a half-working state.
 - **Duplicates follow a configured policy**, `reject` or `replace`. With `replace` the newer connection
   wins and the older socket is closed; with `reject` the newcomer is refused. Either way, exactly one
@@ -128,23 +128,23 @@ Rules that are part of the contract:
 - **Removal is generation-safe.** Every connection carries a monotonic generation and cleanup only removes a
   slot if the generation still matches, so a device that reconnects is not removed by its own old handler.
 
-Implemented in `bridge/registry.py`, pinned by `scripts/test_registry.py` (twelve offline checks over real
-sockets), and **not yet carrying voice traffic**: the running bridge still dials the device, and the worker
+Implemented in `gateway/registry.py`, pinned by `scripts/test_registry.py` (twelve offline checks over real
+sockets), and **not yet carrying voice traffic**: the running gateway still dials the device, and the worker
 that leases a registered device is migration phase 4.
 
 ## Events we already rely on
 
 | Event | Direction | Where we use it |
 |---|---|---|
-| `describe` / `info` | both | the bridge asks the satellite who it is at startup |
+| `describe` / `info` | both | the Satellite Gateway asks the satellite who it is at startup |
 | `audio-start`, `audio-chunk`, `audio-stop` | both | capture and playback, 16 kHz mono in, 22050 mono out |
-| `detect` / `detection` | both | wake word, via the shim. A device that measured what it heard attaches `context.wake_level` (0..100) and `context.wake_score` (0-1, the tiebreaker) — fixed scales, see `docs/voice-detection.md`; the bridge compares them across devices when several hear one utterance (#32). A level-less detection is the historical shape and arbitrates by documented fallbacks. |
+| `detect` / `detection` | both | wake word, via the shim. A device that measured what it heard attaches `context.wake_level` (0..100) and `context.wake_score` (0-1, the tiebreaker) — fixed scales, see `docs/voice-detection.md`; the Satellite Gateway compares them across devices when several hear one utterance (#32). A level-less detection is the historical shape and arbitrates by documented fallbacks. |
 | `transcribe` / `transcript` | both | speech to text, sent to the local STT |
 | `synthesize-start`, `synthesize-chunk`, `synthesize-stop`, `synthesize-stopped` | both | streaming speech out, sentence by sentence |
-| `played` | satellite to bridge | what `wait_for_played` waits for |
-| `run-satellite`, `pause-satellite` | bridge to satellite | arming and pausing the satellite |
+| `played` | satellite to gateway | what `wait_for_played` waits for |
+| `run-satellite`, `pause-satellite` | gateway to satellite | arming and pausing the satellite |
 
-**Our LED channel is not a first-class protocol type.** The bridge publishes `led-busy`, `led-idle` and
+**Our LED channel is not a first-class protocol type.** The Satellite Gateway publishes `led-busy`, `led-idle` and
 `led-followup` as custom event types, and the satellite forwards events it does not recognise to the LED
 service over its event URI. That works and it is loopback-only, but it leans on the satellite's
 forward-unrecognised behaviour rather than on the protocol. The spec has a formal **`user-event`** type
@@ -155,7 +155,7 @@ implementation. Worth a look before a migration, not urgent while we run our own
 
 - **Timers.** The protocol defines `timer-started`, `timer-updated`, `timer-cancelled` and
   `timer-finished`, carrying an `id`, `is_active` and `total_seconds`, and they flow **server to
-  satellite**. We are the server, so the bridge can drive the satellite's own timer rather than
+  satellite**. We are the server, so the Satellite Gateway can drive the satellite's own timer rather than
   implementing timing itself, which hands us the tone, the repeat and the event hooks. This is the
   protocol-level confirmation of the correction already noted on issue #5.
 - **`satellite.area`** in the `info` response: the name of the area a satellite sits in, as a standard
@@ -171,7 +171,7 @@ implementation. Worth a look before a migration, not urgent while we run our own
   guarantee that a server predating it drops the event harmlessly. Relevant wherever we run more than one
   program of a type.
 - **`transcribe.vad_sensitivity`**: how quickly the end of a spoken command is detected, available when
-  the ASR program does not require external VAD. Our endpointing is local to the bridge, so this may not
+  the ASR program does not require external VAD. Our endpointing is local to the Satellite Gateway, so this may not
   apply; worth checking rather than dismissing, given the noisy-room waits.
 
 ## Tracking

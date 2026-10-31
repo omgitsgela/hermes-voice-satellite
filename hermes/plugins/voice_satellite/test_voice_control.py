@@ -21,6 +21,9 @@ def main() -> int:
         assert path == "/settings"
         if method == "POST":
             assert isinstance(payload, dict)
+            if payload.get("conversation_reset"):
+                # The real Gateway rotates and returns the new session id.
+                return {"ok": True, "conversation": "voice-test-session"}
             state.update(payload)
         return {"ok": True, **state}
 
@@ -33,6 +36,7 @@ def main() -> int:
         "endpointing_pause_tolerant", "endpointing_standard", "endpointing_status",
         "fleet_status", "config_status", "config_set",
         "fleet_config_set",
+        "conversation_reset",
     }
     if set(actions) != expected_actions:
         failures.append(f"published action schema: {actions!r}")
@@ -57,7 +61,14 @@ def main() -> int:
     if not (result.get("ok") and result.get("verified") and result.get("follow_up") is True):
         failures.append(f"follow-up compatibility: {result!r}")
 
-    print(f"voice profile controls: {5 - len(failures)}/5 passed")
+    # A confirmed "start a new conversation" must be executable by the model. Without this action
+    # the assistant could offer the reset and then have nothing to call, which is how it ended up
+    # saying "I can't reset the conversation from this side" (2026-10-30).
+    result = json.loads(voice_tool.handle({"action": "conversation_reset"}))
+    if not (result.get("ok") and result.get("verified") and result.get("conversation")):
+        failures.append(f"conversation reset: {result!r}")
+
+    print(f"voice profile controls: {6 - len(failures)}/6 passed")
     for failure in failures:
         print(f"  FAIL: {failure}")
     return 1 if failures else 0

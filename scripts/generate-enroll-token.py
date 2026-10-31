@@ -5,13 +5,13 @@ One job: pick five words with `secrets.choice` from the bundled word list, store
 `--out` mode 0600, and print the token ONCE to stdout for the operator to keep. The token is
 what a person types when setting up a satellite, so it is words rather than hex; it is also the
 key the credential bundle is sealed under, so it is generated with `secrets` and never `random`
-(bridge/enroll.py holds the rules; this is only the install-time entry point).
+(gateway/enroll.py holds the rules; this is only the install-time entry point).
 
     scripts/generate-enroll-token.py [--words scripts/data/enroll-words.txt] \
         --out state/enroll-token.txt
 
 An existing token file is never overwritten: a regenerated token would strand every satellite
-already enrolled under the old one. The bridge itself generates the token lazily on first start
+already enrolled under the old one. The Gateway itself generates the token lazily on first start
 if this script has not run (same shape as the announce token).
 """
 import argparse
@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from bridge.enroll import generate_token, load_wordlist  # noqa: E402
+from satellite_gateway.enroll import generate_token, load_wordlist  # noqa: E402
 
 
 def main() -> int:

@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """Switch the Piper voice on every surface, in one command.
 
-The bridge and Hermes keep their voices in different places and in different shapes, and getting
+The Gateway and Hermes keep their voices in different places and in different shapes, and getting
 either wrong fails quietly:
 
-  * the bridge reads `voices/<name>.onnx` beside the repo and `VOICE_PIPER_VOICE` +
-    `VOICE_PIPER_SPEAKER` from `bridge.env`;
+  * the Gateway reads `voices/<name>.onnx` beside the repo and `VOICE_PIPER_VOICE` +
+    `VOICE_PIPER_SPEAKER` from `satellite-gateway.env`;
   * Hermes reads `~/.hermes/cache/piper-voices/<name>.onnx` and `tts.piper.voice` +
     `tts.piper.speaker_id` from `config.yaml`, and it will NOT download a voice it does not
     recognise — it just fails at synthesis time.
 
-On top of that, a multi-speaker voice is addressed two different ways: the bridge takes a speaker
+On top of that, a multi-speaker voice is addressed two different ways: the Gateway takes a speaker
 NAME from the voice's own map, Hermes takes the numeric ID that name resolves to. This tool owns
 both mappings so a switch cannot half-apply, and it validates the voice against the satellite's
 audio contract (22050 Hz, 16-bit mono, no resampling on the device) before writing anything.
@@ -23,11 +23,11 @@ Usage
     # switch both surfaces to a catalog voice
     scripts/switch-voice.py en_US-lessac-medium
 
-    # a multi-speaker voice: the bridge stores "78", Hermes gets the id it maps to
+    # a multi-speaker voice: the Gateway stores "78", Hermes gets the id it maps to
     scripts/switch-voice.py clean100 --speaker 78
 
     # only one side (e.g. try it in chat before it speaks in the room)
-    scripts/switch-voice.py en_US-amy-medium --scope gateway
+    scripts/switch-voice.py en_US-amy-medium --scope hermes
 
     # see the plan without touching anything
     scripts/switch-voice.py clean100 --speaker 78 --dry-run
@@ -40,7 +40,7 @@ curated external list (`scripts/fetch-voice.py`, hash-pinned), then the Piper ca
 (`piper.download_voices`). `--no-fetch` refuses the last two, which is what you want on a machine
 with no network or in a test.
 
-Every switch backs up `bridge.env` and the Hermes `config.yaml` under `state/voice/backups/` and
+Every switch backs up `satellite-gateway.env` and the Hermes `config.yaml` under `state/voice/backups/` and
 records what it did in `state/voice/state.json`, so `--rollback` needs no notes and no /tmp.
 """
 from __future__ import annotations
@@ -57,9 +57,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from bridge.voices import VOICE_SAMPLE_RATE, describe_voice, resolve_speaker_id  # noqa: E402
+from satellite_gateway.voices import VOICE_SAMPLE_RATE, describe_voice, resolve_speaker_id  # noqa: E402
 
-BRIDGE_UNIT = "hermes-voice-bridge.service"
+BRIDGE_UNIT = "hermes-voice-satellite-gateway.service"
 HERMES_EXAMPLE = REPO / "hermes" / "config" / "voice-surface.example.yaml"
 ENV_VOICE = "VOICE_PIPER_VOICE"
 ENV_SPEAKER = "VOICE_PIPER_SPEAKER"
@@ -78,7 +78,7 @@ def fail(msg):
     return 1
 
 
-# --- bridge.env editing ------------------------------------------------------
+# --- satellite-gateway.env editing ------------------------------------------------------
 def env_values(text: str) -> dict:
     values = {}
     for line in text.splitlines():
@@ -93,7 +93,7 @@ def env_values(text: str) -> dict:
 def set_env(text: str, key: str, value):
     """Set (or remove, when value is None) one KEY=VALUE line, leaving everything else alone.
 
-    Line-level rather than a parse/re-dump on purpose: bridge.env is hand-written and commented,
+    Line-level rather than a parse/re-dump on purpose: satellite-gateway.env is hand-written and commented,
     and a YAML-style round trip would silently discard those comments.
     """
     lines = text.splitlines()
@@ -226,13 +226,13 @@ def backup(repo: Path, files, note: str) -> Path:
 def apply(bridge_env_path: Path, hermes_cfg: Path, cache_dir: Path, repo: Path,
           voice: str, speaker_setting, speaker_id, scope: str) -> None:
     """Write the voice into every file that needs it. Returns nothing; raises Refused."""
-    if scope in ("both", "bridge"):
+    if scope in ("both", "gateway"):
         text = bridge_env_path.read_text() if bridge_env_path.is_file() else ""
         text = set_env(text, ENV_VOICE, voice)
         text = set_env(text, ENV_SPEAKER, speaker_setting)   # None removes the line
         bridge_env_path.write_text(text)
 
-    if scope in ("both", "gateway"):
+    if scope in ("both", "hermes"):
         cache_dir.mkdir(parents=True, exist_ok=True)
         for src in voice_files(repo, voice):
             shutil.copy2(src, cache_dir / src.name)
@@ -264,7 +264,7 @@ def restart_bridge() -> str:
 
 
 def verify_bridge(voice: str) -> list:
-    """Best-effort: is the running bridge really using this voice? Never fatal."""
+    """Best-effort: is the running Gateway really using this voice? Never fatal."""
     notes = []
     try:
         active = subprocess.run(["systemctl", "--user", "is-active", BRIDGE_UNIT],
@@ -316,7 +316,7 @@ def resolve_target(repo: Path, name: str, speaker, allow_fetch: bool):
             raise Refused(str(exc)) from None
         speaker_setting = str(speaker)
         say(f"  speaker  {speaker} -> numeric id {speaker_id} "
-            f"(bridge stores the name, Hermes the id)")
+            f"(Gateway stores the name, Hermes the id)")
     elif speaker is not None:
         say(f"  note     {name} has a single speaker; ignoring --speaker {speaker}")
 
@@ -353,7 +353,7 @@ def show_list(repo: Path, bridge_env_path: Path, hermes_cfg: Path) -> int:
             speakers, rate = "?", "?"
         marks = []
         if name == live:
-            marks.append("bridge")
+            marks.append("Gateway")
         if name == gw:
             marks.append("gateway")
         say(f"{name:34s} {speakers:>8s}  {rate:>6s}  {', '.join(marks) or '-'}")
@@ -370,24 +370,24 @@ def main() -> int:
     parser.add_argument("voice", nargs="?", help="voice name, e.g. en_US-lessac-medium or clean100")
     parser.add_argument("--speaker", help="speaker NAME from the voice's own map, or a numeric id "
                                           "(multi-speaker voices only)")
-    parser.add_argument("--scope", choices=["both", "bridge", "gateway"], default="both",
+    parser.add_argument("--scope", choices=["both", "gateway", "hermes"], default="both",
                         help="which surfaces to change (default both)")
-    parser.add_argument("--repo", default=str(REPO), help="the bridge checkout (default: this repo)")
-    parser.add_argument("--bridge-env", default=None, help="bridge.env to edit (default <repo>/bridge.env)")
+    parser.add_argument("--repo", default=str(REPO), help="the Gateway checkout (default: this repo)")
+    parser.add_argument("--bridge-env", default=None, help="satellite-gateway.env to edit (default <repo>/satellite-gateway.env)")
     parser.add_argument("--hermes-config", default=str(Path.home() / ".hermes" / "config.yaml"),
                         help="Hermes config.yaml (default ~/.hermes/config.yaml)")
     parser.add_argument("--hermes-cache", default=None,
                         help="Hermes voice cache (default ~/.hermes/cache/piper-voices)")
     parser.add_argument("--dry-run", action="store_true", help="show the plan, change nothing")
     parser.add_argument("--rollback", action="store_true", help="revert to the previous voice")
-    parser.add_argument("--no-restart", action="store_true", help="do not restart the bridge")
+    parser.add_argument("--no-restart", action="store_true", help="do not restart the Gateway")
     parser.add_argument("--no-fetch", action="store_true", help="never download a voice")
     parser.add_argument("--no-verify", action="store_true", help="skip post-switch checks")
     parser.add_argument("--list", action="store_true", help="show installed voices and what is live")
     args = parser.parse_args()
 
     repo = Path(args.repo).expanduser().resolve()
-    bridge_env_path = Path(args.bridge_env).expanduser() if args.bridge_env else repo / "bridge.env"
+    bridge_env_path = Path(args.bridge_env).expanduser() if args.bridge_env else repo / "satellite-gateway.env"
     hermes_cfg = Path(args.hermes_config).expanduser()
     cache_dir = Path(args.hermes_cache).expanduser() if args.hermes_cache else \
         Path.home() / ".hermes" / "cache" / "piper-voices"
@@ -410,12 +410,12 @@ def main() -> int:
         return fail("no voice given; see --list, or --rollback")
 
     scope = args.scope
-    if scope in ("both", "gateway") and not hermes_cfg.is_file():
-        if args.scope == "gateway":
+    if scope in ("both", "hermes") and not hermes_cfg.is_file():
+        if args.scope == "hermes":
             return fail(f"no Hermes config at {hermes_cfg}; nothing to change there")
         say(f"  note     no Hermes config at {hermes_cfg}: the gateway is skipped, "
-            f"changing the bridge only")
-        scope = "bridge"
+            f"changing the Gateway only")
+        scope = "gateway"
 
     try:
         info, speaker_setting, speaker_id = resolve_target(repo, args.voice, args.speaker, not args.no_fetch)
@@ -439,11 +439,11 @@ def main() -> int:
 
     if args.dry_run:
         say("  plan     (dry run: nothing written)")
-        if scope in ("both", "bridge"):
+        if scope in ("both", "gateway"):
             say(f"           {bridge_env_path}: {ENV_VOICE}={args.voice}"
                 + (f", {ENV_SPEAKER}={speaker_setting}" if speaker_setting else
                    f", {ENV_SPEAKER} removed"))
-        if scope in ("both", "gateway"):
+        if scope in ("both", "hermes"):
             say(f"           {cache_dir}: copy {args.voice}.onnx{{,.json}}")
             say(f"           {hermes_cfg}: tts.piper.voice={args.voice}"
                 + (f", speaker_id={speaker_id}" if speaker_id is not None else ", speaker_id removed"))
@@ -463,7 +463,7 @@ def main() -> int:
     state.setdefault("history", []).append(wants)
     save_state(repo, state)
 
-    if scope in ("both", "bridge") and not args.no_restart:
+    if scope in ("both", "gateway") and not args.no_restart:
         say(f"  service  {restart_bridge()}")
         if not args.no_verify:
             for note in verify_bridge(args.voice):
@@ -471,9 +471,9 @@ def main() -> int:
 
     say(f"\nDone: {args.voice}" + (f" (speaker {speaker_setting} -> id {speaker_id})"
                                    if speaker_setting else "") + f" on {scope}.")
-    if scope in ("both", "gateway"):
+    if scope in ("both", "hermes"):
         say("The gateway picks the change up without a restart; the next spoken reply uses it.")
-    if scope in ("both", "bridge"):
+    if scope in ("both", "gateway"):
         say("The satellite speaks with it from its next reply.")
     return 0
 

@@ -1,10 +1,10 @@
 """Device-side ALSA volume control for the voice satellite (issue #10).
 
-This runs on the Pi, where playback actually happens. The bridge renders speech but
+This runs on the Pi, where playback actually happens. The Gateway renders speech but
 the level that governs everything the device emits - our TTS, the connected tone, the
 done tone, announcements - is the ALSA level for the output card.
 
-**It enforces its own floor.** The bridge already clamps, and this clamps again,
+**It enforces its own floor.** The Gateway already clamps, and this clamps again,
 because the issue's requirement is that no code path anywhere can take the device to
 silence. Two independent clamps means a bug or a bad desired value on the host cannot
 produce a device that answers nothing. Defence here is cheap; a deaf device is not.
@@ -171,7 +171,7 @@ class AlsaVolume:
         return self.clamp(self.floor + round((level - USER_MIN) * span / (USER_MAX - USER_MIN)))
 
     def raw_to_user(self, raw: object) -> int:
-        """The inverse, for reporting a measured raw level back to the bridge."""
+        """The inverse, for reporting a measured raw level back to the gateway."""
         span = MAX_PERCENT - self.floor
         if span <= 0:
             return USER_MIN

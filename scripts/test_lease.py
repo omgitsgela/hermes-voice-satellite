@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Offline tests for the lease (issue #61, migration phase 4).
 
-Run with the bridge's own interpreter:
+Run with the Gateway's own interpreter:
 
-    ~/hermes-voice-bridge/.venv/bin/python scripts/test_lease.py
+    ~/hermes-voice-satellite/.venv/bin/python scripts/test_lease.py
 
 No device and no network beyond a localhost socket pair: the peer in these tests speaks real Wyoming framing,
 because the failure this file exists to prevent is an event going missing on a live link.
@@ -34,8 +34,8 @@ from wyoming.event import Event, async_read_event, async_write_event  # noqa: E4
 from wyoming.info import Attribution, Describe, Info, Satellite  # noqa: E402
 from wyoming.satellite import PauseSatellite, RunSatellite  # noqa: E402
 
-from bridge.lease import LeasedSatellite  # noqa: E402
-from bridge.registry import SatelliteConnection  # noqa: E402
+from satellite_gateway.lease import LeasedSatellite  # noqa: E402
+from satellite_gateway.registry import SatelliteConnection  # noqa: E402
 
 PASSED = 0
 FAILED = 0
@@ -56,7 +56,7 @@ async def leased_pair(device_id: str = "test-device", generation: int = 7):
 
     The reader is pumped into `deliver` exactly as `RegistryServer` does in production. Without it the test
     would be lying about the code under test: events written by the peer would sit unread in the socket and
-    every wait would time out for a reason that does not exist on a real bridge.
+    every wait would time out for a reason that does not exist on a real gateway.
     """
     ours, theirs = socket.socketpair()
     reader, writer = await asyncio.open_connection(sock=ours)

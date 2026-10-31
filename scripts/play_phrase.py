@@ -21,12 +21,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from bridge import tts  # noqa: E402
-from bridge.config import AUDIO_OUT, SATELLITE_HOST, SATELLITE_PORT  # noqa: E402
-from bridge.satellite import SatelliteClient  # noqa: E402
+from satellite_gateway import tts  # noqa: E402
+from satellite_gateway.config import AUDIO_OUT, SATELLITE_HOST, SATELLITE_PORT  # noqa: E402
+from satellite_gateway.satellite import SatelliteClient  # noqa: E402
 
 DEFAULT_TEXT = (
-    "Hermes here. This is the voice bridge test. "
+    "Hermes here. This is the voice Gateway test. "
     "If you can hear this through the satellite speaker, the audio path works."
 )
 
@@ -71,22 +71,22 @@ async def main() -> int:
             print(f"  snd services   : {snd_names}")
             print(f"  raw            : {info_msg!r}"[:400])
 
-        # The satellite plays for the connection it treats as its client. The bridge is that client
+        # The satellite plays for the connection it treats as its client. The Gateway is that client
         # while it runs, so playback from here is ignored and this script reports a false failure on
         # a healthy system. Warn rather than let someone chase a hardware fault. (Issue #37.)
-        bridge_up = subprocess.run(["systemctl", "--user", "is-active", "hermes-voice-bridge"],
+        bridge_up = subprocess.run(["systemctl", "--user", "is-active", "hermes-voice-satellite"],
                                    capture_output=True, text=True).stdout.strip()
         if bridge_up == "active":
-            print("  NOTE: hermes-voice-bridge is running and holds the satellite's client connection.")
+            print("  NOTE: hermes-voice-satellite is running and holds the satellite's client connection.")
             print("        Playback from this second connection is likely to be ignored, so a result")
-            print("        of 'not played' below may say nothing about the audio path. Stop the bridge")
+            print("        of 'not played' below may say nothing about the audio path. Stop the Gateway")
             print("        first, or announce through it instead.")
 
         print("\n=== 3. ARM THE SATELLITE, THEN STREAM IT TO THE SPEAKER ===")
-        # Arm it the way the bridge and scripts/diag_followup_stream.py do. A satellite that is still
+        # Arm it the way the Gateway and scripts/diag_followup_stream.py do. A satellite that is still
         # streaming can ignore the first message it receives, so playback sent without RunSatellite is
         # not reliably heard. This script is the sole connection, so arming here carries none of the
-        # second-connection risk that keeps bridge/announce.py from sending it (issue #37).
+        # second-connection risk that keeps satellite_gateway/announce.py from sending it (issue #37).
         await sat.run()
         try:
             played = await asyncio.wait_for(sat.play_wav(wav_path), timeout=45.0)

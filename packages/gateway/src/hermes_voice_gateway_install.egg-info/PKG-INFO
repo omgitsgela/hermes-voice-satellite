@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: hermes-voice-gateway-install
+Version: 0.1.0
+Summary: Gateway install logic and the pairing artefacts for the Hermes voice installer
+Requires-Python: >=3.10

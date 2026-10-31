@@ -15,7 +15,7 @@ What matters, in order of how badly it would hurt if it broke:
     audio the shim relayed upstream (issue #32), on the fixed 0..100 scale;
   * with no satellite connected, the control port says so instead of pretending;
 
-    ~/hermes-voice-bridge/.venv/bin/python test_wake_shim.py
+    ~/hermes-voice-satellite/.venv/bin/python test_wake_shim.py
 """
 
 from __future__ import annotations

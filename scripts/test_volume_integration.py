@@ -2,7 +2,7 @@
 """Bridge-side volume integration checks (issue #10).
 
 Covers the part that ties the parser to the device: a spoken request must change the
-device's level, the bridge must never claim a change it did not make, and there must be
+device's level, the Gateway must never claim a change it did not make, and there must be
 no path from any spoken request to silence.
 """
 from __future__ import annotations
@@ -14,13 +14,13 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.config_plane import ConfigPlane  # noqa: E402
-from bridge.loop import VoiceLoop  # noqa: E402
+from satellite_gateway.config_plane import ConfigPlane  # noqa: E402
+from satellite_gateway.loop import VoiceLoop  # noqa: E402
 # NOTE: `loop.volume` is a USER value (1..100), not a raw ALSA one. Comparing it against
 # FLOOR_PERCENT/MAX_PERCENT was comparing two different scales - it passed only because
 # the raw floor of 50 happens to be a legal user value and the assertions were >= rather
 # than ==. That kind of pass is worse than a failure, so the user bounds are used now.
-from bridge.volume import USER_MAX, USER_MIN  # noqa: E402
+from satellite_gateway.volume import USER_MAX, USER_MIN  # noqa: E402
 
 
 class Sat:
@@ -110,7 +110,7 @@ async def main() -> int:
         reply = await loop._volume_command("set volume to 7")
         check("a failed dispatch does not claim success",
               "could" in reply.lower() or "not" in reply.lower(), reply)
-        # The level the bridge tracks is the RECORDED intent, and the sentence says plainly
+        # The level the Gateway tracks is the RECORDED intent, and the sentence says plainly
         # that it has not been applied. So the two together are honest: the durable state and
         # the tracked value agree with each other, and neither claims the device moved.
         recorded = loop.config_plane.get_device("kitchen-1")["desired"]["playback_volume"]
@@ -224,7 +224,7 @@ async def main() -> int:
         # nothing calls it - which is precisely how the unwired hardware adapter (#68) hid,
         # and removing the adoption call from registration did NOT fail this suite until
         # this check existed. Registration must be what triggers it.
-        from bridge.registry import DeviceIdentity
+        from satellite_gateway.registry import DeviceIdentity
 
         class FakeSlot:
             device_id = "bench-2"

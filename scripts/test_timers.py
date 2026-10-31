@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic offline checks for bridge timers (issue #5)."""
+"""Deterministic offline checks for Gateway timers (issue #5)."""
 from __future__ import annotations
 
 import asyncio
@@ -10,7 +10,7 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.timers import TimerLimitError, TimerManager, parse_duration  # noqa: E402
+from satellite_gateway.timers import TimerLimitError, TimerManager, parse_duration  # noqa: E402
 
 
 async def main() -> int:

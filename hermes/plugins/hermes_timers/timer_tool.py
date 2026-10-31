@@ -10,10 +10,10 @@ from typing import Optional
 
 # The checkout this installation lives in. A deployment value, not a literal: an environment
 # variable wins, and the default is the conventional location (issue #45).
-_PROJECT = Path(os.environ.get("VOICE_BRIDGE_PROJECT", "").strip() or (Path.home() / "hermes-voice-bridge"))
+_PROJECT = Path(os.environ.get("VOICE_GATEWAY_PROJECT", "").strip() or (Path.home() / "hermes-voice-satellite"))
 TOKEN_FILE = _PROJECT / "state" / "announce-token.txt"
 TOKEN_ENV = "VOICE_ANNOUNCE_TOKEN"
-BASE_URL = os.environ.get("VOICE_BRIDGE_URL", "http://127.0.0.1:8765").rstrip("/")
+BASE_URL = os.environ.get("VOICE_GATEWAY_URL", "http://127.0.0.1:8765").rstrip("/")
 TIMEOUT = 10.0
 try:
     from hermes_constants import get_hermes_home
@@ -33,9 +33,9 @@ def _token() -> str:
     try:
         token = TOKEN_FILE.read_text().strip()
     except OSError as exc:
-        raise TimerToolError("the bridge token file is not readable") from exc
+        raise TimerToolError("the Gateway token file is not readable") from exc
     if not token:
-        raise TimerToolError("the bridge token file is empty")
+        raise TimerToolError("the Gateway token file is empty")
     return token
 
 
@@ -56,7 +56,7 @@ def _request(method: str, path: str, payload: Optional[dict] = None) -> dict:
             detail = f"HTTP {exc.code}"
         raise TimerToolError(str(detail or f"HTTP {exc.code}")) from exc
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
-        raise TimerToolError("the bridge timer endpoint is unavailable") from exc
+        raise TimerToolError("the Gateway timer endpoint is unavailable") from exc
 
 
 def _alarm_list() -> list[dict]:

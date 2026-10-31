@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Outbound transport for a satellite that dials the bridge (issue #61, migration phase 3).
+"""Outbound transport for a satellite that dials the Gateway (issue #61, migration phase 3).
 
 The device stops being a Wyoming *server* and becomes a Wyoming *client*: it opens one connection to the
-bridge, registers, and then carries everything over that socket - microphone audio, wake detections, the
+gateway, registers, and then carries everything over that socket - microphone audio, wake detections, the
 transcript, playback, the LED events and the announcement path.
 
 **Installable as a service, and the relay carries the audio.** `pi/systemd/outbound-satellite.service.in`
@@ -13,13 +13,13 @@ playback, the chime and the LEDs stay in the service that already does them well
 code path that owns the audio device.
 
 The connection, handshake, refusal path, reconnect behaviour, relay teardown and the configuration
-control plane are all covered offline against a fake bridge (`scripts/test_outbound_runner.py`).
+control plane are all covered offline against a fake Gateway (`scripts/test_outbound_runner.py`).
 Deploying the relay on a real device and verifying it against real hardware is the part that still needs
 the device, not writing it.
 
 Design rules from the pre-implementation review, each visible in the code below:
 
-1. **Never report ready before the bridge has accepted the registration.** `set_server()` on the current
+1. **Never report ready before the Gateway has accepted the registration.** `set_server()` on the current
    build flashes the connected LED the instant a socket exists, which would lie.
 2. **The device owns reconnect**, with capped exponential backoff and jitter, and it re-resolves the
    endpoint on every attempt so a DNS change is survivable.
@@ -62,7 +62,7 @@ except ImportError:  # pragma: no cover - exercised by the installed script entr
 
 log = logging.getLogger("pi.outbound")
 
-#: Must match the bridge. The bridge refuses a device that speaks a different version, and says so.
+#: Must match the gateway. The Gateway refuses a device that speaks a different version, and says so.
 PROTOCOL_VERSION = 1
 
 REGISTER_EVENT = "hermes.register"
@@ -71,7 +71,7 @@ REGISTER_REFUSED_EVENT = "hermes.register.refused"
 
 
 class RegistrationRefused(Exception):
-    """The bridge refused this device. Retrying will not help until a human changes something."""
+    """The Gateway refused this device. Retrying will not help until a human changes something."""
 
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
@@ -80,7 +80,7 @@ class RegistrationRefused(Exception):
 
 @dataclass
 class LinkConfig:
-    """Everything the device needs to reach its bridge. Deliberately small: this is the whole of the
+    """Everything the device needs to reach its gateway. Deliberately small: this is the whole of the
     device's bootstrap configuration, which is the point of the inverted shape."""
 
     device_id: str
@@ -98,7 +98,7 @@ class LinkConfig:
     backoff_base: float = 1.0
     backoff_max: float = 60.0
     refused_backoff: float = 300.0
-    #: How long a connection must stay up before the reconnect backoff is reset. Without this, a bridge
+    #: How long a connection must stay up before the reconnect backoff is reset. Without this, a Gateway
     #: that accepts the handshake and then immediately drops produces a tight retry loop forever, because
     #: every attempt looks successful (review finding, issue #63).
     healthy_after: float = 30.0
@@ -139,24 +139,37 @@ class LinkStats:
     last_backoff: float = 0.0
 
 
+def _env_value(env: Dict[str, str], suffix: str, default: str = "") -> str:
+    """Read the new variable name, and fall back to the old one so an existing card keeps working.
+
+    The Gateway was called the Gateway until 2026-10-31, and every card provisioned before then has
+    VOICE_BRIDGE_* names in its environment file. Reading both costs one lookup and means a satellite
+    in the house does not have to be re-provisioned to survive the rename.
+    """
+    for name in (f"VOICE_GATEWAY_{suffix}", f"VOICE_BRIDGE_{suffix}"):
+        if name in env:
+            return env[name]
+    return default
+
+
 def load_config_from_env(environ: Optional[Dict[str, str]] = None) -> LinkConfig:
     """Read the device's bootstrap configuration.
 
-    The device carries network credentials, the bridge endpoint and its own identity; everything else
-    (name, voice, wake word, LED behaviour) is policy and lives on the bridge.
+    The device carries network credentials, the Gateway endpoint and its own identity; everything else
+    (name, voice, wake word, LED behaviour) is policy and lives on the gateway.
     """
     env = dict(os.environ if environ is None else environ)
     device_id = env.get("VOICE_DEVICE_ID", "").strip()
-    host = env.get("VOICE_BRIDGE_HOST", "").strip()
+    host = _env_value(env, "HOST").strip()
     if not device_id or not host:
         raise SystemExit(
-            "VOICE_DEVICE_ID and VOICE_BRIDGE_HOST are required: this device cannot register without "
+            "VOICE_DEVICE_ID and VOICE_GATEWAY_HOST are required: this device cannot register without "
             "knowing what it is and where to dial"
         )
     return LinkConfig(
         device_id=device_id,
         host=host,
-        port=int(env.get("VOICE_BRIDGE_PORT", "10700")),
+        port=int(_env_value(env, "PORT", "10700")),
         name=env.get("VOICE_DEVICE_NAME", ""),
         area=env.get("VOICE_DEVICE_AREA", ""),
         firmware_version=env.get("VOICE_FIRMWARE_VERSION", ""),
@@ -177,16 +190,16 @@ def load_config_from_env(environ: Optional[Dict[str, str]] = None) -> LinkConfig
 def _ssl_context_from_env(env: Dict[str, str]) -> Optional[ssl.SSLContext]:
     """A TLS context when the deployment needs one, or None for a plain local connection.
 
-    `VOICE_BRIDGE_TLS_CA` sets the CA to validate the bridge against. The client certificate and key are
+    `VOICE_GATEWAY_TLS_CA` sets the CA to validate the Gateway against. The client certificate and key are
     optional: they are what mTLS identity needs, and a device without them is only allowed on a listener
     that does not demand a credential.
     """
-    ca = env.get("VOICE_BRIDGE_TLS_CA", "").strip()
+    ca = _env_value(env, "TLS_CA").strip()
     if not ca:
         return None
     context = ssl.create_default_context(cafile=ca)
-    cert = env.get("VOICE_BRIDGE_TLS_CERT", "").strip()
-    key = env.get("VOICE_BRIDGE_TLS_KEY", "").strip()
+    cert = _env_value(env, "TLS_CERT").strip()
+    key = _env_value(env, "TLS_KEY").strip()
     if cert and key:
         context.load_cert_chain(certfile=cert, keyfile=key)
     return context
@@ -213,7 +226,7 @@ def _read_pending_restart(state_path: "pathlib.Path | str") -> list[str]:
 
 
 class BridgeLink:
-    """One connection to the bridge, kept alive across reconnects."""
+    """One connection to the gateway, kept alive across reconnects."""
 
     def __init__(
         self,
@@ -279,13 +292,13 @@ class BridgeLink:
             started = time.monotonic()
             try:
                 await self._connect_and_serve()
-                ended = "the bridge closed the connection"
+                ended = "the Gateway closed the connection"
             except RegistrationRefused as exc:
                 self.stats.refusals += 1
                 self.stats.last_error = exc.reason
                 log.error(
-                    "the bridge refused this device: %s. Waiting %.0fs before asking again: retrying "
-                    "will not change the answer until someone acts on the bridge.",
+                    "the Gateway refused this device: %s. Waiting %.0fs before asking again: retrying "
+                    "will not change the answer until someone acts on the gateway.",
                     exc.reason, self.config.refused_backoff,
                 )
                 await self._sleep(self.config.refused_backoff)
@@ -298,14 +311,14 @@ class BridgeLink:
             except Exception as exc:  # noqa: BLE001 - a transport bug must not kill the device
                 ended = f"unexpected {type(exc).__name__}: {exc}"
                 self.stats.last_error = ended
-                log.exception("unexpected failure in the bridge link")
+                log.exception("unexpected failure in the Gateway link")
 
             # Reset the backoff only after a connection has actually stayed up. Resetting it on the
-            # handshake alone means an accept-then-drop bridge keeps every retry at the base interval
+            # handshake alone means an accept-then-drop Gateway keeps every retry at the base interval
             # (review finding, issue #63).
             if time.monotonic() - started >= self.config.healthy_after:
                 if self._backoff_index:
-                    log.info("bridge link was healthy for %.0fs; resetting the reconnect backoff",
+                    log.info("Gateway link was healthy for %.0fs; resetting the reconnect backoff",
                              self.config.healthy_after)
                 self._backoff_index = 0
 
@@ -313,7 +326,7 @@ class BridgeLink:
             if self.on_disconnected is not None:
                 await _maybe_await(self.on_disconnected(ended))
             delay = self._next_backoff()
-            log.warning("bridge link down (%s); retrying in %.1fs", ended, delay)
+            log.warning("Gateway link down (%s); retrying in %.1fs", ended, delay)
             await self._sleep(delay)
 
     async def stop(self) -> None:
@@ -366,25 +379,25 @@ class BridgeLink:
         self._generation += 1
         self.stats.registrations += 1
         # The backoff is deliberately NOT reset here: a connection that registers and then dies must keep
-        # accumulating backoff, or an accept-then-drop bridge produces a tight retry loop (issue #63). The
+        # accumulating backoff, or an accept-then-drop Gateway produces a tight retry loop (issue #63). The
         # reset happens in run() only after the link has been healthy for healthy_after seconds.
         log.info(
-            "registered with the bridge as %s (generation %s)", self.config.device_id, self._generation
+            "registered with the Gateway as %s (generation %s)", self.config.device_id, self._generation
         )
         if self.on_registered is not None:
             await _maybe_await(self.on_registered(self.config.registration_payload()))
 
         if self.config.relay:
-            # Carry what the bridge says to this device's own satellite, and what the satellite says back.
+            # Carry what the Gateway says to this device's own satellite, and what the satellite says back.
             # See _serve_local for why this is a pipe and not a second implementation of the audio.
             await self._serve_local()
         else:
             await self._pump()
 
     def _enable_tcp_keepalive(self) -> None:
-        """Make an idle link notice that the bridge host vanished.
+        """Make an idle link notice that the Gateway host vanished.
 
-        Without keepalive, a powered-off bridge can leave the device-side socket in ESTABLISHED for the
+        Without keepalive, a powered-off Gateway can leave the device-side socket in ESTABLISHED for the
         kernel's multi-hour default. The reader then sees no EOF, the reconnect loop never runs, and the
         device remains registered only in its own imagination. Match the host-side liveness window: after
         15 idle seconds, three probes five seconds apart surface a dead peer in roughly 30 seconds.
@@ -395,23 +408,23 @@ class BridgeLink:
             writer = self.writer
             sock = writer.get_extra_info("socket") if writer is not None else None
             if sock is None:
-                log.warning("could not reach the bridge socket, so TCP keepalive is off")
+                log.warning("could not reach the Gateway socket, so TCP keepalive is off")
                 return
             sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_KEEPALIVE, 1)
             for name, value in (("TCP_KEEPIDLE", 15), ("TCP_KEEPINTVL", 5), ("TCP_KEEPCNT", 3)):
                 option = getattr(_socket, name, None)
                 if option is not None:
                     sock.setsockopt(_socket.IPPROTO_TCP, option, value)
-            log.info("TCP keepalive on for the bridge link (15s idle, 3 probes 5s apart)")
+            log.info("TCP keepalive on for the Gateway link (15s idle, 3 probes 5s apart)")
         except Exception as exc:  # noqa: BLE001 - liveness tuning must not block a usable link
-            log.warning("could not enable TCP keepalive on the bridge link: %s", exc)
+            log.warning("could not enable TCP keepalive on the Gateway link: %s", exc)
 
     async def _handshake(self) -> None:
         """describe -> info -> register -> ok, with every step bounded."""
         reader = self._require_reader()
         first = await asyncio.wait_for(async_read_event(reader), self.config.handshake_timeout)
         if first is not None and first.type != "describe":
-            log.info("bridge opened with %s rather than describe", first.type)
+            log.info("Gateway opened with %s rather than describe", first.type)
 
         await self._send_raw(Event(type="info", data=self._info_payload()))
 
@@ -443,7 +456,7 @@ class BridgeLink:
                 raise asyncio.TimeoutError(f"no {expect} within the handshake timeout")
             incoming = await asyncio.wait_for(async_read_event(reader), remaining)
             if incoming is None:
-                raise ConnectionError("the bridge closed the connection during the handshake")
+                raise ConnectionError("the Gateway closed the connection during the handshake")
             self.stats.events_received += 1
             if incoming.type in expect:
                 return incoming
@@ -482,12 +495,12 @@ class BridgeLink:
         capture, playback, the LEDs, all of it tuned here over months. Reimplementing that state machine on
         the far side of a socket would mean two copies to keep in step, and this project has already paid
         once for two code paths disagreeing about who owns a socket. So the link becomes a transparent pipe
-        to the existing service, and the bridge sees exactly the satellite it has always talked to, with one
+        to the existing service, and the Gateway sees exactly the satellite it has always talked to, with one
         difference: this device opened the connection instead of waiting to be dialled.
 
         Returns when either end stops, which the caller treats as the link ending and reconnects from.
         """
-        # Read the bridge while the local service is still booting. Buffer a bounded
+        # Read the Gateway while the local service is still booting. Buffer a bounded
         # number of ordinary events; control events and EOF must not wait for it.
         pending: asyncio.Queue[Event] = asyncio.Queue(maxsize=256)
 
@@ -524,16 +537,16 @@ class BridgeLink:
                 )
             except (OSError, asyncio.TimeoutError) as exc:
                 # Nothing is listening yet, which is the normal case on a boot: this service and the satellite
-                # start together and the satellite is the slower of the two. Keep the bridge link open and
+                # start together and the satellite is the slower of the two. Keep the Gateway link open and
                 # keep trying. Holding a link that can never relay anything, which is what this used to do
-                # after one failed attempt, leaves the bridge talking to a device that says nothing.
+                # after one failed attempt, leaves the Gateway talking to a device that says nothing.
                 log.warning(
                     "no local satellite at %s:%s yet (%s); retrying in %.0fs",
                     self.config.local_host, self.config.local_port, exc, self.config.local_retry_seconds,
                 )
                 await self._sleep(self.config.local_retry_seconds)
                 if not self.connected:
-                    # The bridge link died while we waited. Let the caller reconnect both ends together.
+                    # The Gateway link died while we waited. Let the caller reconnect both ends together.
                     return
 
         self._local_writer = writer
@@ -580,7 +593,7 @@ class BridgeLink:
                 return
 
     async def relay_event_to_local(self, event: Event) -> None:
-        """One event from the bridge, written straight to the local satellite."""
+        """One event from the gateway, written straight to the local satellite."""
         writer = self._local_writer
         if writer is None:
             return

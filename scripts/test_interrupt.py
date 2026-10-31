@@ -24,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from bridge.loop import VoiceLoop  # noqa: E402
+from satellite_gateway.loop import VoiceLoop  # noqa: E402
 
 FAILURES: list[str] = []
 

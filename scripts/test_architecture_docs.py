@@ -73,10 +73,10 @@ def main() -> int:
     doc = ARCHITECTURE.read_text()
 
     # ---- facts that live in the code, read back rather than remembered -------------------
-    from bridge.config import (
+    from satellite_gateway.config import (
         GATEWAY_BASE_URL, SILERO_THRESHOLD, VOICE_DETECTOR, VOICE_ROUTE_ALIAS,
     )
-    from bridge.silero_vad import MODEL_PATH
+    from satellite_gateway.silero_vad import MODEL_PATH
 
     check("the doc names the detector actually configured",
           f"`{VOICE_DETECTOR}`" in doc or VOICE_DETECTOR in doc, True)
@@ -85,14 +85,14 @@ def main() -> int:
     check("the vendored model it points at is really there", MODEL_PATH.is_file(), True)
     check("and is inside the repository, not site-packages",
           "site-packages" in str(MODEL_PATH), False)
-    check("the doc is honest about where the detector runs (the bridge)",
-          "bridge" in doc and PATH_LABEL_OK(doc), True)
+    check("the doc is honest about where the detector runs (the gateway)",
+          "Gateway" in doc and PATH_LABEL_OK(doc), True)
 
     # The detector is named with its threshold somewhere, so a reader can find the knob from here.
     check("the Silero threshold is discoverable from the doc", str(SILERO_THRESHOLD) in doc, True)
 
     # The gateway address a reader would need to follow stage 6.
-    check("the doc names the bridge's gateway base url", GATEWAY_BASE_URL in doc, True)
+    check("the doc names the Gateway's gateway base url", GATEWAY_BASE_URL in doc, True)
 
     # ---- the map is navigable: each stage doc points back at it --------------------------
     for name in PIPELINE_DOCS:
@@ -117,7 +117,7 @@ def main() -> int:
 
 
 def PATH_LABEL_OK(doc: str) -> bool:
-    """The map must say the detector runs on the bridge, not on the device."""
+    """The map must say the detector runs on the gateway, not on the device."""
     return "Runs on" in doc
 
 

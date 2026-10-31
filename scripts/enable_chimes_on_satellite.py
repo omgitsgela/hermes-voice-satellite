@@ -4,7 +4,7 @@
     scp scripts/enable_chimes_on_satellite.py <satellite>:/tmp/
     ssh <satellite> 'sudo python3 /tmp/enable_chimes_on_satellite.py'
 
-Why the satellite owns the tone rather than the bridge: the satellite plays --awake-wav
+Why the satellite owns the tone rather than the gateway: the satellite plays --awake-wav
 locally the instant its wake word fires (no network round trip), and it mutes the
 microphone for the wav's duration PLUS --mic-seconds-to-mute-after-awake-wav
 (satellite.py:656-662), so the tone is never captured into the utterance. A

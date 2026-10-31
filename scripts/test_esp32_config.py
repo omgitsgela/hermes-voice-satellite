@@ -326,7 +326,7 @@ class ConfigAgentTests(unittest.TestCase):
         session2 = self.new(lib, calls=calls)
         self.with_storage(lib, session2, st, save, load)
 
-        # (a) the bridge's reconnect re-dispatch (same generation, same settings) re-applies
+        # (a) the Gateway's reconnect re-dispatch (same generation, same settings) re-applies
         # the volatile volume: actual was empty after restore, so the unapplied check fires.
         redelivered = self.step(lib, session2, self.desired(1, profile))
         self.assertEqual(calls[0], 1, 'the redelivery must re-apply the volatile volume')
@@ -349,7 +349,7 @@ class ConfigAgentTests(unittest.TestCase):
     def test_corrupt_blob_is_discarded_to_first_boot(self):
         """A torn or garbage NVS blob must degrade to first-boot state (a fresh guard), not
         crash and not partially restore: schema_version is checked, so anything that fails
-        the check is thrown away and the device converges on the bridge's next dispatch."""
+        the check is thrown away and the device converges on the Gateway's next dispatch."""
         lib = self.library()
         for bad in [b'garbage-not-json', b'{"schema_version":999,"generation":7}',
                     b'{"schema_version":1,  # truncated', b'']:
@@ -367,7 +367,7 @@ class ConfigAgentTests(unittest.TestCase):
 
     def test_persist_failure_is_an_error_and_retries(self):
         """If the NVS commit fails, the event is NOT accepted as durable: the report says
-        error. The bridge will then re-dispatch (or the device retries on redelivery), and
+        error. The Gateway will then re-dispatch (or the device retries on redelivery), and
         when storage recovers the same generation converges. The in-memory side effects stay
         (the volume was set); only the durable claim is withheld."""
         lib = self.library()
@@ -390,7 +390,7 @@ class ConfigAgentTests(unittest.TestCase):
         """Distinguishes the commit ordering: persist BEFORE commit. If the persist fails,
         the stored state (generation + desired) must not have advanced, so a payload under
         that generation is still unspent and applies -- it is NOT refused as a conflict.
-        (The real bridge only redelivers the identical payload, so this is the input that
+        (The real Gateway only redelivers the identical payload, so this is the input that
         separates 'commit-then-persist' from 'persist-then-commit'.)"""
         lib = self.library()
         st, save, load = self.new_storage(fail_first=1)
@@ -407,7 +407,7 @@ class ConfigAgentTests(unittest.TestCase):
         """A REBOOT (or a gateway restart that re-seeds the volume) loses the live value even
         when the last apply was FULLY APPLIED: the adapter reported every setting, so the
         durable state is healthy -- and actual was deliberately not persisted (it is a live
-        runtime condition, not durable state). The bridge's reconnect re-dispatch under the
+        runtime condition, not durable state). The Gateway's reconnect re-dispatch under the
         same generation must therefore RE-APPLY, not take the healthy no-op fast path: the
         no-op decision has to depend on `actual` (which is empty after restore), never on the
         persisted health alone. Proven by the adapter's call count advancing after restore."""
@@ -553,7 +553,7 @@ class ConfigAgentTests(unittest.TestCase):
     def test_corrupt_blob_with_fractional_generation_is_discarded(self):
         """The RESTORE path has the same guard: a torn or hand-edited blob whose generation is
         not an integer (or is out of long range) must be treated as no persisted state at
-        all -- not a half-restored guard. The device converges on the bridge's next dispatch:
+        all -- not a half-restored guard. The device converges on the Gateway's next dispatch:
         generation 1 must be treated as NEW, and the redelivery must apply."""
         lib = self.library()
         for bad in [b'{"schema_version":1,"device_id":"control-fixture",'
@@ -649,7 +649,7 @@ class ConfigAgentTests(unittest.TestCase):
         interpolates the PEER's key into it: a hostile key (control characters) can be JSON-
         escaped to 6x its raw size (\\u00XX), which used to push the report past the buffer --
         the agent then produced no report, the session treated that as a link fault, and the
-        bridge re-dispatched the SAME poisoned frame on every registration: a reconnect storm
+        Gateway re-dispatched the SAME poisoned frame on every registration: a reconnect storm
         the device could never clear. The report must ALWAYS fit the 1024 buffer at any peer
         input: the error may drop the untrusted detail (the key is not the fix) but the event
         is still a clean, parseable error report -- never silence, never a link failure."""

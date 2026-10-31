@@ -9,13 +9,13 @@ questions about every 20 ms frame, and they are different questions:
 2. **Is it loud enough to be a person in this room?** - the energy gate.
 
 This document is about the first. The second is in the comment above `VOICE_ENERGY_GATE` in
-`bridge/config.py`, and its bug is in `scripts/test_energy_gate.py`.
+`satellite_gateway/config.py`, and its bug is in `scripts/test_energy_gate.py`.
 
 ## The change, and why it was forced
 
 Until 2026-09-25 the detector was `webrtcvad` at aggressiveness 2. The report that forced the change: the satellite
 recognising its wake word and then answering nothing, in a busy computer centre office with a fan and
-other people. The bridge log said `nothing said after the wake word` nine times running, each turn
+other people. The Satellite Gateway log said `nothing said after the wake word` nine times running, each turn
 carrying `0.52s audio, 0.02s speech` - about 2% of a five-second window.
 
 The instrumented gate showed `vad_speech=46 gate_rejected=26`: the detector was finding her, and the
@@ -44,10 +44,10 @@ tell a fan from a person. Silero removes the reason the patch had to be aggressi
 
 ## What is used, and where it lives
 
-- `bridge/silero_vad.py` - the detector, a thin wrapper mirroring `webrtcvad.Vad.is_speech`.
-- `bridge/vendor/silero_vad_v6.onnx` - the model, **committed**, with its checksum in
-  `bridge/vendor/MANIFEST.md`.
-- `VOICE_DETECTOR` in `bridge/config.py` - `silero` (default) or `webrtcvad`.
+- `gateway/silero_vad.py` - the detector, a thin wrapper mirroring `webrtcvad.Vad.is_speech`.
+- `gateway/vendor/silero_vad_v6.onnx` - the model, **committed**, with its checksum in
+  `gateway/vendor/MANIFEST.md`.
+- `VOICE_DETECTOR` in `satellite_gateway/config.py` - `silero` (default) or `webrtcvad`.
 - `scripts/test_silero_vad.py` - the comparison above, as assertions.
 
 Nothing is downloaded at runtime. The upstream project is tracked as a pinned git bundle by
@@ -91,7 +91,7 @@ level; do not assume it.
 
 When several armed devices hear the *same* utterance, the conversation goes to the device that
 heard it best. A device cannot know how loudly the others heard it, so each device measures its
-own microphone loudness and reports it on the detection; the bridge compares the reports inside
+own microphone loudness and reports it on the detection; the Satellite Gateway compares the reports inside
 one claim window. The measurement lives in the wake core (`wy_wake.c`), host-tested in
 `scripts/test_esp32_wake.py` and proven on the wire in `scripts/test_esp32_wake_integration.py`:
 
@@ -109,7 +109,7 @@ one claim window. The measurement lives in the wake core (`wy_wake.c`), host-tes
   across time, never across installations with different mic gains. They are an ordering
   signal, not an absolute loudness.
 
-The bridge side (`bridge/wake_router.py`): level dominates, wake score is the tiebreaker,
+The Satellite Gateway side (`gateway/wake_router.py`): level dominates, wake score is the tiebreaker,
 arrival order is the last resort; a measured level always beats an unmeasured one, and two
 unmeasured detections behave exactly like the old first-arrival rule. The claim window is
 `VOICE_WAKE_CLAIM_WINDOW_MS` (0 = first arrival wins, which is also what a fleet of older
@@ -133,6 +133,6 @@ Host-tested in `pi/test_wake_shim.py`.
 ```
 
 To hear the difference on real audio, set `VOICE_DETECTOR = "webrtcvad"`, restart
-`hermes-voice-bridge.service`, and compare the `vad_speech` figure in the `levels:` log line against
+`hermes-voice-satellite-gateway.service`, and compare the `vad_speech` figure in the `levels:` log line against
 the same utterance with `silero`. The gate and the detector are instrumented separately precisely so
 that a failure can be attributed to one of them rather than guessed at.

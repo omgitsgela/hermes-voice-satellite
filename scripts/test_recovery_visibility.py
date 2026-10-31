@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """A recovered link must say so in the journal.
 
-Run with the bridge's own interpreter:
+Run with the Gateway's own interpreter:
 
-    ~/hermes-voice-bridge/.venv/bin/python scripts/test_recovery_visibility.py
+    ~/hermes-voice-satellite/.venv/bin/python scripts/test_recovery_visibility.py
 
 Why this exists. `listening (session ...)` is logged exactly once, by `VoiceLoop.run()`, before the
 turn loop. `_reacquire_after_loss` runs *inside* that loop and then continues it, so after a device
 is power-cycled the journal ends at the re-acquire line and stops. Nothing distinguishes "recovered
 and idle, waiting for a wake word" from "stuck in the recovery path".
 
-That is not hypothetical. Measured 2026-09-26: after a satellite power-cycle the bridge re-acquired
+That is not hypothetical. Measured 2026-09-26: after a satellite power-cycle the Gateway re-acquired
 the lease and went quiet, and three minutes were spent deciding whether it had actually come back.
 Idle is silent by design, so the journal has to state that it is listening again, or nobody reading
 it can tell.
@@ -29,7 +29,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.loop import VoiceLoop  # noqa: E402
+from satellite_gateway.loop import VoiceLoop  # noqa: E402
 
 checks = 0
 failures: list[str] = []
@@ -74,7 +74,7 @@ async def main() -> int:
 
     loop._acquire_a_satellite = fake_acquire
 
-    logger = logging.getLogger("bridge.loop")
+    logger = logging.getLogger("satellite_gateway.loop")
     capture = Capture()
     previous_level = logger.level
     logger.addHandler(capture)

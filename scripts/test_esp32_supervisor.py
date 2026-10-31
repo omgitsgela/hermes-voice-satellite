@@ -6,14 +6,14 @@ no FreeRTOS, no mbedTLS), so a scripted transport and a fake clock stand in for 
 time, and the tests pin down the properties the one-shot registration path could not:
 
   * a registered link is long-lived -- it stays on one connection across a long idle gap and many
-    control events. The bridge keeps an idle dialled link alive with TCP keepalive only and sends
+    control events. The Gateway keeps an idle dialled link alive with TCP keepalive only and sends
     no application-level ping, so the supervisor must never treat an idle read as a loss;
   * run/pause events are pumped on that same connection;
   * when the transport actually ends (a clean EOF), the link is torn down, the supervisor backs
     off, and it re-dials into a fresh session on the next attempt;
   * backoff grows with consecutive failures, is capped, resets after a good registration, and a
     finite attempt budget ends cleanly instead of looping;
-  * a bridge refusal is terminal.
+  * a Gateway refusal is terminal.
 
 The fake read models a blocking read: when it is asked for bytes that are not yet available it
 advances the fake clock by the event's lead time and then delivers them, exactly what a socket read
@@ -193,7 +193,7 @@ class SupervisorTests(unittest.TestCase):
         lib = self.library()
         transport = FakeTransport(eof=True)
         self._transport = transport
-        # Registration, then a 600 s idle gap (the bridge is silent during it -- keepalive only),
+        # Registration, then a 600 s idle gap (the Gateway is silent during it -- keepalive only),
         # then two more control events. The gap is real: it lives inside the read.
         transport.add(0, [Event(type='describe'),
                           Event(type='hermes.register.ok',
@@ -341,7 +341,7 @@ class SupervisorTests(unittest.TestCase):
 
     def test_report_rolls_when_it_fills(self):
         """The supervisor's report is bounded and the session can outlive it: on a device that
-        cannot reach its bridge, ten backoff cycles write more than the 96-byte test buffer can
+        cannot reach its gateway, ten backoff cycles write more than the 96-byte test buffer can
         hold. A frozen append would stop writing as soon as the buffer filled (leaving a
         truncated final fragment), so GATEWAY_STATUS would keep reporting the same stale last
         line for the rest of the session, and the soak would judge a healthy, flapping link by

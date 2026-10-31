@@ -75,7 +75,7 @@ for name, entry in ext.items():
     check(f"{name} names its license terms", bool(entry.get("license")))
 
 c100 = ext.get("clean100", {}).get("files", {})
-check("clean100 installs under the names bridge/config.py builds",
+check("clean100 installs under the names satellite_gateway/config.py builds",
       "clean100.onnx" in c100 and "clean100.onnx.json" in c100)
 
 # --- 2/3. behaviour: happy path, hash refusal, idempotency, rate refusal ----------

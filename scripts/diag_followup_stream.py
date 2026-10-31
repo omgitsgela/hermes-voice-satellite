@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
 """Does the satellite stream microphone audio with no wake word?
 
-2026-09-22, after follow-up mode "never got answered": the bridge's follow-up windows opened
+2026-09-22, after follow-up mode "never got answered": the Gateway's follow-up windows opened
 and then timed out with nothing heard. This settles why.
 
 The suspicion, from reading the satellite's own code: with no VAD flag, a wyoming satellite only
 opens its microphone stream after a wake-word Detection. A wake is not involved in a follow-up
 window, so the window has no audio to listen to at all. The earlier runs that appeared to work
 captured speech that arrived with an awake chime in the journal, i.e. a wake really had happened and
-the bridge absorbed the Detection while capturing.
+the Gateway absorbed the Detection while capturing.
 
-This drives the satellite directly, with the bridge stopped, so it needs no human, no wake word and no
+This drives the satellite directly, with the Gateway stopped, so it needs no human, no wake word and no
 network beyond the Pi:
 
-    1. connect, RunSatellite, as the bridge does;
-    2. send Transcript("") exactly as the bridge does when an utterance ends;
+    1. connect, RunSatellite, as the Gateway does;
+    2. send Transcript("") exactly as the Gateway does when an utterance ends;
     3. listen for AudioChunk events, and play a real spoken wav through the satellite's own speaker
        so the microphone has genuine speech to hear;
     4. report how much audio arrived.
 
 With `--vad` absent the answer is zero. With `--vad` present, the speech should start a stream.
 
-    systemctl --user stop hermes-voice-bridge.service
+    systemctl --user stop hermes-voice-satellite-gateway.service
     .venv/bin/python scripts/diag_followup_stream.py
-    systemctl --user start hermes-voice-bridge.service
+    systemctl --user start hermes-voice-satellite-gateway.service
 """
 
 from __future__ import annotations
@@ -38,10 +38,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from wyoming.asr import Transcript  # noqa: E402
 from wyoming.audio import AudioChunk  # noqa: E402
 
-from bridge.config import SATELLITE_HOST, SATELLITE_PORT  # noqa: E402
-from bridge.satellite import SatelliteClient  # noqa: E402
+from satellite_gateway.config import SATELLITE_HOST, SATELLITE_PORT  # noqa: E402
+from satellite_gateway.satellite import SatelliteClient  # noqa: E402
 
-SPOKEN_WAV = Path.home() / "hermes-voice-bridge" / "audio" / "announce-an-074311-3467-full.wav"
+SPOKEN_WAV = Path.home() / "hermes-voice-satellite" / "audio" / "announce-an-074311-3467-full.wav"
 LISTEN_SECONDS = 14.0
 QUIET = "--quiet" in sys.argv   # no playback: one reader only, so chunk timing is meaningful
 
@@ -58,7 +58,7 @@ async def main() -> int:
     print(f"connected to satellite: {name}")
     await client.run()
 
-    # The bridge's own end-of-utterance signal. This is the exact state a follow-up window starts
+    # The Gateway's own end-of-utterance signal. This is the exact state a follow-up window starts
     # from: no wake active, the device is waiting for the next thing it hears.
     await client.send(Transcript(text="").event())
     print("sent Transcript(''); mic should be idle until it hears speech")

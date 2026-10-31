@@ -16,7 +16,7 @@ The honest definition of healthy, from the supervisor's contract (item 1):
     terminal case, and stopping is the correct thing), and a LOST sample means the console
     stopped answering; either one is a failure.
   * the link actually registered at least once. The persistent task can be active the whole
-    window and never get the bridge to accept a registration; that is a failure, reported
+    window and never get the Gateway to accept a registration; that is a failure, reported
     as never_registered rather than read as healthy.
 What is NOT a failure, on purpose: a sample whose last line is a backoff or a failed
 establish attempt. A dropped link that the supervisor reconnects is exactly the property

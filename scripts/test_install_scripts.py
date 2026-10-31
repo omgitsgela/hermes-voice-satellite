@@ -23,13 +23,13 @@ What is pinned:
   6  the Pi --dry-run renders the config (VS_BASE / device name / wake word) and names the
      coupled-service group
   7  the Pi script refuses to proceed without --base / --device-name
-  8  the Pi --endpoint + --tls-certs renders the registry link (VOICE_BRIDGE_HOST/PORT/TLS_*),
+  8  the Pi --endpoint + --tls-certs renders the registry link (VOICE_GATEWAY_HOST/PORT/TLS_*),
      installs the outbound unit, and puts it in the service group
   9  a half registry link is refused: --tls-certs without --endpoint (credentials, nowhere to
      dial) is a dead device
   10 the issuer (init/enroll/verify) produces a consistent CA + server + device set, and a
      device cert the CA cannot verify is refused at verify
-  11 the gateway --dry-run names every step (venv, bridge.env registry values, TLS init,
+  11 the gateway --dry-run names every step (venv, satellite-gateway.env registry values, TLS init,
      user unit, plugin) and refuses a loopback --device-reachable-as
   12 the hermes-voice-config helper applies keys in one pass, is idempotent, and leaves
      an already-correct file byte-for-byte untouched
@@ -96,6 +96,41 @@ def load_pdt():
 
 
 class InstallScriptTests(unittest.TestCase):
+    def test_the_gateway_installer_recognises_the_current_checkout(self):
+        """The repo-wide rename left this guard testing for a directory that no longer exists.
+
+        `--dry-run` skips the guard, so a preview looked fine while a real install died at validation
+        before doing anything. The test drives the real path with a stand-in checkout: it must get
+        PAST the package guard and stop at the next missing input instead.
+        """
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory) / 'checkout'
+            (base / 'satellite_gateway').mkdir(parents=True)
+            finished = run(GATEWAY, '--base', str(base), '--device-reachable-as', '192.0.2.10')
+            stderr = finished.stderr
+            self.assertNotIn('no satellite_gateway/ under', stderr,
+                             'the checkout guard still rejects the current package directory')
+            self.assertIn('satellite-gateway.env.example', stderr,
+                          'expected the next missing input to be reported instead')
+
+    def test_no_install_script_names_a_removed_directory(self):
+        """A renamed package must not linger in the guards that decide whether an install can run."""
+        import re
+
+        for script in (ESP32, PI, GATEWAY):
+            with self.subTest(script=script.name):
+                text = script.read_text()
+                for stale in ('"$BASE/bridge"', '"$REPO_ROOT/bridge"'):
+                    self.assertNotIn(stale, text, f'{script.name} still refers to {stale}')
+                # `satellite_gateway/config.py` legitimately contains "gateway/config.py", so only
+                # the unqualified path is stale.
+                self.assertIsNone(
+                    re.search(r"(?<!satellite_)gateway/config\.py", text),
+                    f'{script.name} still imports from the removed gateway/ package',
+                )
+
     def test_scripts_exist_and_are_bash(self):
         for script in (ESP32, PI):
             self.assertTrue(script.exists(), f'missing {script}')
@@ -269,18 +304,18 @@ class InstallScriptTests(unittest.TestCase):
 
     def test_esp32_provision_moves_credentials_as_paths_not_argv(self):
         result = run(ESP32, '--dry-run', '--provision', '--port', '/dev/ttyACM0',
-                     '--tls-certs', '/srv/bridge/state/registry-tls', '--device-id', 'esp32-test',
+                     '--tls-certs', '/srv/gateway/state/registry-tls', '--device-id', 'esp32-test',
                      '--endpoint', 'tls://192.0.2.10:10702',
                      '--wifi-ssid', 'TestNet', '--wifi-psk-file', '/tmp/psk.txt',
                      '--model', '/tmp/hey_hermes.tflite', '--model-name', 'hey_hermes')
         self.assertEqual(result.returncode, 0, result.stderr)
         # The provisioning helpers take the FILE PATHS; no key material is inline in argv.
         self.assertIn('provision-device-tls.py', result.stdout)
-        self.assertIn('--certs /srv/bridge/state/registry-tls', result.stdout)
+        self.assertIn('--certs /srv/gateway/state/registry-tls', result.stdout)
         self.assertIn('--device esp32-test', result.stdout)
         self.assertIn('--host 192.0.2.10', result.stdout)
         self.assertIn('--port 10702', result.stdout)
-        self.assertIn('--registry /srv/bridge/state/device-credentials.json', result.stdout)
+        self.assertIn('--registry /srv/gateway/state/device-credentials.json', result.stdout)
         self.assertIn('--port-device /dev/ttyACM0', result.stdout)
         self.assertIn('--write', result.stdout)
         self.assertIn('provision-device-model.py', result.stdout)
@@ -296,7 +331,7 @@ class InstallScriptTests(unittest.TestCase):
         """Provisioning is a set, not a menu: a board missing any piece is a dead board, so an
         incomplete provision must be refused before it starts, not half-applied."""
         full = {
-            '--tls-certs': '/srv/bridge/state/registry-tls',
+            '--tls-certs': '/srv/gateway/state/registry-tls',
             '--device-id': 'esp32-test',
             '--endpoint': 'tls://192.0.2.10:10702',
             '--wifi-ssid': 'TestNet',
@@ -333,34 +368,34 @@ class InstallScriptTests(unittest.TestCase):
 
     def test_pi_registry_link_renders_the_outbound_env(self):
         """--endpoint + --tls-certs wire the registry link that outbound-satellite reads: the
-        endpoint's host:port become VOICE_BRIDGE_HOST/PORT, the enrolled cert files become
-        VOICE_BRIDGE_TLS_*, and the outbound unit is installed and joined into the service group."""
+        endpoint's host:port become VOICE_GATEWAY_HOST/PORT, the enrolled cert files become
+        VOICE_GATEWAY_TLS_*, and the outbound unit is installed and joined into the service group."""
         result = run(PI, '--dry-run', '--base', '/opt/wyoming-satellite', '--device-name', 'kitchen',
-                     '--endpoint', 'tls://192.0.2.10:10702', '--tls-certs', '/srv/bridge/state/registry-tls')
+                     '--endpoint', 'tls://192.0.2.10:10702', '--tls-certs', '/srv/gateway/state/registry-tls')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('VOICE_BRIDGE_HOST=192.0.2.10', result.stdout)
-        self.assertIn('VOICE_BRIDGE_PORT=10702', result.stdout)
-        self.assertIn('VOICE_BRIDGE_TLS_CERT=/srv/bridge/state/registry-tls/kitchen.crt', result.stdout)
-        self.assertIn('VOICE_BRIDGE_TLS_KEY=/srv/bridge/state/registry-tls/kitchen.key', result.stdout)
+        self.assertIn('VOICE_GATEWAY_HOST=192.0.2.10', result.stdout)
+        self.assertIn('VOICE_GATEWAY_PORT=10702', result.stdout)
+        self.assertIn('VOICE_GATEWAY_TLS_CERT=/srv/gateway/state/registry-tls/kitchen.crt', result.stdout)
+        self.assertIn('VOICE_GATEWAY_TLS_KEY=/srv/gateway/state/registry-tls/kitchen.key', result.stdout)
         self.assertIn('outbound-satellite.service', result.stdout)
         # A registry-linked device joins the service group with its link unit.
         self.assertRegex(result.stdout, r'enable --now .*outbound-satellite\.service')
 
     def test_pi_endpoint_without_certs_is_allowed_as_a_local_link(self):
         """An endpoint with no TLS is a trusted-LAN link, not an error: the env gets host/port
-        and the link unit is installed, just with no VOICE_BRIDGE_TLS_* lines."""
+        and the link unit is installed, just with no VOICE_GATEWAY_TLS_* lines."""
         result = run(PI, '--dry-run', '--base', '/opt/wyoming-satellite', '--device-name', 'kitchen',
                      '--endpoint', 'tcp://192.0.2.10:10701')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('VOICE_BRIDGE_HOST=192.0.2.10', result.stdout)
-        self.assertNotIn('VOICE_BRIDGE_TLS_CERT', result.stdout)
+        self.assertIn('VOICE_GATEWAY_HOST=192.0.2.10', result.stdout)
+        self.assertNotIn('VOICE_GATEWAY_TLS_CERT', result.stdout)
         self.assertIn('outbound-satellite.service', result.stdout)
 
     def test_pi_half_registry_link_is_refused(self):
         """Credentials with nowhere to dial is a dead device, so --tls-certs without --endpoint
         must be refused before anything is installed."""
         result = run(PI, '--dry-run', '--base', '/opt/wyoming-satellite', '--device-name', 'kitchen',
-                     '--tls-certs', '/srv/bridge/state/registry-tls')
+                     '--tls-certs', '/srv/gateway/state/registry-tls')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('--endpoint', result.stderr)
 
@@ -406,7 +441,7 @@ class IssuerTests(unittest.TestCase):
         self.assertTrue((tls / 'esp32-test.crt').is_file())
         self.assertTrue((tls / 'esp32-test.key').is_file())
         # The credential on file maps the device cert's real fingerprint to the device id, which
-        # is exactly what the bridge's load_credential_lookup builds. The fingerprint is
+        # is exactly what the gateway's load_credential_lookup builds. The fingerprint is
         # recomputed here the same way the provisioner does (sha256 of the cert's DER).
         import hashlib
         mod = load_pdt()
@@ -464,8 +499,8 @@ class GatewayInstallerTests(unittest.TestCase):
 
     def make_base(self, tmp: Path) -> Path:
         base = tmp / 'clone'
-        (base / 'bridge').mkdir(parents=True)
-        shutil.copy(ROOT / 'bridge.env.example', base / 'bridge.env.example')
+        (base / 'gateway').mkdir(parents=True)
+        shutil.copy(ROOT / 'satellite-gateway.env.example', base / 'satellite-gateway.env.example')
         shutil.copy(ROOT / 'requirements.txt', base / 'requirements.txt')
         return base
 
@@ -481,12 +516,12 @@ class GatewayInstallerTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             out = result.stdout
             # The five steps, in order.
-            self.assertIn('1. bridge virtualenv', out)
-            self.assertIn('2. bridge.env', out)
+            self.assertIn('1. gateway virtualenv', out)
+            self.assertIn('2. satellite-gateway.env', out)
             self.assertIn('3. registry TLS material', out)
             self.assertIn('4. systemd user unit', out)
             self.assertIn('5. Hermes side', out)
-            # The registry link values, derived from the flags and the bridge's config defaults.
+            # The registry link values, derived from the flags and the gateway's config defaults.
             self.assertIn('VOICE_REGISTRY_ENABLED=1', out)
             self.assertIn('VOICE_REGISTRY_PORT=10701', out)
             self.assertIn('VOICE_REGISTRY_TLS_PORT=10702', out)   # REGISTRY_PORT+1
@@ -498,12 +533,12 @@ class GatewayInstallerTests(unittest.TestCase):
             # The registry listener binds 0.0.0.0 by default (the dial address is the cert SAN);
             # the commented template line is not treated as a value.
             self.assertIn('VOICE_REGISTRY_HOST=0.0.0.0', out)
-            # The credentials path is derived by the bridge from its own repo root, not a key the
+            # The credentials path is derived by the gateway from its own repo root, not a key the
             # installer writes, so it must not appear as a managed VOICE_REGISTRY_* line.
             self.assertNotIn('VOICE_REGISTRY_CREDENTIALS', out)
             # The user unit is rendered from its template with the base path; the plugin is a local
             # tree copied in (hermes plugins install cannot take a path), then enabled by name.
-            self.assertIn('hermes-voice-bridge.service.in', out)
+            self.assertIn('hermes-voice-satellite-gateway.service.in', out)
             self.assertIn('enable --now', out)
             self.assertIn('.hermes/plugins/voice_satellite', out)
             self.assertIn('hermes plugins enable voice_satellite', out)
@@ -574,7 +609,7 @@ class GuidedModeTests(unittest.TestCase):
             'n',                                     # write the firmware to the satellite?
             'y',                                     # set the satellite up?
             '/dev/ttyACM0',                          # satellite serial port
-            '/srv/bridge/state/registry-tls',        # certificates folder
+            '/srv/gateway/state/registry-tls',        # certificates folder
             'esp32-test',                            # name this satellite is enrolled under
             'tls://192.0.2.10:10702',                # address it reaches the gateway on
             'TestNet',                               # Wi-Fi network
@@ -584,7 +619,7 @@ class GuidedModeTests(unittest.TestCase):
         ]
         guided = self.run_guided(ESP32, answers)
         flags = run(ESP32, '--dry-run', '--provision', '--port', '/dev/ttyACM0',
-                    '--tls-certs', '/srv/bridge/state/registry-tls', '--device-id', 'esp32-test',
+                    '--tls-certs', '/srv/gateway/state/registry-tls', '--device-id', 'esp32-test',
                     '--endpoint', 'tls://192.0.2.10:10702',
                     '--wifi-ssid', 'TestNet', '--wifi-psk-file', str(psk))
         self.assert_same_command_set(guided, flags)
@@ -597,7 +632,7 @@ class GuidedModeTests(unittest.TestCase):
         have to know the scheme or the port. Both are filled in, and the resolved address is said
         out loud so nothing happens silently. A port that IS given is respected, so a gateway on a
         non-standard port still works."""
-        base = ['n', 'y', '/dev/ttyACM0', '/srv/bridge/state/registry-tls', 'esp32-test']
+        base = ['n', 'y', '/dev/ttyACM0', '/srv/gateway/state/registry-tls', 'esp32-test']
         tail = ['TestNet', '/tmp/psk.txt', 'n', 'no']
 
         result = self.run_guided(ESP32, base + ['192.0.2.10'] + tail)
@@ -620,7 +655,7 @@ class GuidedModeTests(unittest.TestCase):
 
         # and the flag path agrees with the prompt path
         flags = run(ESP32, '--dry-run', '--provision', '--port', '/dev/ttyACM0',
-                    '--tls-certs', '/srv/bridge/state/registry-tls', '--device-id', 'esp32-test',
+                    '--tls-certs', '/srv/gateway/state/registry-tls', '--device-id', 'esp32-test',
                     '--endpoint', '192.0.2.10', '--wifi-ssid', 'TestNet',
                     '--wifi-psk-file', '/tmp/psk.txt')
         self.assertIn('set-endpoint tls://192.0.2.10:10702', flags.stdout,
@@ -632,7 +667,7 @@ class GuidedModeTests(unittest.TestCase):
         three so the design is not closed off, but only the network link is carried today -- so
         asking for usb must be EXPLAINED, not accepted, or the person is handed a satellite that
         cannot connect. The refusal must also offer the way that does work."""
-        base = ['n', 'y', '/dev/ttyACM0', '/srv/bridge/state/registry-tls', 'esp32-test']
+        base = ['n', 'y', '/dev/ttyACM0', '/srv/gateway/state/registry-tls', 'esp32-test']
         tail = ['TestNet', '/tmp/psk.txt', 'n', 'no']
 
         # 'usb' is refused with a reason; the re-prompt then takes a real address
@@ -660,7 +695,7 @@ class GuidedModeTests(unittest.TestCase):
         every surface a person or a log can see."""
         secret = 'an-extremely-secret-passphrase'
         answers = [
-            'n', 'y', '/dev/ttyACM0', '/srv/bridge/state/registry-tls', 'esp32-test',
+            'n', 'y', '/dev/ttyACM0', '/srv/gateway/state/registry-tls', 'esp32-test',
             'tls://192.0.2.10:10702', 'TestNet', secret,
             'n', 'no',
         ]
@@ -698,7 +733,7 @@ class GuidedModeTests(unittest.TestCase):
                 'tls://192.0.2.10:10702',             # address it reaches the assistant on
                 'TestNet',                            # Wi-Fi network
                 '/tmp/psk.txt',                       # passphrase file
-                '/srv/bridge/state/registry-tls',     # FALLBACK: the certificates folder
+                '/srv/gateway/state/registry-tls',     # FALLBACK: the certificates folder
                 'n',                                  # compile the firmware yourself?
                 'no',                                 # confirm -> abort
             ]
@@ -714,7 +749,7 @@ class GuidedModeTests(unittest.TestCase):
             self.assertIn("Folder holding this satellite's certificates", result.stdout)
             # The fallback answer becomes the run's --tls-certs (no --registry: this is the
             # manual path's own layout), and a refused confirmation runs nothing.
-            self.assertIn('--tls-certs /srv/bridge/state/registry-tls', self.run_line(result))
+            self.assertIn('--tls-certs /srv/gateway/state/registry-tls', self.run_line(result))
             self.assertNotIn('--registry', self.run_line(result))
             self.assertIn('aborted', result.stderr)
             self.assertEqual(self.dry_run_lines(result), [], 'no command may run after a no')
@@ -832,7 +867,7 @@ class GuidedModeTests(unittest.TestCase):
             'hey_hermes',                            # wake word
             'pi',                                    # user
             'tls://192.0.2.10:10702',                # registry endpoint
-            '/srv/bridge/state/registry-tls',        # TLS certificates directory
+            '/srv/gateway/state/registry-tls',        # TLS certificates directory
             '/etc/voice-satellite/satellite.env',    # satellite.env path
             '10700',                                 # satellite port
             'yes',                                   # confirm
@@ -842,15 +877,15 @@ class GuidedModeTests(unittest.TestCase):
                     '--wake-word', 'hey_hermes', '--user', 'pi', '--satellite-port', '10700',
                     '--env-path', '/etc/voice-satellite/satellite.env',
                     '--endpoint', 'tls://192.0.2.10:10702',
-                    '--tls-certs', '/srv/bridge/state/registry-tls')
+                    '--tls-certs', '/srv/gateway/state/registry-tls')
         self.assert_same_command_set(guided, flags)
         self.assertRegex(flags.stdout, r'enable --now .*outbound-satellite\.service')
 
     def test_gateway_guided_matches_the_flag_invocation(self):
         with tempfile.TemporaryDirectory(prefix='gw-guided-') as tmp:
             base = Path(tmp) / 'clone'
-            (base / 'bridge').mkdir(parents=True)
-            shutil.copy(ROOT / 'bridge.env.example', base / 'bridge.env.example')
+            (base / 'gateway').mkdir(parents=True)
+            shutil.copy(ROOT / 'satellite-gateway.env.example', base / 'satellite-gateway.env.example')
             shutil.copy(ROOT / 'requirements.txt', base / 'requirements.txt')
             answers = [
                 str(base),                           # base (the clone the gateway runs from)
@@ -885,11 +920,11 @@ class GuidedModeTests(unittest.TestCase):
     def test_answering_no_at_the_confirmation_aborts_with_nothing_written(self):
         """The confirmation is a real gate: an explicit no must abort before any command runs."""
         cases = (
-            (ESP32, ['n', 'y', '/dev/ttyACM0', '/srv/bridge/state/registry-tls',
+            (ESP32, ['n', 'y', '/dev/ttyACM0', '/srv/gateway/state/registry-tls',
                      'esp32-test', 'tls://192.0.2.10:10702', 'TestNet', '/tmp/psk.txt',
                      'n', 'no']),
             (PI, ['/opt/wyoming-satellite', 'kitchen', 'hey_hermes', 'pi',
-                  'tls://192.0.2.10:10702', '/srv/bridge/state/registry-tls',
+                  'tls://192.0.2.10:10702', '/srv/gateway/state/registry-tls',
                   '/etc/voice-satellite/satellite.env', '10700', 'no']),
         )
         for script, answers in cases:
@@ -900,20 +935,20 @@ class GuidedModeTests(unittest.TestCase):
                 self.assertEqual(self.dry_run_lines(result), [], 'no command may run after a no')
         with tempfile.TemporaryDirectory(prefix='gw-no-') as tmp:
             base = Path(tmp) / 'clone'
-            (base / 'bridge').mkdir(parents=True)
-            shutil.copy(ROOT / 'bridge.env.example', base / 'bridge.env.example')
+            (base / 'gateway').mkdir(parents=True)
+            shutil.copy(ROOT / 'satellite-gateway.env.example', base / 'satellite-gateway.env.example')
             shutil.copy(ROOT / 'requirements.txt', base / 'requirements.txt')
             result = self.run_guided(GATEWAY, [str(base), '192.0.2.10', '10701', '10702',
                                                '0.0.0.0', '192.0.2.20:10700', 'y', 'no'])
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('aborted', result.stderr)
             self.assertEqual(self.dry_run_lines(result), [])
-            self.assertFalse((base / 'bridge.env').exists(), 'refusal must not write bridge.env')
+            self.assertFalse((base / 'satellite-gateway.env').exists(), 'refusal must not write satellite-gateway.env')
 
     def test_a_bad_answer_is_reprompted_with_the_flag_rules_reason(self):
         """Guided validation mirrors the flag rules: an ftp:// endpoint is refused with the same
         reason the flag path would die with, and the flow re-prompts instead of accepting it."""
-        answers = ['n', 'y', '/dev/ttyACM0', '/srv/bridge/state/registry-tls', 'esp32-test',
+        answers = ['n', 'y', '/dev/ttyACM0', '/srv/gateway/state/registry-tls', 'esp32-test',
                    'ftp://192.0.2.10:10702',                       # rejected, re-prompt
                    'tls://192.0.2.10:10702',                       # accepted
                    'TestNet', '/tmp/psk.txt', 'n', 'yes']
@@ -936,7 +971,7 @@ class GuidedModeTests(unittest.TestCase):
         '',                                      # write the firmware? (seeded n by --provision)
         '',                                      # set the board up? (seeded y)
         '/dev/ttyACM0',                          # board serial port
-        '/srv/bridge/state/registry-tls',        # certificates folder
+        '/srv/gateway/state/registry-tls',        # certificates folder
         'esp32-test',                            # name this board is enrolled under
         'tls://192.0.2.10:10702',                # address it reaches the assistant on
         'TestNet',                               # Wi-Fi network
@@ -1003,8 +1038,8 @@ class GuidedModeTests(unittest.TestCase):
     def test_gateway_guided_forwards_hermes_bin(self):
         with tempfile.TemporaryDirectory(prefix='gw-bin-') as tmp:
             base = Path(tmp) / 'clone'
-            (base / 'bridge').mkdir(parents=True)
-            shutil.copy(ROOT / 'bridge.env.example', base / 'bridge.env.example')
+            (base / 'gateway').mkdir(parents=True)
+            shutil.copy(ROOT / 'satellite-gateway.env.example', base / 'satellite-gateway.env.example')
             shutil.copy(ROOT / 'requirements.txt', base / 'requirements.txt')
             answers = [str(base), '192.0.2.10', '10701', '10702', '0.0.0.0',
                        '192.0.2.20:10700', 'y', 'yes']
@@ -1170,7 +1205,7 @@ class FlagSurfaceGuardTests(unittest.TestCase):
                        '' if flag == '--user' else 'pitest']
             if flag == '--endpoint':
                 answers += ['',                            # accept the typed endpoint
-                            '/srv/bridge/state/registry-tls']  # TLS prompt (endpoint non-empty)
+                            '/srv/gateway/state/registry-tls']  # TLS prompt (endpoint non-empty)
             else:
                 answers += ['none']                        # empty endpoint -> no TLS prompt
             answers += ['' if flag == '--env-path' else '/etc/voice-satellite/satellite.env',
@@ -1183,7 +1218,7 @@ class FlagSurfaceGuardTests(unittest.TestCase):
             if flag == '--build':                 # seeded n/n/y: no detail prompts run
                 answers = fp + ['', 'no']
             elif flag == '--provision':           # seeded n/y/n: the full provision prompt set
-                answers = fp + ['/dev/ttyACM0', '/srv/bridge/state/registry-tls', 'esp32-test',
+                answers = fp + ['/dev/ttyACM0', '/srv/gateway/state/registry-tls', 'esp32-test',
                                 'tls://192.0.2.10:10702', 'TestNet', '/tmp/psk.txt', '', 'no']
             elif flag == '--flash':               # seeded y/n/n: only the port
                 answers = fp + ['/dev/ttyACM0', '', 'no']
@@ -1192,7 +1227,7 @@ class FlagSurfaceGuardTests(unittest.TestCase):
                 # prompt belonging to the flag under test accepts the typed default ('').
                 answers = fp + [
                     '' if flag == '--port' else '/dev/ttyACM0',
-                    '' if flag == '--tls-certs' else '/srv/bridge/state/registry-tls',
+                    '' if flag == '--tls-certs' else '/srv/gateway/state/registry-tls',
                     '' if flag == '--device-id' else 'esp32-test',
                     '' if flag == '--endpoint' else 'tls://192.0.2.10:10702',
                     '' if flag == '--wifi-ssid' else 'TestNet',
@@ -1280,13 +1315,13 @@ class FlagSurfaceGuardTests(unittest.TestCase):
 
 class VoiceConfigHelperTests(unittest.TestCase):
     """scripts/hermes-voice-config.py: the one-pass Hermes config edit the gateway installer
-    drives. It needs PyYAML, which lives in the bridge venv, so it is skipped on a host whose
+    drives. It needs PyYAML, which lives in the gateway venv, so it is skipped on a host whose
     system python lacks it."""
 
     def setUp(self):
         self.py = ROOT / '.venv' / 'bin' / 'python'
         if not self.py.is_file():
-            raise unittest.SkipTest('bridge venv not present')
+            raise unittest.SkipTest('gateway venv not present')
         self.cfg = Path(tempfile.mktemp(prefix='voice-cfg-'))
         self.cfg.write_text('model: test-model\nother: kept\n')
 

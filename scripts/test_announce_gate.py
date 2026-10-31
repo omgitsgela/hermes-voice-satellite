@@ -3,7 +3,7 @@
 
 Announcements must not play while the device is listening: the microphone is open, so the
 announcement is captured and transcribed as if the person had said it. The gate is
-`turn_started_at`, read by the announcer through its own predicate. Run with the bridge venv:
+`turn_started_at`, read by the announcer through its own predicate. Run with the Gateway venv:
 
     .venv/bin/python scripts/test_announce_gate.py
 """
@@ -17,9 +17,9 @@ import types
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import bridge.loop as loop_module  # noqa: E402
-from bridge.announce import Announcer  # noqa: E402
-from bridge.endpointing import EndpointResult  # noqa: E402
+import gateway.loop as loop_module  # noqa: E402
+from satellite_gateway.announce import Announcer  # noqa: E402
+from satellite_gateway.endpointing import EndpointResult  # noqa: E402
 
 Loop = next(obj for obj in vars(loop_module).values()
             if isinstance(obj, type) and hasattr(obj, "_watch_for_interruption"))
@@ -45,43 +45,43 @@ class DeadSat:
 
 
 def make_bridge():
-    bridge = Loop.__new__(Loop)
-    bridge.sat = DeadSat()
-    bridge.turn_started_at = None
-    bridge._ep = types.SimpleNamespace(reset=lambda: None)
-    return bridge
+    gateway = Loop.__new__(Loop)
+    gateway.sat = DeadSat()
+    gateway.turn_started_at = None
+    gateway._ep = types.SimpleNamespace(reset=lambda: None)
+    return Gateway
 
 
-def gate_is_active(bridge) -> bool:
+def gate_is_active(gateway) -> bool:
     """Ask the real announcer predicate, not a copy of its logic."""
     probe = Announcer.__new__(Announcer)
-    probe.loop = bridge
+    probe.loop = Gateway
     # the announcer takes a callable here, not a value: it is built without a loop in some
     # deployments, so the timestamp is injected as a function
-    probe._turn_started_at = lambda: getattr(bridge, "turn_started_at", None)
+    probe._turn_started_at = lambda: getattr(gateway, "turn_started_at", None)
     return probe._turn_is_active()
 
 
 def make_early_return_bridge(transcript: str, local_reply: str = ""):
-    bridge = Loop.__new__(Loop)
-    bridge.gateway = types.SimpleNamespace(session_id="announce-gate-test")
-    bridge.turns = []
-    bridge.turn_started_at = None
-    bridge._speaking = False
-    bridge.follow_up = False
-    bridge.leased = None
+    gateway = Loop.__new__(Loop)
+    gateway.gateway = types.SimpleNamespace(session_id="announce-gate-test")
+    gateway.turns = []
+    gateway.turn_started_at = None
+    gateway._speaking = False
+    gateway.follow_up = False
+    gateway.leased = None
 
     class Sat:
         async def send(self, _event):
             pass
 
-    bridge.sat = Sat()
+    gateway.sat = Sat()
 
     async def wait_for_wake():
         return "hey_hermes"
 
     async def capture_after_wake(_wake_word):
-        bridge.turn_started_at = time.monotonic()
+        gateway.turn_started_at = time.monotonic()
         return EndpointResult(
             audio=b"\0\0" * 8000,
             rate=16000,
@@ -98,39 +98,39 @@ def make_early_return_bridge(transcript: str, local_reply: str = ""):
     async def say(_text):
         pass
 
-    bridge.wait_for_wake = wait_for_wake
-    bridge.capture_after_wake = capture_after_wake
-    bridge.transcribe = transcribe
-    bridge.say = say
-    bridge._local_command = lambda _text: local_reply
-    bridge.rotate_session = lambda _reason: None
-    return bridge
+    gateway.wait_for_wake = wait_for_wake
+    gateway.capture_after_wake = capture_after_wake
+    gateway.transcribe = transcribe
+    gateway.say = say
+    gateway._local_command = lambda _text: local_reply
+    gateway.rotate_session = lambda _reason: None
+    return Gateway
 
 
 async def main() -> int:
     # 1. opening the microphone raises the gate
-    bridge = make_bridge()
-    check("gate down before anyone speaks", gate_is_active(bridge), False)
+    gateway = make_bridge()
+    check("gate down before anyone speaks", gate_is_active(gateway), False)
     try:
-        await bridge.capture_utterance("hey_hermes")
+        await gateway.capture_utterance("hey_hermes")
     except Exception:
         pass
-    check("gate up while listening", gate_is_active(bridge), True)
+    check("gate up while listening", gate_is_active(gateway), True)
 
     # 2. an existing turn's timestamp is not overwritten, so the stale-age net keeps counting from
     #    the turn's start rather than from each capture (an interruption during a long task)
-    bridge = make_bridge()
+    gateway = make_bridge()
     started = time.monotonic() - 42.0
-    bridge.turn_started_at = started
+    gateway.turn_started_at = started
     try:
-        await bridge.capture_utterance("hey_hermes")
+        await gateway.capture_utterance("hey_hermes")
     except Exception:
         pass
-    check("existing turn timestamp preserved", bridge.turn_started_at, started)
+    check("existing turn timestamp preserved", gateway.turn_started_at, started)
 
     # 3. with no turn, the announcer sees an idle room
-    bridge = make_bridge()
-    check("idle room is not gated", gate_is_active(bridge), False)
+    gateway = make_bridge()
+    check("idle room is not gated", gate_is_active(gateway), False)
 
     # 4. Every successful early return after capture releases the gate (#51).
     cases = (
@@ -139,10 +139,10 @@ async def main() -> int:
         ("spoken session reset", "start a new conversation", ""),
     )
     for label, transcript, local_reply in cases:
-        bridge = make_early_return_bridge(transcript, local_reply)
-        await bridge.one_turn()
-        check(f"{label} clears timestamp", bridge.turn_started_at, None)
-        check(f"{label} releases announcement gate", gate_is_active(bridge), False)
+        gateway = make_early_return_bridge(transcript, local_reply)
+        await gateway.one_turn()
+        check(f"{label} clears timestamp", gateway.turn_started_at, None)
+        check(f"{label} releases announcement gate", gate_is_active(gateway), False)
 
     print(f"announce gate checks: {checks - len(failures)}/{checks} passed")
     for f in failures:

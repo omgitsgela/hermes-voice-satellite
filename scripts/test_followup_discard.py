@@ -3,7 +3,7 @@
 
 The device's done tone arrives as ordinary audio chunks. Sleeping through the quiet interval only
 delays reading them, so the endpointer hears our own chime as speech and can close the window on a
-word nobody said. Run with the bridge venv:
+word nobody said. Run with the Gateway venv:
 
     .venv/bin/python scripts/test_followup_discard.py
 """
@@ -15,8 +15,8 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import bridge.loop as loop_module  # noqa: E402
-from bridge.satellite import SatelliteClient  # noqa: E402
+import gateway.loop as loop_module  # noqa: E402
+from satellite_gateway.satellite import SatelliteClient  # noqa: E402
 from wyoming.audio import AudioChunk  # noqa: E402
 
 Loop = next(obj for obj in vars(loop_module).values()
@@ -73,7 +73,7 @@ async def main() -> int:
     check("real satellite queue empty", b.sat._queue.qsize(), 0)
 
     # 5. the quiet interval actually calls it, since that is the whole point
-    src = (pathlib.Path(__file__).resolve().parent.parent / "bridge" / "loop.py").read_text()
+    src = (pathlib.Path(__file__).resolve().parent.parent / "Gateway" / "loop.py").read_text()
     quiet = src.index("await asyncio.sleep(FOLLOW_UP_QUIET_SECONDS)")
     check("discard happens after the quiet sleep",
           "_discard_queued_events()" in src[quiet:quiet + 500], True)

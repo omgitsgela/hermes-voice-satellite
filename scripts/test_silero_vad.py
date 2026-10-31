@@ -23,13 +23,13 @@ So this is not "a better threshold". It removes the reason the threshold had to 
 The rule, 2026-09-25: "if we're going to use silero, we're going to use it locally, and make
 it a repo we track." A detector that decides whether the device hears its owner must not depend on
 a package that can be yanked, or on an asset living inside someone else's wheel where an unrelated
-upgrade can move or drop it. The ONNX file is in `bridge/vendor/` with its checksum recorded, and
-inference is plain `onnxruntime`, which the bridge already installs for other work.
+upgrade can move or drop it. The ONNX file is in `gateway/vendor/` with its checksum recorded, and
+inference is plain `onnxruntime`, which the Gateway already installs for other work.
 
 The upstream source is tracked as a pinned git bundle alongside the other upstreams, by
 `scripts/refresh-upstream-mirrors.py`, so the project can be rebuilt without any network.
 
-Run with the bridge venv:
+Run with the Gateway venv:
 
     .venv/bin/python scripts/test_silero_vad.py
 """
@@ -45,7 +45,7 @@ import wave
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bridge.silero_vad import MODEL_PATH, SileroVad  # noqa: E402
+from satellite_gateway.silero_vad import MODEL_PATH, SileroVad  # noqa: E402
 
 checks = 0
 failures: list[str] = []

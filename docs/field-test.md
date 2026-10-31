@@ -13,7 +13,7 @@ device can route to (the `--device-reachable-as` value used at gateway install).
 Prerequisites, from `docs/installation.md`:
 
 * the gateway host runs Hermes and `scripts/install-gateway.sh` has completed
-  (`systemctl --user status hermes-voice-bridge` is active, and `state/registry-tls/` holds the
+  (`systemctl --user status hermes-voice-satellite` is active, and `state/registry-tls/` holds the
   CA + server certificate);
 * a machine with the board attached by USB (the board appears as a serial device, typically
   `/dev/ttyACM0` on `<usb-port>`) — often a laptop rather than the gateway host;
@@ -63,7 +63,7 @@ scp <host>:<gateway-dir>/state/device-credentials.json ./
 
 `install-esp32.sh` looks for `device-credentials.json` **beside** the `--tls-certs` directory
 (override with `--registry <file>`). Both files are copied because the provisioner cross-checks
-the certificate against the bridge's credential entry before writing anything.
+the certificate against the Satellite Gateway's credential entry before writing anything.
 
 **Top failure:** provisioning dies with `no registry file at ...` — the credentials copy is not
 beside the certs directory; re-copy it or pass `--registry`.
@@ -104,7 +104,7 @@ default to the bundled `okay_nabu` (`firmware/esp32/models/`, licence note in it
 `<psk-file>` holds exactly the Wi-Fi passphrase (plus one trailing newline) — the passphrase
 moves as a file path, never through argv.
 
-**Success looks like:** `certificate matches the bridge registry entry for <device-id>`,
+**Success looks like:** `certificate matches the Satellite Gateway registry entry for <device-id>`,
 `PROVISIONED <device-id> at 0x...: ... bytes`, `readback byte-identical to the region image`,
 `using the bundled default wake model`, and finally `provisioned: TLS credential, wake model,
 endpoint, Wi-Fi. On reboot the board associates, dials tls://<host>:10702 and registers as
@@ -113,7 +113,7 @@ shows `<your-net>`.
 
 **Top failure:** `no <device-id>.crt in ./registry-tls (is the device enrolled?)` — the cert
 set from step 2 is not there. `... does not map sha256:... to <device-id>` — the certificate on
-disk is not the one the bridge has on file for this id (stale copy, or the device was
+disk is not the one the Satellite Gateway has on file for this id (stale copy, or the device was
 re-enrolled after copying): re-copy `registry-tls/` + `device-credentials.json`, or re-enroll.
 `<psk-file> is neither an 8-63 character passphrase nor a 64-hex raw key` — the passphrase file
 holds the wrong bytes.
@@ -148,7 +148,7 @@ cd <gateway-dir>
 
 It proves four links against live state — the registry listener is really listening and
 accepting, the TLS set is consistent (the issuer's own `verify`), the device is in
-`state/device-credentials.json`, and the bridge's own state/log show the device registered —
+`state/device-credentials.json`, and the Satellite Gateway's own state/log show the device registered —
 and exits non-zero if any link fails.
 
 **Success looks like:**
@@ -163,14 +163,14 @@ verify-satellite: PASS (4/4 links) -- <device-id> is registered and ready
 ```
 
 **Top failure:** `FAIL registered ... no live evidence that <device-id> has registered` — the
-board never reached the bridge. Watch `journalctl --user -u hermes-voice-bridge -f` while
+board never reached the Satellite Gateway. Watch `journalctl --user -u hermes-voice-satellite -f` while
 power-cycling the board: `refused a registration from <addr>: no recognised credential` or
-`unknown credential sha256:... from <addr>` means the board presents a certificate the bridge
+`unknown credential sha256:... from <addr>` means the board presents a certificate the Satellite Gateway
 does not know (re-enroll, then re-provision). A dial failure naming the host and port (ESP32:
 `GATEWAY_STATUS` on the provisioning console; Pi: `journalctl -u outbound-satellite`) means a
 wrong `--endpoint` or no route to `<host>`. A `FAIL listener` with `Connection refused` means
-nothing is listening on the port: check `systemctl --user status hermes-voice-bridge` and the
-port in `bridge.env`.
+nothing is listening on the port: check `systemctl --user status hermes-voice-satellite` and the
+port in `satellite-gateway.env`.
 
 ## 6. Speak the wake word (the acceptance test)
 
@@ -183,7 +183,7 @@ within a few seconds. On the Pi that is the whole test: the acoustic wake word i
 
 **Status on the ESP32:** the on-board scorer now runs real inference. The firmware loads the
 provisioned model and scores microphone audio through TFLite-Micro (the log-mel microfrontend plus
-a streaming inference window), so the wake word fires from the microphone without the bridge. The
+a streaming inference window), so the wake word fires from the microphone without the Satellite Gateway. The
 console's `WAKE_STATUS` reports `scorer=tflm` when the real scorer is live and `model=real` when a
 validated model is loaded; if either reads as the stub/placeholder, re-run the provision step. The
 `WAKE_FIRE` console command still forces a single detection (one line on `<usb-port>` at 115200
@@ -191,7 +191,7 @@ baud; see `firmware/esp32/README.md`), which is the right tool for exercising th
 answer path without speaking, or when the room is too noisy to test acoustically.
 
 **Top failure:** the chime plays but no answer — that is the mic/endpointing path, not the wake
-detector; follow the turn in `journalctl --user -u hermes-voice-bridge -f`. No chime at all —
+detector; follow the turn in `journalctl --user -u hermes-voice-satellite -f`. No chime at all —
 the detector did not fire: ESP32, `WAKE_STATUS` on the console (re-run the provision step if no
 model is loaded); Pi, `journalctl -u wyoming-openwakeword -u wake-shim` and check the model
 file exists. Too many false wakes in a busy room — say the phrase less clearly at first

@@ -2,7 +2,7 @@
 """Bridge a USB-attached satellite to a gateway's registry listener from a PC.
 
 An embedded satellite has one USB port and no network of its own yet. This is the ordinary way to
-reach a bridge with it: the PC owns the serial port, puts the device into its link mode, and becomes a
+reach a Gateway with it: the PC owns the serial port, puts the device into its link mode, and becomes a
 transparent pipe to the gateway. It is the same shape as the device-side runner in
 `pi/outbound_satellite.py`, with the relay leg pointed at a serial port instead of a local satellite.
 
@@ -47,7 +47,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 DEFAULT_MODE_COMMAND = b'START_WYOMING\n'
 DEFAULT_ACK = b'PROVISION OK WYOMING CONTROL_ONLY RESET_REQUIRED'
 DEFAULT_GATEWAY_PORT = 10701
-#: Mirror the project's one keepalive implementation (see bridge/net.py). An idle link has no timeout of
+#: Mirror the project's one keepalive implementation (see gateway/net.py). An idle link has no timeout of
 #: its own, and a relay that outlives a vanished gateway would hold a socket that looks alive forever.
 KEEPALIVE_IDLE_SECONDS = 15
 KEEPALIVE_INTERVAL_SECONDS = 5
@@ -302,7 +302,7 @@ def run_relay(
                         gateway_socket.sendall(chunk)
                     except OSError as error:
                         # The gateway is gone mid-forward. That is a gateway-side death, not a
-                        # device fault: the device is still fine, the bridge at the other end
+                        # device fault: the device is still fine, the Gateway at the other end
                         # crashed. It must land as not-registered (3), the same as the FIN death
                         # below, never as device-link-failed (4) which points at the USB cable.
                         # So `error` stays empty; stopped_because carries the message.
@@ -312,7 +312,7 @@ def run_relay(
                 try:
                     chunk = gateway_socket.recv(4096)
                 except OSError as error:
-                    # A reset (or any socket error) from the gateway: the bridge died on its side,
+                    # A reset (or any socket error) from the gateway: the Gateway died on its side,
                     # not the device. Not registered, and not a device fault either, so `error`
                     # stays empty and the run falls through to the not-registered exit (3).
                     outcome.stopped_because = f'gateway connection lost ({error})'

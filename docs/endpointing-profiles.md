@@ -46,7 +46,7 @@ any natural wording works:
 > "stop waiting so long after I finish"
 > "are you using the slower listening mode?"
 
-**From the bridge settings endpoint**, with the same bearer token announcements use:
+**From the Satellite Gateway settings endpoint**, with the same bearer token announcements use:
 
 ```
 GET  /settings
@@ -63,7 +63,7 @@ POST /settings  {"endpointing_profile": "standard"}
 `state/endpointing-profile` holds one profile name per line. An unreadable or unrecognised value falls
 back to `standard`, so a bad file cannot leave the device waiting indefinitely.
 
-The profile is persisted, so it survives a bridge restart and a host reboot. Only one setting may be
+The profile is persisted, so it survives a Gateway restart and a host reboot. Only one setting may be
 sent per request, and the value is validated against the shipped profile table; an unknown name is
 rejected with 400 rather than silently stored.
 

@@ -1,0 +1,8 @@
+pyproject.toml
+src/hermes_device_pi/__init__.py
+src/hermes_device_pi.egg-info/PKG-INFO
+src/hermes_device_pi.egg-info/SOURCES.txt
+src/hermes_device_pi.egg-info/dependency_links.txt
+src/hermes_device_pi.egg-info/entry_points.txt
+src/hermes_device_pi.egg-info/requires.txt
+src/hermes_device_pi.egg-info/top_level.txt

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The 48 kHz profile's two rate conversions, proven on the host against the real C.
 
-These matter more than they look. The 48 kHz profile exists to stop destroying the bridge's
+These matter more than they look. The 48 kHz profile exists to stop destroying the Gateway's
 TTS: at 16 kHz the playback path low-passes at 7400 Hz and throws away everything above it,
 which is exactly the "the voice sounds lower quality than it should be" complaint. So the
 up-sampler's job is to carry 7.4-11 kHz content ACROSS, and the decimator's job is to keep

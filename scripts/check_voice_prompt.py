@@ -13,19 +13,19 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from bridge.config import (  # noqa: E402
+from satellite_gateway.config import (  # noqa: E402
     GATEWAY_BASE_URL,
     GATEWAY_ENV_FILE,
     VOICE_INSTRUCTIONS,
     VOICE_ROUTE_ALIAS,
 )
-from bridge.gateway import VoiceGateway, read_api_key  # noqa: E402
+from satellite_gateway.gateway import VoiceGateway, read_api_key  # noqa: E402
 
 BANNED = ("verif", "confirm", "double check", "double-check", "checked", "validated",
           "i can see", "attribute")
 
 # The rule, 2026-09-22: the voice surface must not volunteer anything about its own setup, and
-# WHEN ASKED it must look the answer up (skill_view on hermes-voice-bridge) instead of guessing.
+# WHEN ASKED it must look the answer up (skill_view on hermes-voice-satellite) instead of guessing.
 # These checks pin both halves. The expected values come from that skill's own summary section, so a
 # pass means it read the skill and reported what is actually configured.
 FACT_CHECKS = [

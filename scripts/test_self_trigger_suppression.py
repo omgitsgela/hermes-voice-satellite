@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression test: a latched `_speaking` must never make the bridge permanently deaf.
+"""Regression test: a latched `_speaking` must never make the gateway permanently deaf.
 
 The bug this guards: `self._speaking` was cleared only at the END of a turn, but every wake was
 dismissed as a self-trigger WHILE `_speaking` was set. So if the flag ever latched true, no turn
@@ -11,7 +11,7 @@ The fix makes the suppression TIME-BOUNDED: a wake within SELF_TRIGGER_WINDOW_S 
 playback is still dismissed as echo (that rule is correct), but a wake later than that is
 ACCEPTED and the latched flag is cleared.
 
-These tests exercise the real logic in bridge/loop.py, not a copy of it.
+These tests exercise the real logic in satellite_gateway/loop.py, not a copy of it.
 """
 import inspect
 import time
@@ -19,12 +19,12 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-LOOP = ROOT.parent / 'hermes-voice-bridge' / 'bridge' / 'loop.py'
+LOOP = ROOT.parent / 'hermes-voice-satellite' / 'satellite_gateway' / 'loop.py'
 
 
 class SelfTriggerSuppressionTests(unittest.TestCase):
     def setUp(self):
-        self.assertTrue(LOOP.exists(), 'bridge/loop.py not found at %s' % LOOP)
+        self.assertTrue(LOOP.exists(), 'satellite_gateway/loop.py not found at %s' % LOOP)
         self.source = LOOP.read_text()
 
     def test_the_window_is_a_bounded_constant(self):

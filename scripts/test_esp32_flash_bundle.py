@@ -200,6 +200,35 @@ class PreserveOtherPartitionsTest(unittest.TestCase):
     ESP32 constraint -- images that write only their own regions keep NVS intact.
     """
 
+    def test_extraction_works_without_a_build_tree(self):
+        """The region-wise fallback in the install guide exists for machines with no build.
+
+        It used to demand `--build` anyway, so the documented command failed for exactly the reader
+        it was written for.
+        """
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            build, _boot, _ptable, app_bytes = make_build(tmp)
+            bundle = Path(tmp) / "flash.bundle.bin"
+            manifest = Path(tmp) / "flash.manifest.txt"
+            made = run_bundle(["--build", str(build), "--bundle", str(bundle), "--out", str(manifest)], tmp)
+            self.assertEqual(made.returncode, 0, made.stderr)
+
+            out = Path(tmp) / "extracted"
+            got = run_bundle(
+                ["--extract", str(out), "--bundle", str(bundle), "--check", str(manifest)], tmp
+            )
+            self.assertEqual(got.returncode, 0, got.stderr)
+            self.assertEqual((out / "app.bin").read_bytes(), app_bytes)
+
+            # Still a verified extraction: a tampered bundle must not be unpacked.
+            bundle.write_bytes(bundle.read_bytes() + b"tamper")
+            refused = run_bundle(
+                ["--extract", str(out), "--bundle", str(bundle), "--check", str(manifest)], tmp
+            )
+            self.assertNotEqual(refused.returncode, 0)
+
     def test_extract_recovers_each_component_from_the_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
             build, bootloader, ptable, app = make_build(tmp)

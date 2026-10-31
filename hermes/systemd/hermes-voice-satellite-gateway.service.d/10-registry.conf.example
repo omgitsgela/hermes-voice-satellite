@@ -1,0 +1,28 @@
+# The inverted shape (issue #61): a device may dial the Gateway instead of being dialled.
+#
+# Install on the Gateway host as
+#     ~/.config/systemd/user/hermes-voice-bridge.service.d/10-registry.conf
+# then
+#     systemctl --user daemon-reload && systemctl --user restart hermes-voice-bridge
+#
+# A drop-in needs its [Service] header, or systemd ignores every line in it with "Assignment outside of
+# section" and the service looks unchanged.
+#
+# VOICE_REGISTRY_HOST is the address a device reaches this Gateway on. Not 0.0.0.0, and not the 127.0.0.1
+# default: the device's packets are addressed there, and nothing else has any business on this port.
+#
+# The allow-unauthenticated line is a deliberate and temporary trusted-network exception. The registration
+# credential model is built on certificate fingerprints, which mean nothing until TLS terminates here, so
+# there is no honest credential to configure yet; without the flag the listener refuses to start, which is
+# the correct failure. Delete that line as soon as a credential file exists, and never expose this port
+# beyond a private network.
+#
+# The two timing values are optional and shown at their defaults: how long to wait for a device before
+# falling back to dialling a satellite at a fixed address, and how often to re-check while waiting.
+[Service]
+Environment=VOICE_REGISTRY_ENABLED=1
+Environment=VOICE_REGISTRY_HOST=<the address the device reaches this Gateway on>
+Environment=VOICE_REGISTRY_PORT=10701
+Environment=VOICE_REGISTRY_ALLOW_UNAUTHENTICATED=1
+Environment=VOICE_REGISTRY_LEASE_WAIT_SECONDS=30
+Environment=VOICE_REGISTRY_WAIT_RETRY_SECONDS=30

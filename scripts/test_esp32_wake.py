@@ -127,7 +127,7 @@ class WakeCoreTests(unittest.TestCase):
     # -- arbitration level contract (issue #32) --------------------------------
     def test_no_measurement_before_the_first_scored_frame(self):
         """A core that has never scored an armed frame reports level -1 ("no
-        measurement"), NOT the silence floor: the bridge must be able to tell
+        measurement"), NOT the silence floor: the Gateway must be able to tell
         "this device never heard anything armed" from "this device heard
         silence"."""
         lib = self.library()
@@ -151,7 +151,7 @@ class WakeCoreTests(unittest.TestCase):
                           'amplitude %d: expected level ~%d, got %d' % (amplitude, expected, got))
 
     def test_louder_room_reports_a_higher_level(self):
-        """The ordering the whole bridge arbitration depends on: same core, two
+        """The ordering the whole Gateway arbitration depends on: same core, two
         runs, the louder room gets the strictly higher frozen level."""
         lib = self.library()
         quiet = self.detector(lib, [0.90])
@@ -205,7 +205,7 @@ class WakeCoreTests(unittest.TestCase):
 
     def test_exact_silence_reads_the_floor_not_no_measurement(self):
         """A quiet room IS a measurement (0), distinct from never having scored
-        anything armed (-1): the bridge can then still rank a silent device
+        anything armed (-1): the Gateway can then still rank a silent device
         below a hearing one instead of treating it as unmeasured."""
         lib = self.library()
         det = self.detector(lib, [0.90])
@@ -237,7 +237,7 @@ class WakeCoreTests(unittest.TestCase):
         self.assertFalse(lib.wy_wake_deaf(det))
 
     def test_at_threshold_fires(self):
-        """A frame whose score is EXACTLY the threshold fires: the bridge's
+        """A frame whose score is EXACTLY the threshold fires: the Gateway's
         semantics are >=, not >, so 0.35 at threshold 0.35 is a detection."""
         lib = self.library()
         det = self.detector(lib, [0.35], threshold=0.35)
@@ -312,7 +312,7 @@ class WakeCoreTests(unittest.TestCase):
     # -- task 2: deaf guard ----------------------------------------------------
     def test_a_detection_is_single_shot_until_the_stream_ends(self):
         """Once the core fires it is deaf on its own (the microphone is now
-        forwarded to the bridge): a HIGH score on the very next frame is not a
+        forwarded to the gateway): a HIGH score on the very next frame is not a
         second detection. After the stream ends the detector arms again."""
         lib = self.library()
         det = self.detector(lib, [0.9, 0.9, 0.9], threshold=0.35)
@@ -393,7 +393,7 @@ class WakeCoreTests(unittest.TestCase):
 
     def test_deaf_during_playback_even_before_a_stream(self):
         """Playback of a locally rendered sound (the chime, an announcement)
-        deems the core deaf even with no bridge stream running: a high score
+        deems the core deaf even with no Gateway stream running: a high score
         during playback is consumed, not a self-trigger."""
         lib = self.library()
         det = self.detector(lib, [0.9, 0.9], threshold=0.35)
@@ -428,7 +428,7 @@ class WakeCoreTests(unittest.TestCase):
             # the restype set above.
             return lib.wy_wake_playback_sounds(active, queued, since_drained)
 
-        # The bridge's stream flag is authoritative while it is asserted.
+        # The Gateway's stream flag is authoritative while it is asserted.
         self.assertEqual(sounds(1, 0, 0), 1)
         # A ring that is draining is audible, whatever the level says.
         self.assertEqual(sounds(0, 4096, 0), 1)
@@ -439,7 +439,7 @@ class WakeCoreTests(unittest.TestCase):
         # is STALLED, not playing, and must not deafen anything.
         self.assertEqual(sounds(0, 4096, 100000), 0)
         self.assertEqual(sounds(1, 4096, 100000), 1,
-                         'an asserted bridge stream stays authoritative')
+                         'an asserted Gateway stream stays authoritative')
 
     def test_the_chime_matches_the_reference_sound_set(self):
         """The device must reproduce the reference satellite's awake tone, not merely

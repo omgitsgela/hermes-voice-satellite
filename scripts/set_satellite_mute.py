@@ -70,5 +70,5 @@ print(f"\ntotal deaf microphone after the wake tone: {total * 1000:.0f} ms"
 if total > MAX_TOTAL_SECONDS:
     print(f"WARNING: past the measured-good bound of {MAX_TOTAL_SECONDS * 1000:.0f} ms. Both 908 ms"
           " and 708 ms clipped the onset of the user's first word.")
-    print("         The bridge's own WAKE_QUIET_SECONDS must stay under this total as well.")
+    print("         The Gateway's own WAKE_QUIET_SECONDS must stay under this total as well.")
 print("\nrestart to apply:  sudo systemctl restart wyoming-satellite.service")

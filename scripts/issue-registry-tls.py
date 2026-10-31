@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
-"""Mint the bridge's registry TLS material and enroll satellite devices into it.
+"""Mint the Gateway's registry TLS material and enroll satellite devices into it.
 
 This is the host-side half of the device story. A satellite speaks to the registry over mutual
-TLS: the bridge presents `server.crt` (signed by the client CA), each device presents a
-certificate the same CA signed, and the bridge authenticates the device by the SHA-256 of its
+TLS: the Gateway presents `server.crt` (signed by the client CA), each device presents a
+certificate the same CA signed, and the Gateway authenticates the device by the SHA-256 of its
 certificate's DER form -- the fingerprint stored in `device-credentials.json`.
 
 Nothing here connects to a device. It produces the files a device install then pushes over USB:
 
   state/registry-tls/client-ca.crt    the CA that signs device certificates (shared with devices)
-  state/registry-tls/server.crt       the bridge's own certificate (signed by the client CA)
+  state/registry-tls/server.crt       the Gateway's own certificate (signed by the client CA)
   state/registry-tls/server.key       its private key (0600)
   state/registry-tls/<device>.crt     one certificate per enrolled device (signed by the CA)
   state/registry-tls/<device>.key     its private key (0600)
   state/device-credentials.json       fingerprint -> device id, 0600
 
-`init` makes the state usable by the bridge: with no CA it creates one and the server
+`init` makes the state usable by the gateway: with no CA it creates one and the server
 certificate; with an existing CA it reuses it (a CA key already on disk is never regenerated
 without --force, because every enrolled device would stop authenticating). `enroll` signs a
 device certificate, registers its fingerprint, and prints the exact `install-esp32.sh` /
 `install-pi.sh` command that provisions it. `verify` re-checks the whole set, offline.
 
-The fingerprint is computed exactly as the bridge computes it (scripts/provision-device-tls.py's
+The fingerprint is computed exactly as the Gateway computes it (scripts/provision-device-tls.py's
 pem_to_der -> sha256 of the DER), so an enrolled device is accepted by the very lookup the
 listener builds. OpenSSL is the only external tool; it is a host tool, and a host that cannot
 open a terminal to openssl is not a host this installer targets.
@@ -50,7 +50,7 @@ _spec.loader.exec_module(_mod)
 pem_to_der = _mod.pem_to_der
 
 DEFAULT_DAYS = 3650
-CN_PREFIX = "hermes-voice-bridge"
+CN_PREFIX = "hermes-voice-satellite"
 
 
 def run_openssl(args: list[str], *extra: list[str]) -> str:
@@ -66,7 +66,7 @@ def run_openssl(args: list[str], *extra: list[str]) -> str:
 
 
 def fingerprint_of(cert_path: Path) -> str:
-    """sha256:<hex> of the certificate's DER form -- the credential the bridge looks up."""
+    """sha256:<hex> of the certificate's DER form -- the credential the Gateway looks up."""
     return "sha256:" + hashlib.sha256(pem_to_der(cert_path.read_bytes())).hexdigest()
 
 
@@ -97,7 +97,7 @@ def report_pair(cert_path: Path, key_path: Path, problem) -> bool:
 
 def check_ca_signature(ca_crt: Path, cert: Path, problem) -> None:
     """A device certificate the CA cannot verify will never complete the handshake. We use
-    `openssl verify` because it checks exactly what the bridge's listener will check (the chain
+    `openssl verify` because it checks exactly what the Gateway's listener will check (the chain
     up to this CA) and keeps this tool free of the `cryptography` package, which the project
     deliberately does not depend on."""
     result = subprocess.run(["openssl", "verify", "-CAfile", str(ca_crt), str(cert)],
@@ -147,7 +147,7 @@ def cmd_init(args: argparse.Namespace) -> int:
                      "-days", str(days), "-subj", f"/CN={CN_PREFIX}-client-ca"])
         os.chmod(ca_key, 0o600)
 
-    # The bridge verifies the client CA by file; client-ca.crt is the file it loads. It is the
+    # The Gateway verifies the client CA by file; client-ca.crt is the file it loads. It is the
     # same key as ca.crt here because one CA signs both the server and the devices -- keeping the
     # two names explicit means the layout matches what the firmware region stores.
     client_ca.write_bytes(ca_crt.read_bytes())
@@ -283,13 +283,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
         problem(f"no CA pair at {tls}")
         return 1
     if not (tls / "client-ca.crt").is_file():
-        problem("client-ca.crt missing (the bridge loads it to authenticate devices)")
+        problem("client-ca.crt missing (the Gateway loads it to authenticate devices)")
     else:
         if (tls / "client-ca.crt").read_bytes() != ca_crt.read_bytes():
             problem("client-ca.crt differs from ca.crt")
     for name in ("server.crt", "server.key"):
         if not (tls / name).is_file():
-            problem(f"{name} missing (the bridge cannot start the TLS listener without it)")
+            problem(f"{name} missing (the Gateway cannot start the TLS listener without it)")
     report_pair(tls / "server.crt", tls / "server.key", problem)
 
     creds = load_credentials(cfile)
@@ -304,7 +304,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
             continue
         if fingerprint_of(dev_crt) != fp:
             problem(f"{device}: certificate fingerprint does not match the credential on file "
-                    f"(the bridge will refuse it)")
+                    f"(the Gateway will refuse it)")
         report_pair(dev_crt, dev_key, problem)
         # The device's certificate must be signed by this CA: a certificate the CA cannot
         # verify is a device that will never complete the handshake, whatever the credentials say.
@@ -324,7 +324,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--state", default=".", help="the bridge's state/ directory (default: current)")
+    parser.add_argument("--state", default=".", help="the Gateway's state/ directory (default: current)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_init = sub.add_parser("init", help="create or reuse the CA + server certificate")

@@ -2,7 +2,7 @@
 """Offline tests for scripts/device-check.py (issue #34).
 
 The checker runs on a device, but its classification logic is what it gets judged on, so it is
-tested here with synthetic ALSA dumps and a stubbed command runner. Run with the bridge venv:
+tested here with synthetic ALSA dumps and a stubbed command runner. Run with the Gateway venv:
 
     .venv/bin/python scripts/test_device_check.py
 """

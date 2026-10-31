@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep the bridge install independent of the separately deployed Hermes gateway."""
+"""Keep the Gateway install independent of the separately deployed Hermes gateway."""
 import ast
 from pathlib import Path
 import re
@@ -11,10 +11,10 @@ names = {
     for line in requirements if line.strip() and not line.lstrip().startswith("#")
 }
 assert "hermes-agent" not in names, (
-    "The bridge uses the Hermes HTTP API, not the hermes-agent Python distribution; "
+    "The Gateway uses the Hermes HTTP API, not the hermes-agent Python distribution; "
     "install the gateway separately."
 )
-for path in sorted((ROOT / "bridge").glob("*.py")):
+for path in sorted((ROOT / "Gateway").glob("*.py")):
     tree = ast.parse(path.read_text(), filename=str(path))
     for node in ast.walk(tree):
         imported = []
@@ -24,4 +24,4 @@ for path in sorted((ROOT / "bridge").glob("*.py")):
             imported = [node.module]
         assert not any(name.split(".")[0] in {"hermes_cli", "run_agent", "agent"}
                        for name in imported), f"{path.name} imports Hermes internals"
-print("bridge requirements and implementation are independent of Hermes internals: passed")
+print("Gateway requirements and implementation are independent of Hermes internals: passed")

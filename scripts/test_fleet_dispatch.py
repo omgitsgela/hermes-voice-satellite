@@ -8,7 +8,7 @@ external work), then sleeps and dispatches OUTSIDE it, with the dispatch bounded
 timeout. A device whose connection stopped consuming output must not hold the fleet's
 pacing slot forever and stall every other room's restart-class change.
 
-F8: a fleet dispatch that is still sleeping when the bridge stops must be cancelled and
+F8: a fleet dispatch that is still sleeping when the Gateway stops must be cancelled and
 awaited, and that cleanup must run even if an earlier shutdown step raises.
 """
 from __future__ import annotations
@@ -21,9 +21,9 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import bridge.announce as announce  # noqa: E402
-from bridge.announce import Announcer  # noqa: E402
-from bridge.config_plane import ConfigPlane  # noqa: E402
+import gateway.announce as announce  # noqa: E402
+from satellite_gateway.announce import Announcer  # noqa: E402
+from satellite_gateway.config_plane import ConfigPlane  # noqa: E402
 
 
 class FakeSatellite:
@@ -180,7 +180,7 @@ async def test_shutdown_cancels_pending_dispatch() -> None:
 
             # Case 2: stop() must STILL clean up the fleet tasks when an earlier shutdown
             # step raises (e.g. the worker already failed) - a task that outlives stop()
-            # is a service being restarted after the bridge is down.
+            # is a service being restarted after the Gateway is down.
             ann2 = make_announcer(tmp, {"b-1"}, dispatch)
             ann2._restart_dispatch_at = time.monotonic() + 5.0
             task2 = asyncio.create_task(

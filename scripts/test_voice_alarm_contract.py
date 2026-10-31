@@ -19,7 +19,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from bridge.config import VOICE_INSTRUCTIONS  # noqa: E402
+from satellite_gateway.config import VOICE_INSTRUCTIONS  # noqa: E402
 
 # The mechanism clauses. Alarm jobs created without these are reminders: they cost a model
 # call, deliver a message, and are never spoken through the house speaker.

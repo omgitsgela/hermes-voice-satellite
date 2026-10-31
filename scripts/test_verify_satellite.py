@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """Offline tests for scripts/verify-satellite.py, the post-provisioning readiness check.
 
-Run with the bridge's own interpreter:
+Run with the Gateway's own interpreter:
 
     .venv/bin/python -B scripts/test_verify_satellite.py
 
 Every scenario builds a THROWAWAY state directory with the REAL issuer
 (scripts/issue-registry-tls.py init + enroll) and the REAL config plane
-(bridge/config_plane.py), so the verifier is exercised against exactly the artifacts a
+(gateway/config_plane.py), so the verifier is exercised against exactly the artifacts a
 gateway host would hold. No live network is needed: the listener link is proven against a
 loopback socket the test owns, and the registration evidence is written by the same code the
-bridge's registration hook calls.
+Gateway's registration hook calls.
 
 Checks:
 
@@ -136,7 +136,7 @@ def build_state(root: pathlib.Path) -> pathlib.Path:
     run_issuer(state, "init", "--san", "127.0.0.1")
     run_issuer(state, "enroll", "--new", DEVICE_ID)
 
-    from bridge.config_plane import ConfigPlane
+    from satellite_gateway.config_plane import ConfigPlane
 
     plane = ConfigPlane(state / "fleet-config.json")
     plane.ensure_device(DEVICE_ID, metadata={
@@ -147,10 +147,10 @@ def build_state(root: pathlib.Path) -> pathlib.Path:
 
 
 def write_bridge_log(root: pathlib.Path) -> pathlib.Path:
-    """A bridge log line in the exact shape bridge/loop.py's registration hook prints."""
-    log = root / "bridge.log"
+    """A Gateway log line in the exact shape satellite_gateway/loop.py's registration hook prints."""
+    log = root / "satellite_gateway.log"
     log.write_text(
-        f"INFO bridge.loop: device registered: id={DEVICE_ID} name=field-test area=test-bench "
+        f"INFO gateway.loop: device registered: id={DEVICE_ID} name=field-test area=test-bench "
         f"version=0.0-test protocol=1 capabilities=audio\n"
     )
     return log
@@ -166,8 +166,8 @@ def run_verifier(state: pathlib.Path, port: int, log: pathlib.Path,
     )
 
 #: The environment variables that feed the verifier's configuration detection. Pinned
-#: explicitly in every default-resolution run: they outrank bridge.env, so a developer's local
-#: bridge.env or shell exports can never steer a test.
+#: explicitly in every default-resolution run: they outrank satellite-gateway.env, so a developer's local
+#: satellite-gateway.env or shell exports can never steer a test.
 REGISTRY_ENV_NAMES = ("VOICE_REGISTRY_HOST", "VOICE_REGISTRY_PORT", "VOICE_REGISTRY_TLS_PORT")
 
 def probe_env(**overrides: str) -> dict:
@@ -199,7 +199,7 @@ def state_snapshot(state: pathlib.Path) -> dict:
 
 
 def write_rogue_device_cert(state: pathlib.Path, work: pathlib.Path) -> None:
-    """Replace the device's certificate with one signed by a CA the bridge does not trust,
+    """Replace the device's certificate with one signed by a CA the Gateway does not trust,
     and fix the credential entry to the new fingerprint so the ONLY failure is the CA signature."""
     tls = state / "registry-tls"
 
@@ -332,9 +332,9 @@ def t_unknown_device() -> None:
 
 @check("7", "the default probe follows the LIVE listener (ss) before the configured host")
 def t_default_probe_follows_the_live_listener() -> None:
-    """The false-FAIL case, reproduced offline: the bridge accepts on a NON-loopback address
+    """The false-FAIL case, reproduced offline: the Gateway accepts on a NON-loopback address
     while the configured host says loopback. Probing 127.0.0.1 against a listener that is not
-    there is what printed `FAIL listener` against a perfectly healthy bridge -- the default
+    there is what printed `FAIL listener` against a perfectly healthy Gateway -- the default
     must read what `ss` sees and probe THAT."""
     assert shutil.which("ss") is not None, "ss is required: the live listener is read from it"
     with tempfile.TemporaryDirectory(prefix="verify-satellite-live.") as tmp:
@@ -395,12 +395,12 @@ def t_explicit_flags_override_the_live_listener() -> None:
 @check("9", "with no live listener the probe defaults to the configured host, then loopback")
 def t_probe_default_falls_back_to_configuration_then_loopback() -> None:
     """The rest of the order: a silent live source falls through to VOICE_REGISTRY_HOST /
-    bridge.env, and with nothing configured either, to loopback. And when the live source DOES
+    satellite-gateway.env, and with nothing configured either, to loopback. And when the live source DOES
     speak, it wins over the configured host and even picks the port when configuration's is
-    dark (a stale bridge.env)."""
+    dark (a stale satellite-gateway.env)."""
     verify = load_verify()
     with tempfile.TemporaryDirectory(prefix="verify-satellite-resolve.") as tmp:
-        env_file = pathlib.Path(tmp) / "bridge.env"
+        env_file = pathlib.Path(tmp) / "satellite-gateway.env"
         env_file.write_text("VOICE_REGISTRY_HOST=192.0.2.10\nVOICE_REGISTRY_PORT=10701\n"
                             "VOICE_REGISTRY_TLS_PORT=10702\n")
         with cleared_registry_env():
@@ -409,7 +409,7 @@ def t_probe_default_falls_back_to_configuration_then_loopback() -> None:
             live = verify.parse_listeners("LISTEN 0 128 198.51.100.7:10702 0.0.0.0:*\n")
             assert verify.resolve_probe_target(None, None, live, env_file, True) == ("198.51.100.7", 10702)
             # A live listener on the OTHER configured port picks the port too: what is
-            # accepting beats what bridge.env claims.
+            # accepting beats what satellite-gateway.env claims.
             assert verify.resolve_probe_target(None, None, live, env_file, False) == ("198.51.100.7", 10702)
         env_file.write_text("")
         with cleared_registry_env():
@@ -423,7 +423,7 @@ def t_wildcard_listener_falls_through_to_configuration() -> None:
     (or loopback), while the live port still picks the port. Explicit flags still win above all."""
     verify = load_verify()
     with tempfile.TemporaryDirectory(prefix="verify-satellite-wildcard.") as tmp:
-        env_file = pathlib.Path(tmp) / "bridge.env"
+        env_file = pathlib.Path(tmp) / "satellite-gateway.env"
         env_file.write_text("VOICE_REGISTRY_HOST=192.0.2.10\nVOICE_REGISTRY_PORT=10701\n"
                             "VOICE_REGISTRY_TLS_PORT=10702\n")
         with cleared_registry_env():

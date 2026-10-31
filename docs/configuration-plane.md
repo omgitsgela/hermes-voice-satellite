@@ -2,17 +2,17 @@
 
 **Where this sits:** stage across the device of the voice pipeline. The end-to-end map, and every other stage, is in `docs/architecture.md`.
 
-Interface contract for the voice bridge's settings and fleet-configuration surface. Written for the
+Interface contract for the voice gateway's settings and fleet-configuration surface. Written for the
 system on the other side of it: the Hermes gateway, a script, a cron job, or an operator's browser.
 
 Verified against the implementation on `main`. Every field, bound and status code below is read from
-the code, not from an intention: `bridge/config_plane.py` (state and validation), `bridge/announce.py`
-(HTTP), `bridge/registry.py` (wire events), `pi/config_agent.py` (device side), `pi/device_apply.py`
+the code, not from an intention: `gateway/config_plane.py` (state and validation), `gateway/announce.py`
+(HTTP), `gateway/registry.py` (wire events), `pi/config_agent.py` (device side), `pi/device_apply.py`
 (hardware adapter), `pi/mic_gain_control.py` (input level).
 
 ## 1. What this is
 
-One authenticated HTTP endpoint on the bridge host, plus a control pair of Wyoming events over the
+One authenticated HTTP endpoint on the Satellite Gateway host, plus a control pair of Wyoming events over the
 connection a device already holds.
 
 - **Host side** owns the truth. Desired state is durable, versioned and validated here.
@@ -62,7 +62,7 @@ requires a service bounce. A client that batches settings should group by `apply
 every restart-class change.
 
 `playback_volume` is the setting with the strongest device-side guarantee, and it carries one extra
-guarantee the schema cannot express: **it can never be silent.** The bridge clamps it to an audible floor
+guarantee the schema cannot express: **it can never be silent.** The Satellite Gateway clamps it to an audible floor
 and the device clamps it independently, so a `0` written here lands as the floor rather than as a deaf
 device. Writing `0` is not an error; it is recorded and reported, and the applied value comes back higher
 than the requested one, with the reason in `last_error`. See `docs/volume.md`.
@@ -79,6 +79,25 @@ than hidden:
 - **`led_brightness` is on the LED driver's 1-31 scale, not a percentage.** The APA102 global-brightness
   register is 5 bits and the service refuses anything outside 1-31. The strip's power rail is a GPIO, so
   there is no `0`/"off" level in this setting; 1 is its dimmest.
+
+### What `wake_threshold` does and does not do on a microWakeWord device
+
+On the ESP32 satellite the wake detector runs a microWakeWord model whose scorer gates FIRST: it returns
+a score only when its sliding-window mean crosses the model's own `probability_cutoff` (0.97 in the
+bundled `okay_nabu` manifest), and returns `0.0` at every other frame. The fleet's `wake_threshold` is a
+SECOND gate applied to that score.
+
+The consequence is worth stating plainly, because it makes the setting look more powerful than it is:
+
+- a value **below** the model cutoff (0.15, 0.22, 0.35 …) accepts every crossing the model already
+  produced, so it is acoustically identical to the default — it neither helps nor hurts;
+- a value **above** it can reject a marginal crossing, i.e. it can only make the device LESS sensitive.
+
+So raising sensitivity is not something this setting can do. Real sensitivity control means driving the
+scorer's `probability_cutoff`, which is a scorer parameter rather than a core one, and lowering it trades
+false wakes for reach — a decision that needs real-world testing, not a config change.
+
+On the Pi satellite the same value is handed to the wake service, which applies it to its own detector.
 
 **`playback_volume` is on a USER scale of 1-100, not a raw ALSA percentage.** 1 is the quietest this
 hardware can be and 100 is full volume, so the same number means the same thing on a device with a
@@ -212,7 +231,7 @@ rejected fleet write changes nothing.
 
 A fleet write is then dispatched like a per-device write: if every targeted device is connected the new
 generation reaches it immediately. If the patch touches any **restart-class** setting
-(`wake_word`, `wake_threshold`, `led_brightness`) the dispatch is **paced**: the bridge spaces out the
+(`wake_word`, `wake_threshold`, `led_brightness`) the dispatch is **paced**: the Satellite Gateway spaces out the
 per-device restart-class restarts by `VOICE_FLEET_RESTART_DISPATCH_INTERVAL` seconds (default 8) rather
 than bouncing every room's audio stack in the same instant. Immediate-class settings are dispatched
 without delay.
@@ -224,9 +243,9 @@ connection stopped consuming output cannot hold the fleet's pacing slot: every d
 `VOICE_FLEET_DISPATCH_TIMEOUT` (default 30 s), and a timeout is logged rather than fatal, because the
 write is durable and the device takes the generation on its next registration. Pending paced dispatches
 are cancelled and awaited by `Announcer.stop()`, in a `finally` that runs even when an earlier shutdown
-step raises, so a shutdown cannot leave a restart firing after the bridge is down.
+step raises, so a shutdown cannot leave a restart firing after the Satellite Gateway is down.
 
-The configuration page (`GET /configure`, served from `bridge/static/settings.html`) sends **only the
+The configuration page (`GET /configure`, served from `gateway/static/settings.html`) sends **only the
 settings the operator selected** on a fleet apply: each fleet field is checkbox-gated, and an
 unselected field is omitted from the request entirely. This is what makes a fleet apply a *change*
 rather than a *clobber* — a setting the operator did not touch keeps each device's own value, which
@@ -365,7 +384,7 @@ device should run this wake word from now on" wants `/config`.
 
 `duration` accepts `30s`, `10m`, `1h30m`, `1 h 30 m`. Exactly one of `seconds` or `duration` — passing
 both is a `400`. Timers are bridge-owned because they need sub-minute relative deadlines, and they are
-persisted atomically so a bridge restart does not silently cancel one. On expiry the timer enters the
+persisted atomically so a Gateway restart does not silently cancel one. On expiry the timer enters the
 announcement queue with a distinct sound and a dedup key, so one timer produces one announcement.
 
 ## 9. Interfacing from the Hermes gateway
@@ -375,7 +394,7 @@ Two plugin tools already drive these surfaces over the gateway.
 **`hermes_timers`** (`hermes/plugins/hermes_timers/`) — `set`, `list`, `cancel` on the timer surface, plus
 `alarms`, which lists cron-backed alarms whose name begins with `alarm:`. Those alarms fire through
 `scripts/alarm_fire.py`, which calls the authenticated announcement endpoint with the `alarm` sound. So
-relative timers live in the bridge and absolute wall-clock alarms live in Hermes cron, with one honest
+relative timers live in the Satellite Gateway and absolute wall-clock alarms live in Hermes cron, with one honest
 list per kind rather than one API pretending to do both.
 
 **`voice_satellite`** (`hermes/plugins/voice_satellite/`) — two families of action, split by intent:
@@ -398,8 +417,8 @@ guard is honoured rather than bypassed: it cannot clobber a change it did not ob
 setting names locally so a typo produces a useful message instead of an opaque `400`, and it reports
 `dispatched` separately from `accepted`, because those genuinely differ when a device is away.
 
-Both read the bearer token from the bridge state directory or `VOICE_ANNOUNCE_TOKEN`, and both **read the
-value back** after writing, so the reply the assistant speaks is the bridge's state rather than an
+Both read the bearer token from the Satellite Gateway state directory or `VOICE_ANNOUNCE_TOKEN`, and both **read the
+value back** after writing, so the reply the assistant speaks is the Satellite Gateway's state rather than an
 assumption. A client integrating the same way should do the same: `202` means recorded, and only a
 follow-up read means applied.
 
@@ -408,7 +427,7 @@ follow-up read means applied.
 Named honestly so a client does not build against a shape that does not exist:
 
 - **No push notifications.** Convergence is discovered by reading. There is no websocket or callback.
-- **No multi-host federation.** One bridge owns one fleet's config file.
+- **No multi-host federation.** One gateway owns one fleet's config file.
 - **No secret storage.** The schema is for non-secret device policy. Credentials are not settings.
 - **No arbitrary execution and no path settings.** By design; see section 1.
 - **TLS is not terminated here.** The endpoint is LAN-scoped, matching the announcement endpoint's

@@ -16,7 +16,7 @@ A unit has to be one of exactly two shapes:
 1. **A Raspberry Pi plus an add-on board (a HAT).** The Pi is the host, the HAT supplies the microphones
    and the control surface, and our own software drives the LEDs over SPI. This is what runs today.
 2. **An integrated ESP32-class device**, with its own processor and flashable firmware. We ship our own
-   firmware on these, speaking the Wyoming protocol directly to the bridge. Not ESPHome, not Linux Voice
+   firmware on these, speaking the Wyoming protocol directly to the Satellite Gateway. Not ESPHome, not Linux Voice
    Assistant: those are other stacks and we are not adopting them.
 
 **Excluded by rule: USB-only microphones and arrays.** Their audio goes over USB and their lights and
@@ -81,7 +81,7 @@ firmware documentation, checked 2026-09-24.
 1. **There is no live audio path, and the vendor says so.** The firmware guide lists BLE real-time audio
    streaming as out of scope: "the BLE link carries AT commands, file transfer frames, and an audio
    energy-level visualization notify only. **It does not stream live audio.**" Audio goes PDM microphones
-   into preprocessing into an Opus encoder at 32 kbps mono and lands in storage. Our bridge needs a
+   into preprocessing into an Opus encoder at 32 kbps mono and lands in storage. Our gateway needs a
    continuous 16 kHz mono PCM stream arriving on a socket, and the Clip has no mode that produces one. A
    file-transfer protocol is not a substitute: it moves finished recordings, not the microphone.
 2. **It is not a Pi peripheral either, so the HAT path is closed too.** USB on this device is CDC ACM

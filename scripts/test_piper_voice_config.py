@@ -4,17 +4,17 @@
 Changing the voice a household hears must be a documented, testable path, not a
 memory exercise. This pins:
 
-1. `bridge/config.py` exposes the voice name AND the multi-speaker pick as
+1. `satellite_gateway/config.py` exposes the voice name AND the multi-speaker pick as
    configuration (`VOICE_PIPER_VOICE`, `VOICE_PIPER_SPEAKER`, `VOICE_PIPER_LENGTH_SCALE`).
-2. `bridge/tts.py` resolves a speaker name (`p2769`) or index to a numeric speaker id,
+2. `satellite_gateway/tts.py` resolves a speaker name (`p2769`) or index to a numeric speaker id,
    fails loudly on a name that is not in the voice's own `speaker_id_map`, and passes
    the resolved config on EVERY synthesis path (`synthesize_chunks`, `synthesize_to_wav`).
 3. A missing voice json (fresh clone, voice not downloaded yet) must not crash the
-   bridge at import time; resolution happens when the voice loads.
+   Gateway at import time; resolution happens when the voice loads.
 4. `docs/switching-voices.md` exists, names its stage, and names the real knobs and
    the real speaker-listing tool, so the procedure is findable from the map.
 5. The SHIPPED default is pinned as a contract, not as a favourite voice: it must be a
-   plausible catalog-style name that agrees with `bridge.env.example`. Which voice this
+   plausible catalog-style name that agrees with `satellite-gateway.env.example`. Which voice this
    installation actually speaks with is a config decision made with
    `scripts/switch-voice.py`, and changing it must never require editing this file.
 
@@ -47,12 +47,12 @@ def check(label: str, condition) -> None:
 
 
 def load_config(env: dict | None = None):
-    """Exec bridge/config.py fresh with a controlled environment and no real bridge.env."""
-    source = (ROOT / "bridge/config.py").read_text()
-    namespace = {"__file__": str(ROOT / "bridge/config.py")}
+    """Exec satellite_gateway/config.py fresh with a controlled environment and no real satellite-gateway.env."""
+    source = (ROOT / "satellite_gateway/config.py").read_text()
+    namespace = {"__file__": str(ROOT / "satellite_gateway/config.py")}
     with patch.dict(os.environ, env or {}, clear=True), \
          patch.object(Path, "read_text", return_value=""):
-        exec(compile(source, "bridge/config.py", "exec"), namespace)
+        exec(compile(source, "satellite_gateway/config.py", "exec"), namespace)
     return namespace
 
 
@@ -64,12 +64,12 @@ check("default voice is a plausible Piper catalog name",
                         cfg["PIPER_VOICE_NAME"])),
       )
 # The shipped default is a code decision (what a fresh clone gets). The voice this installation
-# actually speaks with lives in bridge.env and changes with scripts/switch-voice.py, so this test
+# actually speaks with lives in satellite-gateway.env and changes with scripts/switch-voice.py, so this test
 # must not encode anyone's current preference. It pins the pairing instead: whatever the code
-# default is, bridge.env.example documents the same name.
-_example = (ROOT / "bridge.env.example").read_text()
+# default is, satellite-gateway.env.example documents the same name.
+_example = (ROOT / "satellite-gateway.env.example").read_text()
 _doc_default = re.search(r"^#\s*VOICE_PIPER_VOICE=(\S+)", _example, re.M)
-check("bridge.env.example documents the code default",
+check("satellite-gateway.env.example documents the code default",
       _doc_default is not None and _doc_default.group(1) == cfg["PIPER_VOICE_NAME"])
 check("VOICE_PIPER_SPEAKER is read as configuration", "PIPER_SPEAKER_SETTING" in cfg)
 # A multi-speaker default would have to name a speaker, or Piper silently picks one from the
@@ -90,7 +90,7 @@ check("config import does not resolve against the filesystem",
 
 # --- 2. speaker resolution ----------------------------------------------------
 
-from bridge import tts
+from satellite_gateway import tts
 
 with tempfile.TemporaryDirectory() as td:
     fake = Path(td) / "fake.onnx.json"

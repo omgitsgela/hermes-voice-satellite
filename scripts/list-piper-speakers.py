@@ -4,7 +4,7 @@
 Multi-speaker Piper voices (clean100: 245 speakers; en_US-libritts-high: 904) are unusable
 without a chosen speaker; this is the lookup that turns "I liked a sample" into a
 VOICE_PIPER_SPEAKER value. Reads the voice's own speaker_id_map from its .onnx.json, so
-what it prints is exactly what the bridge can resolve.
+what it prints is exactly what the Gateway can resolve.
 
   .venv/bin/python scripts/list-piper-speakers.py                  # configured voice
   .venv/bin/python scripts/list-piper-speakers.py --voice clean100
@@ -26,7 +26,7 @@ sys.path.insert(0, str(ROOT))
 
 def resolve_config_path(voice: str | None) -> Path:
     if voice is None:
-        from bridge.config import VOICE_CONFIG
+        from satellite_gateway.config import VOICE_CONFIG
 
         return VOICE_CONFIG
     p = Path(voice).expanduser()
@@ -38,7 +38,7 @@ def resolve_config_path(voice: str | None) -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser(description="List Piper voice speakers (name -> id).")
     parser.add_argument("--voice", help="Voice name (in voices/) or a path to a .onnx.json. "
-                                        "Default: the voice configured in bridge.env.")
+                                        "Default: the voice configured in satellite-gateway.env.")
     parser.add_argument("--search", help="Only names containing this substring.")
     parser.add_argument("--limit", type=int, default=0, help="Show at most N speakers.")
     args = parser.parse_args()

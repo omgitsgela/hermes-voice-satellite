@@ -1,0 +1,122 @@
+name: installer
+
+# The installer is the part of this project a person runs before anything else works, and it spans
+# three platforms. This workflow exists so "it passes" means more than "it passed on the machine
+# where it was written".
+
+on:
+  push:
+    paths:
+      - "packages/**"
+      - "packaging/**"
+      - "scripts/test-installer.sh"
+      - "scripts/build-installer.sh"
+      - "scripts/check-no-personal-data.sh"
+      - "docs/installer.md"
+      - ".github/workflows/installer.yml"
+  pull_request:
+    paths:
+      - "packages/**"
+      - "packaging/**"
+      - "scripts/test-installer.sh"
+      - "scripts/build-installer.sh"
+      - ".github/workflows/installer.yml"
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: tests (${{ matrix.os }}, python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install the one runtime dependency the installer uses
+        # cryptography is needed to generate the certificate the end-to-end pairing test serves.
+        run: python -m pip install --upgrade pip pyserial cryptography
+
+      - name: Offline suites
+        shell: bash
+        run: bash scripts/test-installer.sh
+
+      - name: No installation-specific values in tracked files
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/check-no-personal-data.sh
+
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the bundled installer
+        shell: bash
+        run: bash scripts/build-installer.sh
+
+      - name: It must run with no Python on PATH (POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          # The whole promise is that a person does not install a runtime first. Prove it by running
+          # the bundle with an empty environment and no interpreter available.
+          env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
+            dist/hermes-voice-satellite/hermes-voice-satellite --status > "$RUNNER_TEMP/status.json"
+          python -c "import json; d=json.load(open('$RUNNER_TEMP/status.json')); \
+                     assert d['devices'], 'no devices discovered'; print('devices:', [x['id'] for x in d['devices']])"
+
+      - name: It must run with no Python on PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Same promise, different shell: strip PYTHON* from the environment and run the exe.
+          Get-ChildItem env: | Where-Object { $_.Name -like 'PYTHON*' } | Remove-Item
+          & "dist/hermes-voice-satellite/hermes-voice-satellite.exe" --status | Out-File -Encoding utf8 status.json
+          $devices = (Get-Content status.json -Raw | ConvertFrom-Json).devices
+          if (-not $devices) { throw "no devices discovered" }
+          Write-Host "devices:" ($devices | ForEach-Object { $_.id })
+
+      - name: The bundle carries what an installation runs (POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          # A bundle that can only report what it sees is not an installer: this checks the scripts,
+          # the Pi templates and the firmware model are inside it and found without a checkout.
+          env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
+            dist/hermes-voice-satellite/hermes-voice-satellite --check-assets
+
+      - name: The bundle carries what an installation runs (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-ChildItem env: | Where-Object { $_.Name -like 'PYTHON*' } | Remove-Item
+          & "dist/hermes-voice-satellite/hermes-voice-satellite.exe" --check-assets
+          if ($LASTEXITCODE -ne 0) { throw "runtime assets missing from the bundle" }
+
+      - name: Record the size
+        shell: bash
+        run: du -sh dist/hermes-voice-satellite | tee size.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hermes-voice-satellite-${{ runner.os }}
+          path: |
+            dist/hermes-voice-satellite/
+            size.txt
+          retention-days: 14

@@ -865,7 +865,7 @@ class SatelliteBase:
         """Called when speech-to-text text is received."""
         await run_event_command(self.settings.event.transcript, transcript.text)
         # Mute the microphone across the done tone, exactly as the awake tone above already does.
-        # Without this the tone is captured as speech: on 2026-09-22 the bridge's follow-up window
+        # Without this the tone is captured as speech: on 2026-09-22 the Gateway's follow-up window
         # opened 0.6 s after playback finished and the done tone arrived about a second later,
         # transcribed as "beep", and the device answered it. The mute covers the tone plus the
         # existing seconds_to_mute_after_awake_wav margin.

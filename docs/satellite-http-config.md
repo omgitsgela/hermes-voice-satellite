@@ -11,11 +11,11 @@ decisions were made, and they went the recommended way.
 
 What was actually built, against this document's recommendation:
 
-- a settings and fleet surface on the **host**, on the port the bridge already listens on (`/configure`,
+- a settings and fleet surface on the **host**, on the port the Satellite Gateway already listens on (`/configure`,
   `/config/*`), not a new LAN listener on the Pi;
 - an **allowlist of named settings with server-side validators**, never a shell and never a free-form
   command field;
-- changes applied to the Pi through the **control channel the bridge already owns** (`hermes.config.*`
+- changes applied to the Pi through the **control channel the Satellite Gateway already owns** (`hermes.config.*`
   over the registered connection), so the Pi gains no new listening port;
 - the same bearer-token authentication as announcements.
 
@@ -33,8 +33,8 @@ Her request, verbatim:
 **Technically feasible. But the satellite is the wrong place to put it, and the request can be met
 better without it.**
 
-Build the configuration page on the host, next to the bridge's existing authenticated HTTP server,
-and apply changes to the Pi through the control channel the bridge already uses. The user gets what
+Build the configuration page on the host, next to the Satellite Gateway's existing authenticated HTTP server,
+and apply changes to the Pi through the control channel the Satellite Gateway already uses. The user gets what
 she actually asked for, which is a web page on the LAN that configures the device from any device
 in the house, with none of the risk below and no new load on the Pi.
 
@@ -50,7 +50,7 @@ Everything in this document is measured, not estimated. Measurements taken 2026-
 | Thermals | n/a | 59.6 C, `get_throttled` 0x0 (healthy, no undervoltage) |
 | Python | Hermes venv | 3.11.2 |
 | HTTP libraries | aiohttp, everything | **no aiohttp, no flask**; stdlib `http.server` only |
-| Services | gateway, bridge | `wyoming-satellite`, `wyoming-openwakeword`, `wake-shim`, `2mic_leds` |
+| Services | gateway, gateway | `wyoming-satellite`, `wyoming-openwakeword`, `wake-shim`, `2mic_leds` |
 | Largest process | Hermes gateway | 74.6 MB (openwakeword) |
 
 ### What the Pi exposes to the network today
@@ -61,12 +61,12 @@ loopback: 10400 (shim), 10401 (openwakeword), 10402 (shim control), 10500
 ```
 
 That split is deliberate and worth protecting: **the device adds nothing to the LAN except SSH and
-the one port the bridge dials into.** Every internal control path is loopback.
+the one port the Satellite Gateway dials into.** Every internal control path is loopback.
 
-**That port is going away too** (issue #61): when the device dials the bridge instead of being dialled, it
+**That port is going away too** (issue #61): when the device dials the Satellite Gateway instead of being dialled, it
 needs no listener at all, which is what makes a device behind somebody else's NAT - or on a network you do
 not control - a supported shape rather than a compromise. The qualification that matters, and it is in the
-issue rather than here: an outbound connection still needs a **reachable destination**, so the bridge has to
+issue rather than here: an outbound connection still needs a **reachable destination**, so the Satellite Gateway has to
 be on the same LAN, on a private overlay, behind an authenticated tunnel, or listening with TLS on a public
 endpoint. Everything below about a management interface on the host still holds; only the direction of the
 voice connection changes.
@@ -95,15 +95,15 @@ The account that would own any web server on this device has **passwordless, unr
    suspect. Adding a second workload that competes for the same CPU and the same Wi-Fi is a
    plausible way to make the one symptom that annoys the user most.
 3. **It does not need to be there.** Almost every setting she would want to change is applied by
-   restarting a service on the Pi. Something else on the LAN can do that. The bridge already runs
+   restarting a service on the Pi. Something else on the LAN can do that. The Satellite Gateway already runs
    an authenticated HTTP server on a machine with 13.5 GB spare, and there is already a proven,
-   loopback-only path from the bridge to the Pi: the bridge sends an event over the satellite
+   loopback-only path from the Satellite Gateway to the Pi: the Satellite Gateway sends an event over the satellite
    connection it owns, the satellite forwards unrecognised events to the LED service, and that
    service is the only thing on the Pi that talks to the other local services.
 
 ## The recommended design
 
-A settings page served by the bridge on the host, using the same aiohttp app that already serves
+A settings page served by the Satellite Gateway on the host, using the same aiohttp app that already serves
 `/announce` and `/settings`.
 
 - **Front end:** one static page, no framework, no build step. Works in a phone browser.
@@ -134,10 +134,10 @@ A settings page served by the bridge on the host, using the same aiohttp app tha
 | Wake word | model file + unit flag | wake service, then shim, then satellite | silent fallback to the old word |
 | Wake threshold | systemd drop-in | wake service | more false wakes, or a deaf device |
 | Mic preamp gain | `amixer` | none | clipping, or a device that hears badly |
-| TTS voice | bridge config | bridge only | wrong voice, instantly audible |
+| TTS voice | gateway config | gateway only | wrong voice, instantly audible |
 | LED colours and brightness | CLI arguments | LED service (which bounces the satellite) | device looks dead, or stays lit |
 | Follow-up default | a state file | none | the mode is on when it should not be |
-| STT model | bridge config | bridge only | slower answers, more RAM on the host |
+| STT model | gateway config | gateway only | slower answers, more RAM on the host |
 
 The first two are the ones worth building, because the wake word and its threshold are the settings
 that actually get tuned, and `scripts/switch-wake-word.py` already does most of the work correctly.
@@ -164,7 +164,7 @@ it against the baseline in this document:
 - its own RSS over time, against the 171 MB available now
 - `vcgencmd get_throttled` at the end, against `0x0` now
 - temperature, against 59.6 C now
-- **and the bridge log's underrun count over the same window**, because audio is the thing at risk
+- **and the Satellite Gateway log's underrun count over the same window**, because audio is the thing at risk
 
 If the numbers barely move and the underruns do not increase, the capacity objection mostly
 disappears and only the root-access objection remains, which is solvable by hardening sudo. If the
@@ -185,10 +185,10 @@ Not to be raised again until she asks, by her instruction on 2026-09-23:
 
 ## Files, when built
 
-New: `bridge/config_ui.py` (routes and validators), `bridge/static/settings.html`,
+New: `gateway/config_ui.py` (routes and validators), `gateway/static/settings.html`,
 `scripts/test_config_ui.py` (validators, allowlist, rollback logic), and a line in `README.md`.
 
-Changed: `bridge/announce.py` (mount the app), `pi/2mic_service.py` (a settings-apply event
+Changed: `gateway/announce.py` (mount the app), `pi/2mic_service.py` (a settings-apply event
 handler, reusing the existing forward-event path), and whatever sudoers allowlist the hardening
 produces.
 

@@ -11,7 +11,7 @@ not reused: a wake-triggered turn has legitimate short replies ("yes", "no", "st
 length alone would swallow them. The guard is therefore a whole-utterance match against a short list,
 the same shape as the stop-phrase matcher, so "beep the horn" is still a question about a horn.
 
-Run with the bridge venv:
+Run with the Gateway venv:
 
     .venv/bin/python scripts/test_non_word.py
 """
@@ -24,7 +24,7 @@ import types
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import bridge.loop as loop_module  # noqa: E402
+import gateway.loop as loop_module  # noqa: E402
 
 Bridge = next(obj for obj in vars(loop_module).values()
               if isinstance(obj, type) and hasattr(obj, "one_turn"))
@@ -81,17 +81,17 @@ def _stream_factory():
 
 async def run_turn(transcript: str) -> dict:
     """Drive one real one_turn() with stubs, and report what it decided."""
-    bridge = Bridge.__new__(Bridge)
-    bridge.gateway = StubGateway()
-    bridge.sat = types.SimpleNamespace(send=_noop_send, eof=False, tts_stream=_stream_factory)
-    bridge.turns = []
-    bridge.turn_started_at = None
-    bridge._speaking = False
-    bridge.self_trigger_count = 0
-    bridge.follow_up = False
-    bridge._last_turn_at = None
-    bridge.idle_reset_minutes = 0          # so the idle-rotation check short-circuits
-    bridge._state_file = pathlib.Path("/tmp/non-word-test-state")
+    gateway = Bridge.__new__(Bridge)
+    gateway.gateway = StubGateway()
+    gateway.sat = types.SimpleNamespace(send=_noop_send, eof=False, tts_stream=_stream_factory)
+    gateway.turns = []
+    gateway.turn_started_at = None
+    gateway._speaking = False
+    gateway.self_trigger_count = 0
+    gateway.follow_up = False
+    gateway._last_turn_at = None
+    gateway.idle_reset_minutes = 0          # so the idle-rotation check short-circuits
+    gateway._state_file = pathlib.Path("/tmp/non-word-test-state")
 
     spoke: list[str] = []
     led: list[str] = []
@@ -119,28 +119,28 @@ async def run_turn(transcript: str) -> dict:
     async def forever(state):
         await asyncio.sleep(30)
 
-    bridge.wait_for_wake = wait_for_wake
-    bridge.capture_after_wake = capture_after_wake
-    bridge.transcribe = transcribe
-    bridge.say = say
-    bridge.publish_led = publish_led
-    bridge._rearm_wake_word = rearm
-    bridge._watch_for_interruption = forever
-    bridge._next = lambda timeout: _none()
+    gateway.wait_for_wake = wait_for_wake
+    gateway.capture_after_wake = capture_after_wake
+    gateway.transcribe = transcribe
+    gateway.say = say
+    gateway.publish_led = publish_led
+    gateway._rearm_wake_word = rearm
+    gateway._watch_for_interruption = forever
+    gateway._next = lambda timeout: _none()
     # The real matcher, so the test exercises production classification, not a reimplementation.
-    bridge._local_command = Bridge._local_command.__get__(bridge, Bridge)
+    gateway._local_command = Bridge._local_command.__get__(gateway, Bridge)
 
     stats = None
     try:
-        stats = await bridge.one_turn()
+        stats = await gateway.one_turn()
     except ReachedGateway:
         pass
 
     return {
-        "reached_gateway": bool(bridge.gateway.calls),
+        "reached_gateway": bool(gateway.gateway.calls),
         "spoke": spoke,
         "note": getattr(stats, "note", None) if stats is not None else None,
-        "gate_raised": bridge.turn_started_at is not None,
+        "gate_raised": gateway.turn_started_at is not None,
         "led": led,
     }
 

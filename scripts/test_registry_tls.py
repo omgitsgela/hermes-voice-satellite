@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Offline tests for TLS on the registry listener (issue #61, the transport decision).
 
-Run with the bridge's own interpreter:
+Run with the Gateway's own interpreter:
 
-    ~/hermes-voice-bridge/.venv/bin/python scripts/test_registry_tls.py
+    ~/hermes-voice-satellite/.venv/bin/python scripts/test_registry_tls.py
 
-TLS terminates inside the bridge, and the registration credential is the fingerprint of the device's
+TLS terminates inside the gateway, and the registration credential is the fingerprint of the device's
 client certificate, so these checks are real handshakes between real sockets on localhost using the
 throwaway certificates in `scripts/test_tls_fixtures/`. Those are test material only: they are
 regenerated as a set (see the README beside them) and no deployment uses them.
@@ -19,8 +19,8 @@ Checks:
   5  a certificate from a CA the listener does not trust never completes the handshake
   6  a certificate from the trusted CA that the credential file does not list is refused
   7  plaintext against a TLS listener registers nothing and is not given a conversation
-  8  the certificate paths are configurable and default beside the bridge's other state
-  9  the bridge builds the listener's context from those paths, and treats a bad pair as fatal
+  8  the certificate paths are configurable and default beside the Gateway's other state
+  9  the Gateway builds the listener's context from those paths, and treats a bad pair as fatal
  10  over TLS, a payload claiming another identity is still refused
 """
 
@@ -44,7 +44,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from wyoming.event import async_read_event  # noqa: E402
 
-from bridge.registry import (  # noqa: E402
+from satellite_gateway.registry import (  # noqa: E402
     REGISTER_OK_EVENT,
     REGISTER_REFUSED_EVENT,
     RegistryServer,
@@ -264,13 +264,13 @@ async def t_plaintext_is_not_downgraded() -> None:
         await h.stop()
 
 
-@check("8", "the TLS paths are configurable and default beside the bridge's other state")
+@check("8", "the TLS paths are configurable and default beside the Gateway's other state")
 async def t_config_paths() -> None:
     import os
     import subprocess
 
     code = (
-        "import bridge.config as c;"
+        "import gateway.config as c;"
         "print(c.REGISTRY_TLS_CERT_FILE);print(c.REGISTRY_TLS_KEY_FILE);print(c.REGISTRY_TLS_CLIENT_CA_FILE)"
     )
     env = dict(os.environ)
@@ -283,24 +283,24 @@ async def t_config_paths() -> None:
 
     # The key is the one that matters: an operator may keep it root-owned rather than beside the state.
     env.update({
-        "VOICE_REGISTRY_TLS_CERT": "/etc/bridge/server.crt",
-        "VOICE_REGISTRY_TLS_KEY": "/etc/bridge/private/server.key",
-        "VOICE_REGISTRY_TLS_CLIENT_CA": "/etc/bridge/client-ca.crt",
+        "VOICE_REGISTRY_TLS_CERT": "/etc/gateway/server.crt",
+        "VOICE_REGISTRY_TLS_KEY": "/etc/gateway/private/server.key",
+        "VOICE_REGISTRY_TLS_CLIENT_CA": "/etc/gateway/client-ca.crt",
     })
     overridden = subprocess.run([sys.executable, "-B", "-c", code], cwd=str(REPO), env=env,
                                 capture_output=True, text=True, check=True).stdout.split()
-    assert overridden == ["/etc/bridge/server.crt", "/etc/bridge/private/server.key",
-                          "/etc/bridge/client-ca.crt"], overridden
+    assert overridden == ["/etc/gateway/server.crt", "/etc/gateway/private/server.key",
+                          "/etc/gateway/client-ca.crt"], overridden
 
 
-@check("9", "the bridge builds the listener's context from the configured paths, and fails closed")
+@check("9", "the Gateway builds the listener's context from the configured paths, and fails closed")
 async def t_bridge_wiring() -> None:
     # The behaviour of a context and of a listener is covered above; what this pins is the wiring, which
     # is the part a later change can silently drop while every check above still passes.
-    source = (REPO / "bridge" / "loop.py").read_text()
-    assert "load_server_tls_context(" in source, "the bridge must build the listener's context"
+    source = (REPO / "Gateway" / "loop.py").read_text()
+    assert "load_server_tls_context(" in source, "the Gateway must build the listener's context"
     for setting in ("REGISTRY_TLS_CERT_FILE", "REGISTRY_TLS_KEY_FILE", "REGISTRY_TLS_CLIENT_CA_FILE"):
-        assert setting in source, f"the bridge must read {setting}"
+        assert setting in source, f"the Gateway must read {setting}"
     assert "ssl_context=ssl_context" in source, "the listener must be given the context it was built"
     assert "TlsConfigError" in source, (
         "a half-configured certificate must be treated as a configuration error, not as a surprise"
@@ -362,9 +362,9 @@ async def t_two_listeners_one_registry() -> None:
         await registry.close_all()
 
 
-@check("12", "the bridge serves TLS on the TLS port and keeps plain text behind an explicit flag")
+@check("12", "the Gateway serves TLS on the TLS port and keeps plain text behind an explicit flag")
 async def t_migration_wiring() -> None:
-    source = (REPO / "bridge" / "loop.py").read_text()
+    source = (REPO / "Gateway" / "loop.py").read_text()
     assert "REGISTRY_TLS_PORT" in source and "REGISTRY_LEGACY_PLAINTEXT" in source
     # The load-bearing line: with a certificate present, the plain listener runs only when the
     # migration flag says so. Without a certificate it is the only listener, which is the local case.

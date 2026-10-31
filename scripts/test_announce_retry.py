@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import AsyncMock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from bridge.announce import Announcer
+from satellite_gateway.announce import Announcer
 
 
 class AnnouncementRetryTests(unittest.IsolatedAsyncioTestCase):
