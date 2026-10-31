@@ -127,6 +127,23 @@ class Esp32Xvf3800Driver:
             )
         )
 
+    def rom_identity(self, port: str, runner: Runner) -> StepResult:
+        """The identity of a board that cannot answer the console yet.
+
+        A new board, or one still carrying a vendor image, has no satellite firmware to ask. Without
+        this the installer advertised as writing the firmware could only prepare a board somebody had
+        already flashed by another route. The ROM bootloader always answers, and the identity is
+        derived from the same factory MAC the firmware uses.
+        """
+        if not port:
+            return StepResult(ok=False, summary="no USB port selected for this device")
+        return runner.run(
+            Command(
+                (PROVISION_SCRIPT, "--port", port, "rom-mac"),
+                "read the board's factory identity from its ROM bootloader",
+            )
+        )
+
     def verify(self, request: DeviceRequest, runner: Runner) -> StepResult:
         if not request.port:
             return StepResult(ok=False, summary="no USB port selected for this device")

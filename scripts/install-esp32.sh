@@ -21,7 +21,7 @@
 # Usage:
 #   scripts/install-esp32.sh --flash --port /dev/ttyACM0   # flash the prebuilt bundle (no ESP-IDF)
 #   scripts/install-esp32.sh --provision --port /dev/ttyACM0 \
-#       --tls-certs ~/hermes-voice-satellite/state/registry-tls --device-id <id> \
+#       --tls-certs ~/hermes-voice-bridge/state/registry-tls --device-id <id> \
 #       --endpoint tls://<host>:10702 \
 #       --wifi-ssid <ssid> --wifi-psk-file <file>
 #   scripts/install-esp32.sh --build                       # (opt-in) build + bundle from source
@@ -71,11 +71,11 @@ DRY_RUN=0
 MODEL_FILE=""
 MODEL_URL=""
 MODEL_NAME=""   # empty = the model file's stem
-TLS_CERTS_DIR=""  # the Gateway's state/registry-tls: client-ca.crt, <device>.crt/.key, server.crt
+TLS_CERTS_DIR=""  # the bridge's state/registry-tls: client-ca.crt, <device>.crt/.key, server.crt
 DEVICE_ID=""      # the registry identity this board is enrolled as (its own MAC id)
 DEVICE_NAME=""    # the friendly name the house knows it by (device_name in NVS)
 ENDPOINT=""       # what the board dials: tls://host:port (tcp:// for a trusted LAN)
-REGISTRY_FILE=""  # the Gateway's state/device-credentials.json; defaults beside the certs dir
+REGISTRY_FILE=""  # the bridge's state/device-credentials.json; defaults beside the certs dir
 WIFI_SSID=""
 WIFI_PSK_FILE=""
 # The bundle sha256 the operator selected and reviewed. When set, the flash refuses any artifact
@@ -93,22 +93,8 @@ ENROLL_STAGING=""     # fetched certificates, staged until the explicit yes move
 # The interpreter that runs the provisioning helpers and esptool. Prefer the repository's own
 # venv, which is where the docs say to work and where esptool + pyserial live; fall back to
 # python3 so a machine that already has both is unchanged. Resolved once, used by every call.
-#
-# A standalone bundle has no system python3 at all, so it passes its own executable plus a dispatch
-# flag (see packaging/launch.py) and every helper call carries the matching flag. The arrays are
-# empty for a normal checkout, so its commands are byte-for-byte what they were.
 PY="$REPO_ROOT/.venv/bin/python"
 [ -x "$PY" ] || PY="python3"
-if [ -n "${HERMES_INSTALLER_PY:-}" ]; then
-    PY="$HERMES_INSTALLER_PY"
-    PY_HELPER=(--run-python)
-    PY_MODULE=(--run-module)
-    PY_CODE=(--run-code)
-else
-    PY_HELPER=()
-    PY_MODULE=(-m)
-    PY_CODE=(-c)
-fi
 # Flags with no guided prompt of their own are collected verbatim here and forwarded to the
 # re-executed run (guided_end): guided mode must run exactly what the user asked for, so
 # nothing typed on the command line may be silently dropped.
@@ -237,7 +223,7 @@ if [ "$GUIDED" = 1 ]; then
     fi
     REGISTRY_TLS="$(guided_first_dir_with client-ca.crt \
         "$REPO_ROOT/state/registry-tls" \
-        "$HOME/hermes-voice-satellite/state/registry-tls")"
+        "$HOME/hermes-voice-bridge/state/registry-tls")"
     if [ -n "$REGISTRY_TLS" ]; then
         echo "   certificates: found at $REGISTRY_TLS"
     else
@@ -278,7 +264,14 @@ if [ "$GUIDED" = 1 ]; then
         # wins, because the registry identity is the operator's to confirm.
         DETECTED_DEVICE_ID=""
         if [ -z "$DEVICE_ID" ] && [ -n "$SERIAL_PORTS" ] && command -v "$PY" >/dev/null 2>&1; then
-            DETECTED_DEVICE_ID="$("$PY" "${PY_HELPER[@]}" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" device-id 2>/dev/null | head -n1 | tr -d '\r' || true)"
+            DETECTED_DEVICE_ID="$("$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" device-id 2>/dev/null | head -n1 | tr -d '\r' || true)"
+            if [ -z "$DETECTED_DEVICE_ID" ]; then
+                # No console: a new board, or one still carrying a vendor image. The ROM bootloader
+                # always answers, and the identity is derived from the same factory MAC the firmware
+                # uses, so a first-time board can be prepared by this installer at all.
+                echo "   (no satellite firmware answered; reading the board's factory identity instead)" >&2
+                DETECTED_DEVICE_ID="$("$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" rom-mac 2>/dev/null | head -n1 | tr -d '\r' || true)"
+            fi
             case "$DETECTED_DEVICE_ID" in
                 ''|*[!A-Za-z0-9._-]*) DETECTED_DEVICE_ID="" ;;  # never trust a stray line as an id
             esac
@@ -293,7 +286,7 @@ if [ "$GUIDED" = 1 ]; then
             KNOWN_CERTS="$(guided_first_dir_with "$DETECTED_DEVICE_ID.crt" \
                 "$TLS_CERTS_DIR" "$ENROLL_DIR" \
                 "$REPO_ROOT/state/registry-tls" \
-                "$HOME/hermes-voice-satellite/state/registry-tls")"
+                "$HOME/hermes-voice-bridge/state/registry-tls")"
             if [ -n "$KNOWN_CERTS" ] && { [ ! -f "$KNOWN_CERTS/client-ca.crt" ] || \
                     [ ! -f "$KNOWN_CERTS/$DETECTED_DEVICE_ID.key" ]; }; then
                 KNOWN_CERTS=""   # a half set is not "certificates already here"
@@ -442,7 +435,7 @@ if [ "$GUIDED" = 1 ]; then
                     # Capture the status explicitly: a failed command inside `if` leaves $?
                     # pointing at the `if`, not at the command.
                     ENROL_STATUS=0
-                    "$PY" "${PY_HELPER[@]}" "$REPO_ROOT/scripts/enroll_device.py" \
+                    "$PY" "$REPO_ROOT/scripts/enroll_device.py" \
                         --device-id "$DEVICE_ID" --gateway "$ENROLL_GATEWAY" \
                         --endpoint "$ENDPOINT" --out "$ENROLL_STAGING" \
                         --token-file "$ENROLL_TOKEN_TMP" "${ENROL_FORCE_ARGS[@]}" || ENROL_STATUS=$?
@@ -542,7 +535,7 @@ if [ "$GUIDED" = 1 ]; then
                       --wifi-ssid "$WIFI_SSID" --wifi-psk-file "$WIFI_PSK_FILE")
         if [ "$ENROL_MODE" = token ]; then
             # The fetch wrote the registry record beside the certificates; the flag path would
-            # otherwise look for it one directory up (the Gateway's own layout).
+            # otherwise look for it one directory up (the bridge's own layout).
             GUIDED_ARGS+=(--registry "$ENROLL_DIR/device-credentials.json")
         fi
     fi
@@ -566,7 +559,7 @@ if [ "$GUIDED" = 1 ]; then
         if [ -f "$ENROLL_STAGING/device-credentials.json" ]; then
             # The registry file grows across boards: merge this board's entry into whatever is
             # already there instead of replacing it.
-            "$PY" "${PY_HELPER[@]}" - "$ENROLL_STAGING/device-credentials.json" \
+            "$PY" - "$ENROLL_STAGING/device-credentials.json" \
                 "$ENROLL_DIR/device-credentials.json" <<'PYMERGE'
 import json
 import sys
@@ -610,7 +603,7 @@ if [ "$DO_FLASH" = 1 ] || [ "$DO_PROVISION" = 1 ]; then
     # A board write or a provisioning step drives esptool (and pyserial for the console). Check
     # the interpreter up front, so a missing dependency is one actionable line rather than a
     # ModuleNotFoundError in the middle of a flash.
-    if [ "$DRY_RUN" = 0 ] && ! "$PY" "${PY_CODE[@]}" 'import esptool, serial' 2>/dev/null; then
+    if [ "$DRY_RUN" = 0 ] && ! "$PY" -c 'import esptool, serial' 2>/dev/null; then
         die "'$PY' cannot import esptool and pyserial. Set up the repository venv first:
    python3 -m venv .venv && .venv/bin/pip install esptool pyserial"
     fi
@@ -628,7 +621,7 @@ if [ "$DO_BUILD" = 1 ]; then
     # A dry-run must not create directories either (it "touches nothing"), so the mkdir is
     # gated on the real run; the bundle step below is a no-op echo in dry-run anyway.
     [ "$DRY_RUN" = 1 ] || mkdir -p "$BUNDLE_DIR"
-    run "$PY" "${PY_HELPER[@]}" "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
+    run "$PY" "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
         --build "$FIRMWARE_DIR/build" \
         --out "$BUNDLE_DIR/flash.manifest.txt" \
         --bundle "$BUNDLE_DIR/flash.bundle.bin"
@@ -656,12 +649,12 @@ if [ "$DO_FLASH" = 1 ]; then
     #    disagrees with the tree it was allegedly built from is also refused.
     FLASH_REGIONS_DIR="$BUNDLE_DIR/regions"
     [ "$DRY_RUN" = 1 ] || rm -rf "$FLASH_REGIONS_DIR"
-    run "$PY" "${PY_HELPER[@]}" "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
+    run "$PY" "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
         --verify "$BUNDLE_DIR/flash.bundle.bin" --check "$BUNDLE_DIR/flash.manifest.txt" \
         ${EXPECTED_BUNDLE_SHA256:+--expected-sha256 "$EXPECTED_BUNDLE_SHA256"} \
         --extract "$FLASH_REGIONS_DIR"
     if [ -d "$FIRMWARE_DIR/build" ]; then
-        run "$PY" "${PY_HELPER[@]}" "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
+        run "$PY" "$REPO_ROOT/scripts/bundle-esp32-flash.py" \
             --build "$FIRMWARE_DIR/build" --check "$BUNDLE_DIR/flash.manifest.txt"
     fi
     # Write ONLY the regions the manifest names, each at its own offset.
@@ -678,7 +671,7 @@ if [ "$DO_FLASH" = 1 ]; then
     if [ -f "$BUNDLE_DIR/flash.manifest.txt" ]; then
         while read -r off name; do
             FLASH_ARGS+=("$off" "$FLASH_REGIONS_DIR/$(basename "$name")")
-        done < <("$PY" "${PY_CODE[@]}" '
+        done < <("$PY" -c '
 import pathlib, sys
 for raw in pathlib.Path(sys.argv[1]).read_text().splitlines():
     if raw.startswith("offset="):
@@ -691,12 +684,12 @@ for raw in pathlib.Path(sys.argv[1]).read_text().splitlines():
         # bundle has been downloaded. Say what the regions come from rather than
         # inventing offsets -- a guessed flash map is how a board gets bricked.
         [ "$DRY_RUN" = 1 ] || die "no flash regions in $BUNDLE_DIR/flash.manifest.txt"
-        run "$PY" "${PY_MODULE[@]}" esptool --chip esp32s3 --port "$PORT" --baud 460800 \
+        run "$PY" -m esptool --chip esp32s3 --port "$PORT" --baud 460800 \
             --before default-reset --after hard-reset \
             write_flash --flash_mode dio --flash_size 8MB --flash_freq 80m \
             "<offset and region taken from $BUNDLE_DIR/flash.manifest.txt>"
     else
-        run "$PY" "${PY_MODULE[@]}" esptool --chip esp32s3 --port "$PORT" --baud 460800 \
+        run "$PY" -m esptool --chip esp32s3 --port "$PORT" --baud 460800 \
             --before default-reset --after hard-reset \
             write_flash --flash_mode dio --flash_size 8MB --flash_freq 80m \
             "${FLASH_ARGS[@]}"
@@ -712,7 +705,7 @@ fi
 # provisioning helpers, so nothing secret lands in a shell history or a log line.
 if [ "$DO_PROVISION" = 1 ]; then
     echo "== provision ($PORT) =="
-    [ -n "$TLS_CERTS_DIR" ] || die "--tls-certs is required (the Gateway's state/registry-tls directory)"
+    [ -n "$TLS_CERTS_DIR" ] || die "--tls-certs is required (the bridge's state/registry-tls directory)"
     [ -n "$DEVICE_ID" ]     || die "--device-id is required (the registry identity this board is enrolled as)"
     [ -n "$ENDPOINT" ]      || die "--endpoint is required (tls://host:port; the board dials exactly this)"
     [ -n "$WIFI_SSID" ]     || die "--wifi-ssid is required (the network the board joins)"
@@ -738,20 +731,20 @@ if [ "$DO_PROVISION" = 1 ]; then
     if [ "$ENDPOINT_PORT" -lt 1 ] || [ "$ENDPOINT_PORT" -gt 65535 ]; then
         die "--endpoint port out of range 1-65535: $ENDPOINT_PORT"
     fi
-    # The registry file sits beside the certs directory in the Gateway's state/; --registry overrides.
+    # The registry file sits beside the certs directory in the bridge's state/; --registry overrides.
     [ -n "$REGISTRY_FILE" ] || REGISTRY_FILE="$(dirname "$TLS_CERTS_DIR")/device-credentials.json"
     [ "$DRY_RUN" = 1 ] || [ -d "$TLS_CERTS_DIR" ] || die "no TLS cert directory at $TLS_CERTS_DIR"
     [ "$DRY_RUN" = 1 ] || [ -f "$TLS_CERTS_DIR/client-ca.crt" ] || die "no client-ca.crt in $TLS_CERTS_DIR"
     [ "$DRY_RUN" = 1 ] || [ -f "$TLS_CERTS_DIR/$DEVICE_ID.crt" ] || die "no $DEVICE_ID.crt in $TLS_CERTS_DIR (is the device enrolled?)"
     [ "$DRY_RUN" = 1 ] || [ -f "$TLS_CERTS_DIR/$DEVICE_ID.key" ] || die "no $DEVICE_ID.key in $TLS_CERTS_DIR (is the device enrolled?)"
-    [ "$DRY_RUN" = 1 ] || [ -f "$REGISTRY_FILE" ] || die "no registry file at $REGISTRY_FILE (the Gateway's state/device-credentials.json)"
+    [ "$DRY_RUN" = 1 ] || [ -f "$REGISTRY_FILE" ] || die "no registry file at $REGISTRY_FILE (the bridge's state/device-credentials.json)"
     [ "$DRY_RUN" = 1 ] || [ -f "$WIFI_PSK_FILE" ] || die "wifi psk file not found: $WIFI_PSK_FILE"
 
-    # 1. The TLS credential region: the CA that signed the Gateway, this device's certificate and
-    #    key, the pinned fingerprint of the Gateway's certificate, and the host:port to dial.
-    #    The Gateway's registry file cross-checks that the certificate being written is the one the
-    #    Gateway has on file for this identity, so a mix-up is refused before a byte is written.
-    run "$PY" "${PY_HELPER[@]}" "$REPO_ROOT/scripts/provision-device-tls.py" \
+    # 1. The TLS credential region: the CA that signed the bridge, this device's certificate and
+    #    key, the pinned fingerprint of the bridge's certificate, and the host:port to dial.
+    #    The bridge's registry file cross-checks that the certificate being written is the one the
+    #    bridge has on file for this identity, so a mix-up is refused before a byte is written.
+    run "$PY" "$REPO_ROOT/scripts/provision-device-tls.py" \
         --certs "$TLS_CERTS_DIR" --device "$DEVICE_ID" \
         --host "$ENDPOINT_HOST" \
         --port  "$ENDPOINT_PORT" \
@@ -792,22 +785,26 @@ if [ "$DO_PROVISION" = 1 ]; then
         fi
     fi
     [ "$DRY_RUN" = 1 ] || [ -f "$MODEL_FILE" ] || die "model file not found: $MODEL_FILE"
-    run "$PY" "${PY_HELPER[@]}" "$REPO_ROOT/scripts/provision-device-model.py" --port "$PORT" \
+    run "$PY" "$REPO_ROOT/scripts/provision-device-model.py" --port "$PORT" \
         --model "$MODEL_FILE" --name "$MODEL_NAME"
+    # The model blob on its own is not enough: the detector loads the model whose header name equals
+    # the `wake_word` selector, and it keeps the PREVIOUS selector until told otherwise. Provisioning
+    # a new model without it left the board discarding the new model and not waking at all.
+    run "$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" set-wake "$MODEL_NAME"
 
     # 3. The endpoint the board dials. The scheme is the transport: tls:// is the registry
     #    standard and tcp:// a trusted-LAN rollback. A passphrase is never an argument.
-    run "$PY" "${PY_HELPER[@]}" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" set-endpoint "$ENDPOINT"
+    run "$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" set-endpoint "$ENDPOINT"
     # The friendly name is separate from the registry identity (which is the board's own MAC id
     # and cannot be changed). Set it when the house name differs, so describe/info show the name
     # the person chose instead of a MAC-derived id.
     if [ -n "$DEVICE_NAME" ] && [ "$DEVICE_NAME" != "$DEVICE_ID" ]; then
-        run "$PY" "${PY_HELPER[@]}" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" set-name "$DEVICE_NAME"
+        run "$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" set-name "$DEVICE_NAME"
     fi
 
     # 4. The Wi-Fi profile the board joins across reboots. The passphrase moves as a file; the
     #    device reports its presence, never its value.
-    run "$PY" "${PY_HELPER[@]}" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" save-profile "$WIFI_SSID" "$WIFI_PSK_FILE"
+    run "$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" save-profile "$WIFI_SSID" "$WIFI_PSK_FILE"
     # The passphrase arrived through a private file this script wrote (see the guided flow). Now
     # that the board holds it in its own storage, that copy is removed. A file the operator
     # supplied is never touched.
@@ -815,9 +812,15 @@ if [ "$DO_PROVISION" = 1 ]; then
         rm -f "$WIFI_PSK_FILE"
         unset HERMES_DISPOSABLE_PSK
     fi
-    run "$PY" "${PY_HELPER[@]}" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" list-profiles
-    echo "   provisioned: TLS credential, wake model, endpoint, Wi-Fi. On reboot the satellite"
-    echo "   associates, dials $ENDPOINT and registers as $DEVICE_ID."
+    run "$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" list-profiles
+    # A first-time board only evaluates its register-on-boot gate once, before the provisioning
+    # session's first command; a later save does not run it again. So the board is restarted here
+    # explicitly, rather than telling the person the device is restarting when nothing asked it to.
+    run "$PY" "$REPO_ROOT/scripts/esp32_provision.py" --port "$PORT" restart
+    echo "   provisioned: TLS credential, wake model, endpoint, Wi-Fi."
+    echo "   The board has been restarted. It should associate, dial $ENDPOINT and register as"
+    echo "   $DEVICE_ID within about half a minute. If it does not, power-cycle it once and check"
+    echo "   the Wi-Fi network it joined."
 fi
 
 echo "install-esp32: done"

@@ -9,13 +9,15 @@ terminal, a Python install, or any knowledge of what a Wyoming protocol is.
 | Term | Means |
 |---|---|
 | **Hermes Voice Satellite** | The project, and the name of the installer command: `hermes-voice-satellite`. |
-| **Gateway** | The service the satellites talk to and that talks to the Hermes API. One component with two roles, never two services. "Satellite Gateway" is the same thing, seen from the satellites' side. |
+| **Satellite Gateway** | The service the satellites talk to and that talks to the Hermes API. One component with two roles, never two services. Always said in full. |
 | **Satellite** | A physical device: an ESP32 with a microphone array, or a Raspberry Pi with a HAT. |
+| **the Hermes gateway** | Hermes' own messaging integration (Telegram and the rest), and its API. A different program that this project talks to, never this project's service. |
 
-The word "Gateway" was the Satellite Gateway's earlier name. It survives in three technical identifiers, which
-are file names rather than the component's name: the package directory `gateway/`, the environment file
-`satellite-gateway.env`, and the unit `hermes-voice-satellite-gateway.service`. A migration to `gateway/`, `satellite-gateway.env` and
-`hermes-voice-satellite-gateway.service` is a separate change, because it touches a running service.
+**An unqualified "gateway" in this project always means the Hermes one.** That is why the service is
+called the Satellite Gateway everywhere: in the interface, in the console, in log lines, and in these
+documents. The earlier name was "bridge", and both earlier names survive only as compatibility
+aliases: the environment file falls back to `gateway.env` and then `bridge.env`, and the device
+variables are still `VOICE_GATEWAY_*`.
 
 It is also a **configuration tool**: run it again, point it at a gateway you already set up, and
 change what can be changed without a cable.

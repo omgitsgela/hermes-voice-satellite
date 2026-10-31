@@ -66,6 +66,10 @@ def parse_duration(text: str) -> int:
 class TimerManager:
     """Durable timer store plus one deadline-driven scheduler task."""
 
+    #: How many scheduler ticks an expiry may wait for the announcement queue to make room before it
+    #: is abandoned. A queue that never drains must not pin a timer forever.
+    MAX_DELIVERY_RETRIES = 20
+
     def __init__(
         self,
         *,
@@ -199,14 +203,40 @@ class TimerManager:
         # timer gone from memory and still due in the file.
         self._save(remaining)
         self._timers = remaining
+        undelivered: list[dict] = []
         for timer in due:
             lateness = max(0.0, now - timer["due_at"])
             if lateness:
                 _LOGGER.info("timer %s expired %.1fs while the Gateway was unavailable", timer["id"], lateness)
             result = self.on_expire(dict(timer))
             if inspect.isawaitable(result):
-                await result
-        return len(due)
+                result = await result
+            if result is False:
+                # The expiry was REFUSED rather than announced: the announcement queue was full.
+                # Removal already happened above so a restart cannot announce an expiry twice, so
+                # the timer goes back as still due. Retrying is bounded, because a queue that never
+                # drains must not pin an expiry forever.
+                retries = int(timer.get("delivery_retries") or 0) + 1
+                if retries <= self.MAX_DELIVERY_RETRIES:
+                    undelivered.append({**timer, "delivery_retries": retries})
+                    _LOGGER.warning(
+                        "timer %s could not be announced (attempt %d); keeping it due",
+                        timer["id"], retries,
+                    )
+                else:
+                    _LOGGER.error(
+                        "timer %s expired and could not be announced after %d attempts; dropping it",
+                        timer["id"], self.MAX_DELIVERY_RETRIES,
+                    )
+        if undelivered:
+            self._timers = sorted(remaining + undelivered, key=lambda item: item["due_at"])
+            try:
+                self._save(self._timers)
+            except OSError as exc:
+                # In memory it is still due, so the next tick retries; a lost file only means a
+                # restart could forget it, which is no worse than the state before this change.
+                _LOGGER.error("could not persist undelivered timer expiries: %s", exc)
+        return len(due) - len(undelivered)
 
     async def start(self) -> None:
         if self._task is not None:

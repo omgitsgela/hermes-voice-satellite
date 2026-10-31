@@ -684,6 +684,12 @@ class Session:
         result = self.flash(profile_id, step="verify", port=port,
                             dial_address="", device_name="identity", dry_run=self.dry_run)
         if not result.get("ok"):
+            # A board with no satellite firmware cannot answer the console, and that board is the
+            # main reason somebody runs this installer. Ask the ROM bootloader for the factory
+            # identity instead, and say which route produced it.
+            fallback = self._rom_identity(profile_id, port)
+            if fallback:
+                return fallback
             return {"ok": False, "error": result.get("error") or result.get("summary")}
         output = str(result.get("output") or "")
         found = re.findall(r"\b(?:esp32|pi)-[0-9a-zA-Z]{4,}\b", output)
@@ -691,6 +697,29 @@ class Session:
             return {"ok": False,
                     "error": "the device did not report an identity; connect it and try again"}
         return {"ok": True, "device_id": found[0], "raw": output}
+
+    def _rom_identity(self, profile_id: str, port: str | None) -> dict | None:
+        """The factory identity, for a device whose console does not answer. None when unsupported."""
+        import re
+
+        try:
+            driver = self.registry.driver(profile_id)
+        except RegistryError:
+            return None
+        reader = getattr(driver, "rom_identity", None)
+        if reader is None or not port:
+            return None
+        from hermes_installer.driver import Runner
+
+        result = reader(port, Runner(dry_run=self.dry_run, repo_root=self.repo_root))
+        if not result.ok:
+            return None
+        found = re.findall(r"\b(?:esp32|pi)-[0-9a-zA-Z]{4,}\b", str(result.output or ""))
+        if not found:
+            return None
+        return {"ok": True, "device_id": found[0], "via": "rom-bootloader",
+                "note": ("This board has no satellite firmware yet, so its identity was read from "
+                         "the ROM bootloader.")}
 
     def preflight(self, profile_id: str, **fields: Any) -> dict:
         """Everything the stages will need, checked BEFORE anything is written.

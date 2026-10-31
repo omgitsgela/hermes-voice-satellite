@@ -24,6 +24,10 @@ Usage:
     esp32_provision.py --port <usb> scan
 """
 import argparse
+import contextlib
+import io
+import re
+import sys
 import time
 
 #: A WPA2/WPA3 passphrase is 8-63 printable characters, or a 64-hex-digit raw PSK. Both are valid
@@ -63,6 +67,54 @@ def parse_device_id(reply: str) -> str:
     if not reply.startswith(prefix) or not reply[len(prefix):].strip():
         raise RuntimeError(f'unexpected reply to DEVICE_ID: {reply}')
     return reply[len(prefix):].strip()
+
+
+def rom_identity(port: str) -> int:
+    """Read the identity from the ROM bootloader, for a board that has no satellite firmware.
+
+    A brand-new board, or one still carrying a vendor image, cannot answer the provisioning console,
+    so the console route cannot produce the identity an enrolment needs. The ROM bootloader always
+    answers. It resets the board into the bootloader to do it, which is why this is only reached when
+    the console has already refused.
+
+    esptool is imported here rather than at module scope: this file is also used on machines that
+    only ever run the console commands and have no esptool installed.
+    """
+    try:
+        import esptool
+    except ImportError:
+        print("ERROR: esptool is not available to read the ROM identity", file=sys.stderr)
+        return 2
+    transcript = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(transcript), contextlib.redirect_stderr(transcript):
+            try:
+                esptool.main(["--port", port, "--before", "default-reset",
+                              "--after", "hard-reset", "read-mac"])
+            except SystemExit:
+                pass
+    except Exception as exc:  # noqa: BLE001 - a refused read is an answer, not a crash
+        print(f"ERROR: the ROM bootloader could not be read: {exc}", file=sys.stderr)
+        return 2
+    identity = parse_rom_mac(transcript.getvalue())
+    if not identity:
+        print("ERROR: the ROM bootloader did not report a MAC", file=sys.stderr)
+        return 2
+    print(identity)
+    return 0
+
+
+def parse_rom_mac(text: str) -> str:
+    """Turn a ROM bootloader transcript into the identity this project uses for a board.
+
+    esptool prints `MAC: 68:ee:8f:4b:59:88`; the firmware derives its own identity from the same
+    factory MAC as `esp32-68ee8f4b5988`. Keeping the derivation in one function is what lets the
+    installer read an identity from a board that has no satellite firmware yet.
+    """
+    found = re.search(r"MAC:\s*((?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2})", text)
+    if not found:
+        return ""
+    return "esp32-" + found.group(1).replace(":", "").lower()
 
 
 def block_terminator(action: str):
@@ -221,6 +273,17 @@ def main():
     sub.add_parser('clear-profiles')
     sub.add_parser('connect')
     sub.add_parser('scan')
+    wake = sub.add_parser(
+        'set-wake',
+        help='the wake model SELECTOR (the model header name, e.g. hey_hermes). Set it in the same '
+             'session as the model, or the board keeps looking for the previous model and never '
+             'wakes.')
+    wake.add_argument('value')
+    sub.add_parser('restart', help='reset the board so it starts the session just staged')
+    sub.add_parser(
+        'rom-mac',
+        help='the board identity read from the ROM bootloader, for a board that has no satellite '
+             'firmware yet (resets the board into the bootloader to do it)')
     args = parser.parse_args()
 
     command = {'status': 'STATUS', 'device-id': 'DEVICE_ID', 'set-name': 'SET_NAME',
@@ -229,10 +292,16 @@ def main():
                'connect': 'WIFI_CONNECT', 'scan': 'WIFI_SCAN'}.get(args.action)
     if args.action == 'set-endpoint':
         command = 'SET_ENDPOINT ' + args.endpoint
+    elif args.action == 'set-wake':
+        command = 'SET_WAKE ' + args.value
     elif args.action == 'set-name':
         command = 'SET_NAME ' + args.value
     elif args.action == 'remove-profile':
         command = f'WIFI_PROFILE_REMOVE {args.ssid}'
+
+    if args.action == 'rom-mac':
+        # Needs the port to itself, so it runs before the console connection is opened.
+        return rom_identity(args.port)
 
     import serial
     # Set modem control before opening: ordinary commands must not reset the MCU.
@@ -243,7 +312,18 @@ def main():
     try:
         connection.open()
         connection.reset_input_buffer()
-        if args.action == 'save-profile':
+        if args.action == 'restart':
+            # The standard ESP32 auto-reset: EN low through RTS, IO0 left high through DTR. Staging
+            # settings changes nothing until the board runs again, and a fresh board evaluates its
+            # register-on-boot gate only once, before its first command.
+            connection.dtr = True
+            connection.rts = True
+            time.sleep(0.1)
+            connection.rts = False
+            time.sleep(0.1)
+            connection.dtr = False
+            print("reset")
+        elif args.action == 'save-profile':
             # Stage the pair (each step acknowledged), then save it as a profile. The PSK is
             # read from its file and never printed; a refused save raises, so a failed save is
             # never reported as success.
@@ -268,4 +348,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main() or 0)

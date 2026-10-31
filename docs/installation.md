@@ -115,8 +115,8 @@ here is accepted by the exact lookup the Satellite Gateway's registry builds.
 ### Verifying the gateway
 
 ```sh
-systemctl --user status hermes-voice-satellite
-journalctl --user -u hermes-voice-satellite -n 30
+systemctl --user status hermes-voice-satellite-gateway.service
+journalctl --user -u hermes-voice-satellite-gateway.service -n 30
 ss -ltnup | grep -E '1070[0-9]|8765'
 ```
 
@@ -248,20 +248,35 @@ manifest instead:
 # manifest check: all files match
 ```
 
-A reviewed bundle can be flashed without the build tree, because esptool writes the one file
-straight to `0x0` (the same invocation `install-esp32.sh --flash` uses):
+A reviewed bundle can be flashed without the build tree, because the bundler writes each named
+region to the offset the manifest gives it:
 
 ```sh
-python -m esptool --chip esp32s3 --baud 460800 --before default-reset --after hard-reset \
-    write_flash --flash_mode dio --flash_size 8MB --flash_freq 80m \
-    0x0 flash.bundle.bin
+scripts/install-esp32.sh --flash --port /dev/ttyACM0 --bundle flash.bundle.bin
 ```
 
-**Flash rules.** One file, to `0x0`, DIO flash at 8 MB and 80 MHz (the partition table the app was
-built against). No chip erase: the TLS credential region and the wake model live in their own
-partitions, and erasing the chip would wipe a provisioned satellite back to a dead board. No
-partition-table change: the offsets in the bundle are the build's flash map, and a different map is
-a different app.
+**Flash rules, and one that is easy to get wrong.** Write the bundle's regions at their offsets, DIO
+flash at 8 MB and 80 MHz (the partition table the app was built against). No chip erase: the TLS
+credential region and the wake model live in their own partitions, and erasing the chip would wipe a
+provisioned satellite back to a dead board. No partition-table change: the offsets in the bundle are
+the build's flash map, and a different map is a different app.
+
+**Never write the merged image at `0x0`.** A merged image is padded with `0xFF` between the parts it
+contains, and those gaps are exactly where the board keeps its saved settings: NVS (the endpoint, the
+bound Wi-Fi profiles, the wake selector and the device name) and the PHY calibration data sit before
+the application. Writing one file from `0x0` overwrites them, so an update performed "the simple way"
+silently returns a configured satellite to an unconfigured board -- with no `erase_flash` anywhere in
+the command. If you need to do it by hand rather than with the script, extract the bundle first and
+write each offset the manifest lists:
+
+```sh
+.venv/bin/python scripts/bundle-esp32-flash.py --extract flash.extracted --bundle flash.bundle.bin
+# then, for each line of the manifest, one write_flash of that file at that offset
+```
+
+The wake model is a separate write to its own partition, described below, and the wake selector has
+to agree with it: a model whose header name does not match the board's `wake_word` is ignored at boot
+and the satellite stops waking.
 
 The wake model is a second, separate write to the `model` partition — that is what
 `install-esp32.sh --provision` does, and it is why the model swap never required an app rebuild.

@@ -98,7 +98,7 @@ device and receive its audio. Everything else in the stack is loopback only.
 
 | Path | What it is |
 |---|---|
-| `gateway/` | The Satellite Gateway itself: endpointing, STT, TTS, gateway client, satellite client, announcements |
+| `satellite_gateway/` | The Satellite Gateway itself: endpointing, STT, TTS, gateway client, satellite client, announcements |
 | `scripts/` | Operational scripts: live checks, tests, chime generation, capture tools |
 | `pi/` | The device side: wake shim, LED service, the systemd units, and the device's configuration template (`pi/systemd/satellite.env`) |
 | `sounds/` | Chimes and tones the device plays |
@@ -155,7 +155,7 @@ python3.11 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m pip check
 .venv/bin/python -m piper.download_voices --download-dir voices en_US-hfc_male-medium
-cp bridge.env.example satellite-gateway.env
+cp satellite-gateway.env.example satellite-gateway.env
 ```
 
 Set your host, device identity, session, registry and announcement bind values in

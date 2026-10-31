@@ -442,6 +442,11 @@ class Announcer:
             _LOGGER.error("timer %s expired but the announcement queue was full", timer.get("id"))
             self._log({"outcome": "queue_full", "source": "timer", "key": timer.get("id"),
                        "text": text})
+            # Tell the scheduler the expiry was NOT delivered. Swallowing this removed the timer
+            # from memory and disk, so a full queue silently deleted the only record that somebody
+            # was owed an announcement.
+            return False
+        return True
 
     async def _handle_timers_get(self, request: web.Request) -> web.Response:
         if not self._authorised(request):

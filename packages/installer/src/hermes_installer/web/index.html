@@ -428,7 +428,7 @@ function visibleSteps() {
 function relabelProgress() {
   // Number the steps a person will actually take, so a route that skips the gateway reads
   // "1. Start  2. Device" rather than leaving a hole at 2.
-  const names = { 1: "Start", 2: "Gateway", 3: "Device" };
+  const names = { 1: "Start", 2: "Satellite Gateway", 3: "Device" };
   const shown = visibleSteps();
   shown.forEach((n, index) => {
     $("step-tab-" + n).textContent = `${index + 1}. ${names[n]}`;
@@ -499,7 +499,7 @@ function selectDevice(event) {
       <li>${card ? "Its microSD card, and a card reader connected to this computer."
                  : "A USB data cable (not a charging-only cable)."}</li>
       <li>Your Wi-Fi network name, if you want it changed.</li>
-      <li>The Satellite Satellite Gateway address, identity code and pairing words from its setup.</li>
+      <li>The Satellite Gateway address, identity code and pairing words from its setup.</li>
       <li>A working connection from this computer to the Satellite Gateway.</li>
     </ul>`;
   updateStartButton();
@@ -729,7 +729,7 @@ $("code-match").onclick = () => {
 $("code-mismatch").onclick = () => {
   $("code-verdict").innerHTML = `
     <div class="notice bad"><strong>Don't pair yet.</strong>
-      <p style="margin:8px 0 0">Check the Satellite Satellite Gateway address and compare the code again. If you set the
+      <p style="margin:8px 0 0">Check the Satellite Gateway address and compare the code again. If you set the
       gateway up again, use the code from the most recent setup.</p></div>`;
   $("pair-panel").classList.add("hidden");
   announce("Codes did not match. Pairing is paused.");

@@ -92,6 +92,14 @@ class Esp32Commands(unittest.TestCase):
         self.assertEqual(result.commands[0].secret_file, "/run/psk")
 
     @posix_only
+    def test_the_factory_identity_is_read_through_the_rom_bootloader(self):
+        """A board with no satellite firmware cannot answer the console, and that is the board a
+        first-time install has to prepare."""
+        result = esp32.DRIVER.rom_identity("/dev/ttyACM0", dry())
+        argv = result.commands[0].argv
+        self.assertIn("rom-mac", argv)
+        self.assertEqual(argv[argv.index("--port") + 1], "/dev/ttyACM0")
+
     def test_certs_use_the_real_flag_name(self):
         argv = esp32.DRIVER.flash(self.request(certs_dir="/certs"), dry()).commands[0].argv
         self.assertIn("--tls-certs", argv)

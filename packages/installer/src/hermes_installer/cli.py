@@ -99,7 +99,7 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
     out("")
     out("  Hermes voice installer")
     out("  ----------------------")
-    out("  Sets up a voice gateway, a satellite, or both.")
+    out("  Sets up the Satellite Gateway, a satellite, or both.")
     out("")
 
     # A workbench does not need Hermes. Setting up a satellite from a laptop that will never run
@@ -107,7 +107,7 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
     # the gateway role, not the whole program.
     if state["hermes"] == "none":
         out("  Hermes is not installed on this machine.")
-        out("  That only matters if this machine is meant to BE the gateway.")
+        out("  That only matters if this machine is meant to BE the Satellite Gateway.")
         out("")
         role = prompt.choice(
             "What are we setting up?",
@@ -121,7 +121,7 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
         out("")
         role = prompt.choice(
             "What are we setting up?",
-            ["This machine as the gateway", "A satellite on this machine's card or cable",
+            ["This machine as the Satellite Gateway", "A satellite on this machine's card or cable",
              "Both, gateway first", "Change a device I have already set up"],
         )
 
@@ -223,6 +223,8 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
             if identity.get("ok"):
                 fields["device_id"] = identity["device_id"]
                 out(f"  This device calls itself {identity['device_id']}.")
+                if identity.get("note"):
+                    out(f"  {identity['note']}")
             else:
                 out(f"  {identity.get('error')}")
                 return 1
@@ -278,7 +280,7 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
         out("")
         out(f"  That gateway's identity code is  {code}")
         out("  This is how you prove you are talking to your own gateway and not another machine.")
-        if not prompt.yes_no("Does it match the code you were given when the gateway was set up?"):
+        if not prompt.yes_no("Does it match the code you were given when the Satellite Gateway was set up?"):
             out("  Stopped. Nothing was sent, and the words were not used.")
             return 1
         words = prompt.secret("Pairing words")
