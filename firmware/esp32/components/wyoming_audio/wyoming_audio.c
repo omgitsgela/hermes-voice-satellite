@@ -396,8 +396,21 @@ void wy_control_i32_command(uint8_t out[XVF_I2C_SET32_CMD_LEN], uint8_t resid, u
 float wy_mic_gain_multiple(int percent) {
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
-    float multiple = WY_MIC_GAIN_MAX_MULTIPLE * (float)percent / 100.0f;
-    return multiple < WY_MIC_GAIN_MIN_MULTIPLE ? WY_MIC_GAIN_MIN_MULTIPLE : multiple;
+    /* CALIBRATED ON THE DEVICE, 2026-10-30. The fleet's default mic_gain is 78, and 78 has to mean
+     * UNITY -- the level this microphone was measured and tuned at.
+     *
+     * Derived from a clean measurement pair at the default setting (tap 7/3, real sentence): room
+     * p50 183, speech median 1278, gate 503, one clean transcript. The previous mapping made 78%
+     * mean 12.5x (clamped to 8x), which was measured at room p50 2112 and speech 9960 with peaks at
+     * 25609 -- a floor ABOVE the gate's 1000 ceiling, so the energy gate was passing everything and
+     * the VAD alone was holding the line, and the voice was close to clipping.
+     *
+     * So the scale is now relative to unity at WY_MIC_GAIN_UNITY_PERCENT, with the floor and ceiling
+     * still hard limits: no value can silence the microphone, and none can drive it to clipping. */
+    float multiple = (float)percent / (float)WY_MIC_GAIN_UNITY_PERCENT;
+    if (multiple < WY_MIC_GAIN_MIN_MULTIPLE) multiple = WY_MIC_GAIN_MIN_MULTIPLE;
+    if (multiple > WY_MIC_GAIN_MAX_MULTIPLE) multiple = WY_MIC_GAIN_MAX_MULTIPLE;
+    return multiple;
 }
 
 void wy_control_f32_command(uint8_t out[XVF_I2C_SET32_CMD_LEN], uint8_t resid, uint8_t cmd,

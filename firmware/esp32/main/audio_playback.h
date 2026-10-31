@@ -80,7 +80,7 @@ int audio_xvf_set_mic_gain(int mic_gain_percent);
 /* Ceiling on the ASR output gain actually applied (AEC_ASROUTGAIN). The register allows up to
  * 1000x, which would only clip; 8x is +18 dB, ample for a far-field talker and well inside the
  * limiter. */
-#define XVF_ASR_GAIN_MAX 8.0f
+#define XVF_ASR_GAIN_MAX 4.0f
 
 /* The gain the microphone path needs, as a percentage of the compile-time maximum. The fleet
  * default is 78, which maps to about 12.5x before the ASR ceiling clamps it to 8x. */

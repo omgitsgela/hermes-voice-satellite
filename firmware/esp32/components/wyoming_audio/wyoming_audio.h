@@ -224,8 +224,12 @@ void wy_control_f32_command(uint8_t out[XVF_I2C_SET32_CMD_LEN], uint8_t resid, u
  * 0 must NOT produce 0.0 (that would silence the microphone, and a dead microphone is
  * indistinguishable from a hardware fault), and the top of the range must be the compile-time
  * maximum rather than something the caller guessed. */
-#define WY_MIC_GAIN_MAX_MULTIPLE 16.0f
-#define WY_MIC_GAIN_MIN_MULTIPLE 0.5f
+/* 78 is the fleet default and the setting the device was measured and tuned at, so 78 means
+ * UNITY. The bounds are hard limits, not tuning: no value may silence the microphone (0 -> a real,
+ * audible floor) and none may drive the capture into clipping. */
+#define WY_MIC_GAIN_UNITY_PERCENT 78
+#define WY_MIC_GAIN_MAX_MULTIPLE  4.0f
+#define WY_MIC_GAIN_MIN_MULTIPLE  0.5f
 float wy_mic_gain_multiple(int percent);
 
 /* Serialize the audio-chunk data field for the given format into buffer (capacity bytes,
