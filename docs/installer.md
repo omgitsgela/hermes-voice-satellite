@@ -244,9 +244,11 @@ scripts/build-installer.sh --check   # what would be used
 scripts/build-installer.sh           # build into dist/hermes-installer/
 ```
 
-The result runs with no Python, no virtualenv and no pip on the target machine. Measured on this
-checkout: **24 MB** as a directory, after stripping the bundled interpreter. Unstripped the same build
-was 241 MB, almost all of it symbols in the interpreter, which is why the spec sets `strip=True`.
+The result runs with no Python, no virtualenv and no pip on the target machine. Sizes as built by CI:
+**20 MB on Linux, 21 MB on Windows, 20 MB on macOS**, as directories. Locally, on an interpreter built
+with symbols, the same build was 24 MB stripped and **241 MB unstripped**, which is why the spec sets
+`strip` — and why it is set per platform, because stripping is not supported on Windows and produced a
+binary there that could not load its own Python DLL.
 
 Two honest notes for whoever ships it:
 
@@ -257,6 +259,27 @@ Two honest notes for whoever ships it:
 
 The bundle contains the interface file as data, so a build that forgets `datas` produces an installer
 whose window is empty; `--status` in a clean environment is the check that catches it.
+
+## Reviewing this
+
+```sh
+bash scripts/test-installer.sh          # six suites, offline, about 40 seconds
+bash scripts/build-installer.sh         # a standalone bundle in dist/
+python -m hermes_installer.cli --gui     # the interface (dry-run with --dry-run)
+python -m hermes_installer.cli           # the same flow, in a console
+python -m hermes_gateway.pairing_server --help
+```
+
+Worth looking at specifically, because these are the parts where a wrong decision would be expensive:
+
+1. **The device stage starts with the device, not the gateway.** A certificate is issued for the board's
+   own identity, and that identity can only be read while the device is connected.
+2. **The identity check is three answers, not a warning.** Match, don't match, and "I don't have my
+   code" each lead somewhere sensible, and changing the address invalidates everything downstream.
+3. **The capability badges come from the profile.** What a person is told can change remotely is the
+   same data the driver obeys; a profile that claims a cable-only setting is remote is rejected.
+4. **The wake-word list shows both figures** with the caveat, and offers a file of your own.
+5. **`--dry-run` is a ceiling.** Nothing a client sends can turn a preview into a real install.
 
 ## Status of this first draft
 
