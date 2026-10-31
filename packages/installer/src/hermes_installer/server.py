@@ -157,22 +157,73 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"error": "not found"}, 404)
 
 
-def serve(session: Session, *, port: int = 0, open_browser: bool = True) -> int:
-    """Run the interface until interrupted. Returns a process exit code."""
+def _webview_available() -> bool:
+    """Whether importing pywebview works at all. A usable backend is discovered on first window."""
+    try:
+        import webview  # noqa: F401
+        return True
+    except Exception:  # noqa: BLE001 - absent is the normal case
+        return False
+
+
+def _open_window(url: str) -> bool:
+    """A real window when a webview backend is installed, otherwise say so and let the caller fall back.
+
+    pywebview needs native components (WebView2 on Windows, GTK or Qt on Linux). Those are a
+    convenience, never a prerequisite, which is why this returns False instead of raising.
+    """
+    try:
+        import webview  # noqa: F401 - presence is the point
+    except Exception:  # noqa: BLE001 - absent, or present without a usable backend
+        return False
+    try:
+        webview.create_window("Hermes voice installer", url, width=980, height=820)
+        webview.start()
+        return True
+    except Exception:  # noqa: BLE001 - a broken backend must not stop the installer
+        return False
+
+
+def serve(session: Session, *, port: int = 0, open_browser: bool = True,
+          window: bool = True) -> int:
+    """Run the interface until the window closes or the process is interrupted.
+
+    One server, one lifetime. Either a window owns the process while it is open, or the browser does;
+    the server is never started twice and the session's temporary credentials are always cleaned up.
+    """
     handler = type("BoundHandler", (Handler,),
                    {"session": session, "token": secrets.token_urlsafe(32)})
     server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     url = f"http://127.0.0.1:{server.server_port}/"
     print(f"  Hermes voice installer is running at {url}")
     print("  Press Ctrl+C when you are finished.")
-    if open_browser:
-        threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+    serving = threading.Thread(target=server.serve_forever, daemon=True)
+
     try:
+        if window and _webview_available():
+            serving.start()
+            if _open_window(url):
+                return 0
+            # The backend was importable but could not open a window: fall back without a second
+            # server, since this one is already serving.
+            print("  Could not open a window, so the interface is in your browser.")
+            if open_browser:
+                webbrowser.open(url)
+            serving.join()
+            return 0
+
+        if open_browser:
+            threading.Timer(0.6, lambda: webbrowser.open(url)).start()
         server.serve_forever()
+        return 0
     except KeyboardInterrupt:
         print("\n  Closed.")
+        return 0
     finally:
+        try:
+            server.shutdown()
+        except Exception:  # noqa: BLE001 - already stopped
+            pass
         server.server_close()
         # Paired credentials live in a temporary directory; the session that owns them ends here.
         session.close()
-    return 0
