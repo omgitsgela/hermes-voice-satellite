@@ -94,7 +94,10 @@ with tempfile.TemporaryDirectory() as tmp:
 
     protected_failures = 0
     mod.mirror_root = lambda: mirror
-    mod.tracked_files = lambda: {"gateway/tracked.py"}
+    # The fixture this check builds is <mirror>/Gateway/tracked.py, so the stubbed "tracked" set has
+    # to name the same path. It said "gateway/tracked.py" -- a different file -- so the guard had
+    # nothing to protect and the check failed on its own inconsistency.
+    mod.tracked_files = lambda: {"Gateway/tracked.py"}
     sys.argv = [str(HERE / "prune-nas-mirror.py"), "--apply"]
     try:
         with contextlib.redirect_stdout(io.StringIO()):
