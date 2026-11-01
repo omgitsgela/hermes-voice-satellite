@@ -26,7 +26,8 @@
  * This device's apply model lives in the ADAPTER (the device glue, task 6), not here:
  * playback_volume -> set the session's live volume (immediate); wake_word/threshold -> stage
  * to NVS for the wake detector (the next increment); mic_gain/led_brightness -> no adapter
- * yet (degraded); locale/update_channel -> not device-applied. The agent stays
+ * yet (degraded). Two keys that described machinery nothing implements (a device-side locale and
+ * a firmware update track) were removed from the schema, so health means what it says. The agent stays
  * hardware-agnostic and host-testable for that reason.
  */
 
@@ -61,17 +62,13 @@ typedef enum { CFG_INT, CFG_NUM, CFG_STR } cfg_kind;
 typedef struct { const char *name; cfg_kind kind; double lo, hi;
                  const char *const *enum_values; int enum_count; } cfg_spec;
 
-static const char *const LOCALES[] = { "en-US" };
-static const char *const CHANNELS[] = { "stable", "beta" };
 static const cfg_spec SPECS[] = {
     { "wake_word",        CFG_STR, 0, 0, NULL, 0 },
     { "wake_threshold",   CFG_NUM, 0.05, 0.99, NULL, 0 },
-    { "mic_gain",         CFG_INT, 0, 100, NULL, 0 },
+    { "mic_volume",         CFG_INT, 0, 100, NULL, 0 },
     { "playback_volume",  CFG_INT, 0, 100, NULL, 0 },
     { "led_brightness",   CFG_INT, 1, 31, NULL, 0 },
     {"snd_rate",          CFG_INT, 8000, 96000, NULL, 0},   /* reported CAPABILITY, never desired */
-    { "locale",           CFG_STR, 0, 0, LOCALES, 1 },
-    { "update_channel",   CFG_STR, 0, 0, CHANNELS, 2 },
 };
 #define CFG_SPEC_COUNT (int)(sizeof(SPECS) / sizeof(SPECS[0]))
 

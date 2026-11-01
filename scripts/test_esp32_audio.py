@@ -581,7 +581,7 @@ class AudioTests(unittest.TestCase):
         src = (ROOT / 'firmware/esp32/main/gateway_task.c').read_text()
         self.assertIn('audio_xvf_set_mic_gain', src,
                       'the config apply path must actually write the gain to the co-processor')
-        self.assertIn('"mic_gain"', src)
+        self.assertIn('"mic_volume"', src)
 
     def test_playback_batch_matches_the_tx_dma_descriptor(self):
         """A write SMALLER than one TX DMA descriptor gets paced by the descriptor cycle rather

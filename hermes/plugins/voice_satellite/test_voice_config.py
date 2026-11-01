@@ -23,11 +23,11 @@ def main() -> int:
         if not condition:
             failures.append(f"{label}: {detail}")
 
-    fleet = {"kitchen-1": {"device_id": "kitchen-1", "generation": 2, "desired": {"mic_gain": 78},
-                           "reported": {"mic_gain": 78}, "health": "healthy",
+    fleet = {"kitchen-1": {"device_id": "kitchen-1", "generation": 2, "desired": {"mic_volume": 78},
+                           "reported": {"mic_volume": 78}, "health": "healthy",
                            "converged": True, "drift": {}, "connected": True},
-             "hall-1": {"device_id": "hall-1", "generation": 2, "desired": {"mic_gain": 78},
-                        "reported": {"mic_gain": 78}, "health": "healthy",
+             "hall-1": {"device_id": "hall-1", "generation": 2, "desired": {"mic_volume": 78},
+                        "reported": {"mic_volume": 78}, "health": "healthy",
                         "converged": True, "drift": {}, "connected": True}}
     calls: list[tuple[str, str, dict | None]] = []
 
@@ -37,7 +37,7 @@ def main() -> int:
             return {"ok": True, "follow_up": False, "endpointing_profile": "standard"}
         if path == "/config/schema":
             return {"ok": True, "schema_version": 1,
-                    "device_settings": {"mic_gain": {"type": "integer", "minimum": 0, "maximum": 100,
+                    "device_settings": {"mic_volume": {"type": "integer", "minimum": 0, "maximum": 100,
                                                      "default": 78, "apply": "immediate"}}}
         if path == "/config/devices":
             return {"ok": True, "count": len(fleet), "devices": list(fleet.values())}
@@ -82,7 +82,7 @@ def main() -> int:
           and all(d["converged"] is True for d in result["devices"]), result)
 
     result = json.loads(voice_tool.handle({
-        "action": "fleet_config_set", "settings": {"mic_gain": 82}}))
+        "action": "fleet_config_set", "settings": {"mic_volume": 82}}))
     check("fleet_config_set advances every registered device by one generation",
           result["ok"] and result["count"] == 2
           and all(d["generation"] == 3 for d in result["devices"]), result)
@@ -107,7 +107,7 @@ def main() -> int:
           put and put[-1][2]["device_ids"] == ["kitchen-1"], put)
 
     result = json.loads(voice_tool.handle({
-        "action": "fleet_config_set", "settings": {"mic_gain": 5},
+        "action": "fleet_config_set", "settings": {"mic_volume": 5},
         "device_ids": ["ghost-1"]}))
     check("a fleet write to an unknown target is refused and not reported verified",
           result["ok"] is False and "ghost-1" in result["error"], result)
@@ -125,10 +125,10 @@ def main() -> int:
           result["ok"] and result["device"]["generation"] == 4, result)
 
     result = json.loads(voice_tool.handle(
-        {"action": "config_set", "device_id": "kitchen-1", "settings": {"mic_gain": 82}}))
+        {"action": "config_set", "device_id": "kitchen-1", "settings": {"mic_volume": 82}}))
     check("config_set uses the current generation and reads the result back",
           result["ok"] and result["generation"] == 5
-          and result["desired"]["mic_gain"] == 82
+          and result["desired"]["mic_volume"] == 82
           and result["converged"] is False, result)
     check("config_set reports whether the write reached a live device",
           result["dispatched"] is True, result)

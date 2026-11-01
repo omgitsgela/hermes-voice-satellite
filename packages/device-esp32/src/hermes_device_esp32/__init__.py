@@ -45,7 +45,7 @@ PROFILE = DeviceProfile(
     settings={
         "playback_volume": Setting("playback_volume", "immediate", remote=True,
                                    help="How loud it speaks."),
-        "mic_gain": Setting("mic_gain", "immediate", remote=True,
+        "mic_volume": Setting("mic_volume", "immediate", remote=True,
                             help="How sensitive the microphones are. 78 is unity; higher makes a "
                                  "quiet room look like speech."),
         "led_brightness": Setting("led_brightness", "service_restart", remote=True),

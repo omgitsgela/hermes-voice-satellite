@@ -45,13 +45,13 @@ def main() -> int:
         plane.ensure_device("hall-1")
 
         # A fleet write touches every device, once each.
-        records = plane.set_desired_fleet({"mic_gain": 80})
+        records = plane.set_desired_fleet({"mic_volume": 80})
         check("a fleet write returns every device", len(records) == 3, len(records))
         by_id = {r["device_id"]: r for r in records}
         check("every device's generation advanced by one",
               all(r["generation"] == 2 for r in records), records)
         check("the patch is merged into each device's desired state",
-              all(r["desired"].get("mic_gain") == 80 for r in records), records)
+              all(r["desired"].get("mic_volume") == 80 for r in records), records)
         check("untouched settings are preserved per device",
               by_id["kitchen-1"]["desired"].get("playback_volume") == 55,
               by_id["kitchen-1"]["desired"])
@@ -72,8 +72,8 @@ def main() -> int:
 
         # Unknown and empty targets are refused, not silently ignored.
         for label, args, kwargs in [
-            ("an unknown target is refused", ({"mic_gain": 5},), {"device_ids": ["ghost-1"]}),
-            ("an empty target set is refused", ({"mic_gain": 5},), {"device_ids": []}),
+            ("an unknown target is refused", ({"mic_volume": 5},), {"device_ids": ["ghost-1"]}),
+            ("an empty target set is refused", ({"mic_volume": 5},), {"device_ids": []}),
             ("an empty patch is refused", ({},), {}),
         ]:
             try:
@@ -95,7 +95,7 @@ def main() -> int:
         check("wake_threshold is restart-class", setting_requires_restart("wake_threshold"))
         check("wake_word is restart-class", setting_requires_restart("wake_word"))
         check("led_brightness is restart-class", setting_requires_restart("led_brightness"))
-        check("mic_gain is not restart-class", not setting_requires_restart("mic_gain"))
+        check("mic_gain is not restart-class", not setting_requires_restart("mic_volume"))
         check("playback_volume is not restart-class",
               not setting_requires_restart("playback_volume"))
 

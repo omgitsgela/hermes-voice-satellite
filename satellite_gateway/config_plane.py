@@ -36,7 +36,10 @@ DEVICE_SETTING_SCHEMA: dict[str, dict[str, Any]] = {
         "type": "number", "minimum": 0.05, "maximum": 0.99,
         "default": 0.35, "apply": "wake_service_restart",
     },
-    "mic_gain": {
+    "mic_volume": {
+        # How loudly this satellite hears you. The schema names the intent; whether a device turns it
+        # into microphone gain, a DSP control, or nothing at all (a fixed-gain HAT) is the device's
+        # own configuration, and it reports back the level it actually runs at.
         "type": "integer", "minimum": 0, "maximum": 100,
         "default": 78, "apply": "immediate",
     },
@@ -59,14 +62,6 @@ DEVICE_SETTING_SCHEMA: dict[str, dict[str, Any]] = {
         "type": "integer", "minimum": 1, "maximum": 31,
         "default": 31, "apply": "led_service",
     },
-    "locale": {
-        "type": "string", "enum": ["en-US"], "default": "en-US",
-        "apply": "next_turn",
-    },
-    "update_channel": {
-        "type": "string", "enum": ["stable", "beta"], "default": "stable",
-        "apply": "next_update_check",
-    },
 }
 
 
@@ -82,7 +77,7 @@ class ConfigConflict(RuntimeError):
 #: is restart-class: applying it restarts the wake engine or the LED service, which on this
 #: hardware means the audio stack goes quiet for a moment. A fleet write that touches any of
 #: these must be paced so the rooms do not all go silent at once.
-IMMEDIATE_APPLY = frozenset({"immediate", "next_turn", "next_update_check"})
+IMMEDIATE_APPLY = frozenset({"immediate"})
 
 
 def setting_requires_restart(name: str) -> bool:

@@ -567,7 +567,7 @@ async def t_configuration_control_plane() -> None:
             "schema_version": 1,
             "device_id": "kitchen-1",
             "generation": 4,
-            "settings": {"mic_gain": 78},
+            "settings": {"mic_volume": 78},
         }))
         deadline = asyncio.get_running_loop().time() + TIMEOUT
         while (asyncio.get_running_loop().time() < deadline

@@ -68,11 +68,11 @@ async def main() -> int:
         schema = json.loads(schema_response.text)
         check("schema endpoint is versioned and typed",
               schema_response.status == 200 and schema["schema_version"] == 1
-              and schema["device_settings"]["mic_gain"]["type"] == "integer", schema)
+              and schema["device_settings"]["mic_volume"]["type"] == "integer", schema)
 
         write = await announcer._handle_config_desired(FakeRequest({
             "expected_generation": 0,
-            "settings": {"wake_word": "hey_hermes", "mic_gain": 78},
+            "settings": {"wake_word": "hey_hermes", "mic_volume": 78},
         }))
         written = json.loads(write.text)
         check("desired state write returns accepted generation",
@@ -82,7 +82,7 @@ async def main() -> int:
 
         conflict = await announcer._handle_config_desired(FakeRequest({
             "expected_generation": 0,
-            "settings": {"mic_gain": 79},
+            "settings": {"mic_volume": 79},
         }))
         check("stale HTTP write is a conflict", conflict.status == 409, conflict.text)
 
@@ -94,7 +94,7 @@ async def main() -> int:
 
         report = await announcer._handle_config_reported(FakeRequest({
             "generation": 1,
-            "actual": {"wake_word": "hey_hermes", "mic_gain": 78},
+            "actual": {"wake_word": "hey_hermes", "mic_volume": 78},
             "health": "healthy",
             "error": None,
         }))

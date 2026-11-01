@@ -534,7 +534,7 @@ async def t_configuration_report_control_event() -> None:
         assert (await dev.register("kitchen-1")).type == REGISTER_OK_EVENT
         report = {
             "generation": 3,
-            "actual": {"mic_gain": 78},
+            "actual": {"mic_volume": 78},
             "health": "healthy",
             "error": None,
         }

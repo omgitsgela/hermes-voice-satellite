@@ -262,7 +262,7 @@ static void cfg_stage_wake(const char *key, const char *value) {
 /* The apply adapter: the device's real "what can I actually apply" half. It sets the LIVE
  * playback volume (the one setting with a live path -- the next audio slice picks it up), stages
  * wake settings to NVS for the next increment, applies led_brightness to the ring, and is HONEST
- * about the rest: mic_gain / locale / update_channel have no live adapter, so they are never put
+ * about the rest: a setting with no live adapter is never put
  * in `actual`. The health reported is degraded whenever any desired key is not in `actual` (which
  * is always, on this device, because the Satellite Gateway sends the full 7-key profile). Only what is
  * really applied goes in `actual` -- nothing is claimed that was not. */
@@ -297,16 +297,16 @@ static int cfg_apply(void *user, const char *settings_json,
             degraded = 1;   /* a value the live path refused: not applied */
         }
     }
-    /* mic_gain: NOW a live adapter. It was validated, stored and reported back to the fleet while
+    /* mic_volume: NOW a live adapter. It was validated, stored and reported back to the fleet while
      * never reaching the chip -- the device echoed a setting it had never applied, because the
      * co-processor's gain is a 4-byte float and our write path could not express one. */
-    const cJSON *gain = cJSON_GetObjectItemCaseSensitive(settings, "mic_gain");
+    const cJSON *gain = cJSON_GetObjectItemCaseSensitive(settings, "mic_volume");
     if (gain) {
         if (cJSON_IsNumber(gain) && !cJSON_IsBool(gain) &&
             gain->valuedouble >= 0 && gain->valuedouble <= XVF_MIC_GAIN_PERCENT_MAX &&
             gain->valuedouble == (double)(long)gain->valuedouble &&
             audio_xvf_set_mic_gain((int)gain->valuedouble) == 0) {
-            cJSON_AddNumberToObject(actual, "mic_gain", gain->valuedouble);
+            cJSON_AddNumberToObject(actual, "mic_volume", gain->valuedouble);
         } else {
             degraded = 1;   /* a value the live path refused: not applied */
         }

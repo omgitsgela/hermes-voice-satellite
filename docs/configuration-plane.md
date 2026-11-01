@@ -51,11 +51,19 @@ the host already did, because a host is not a trust boundary for a device.
 |---|---|---|---|---|
 | `wake_word` | string | `^[a-z0-9][a-z0-9_-]{0,63}$` | `okay_nabu` | wake service restart |
 | `wake_threshold` | number | 0.05 – 0.99 | `0.35` | wake service restart |
-| `mic_gain` | integer | 0 – 100 | `78` | immediate |
+| `mic_volume` | integer | 0 – 100 | `78` | immediate |
 | `playback_volume` | integer | 0 – 100 | `55` | immediate |
 | `led_brightness` | integer | 1 – 31 | `31` | coupled audio group restart |
-| `locale` | string | enum: `en-US` | `en-US` | next turn |
-| `update_channel` | string | enum: `stable`, `beta` | `stable` | next update check |
+
+Two keys that used to be here are gone: `locale` and `update_channel`. Neither had a consumer on any
+device -- speech is transcribed and synthesised on the Satellite Gateway, so a satellite has no use
+for a language, and `update_channel` presupposed an updater that does not exist, since firmware is
+written by cable. A schema that asks for settings nothing can honour marks every device `degraded`
+for ever, which teaches everyone to ignore the word.
+
+`mic_volume` is named for the intent, not the mechanism. How a device realises "how loudly this
+satellite hears you" is its own business: an ALSA capture control, a codec gain path, or a fixed
+level it reports honestly because the hardware has no control.
 
 `apply` is part of the contract, not a hint: it tells a client whether a change is audible immediately or
 requires a service bounce. A client that batches settings should group by `apply` so one restart covers
@@ -68,7 +76,7 @@ device. Writing `0` is not an error; it is recorded and reported, and the applie
 than the requested one, with the reason in `last_error`. See `docs/volume.md`.
 
 The other hardware settings are applied by the device's adapter (`pi/device_apply.py`) rather than staged:
-`mic_gain` (ALSA input level) and `led_brightness` / `wake_threshold` / `wake_word` (durable env-file
+`mic_volume` (the input level: an ALSA capture control on the Pi, the codec's gain path on the ESP32) and `led_brightness` / `wake_threshold` / `wake_word` (durable env-file
 writes plus a coupled service restart). Two honest caveats are built into the adapter and reported rather
 than hidden:
 
@@ -124,9 +132,9 @@ outside an enum, and a `wake_word` containing anything but lowercase letters, di
   "metadata": {"name": "Kitchen", "area": "kitchen", "firmware_version": "1.2.3",
                "capabilities": ["speaker", "led"]},
   "generation": 4,
-  "desired": {"wake_word": "hey_hermes", "mic_gain": 78},
+  "desired": {"wake_word": "hey_hermes", "mic_volume": 78},
   "reported_generation": 4,
-  "reported": {"wake_word": "hey_hermes", "mic_gain": 78},
+  "reported": {"wake_word": "hey_hermes", "mic_volume": 78},
   "health": "healthy",
   "last_error": null,
   "desired_updated_at": "2026-09-25T14:02:11+00:00",
@@ -195,7 +203,7 @@ Partial writes: `settings` is a patch merged over existing desired state, so set
 clear the others.
 
 ```json
-{"expected_generation": 3, "settings": {"mic_gain": 82}}
+{"expected_generation": 3, "settings": {"mic_volume": 82}}
 ```
 
 `202` → `{"ok": true, "accepted": true, "dispatched": true, "device": <device record>}`
@@ -260,7 +268,7 @@ write.
 The device's own report. Also carries health, so an apply failure is observable rather than inferred.
 
 ```json
-{"generation": 4, "actual": {"mic_gain": 82}, "health": "healthy", "error": null}
+{"generation": 4, "actual": {"mic_volume": 82}, "health": "healthy", "error": null}
 ```
 
 `200` → `{"ok": true, "device": <device record>}`

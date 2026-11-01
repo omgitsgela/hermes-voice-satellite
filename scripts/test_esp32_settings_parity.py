@@ -88,7 +88,7 @@ def main() -> int:
 
     # 2) mic_gain is a capability the Pi satellite does NOT have; the ESP32 must keep it.
     check("mic_gain keeps its live adapter",
-          applies_live(GATEWAY, "mic_gain"))
+          applies_live(GATEWAY, "mic_volume"))
 
     # 3) wake_word: switching models teardown/reloads the scorer, so it is staged by design.
     #    It must still be recorded, and must NOT be reported as applied.

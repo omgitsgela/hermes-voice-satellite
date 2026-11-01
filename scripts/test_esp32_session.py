@@ -1191,9 +1191,8 @@ class SessionTests(unittest.TestCase):
         lib.wy_config_set_apply.argtypes = [C.c_void_p, APPLY, C.c_void_p]
         lib.wy_config_set_apply(cfg, apply, None)
 
-        profile = {'wake_word': 'hey-hermes', 'wake_threshold': 0.5, 'mic_gain': 40,
-                   'playback_volume': volume, 'led_brightness': 10, 'locale': 'en-US',
-                   'update_channel': 'stable'}
+        profile = {'wake_word': 'hey-hermes', 'wake_threshold': 0.5, 'mic_volume': 40,
+                   'playback_volume': volume, 'led_brightness': 10}
         expected_actual = {'playback_volume': volume}
         # The session installs the handler once; the glue (or this test) owns the agent's lifetime.
         # The report buffer is an OUT parameter: ctypes must hand the C code a WRITABLE pointer,

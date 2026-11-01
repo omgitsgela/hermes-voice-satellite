@@ -105,7 +105,7 @@ async def main() -> int:
               pi_misnamed.connection.events[0])
 
         changed = loop.config_plane.set_desired(
-            "esp32-68ee8f4b5988", {"mic_gain": 82}, expected_generation=1)
+            "esp32-68ee8f4b5988", {"mic_volume": 82}, expected_generation=1)
         sent = await loop._dispatch_device_config("esp32-68ee8f4b5988", changed)
         check("API writes dispatch over the live device connection",
               sent is True and slot.connection.events[-1].data["generation"] == 2,

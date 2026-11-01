@@ -35,18 +35,16 @@ def main() -> int:
         schema = plane.schema()
         check("schema is versioned", schema["schema_version"] == 1, schema)
         check("schema exposes bounded desired-state fields",
-              {"wake_word", "wake_threshold", "mic_gain", "playback_volume",
-               "led_brightness", "locale", "update_channel"} <= set(DEVICE_SETTING_SCHEMA),
+              {"wake_word", "wake_threshold", "mic_volume", "playback_volume",
+               "led_brightness"} <= set(DEVICE_SETTING_SCHEMA),
               schema)
 
         first = plane.set_desired("kitchen-1", {
             "wake_word": "hey_hermes",
             "wake_threshold": 0.35,
-            "mic_gain": 78,
+            "mic_volume": 78,
             "playback_volume": 55,
             "led_brightness": 31,
-            "locale": "en-US",
-            "update_channel": "stable",
         }, expected_generation=0)
         check("first write advances generation", first["generation"] == 1, first)
         check("state is persisted private", state.exists() and stat.S_IMODE(state.stat().st_mode) == 0o600,
@@ -61,7 +59,7 @@ def main() -> int:
 
         bad_cases = [
             ("unknown field", {"shell_command": "reboot"}),
-            ("wrong type", {"mic_gain": "loud"}),
+            ("wrong type", {"mic_volume": "loud"}),
             ("out of range", {"wake_threshold": 1.5}),
             ("unsafe wake word", {"wake_word": "../../bad"}),
         ]
@@ -94,11 +92,15 @@ def main() -> int:
         seeded = plane.ensure_device("study-1", metadata={"name": "Study", "area": "study"})
         check("new devices receive a complete default profile",
               seeded["generation"] == 1
-              and set(seeded["desired"]) == set(DEVICE_SETTING_SCHEMA), seeded)
+              # Only SETTABLE keys are seeded: `snd_rate` is marked capability=True (the device
+              # reports the rate its audio path runs at; nothing sets it), so comparing against the
+              # whole schema asked for a key the plane is right not to send.
+              and set(seeded["desired"]) == {name for name, spec in DEVICE_SETTING_SCHEMA.items()
+                                             if not spec.get("capability")}, seeded)
         check("non-secret device metadata is retained", seeded["metadata"]["area"] == "study", seeded)
 
         try:
-            plane.set_desired("../escape", {"mic_gain": 5}, expected_generation=0)
+            plane.set_desired("../escape", {"mic_volume": 5}, expected_generation=0)
             invalid_id = False
         except ConfigValidationError:
             invalid_id = True
@@ -128,12 +130,12 @@ def main() -> int:
 
         # The tolerance is per setting: a setting without one must still match exactly, or
         # the tolerance would quietly spread to every integer in the schema.
-        tol.set_desired("kitchen-1", {"mic_gain": 78}, expected_generation=1)
+        tol.set_desired("kitchen-1", {"mic_volume": 78}, expected_generation=1)
         rep = tol.report("kitchen-1", generation=1,
-                         actual={"playback_volume": 50, "mic_gain": 79},
+                         actual={"playback_volume": 50, "mic_volume": 79},
                          health="healthy", error=None)
         check("a setting without a tolerance still matches exactly",
-              "mic_gain" in rep["drift"] and "playback_volume" not in rep["drift"], rep)
+              "mic_volume" in rep["drift"] and "playback_volume" not in rep["drift"], rep)
 
         # A never-reported setting is drift, not agreement - the tolerance must not make a
         # missing value look present.
@@ -196,21 +198,17 @@ def main() -> int:
             "desired": {
                 "wake_word": "hey_hermes",
                 "wake_threshold": 0.35,
-                "mic_gain": 78,
+                "mic_volume": 78,
                 "playback_volume": 55,
                 "led_brightness": 40,  # legacy out-of-range value
-                "locale": "en-US",
-                "update_channel": "stable",
             },
             "reported_generation": 3,
             "reported": {
                 "wake_word": "hey_hermes",
                 "wake_threshold": 0.35,
-                "mic_gain": 78,
+                "mic_volume": 78,
                 "playback_volume": 55,
                 "led_brightness": 40,
-                "locale": "en-US",
-                "update_channel": "stable",
             },
             "health": "healthy",
             "last_error": None,
