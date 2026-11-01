@@ -501,6 +501,52 @@ class Session:
                 return str(candidate)
         return shutil.which("piper")
 
+    def voice_from_upload(self, files: Any, *, action: str = "preview", apply: bool = True) -> dict:
+        """A voice chosen in a file dialog, rather than typed as a path.
+
+        A browser deliberately does not reveal a file's path, so the bytes arrive here instead. They
+        are written to a private directory that is removed whatever happens next -- a half-installed
+        voice left on disk is the kind of litter that later looks like a supported voice. The pair is
+        validated by the same rules a typed path gets.
+        """
+        import base64
+        import shutil
+        import tempfile
+
+        if not isinstance(files, list) or not files:
+            return {"ok": False, "error": "Choose the Piper .onnx model and its .json together."}
+
+        staging = Path(tempfile.mkdtemp(prefix="voice-upload-"))
+        try:
+            written: list[Path] = []
+            for item in files:
+                name = Path(str((item or {}).get("name") or "")).name
+                if not name or name in {".", ".."}:
+                    return {"ok": False, "error": "One of those files has no usable name."}
+                try:
+                    content = base64.b64decode(str((item or {}).get("content_b64") or ""), validate=True)
+                except (ValueError, TypeError):
+                    return {"ok": False, "error": f"{name} did not arrive intact; try choosing it again."}
+                target = staging / name
+                handle = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(handle, "wb") as opened:
+                    opened.write(content)
+                written.append(target)
+
+            models = [p for p in written if p.suffix == ".onnx"]
+            if len(models) != 1:
+                return {"ok": False,
+                        "error": "Choose exactly one .onnx model, with its .json chosen alongside it."}
+            model = models[0]
+            if not Path(str(model) + ".json").exists():
+                return {"ok": False,
+                        "error": f"Its config is missing: {model.name}.json has to be chosen with it."}
+            if action == "preview":
+                return self.preview_voice_file(str(model))
+            return self.install_voice_file(str(model), apply=apply)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+
     def voice_file_problems(self, path: str) -> list[str]:
         """A Piper voice is two files, and half of them is not a voice."""
         voice = Path(str(path or ""))

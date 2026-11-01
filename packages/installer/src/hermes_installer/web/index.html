@@ -365,7 +365,9 @@
       <audio id="voice-audio" class="hidden"></audio>
       <div class="actions"><button id="voice-download" class="ghost" disabled>Download this voice</button></div>
       <label class="field" for="voice-file">Or a Piper voice on this computer</label>
-      <input id="voice-file" type="text" placeholder="path to a voice .onnx, with its .json beside it" />
+      <!-- A file picker, not a typed path: the model and its config are chosen together, and the
+           page sends their bytes because a browser will not reveal where they live. -->
+      <input id="voice-file" type="file" accept=".onnx,.json" multiple />
       <div class="actions">
         <button id="voice-file-preview" class="ghost">Listen to it</button>
         <button id="voice-file-use" class="ghost">Use this voice</button>
@@ -857,13 +859,34 @@ $("voice-download").onclick = async () => {
   announce("Voice downloaded.");
 };
 
+function readAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",", 2)[1] || "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
 async function voiceFile(action) {
-  const path = ($("voice-file").value || "").trim();
+  const picked = [...(($("voice-file").files) || [])];
   const status = $("voice-file-status");
   status.classList.remove("hidden");
-  if (!path) { status.textContent = "Type the path to a Piper voice first."; return; }
+  if (!picked.length) {
+    status.textContent = "Choose the Piper .onnx model and its .json first.";
+    return;
+  }
   status.textContent = action === "preview" ? "Synthesising a line..." : "Installing the voice...";
-  const result = await api("/api/voice-custom", { path, action });
+  let files;
+  try {
+    files = await Promise.all(picked.map(async (file) => ({
+      name: file.name, content_b64: await readAsBase64(file),
+    })));
+  } catch (err) {
+    status.textContent = "That file could not be read: " + err;
+    return;
+  }
+  const result = await api("/api/voice-custom", { files, action });
   if (!result.ok) { status.textContent = result.error || "That voice could not be used."; return; }
   if (action === "preview") {
     if (result.practice) { status.textContent = result.note; return; }

@@ -82,6 +82,62 @@ class InterfaceSendsIdentifiers(unittest.TestCase):
         self.assertNotIn("textContent", body)
 
 
+class VoiceUpload(unittest.TestCase):
+    """A voice chosen in a file dialog arrives as bytes, because a browser hides the path.
+
+    The pair is staged privately, validated by the same rules a typed path gets, and the staging
+    directory is removed whatever happens -- a half-kept voice on disk later looks like a supported
+    one.
+    """
+
+    @staticmethod
+    def pair(model_name="mine.onnx", with_config=True):
+        import base64
+
+        files = [{"name": model_name,
+                  "content_b64": base64.b64encode(b"onnx-bytes").decode()}]
+        if with_config:
+            files.append({"name": model_name + ".json",
+                          "content_b64": base64.b64encode(b"{}").decode()})
+        return files
+
+    def test_a_chosen_pair_is_accepted(self):
+        from hermes_installer.session import Session
+
+        session = Session(Path.cwd(), dry_run=True)
+        result = session.voice_from_upload(self.pair(), action="preview")
+        self.assertTrue(result["ok"], result)
+
+    def test_a_model_without_its_config_is_refused(self):
+        from hermes_installer.session import Session
+
+        session = Session(Path.cwd(), dry_run=True)
+        result = session.voice_from_upload(self.pair(with_config=False), action="preview")
+        self.assertFalse(result["ok"])
+        self.assertIn("config is missing", result["error"])
+
+    def test_a_path_in_the_filename_cannot_escape(self):
+        from hermes_installer.session import Session
+
+        session = Session(Path.cwd(), dry_run=True)
+        result = session.voice_from_upload(
+            self.pair(model_name="../../etc/evil.onnx", with_config=False), action="preview"
+        )
+        self.assertFalse(result["ok"], result)
+        self.assertIn("config is missing", result["error"], "the name should have been reduced to a leaf")
+
+    def test_nothing_is_left_behind(self):
+        import glob
+        import tempfile
+
+        from hermes_installer.session import Session
+
+        before = set(glob.glob(str(Path(tempfile.gettempdir()) / "voice-upload-*")))
+        Session(Path.cwd(), dry_run=True).voice_from_upload(self.pair(), action="preview")
+        after = set(glob.glob(str(Path(tempfile.gettempdir()) / "voice-upload-*")))
+        self.assertEqual(before, after, "a staging directory outlived the request")
+
+
 class SessionBehaviour(unittest.TestCase):
     def setUp(self):
         self.session = build_session()

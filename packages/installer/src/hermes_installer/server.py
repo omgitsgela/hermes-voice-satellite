@@ -189,6 +189,15 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(self.session.install_device(profile_id, **body))
                 return
             if self.path == "/api/voice-custom":
+                # A file dialog hands the page bytes, never a path, so the pair arrives as content
+                # and is staged privately. A typed path still works, for the console-shaped flow.
+                if isinstance(body.get("files"), list):
+                    self._json(self.session.voice_from_upload(
+                        body.get("files"),
+                        action=str(body.get("action") or "preview"),
+                        apply=bool(body.get("apply", True)),
+                    ))
+                    return
                 if body.get("action") == "preview":
                     self._json(self.session.preview_voice_file(str(body.get("path", ""))))
                 else:
