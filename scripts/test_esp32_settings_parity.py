@@ -94,8 +94,13 @@ def main() -> int:
     #    It must still be recorded, and must NOT be reported as applied.
     check("wake_word is still staged for the next boot",
           stages(GATEWAY, "wake_word"))
-    check("wake_word is NOT reported as applied",
-          not reports(GATEWAY, "wake_word"))
+    # ...but a word the detector actually BOOTED with IS in force, so it must be reported: refusing
+    # to report it left a correctly configured device degraded for ever. The distinction the code
+    # has to make is "in force" versus "staged", and both halves are pinned here.
+    check("a wake_word in force at boot is reported as applied",
+          reports(GATEWAY, "wake_word") and "word_in_force" in GATEWAY.read_text())
+    check("a wake_word being changed is still withheld until the next boot",
+          "strcmp(word_in_force" in GATEWAY.read_text())
     check("the staging reason is documented in the apply path",
           "model SELECTOR" in GATEWAY.read_text())
 
