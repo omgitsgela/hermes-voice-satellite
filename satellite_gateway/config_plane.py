@@ -202,6 +202,33 @@ class ConfigPlane:
         """
         changed = False
         for record in (state.get("devices") or {}).values():
+            # Records written before the schema named intents instead of mechanisms carry keys the
+            # schema no longer has: `locale` and `update_channel` (nothing ever consumed them) and
+            # `mic_gain` (now `mic_volume`). Left in place they fail validation, so the device reads
+            # as `error` -- a worse lie than the `degraded` those keys caused in the first place.
+            # The rename keeps the value: the level in force does not change, only its name.
+            stale_keys = ("locale", "update_channel")
+            renamed = False
+            for where in ("desired", "reported"):
+                values = record.get(where)
+                if not isinstance(values, dict):
+                    continue
+                for stale in stale_keys:
+                    if stale in values:
+                        values.pop(stale)
+                        changed = True
+                if "mic_gain" in values:
+                    if "mic_volume" not in values:
+                        values["mic_volume"] = values["mic_gain"]
+                        renamed = True
+                    values.pop("mic_gain")
+                    changed = True
+            if renamed and isinstance(record.get("desired"), dict):
+                # Re-deliver the corrected profile, so the device converges on the new key name
+                # rather than waiting for somebody to change an unrelated setting.
+                record["generation"] = int(record.get("generation", 0)) + 1
+                record["desired_updated_at"] = _utc_now()
+
             desired = record.get("desired")
             if not isinstance(desired, dict):
                 continue

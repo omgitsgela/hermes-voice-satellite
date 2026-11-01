@@ -89,6 +89,35 @@ def main() -> int:
         check("fleet inventory exposes connectivity", listed[0]["connected"] is True, listed)
         check("state survives restart", ConfigPlane(state).get_device("kitchen-1")["generation"] == 1)
 
+        # A record written under the old schema must not read as `error` for ever. It carries two
+        # keys nothing ever consumed and one renamed one; loading it migrates in place, keeps the
+        # level, and advances the generation so the device converges on the new name.
+        import json as _json
+        legacy_path = pathlib.Path(tmp) / "legacy.json"
+        legacy_path.write_text(_json.dumps({
+            "schema_version": 1,
+            "devices": {"kitchen-1": {
+                "desired": {"wake_word": "hey_hermes", "wake_threshold": 0.35,
+                            "mic_gain": 78, "playback_volume": 55, "led_brightness": 31,
+                            "locale": "en-US", "update_channel": "stable"},
+                "reported": {"wake_word": "hey_hermes", "wake_threshold": 0.35,
+                             "mic_gain": 78, "playback_volume": 55, "led_brightness": 31},
+                "generation": 4, "metadata": {"area": "", "name": "kitchen"},
+            }},
+        }))
+        migrated = ConfigPlane(legacy_path).get_device("kitchen-1")
+        check("a legacy record loses the keys the schema no longer has",
+              "locale" not in migrated["desired"] and "update_channel" not in migrated["desired"],
+              migrated["desired"])
+        check("mic_gain is carried over as mic_volume, keeping its value",
+              migrated["desired"].get("mic_volume") == 78
+              and "mic_gain" not in migrated["desired"], migrated["desired"])
+        check("the reported map is migrated too, so it validates",
+              migrated["reported"].get("mic_volume") == 78
+              and "mic_gain" not in migrated["reported"], migrated["reported"])
+        check("the corrected profile is re-delivered",
+              migrated["generation"] == 5, migrated["generation"])
+
         seeded = plane.ensure_device("study-1", metadata={"name": "Study", "area": "study"})
         check("new devices receive a complete default profile",
               seeded["generation"] == 1

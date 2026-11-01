@@ -344,8 +344,30 @@ static int cfg_apply(void *user, const char *settings_json,
      * not a scalar write and is not done here. It persists to NVS and takes effect on the next
      * boot, which is why it stays out of `actual` and the device honestly reports a partial apply. */
     const cJSON *word = cJSON_GetObjectItemCaseSensitive(settings, "wake_word");
+    /* Read the selector the detector actually BOOTED with, before staging anything: after a stage,
+     * NVS holds the new word while the running scorer still has the old one.
+     *
+     * The distinction is what makes an honest report possible. If the requested word equals the one
+     * in force, there is nothing pending and it belongs in `actual` -- otherwise a device whose word
+     * is correctly set stays `degraded` for ever, because it never says a value it demonstrably has.
+     * If it differs, the change takes effect on the next boot, so it stays out of `actual` and the
+     * partial apply is reported truthfully. */
+    char word_in_force[65] = {0};
+    {
+        nvs_handle_t handle;
+        if (nvs_open("hermes_cfg", NVS_READONLY, &handle) == ESP_OK) {
+            size_t len = sizeof(word_in_force);
+            if (nvs_get_str(handle, "wake_word", word_in_force, &len) != ESP_OK)
+                word_in_force[0] = 0;
+            nvs_close(handle);
+        }
+    }
     if (word && cJSON_IsString(word) && word->valuestring)
         cfg_stage_wake("wake_word", word->valuestring);
+    if (word_in_force[0] &&
+        !(word && cJSON_IsString(word) && word->valuestring &&
+          strcmp(word_in_force, word->valuestring) != 0))
+        cJSON_AddStringToObject(actual, "wake_word", word_in_force);
     /* led_brightness: NOW a live adapter. It was staged as "no adapter" before the ring had a
      * driver, which left every device pinned at full regardless of what the fleet asked for. The
      * fleet's scale is 1-31 (docs/configuration-plane.md); the ring's own scale is 0-255 and the
