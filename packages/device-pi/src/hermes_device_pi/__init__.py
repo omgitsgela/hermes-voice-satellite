@@ -37,8 +37,11 @@ PROFILE = DeviceProfile(
     wake_default="hey_hermes",
     first_party=True,
     description=(
-        "A small computer running Linux. Its wake word runs on the Pi itself, so the model format "
-        "differs from the smaller boxes even when the phrase is the same."
+        # Not "its wake word runs on the Pi": both satellites detect the wake word locally, so that
+        # sentence distinguishes nothing. What a person needs to know is how they prepare it and what
+        # model it takes.
+        "A small computer running Linux. You prepare it with a card reader, and it takes an ONNX "
+        "wake model."
     ),
     identify=(
         "A green board about the size of a matchbox, with the microSD slot on one narrow end. "
@@ -298,7 +301,7 @@ class PiDriver:
             if model.suffix.lower() != ".onnx":
                 return StepResult(
                     ok=False,
-                    summary=(f"this device's wake word runs on the Pi itself, so it needs an ONNX "
+                    summary=(f"this device runs the openWakeWord engine, so it needs an ONNX "
                              f"model; {model.name} is not one. Choose a compatible model or a "
                              f"custom ONNX file."),
                 )
