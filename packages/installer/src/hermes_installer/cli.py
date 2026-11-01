@@ -24,11 +24,21 @@ class Prompt(Protocol):
     def secret(self, message: str) -> str: ...
 
 
+class StartOver(Exception):
+    """Return to welcome without undoing writes that were already approved."""
+
+
+def _answer(value: str) -> str:
+    if value.strip().lower() == ":start-over":
+        raise StartOver
+    return value
+
+
 class TerminalPrompt:
     def text(self, message: str, default: str | None = None) -> str:
         suffix = f" [{default}]" if default else ""
         while True:
-            answer = input(f"{message}{suffix}: ").strip()
+            answer = _answer(input(f"{message}{suffix}: ")).strip()
             if answer:
                 return answer
             if default is not None:
@@ -40,14 +50,14 @@ class TerminalPrompt:
         for index, option in enumerate(options, start=1):
             print(f"  {index}. {option}")
         while True:
-            answer = input(f"Choose 1-{len(options)}: ").strip()
+            answer = _answer(input(f"Choose 1-{len(options)}: ")).strip()
             if answer.isdigit() and 1 <= int(answer) <= len(options):
                 return options[int(answer) - 1]
             print("  (a number from the list)")
 
     def yes_no(self, message: str, default: bool = False) -> bool:
         hint = "Y/n" if default else "y/N"
-        answer = input(f"{message} [{hint}]: ").strip().lower()
+        answer = _answer(input(f"{message} [{hint}]: ")).strip().lower()
         if not answer:
             return default
         return answer.startswith("y")
@@ -55,7 +65,7 @@ class TerminalPrompt:
     def secret(self, message: str) -> str:
         import getpass
 
-        return getpass.getpass(f"{message}: ")
+        return _answer(getpass.getpass(f"{message}: "))
 
 
 class ScriptedPrompt:
@@ -68,7 +78,7 @@ class ScriptedPrompt:
     def _next(self) -> str:
         if not self.answers:
             raise AssertionError(f"ran out of answers after {self.asked}")
-        return self.answers.pop(0)
+        return _answer(self.answers.pop(0))
 
     def text(self, message: str, default: str | None = None) -> str:
         self.asked.append(message)
@@ -164,12 +174,22 @@ def configure_speech(session: Session, prompt: Prompt, out, profile: dict, field
 
 def run(session: Session, prompt: Prompt, out=print) -> int:
     """The console flow. Returns a process exit code."""
+    while True:
+        try:
+            return _run(session, prompt, out)
+        except StartOver:
+            session.close()
+            out("  Starting over. Carried details cleared; already applied changes are not undone.")
+
+
+def _run(session: Session, prompt: Prompt, out) -> int:
     state = session.status()
     out("")
     out("  Hermes Voice Satellite")
     out("  ----------------------")
     out("  Connect a microphone and speaker to Hermes, or change an existing satellite.")
     out("  We check Hermes first and show changes before asking permission to write them.")
+    out("  Type :start-over at any prompt to return here and clear carried details.")
     out("")
 
     # A workbench does not need Hermes. Setting up a satellite from a laptop that will never run
@@ -197,10 +217,13 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
         )
 
     gateway_address = ""
+    gateway_card = None
+    pairing_port = 10704
     if role.startswith("This machine") or role.startswith("Both"):
         out("  This installs the Satellite Gateway on this computer. Hermes must already run here.")
         gateway_address = prompt.text(
-            "The address devices will dial (LAN address or hostname, not 127.0.0.1)"
+            "The address devices will dial (LAN address or hostname, not 127.0.0.1)",
+            default=state.get("lan_address") or None,
         )
         ports = prompt.text("Ports (registry:tls)", default="10701:10702")
         registry_port, _, tls_port = ports.partition(":")
@@ -232,25 +255,30 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
         if not result.get("ok"):
             out(f"  The gateway install failed: {result.get('error') or result.get('log')}")
             return 1
-        base = session.repo_root
-        cert = base / "state" / "registry-tls" / "server.crt"
-        words_file = base / "state" / "enroll-token.txt"
-        if cert.exists() and words_file.exists():
-            card = session.pairing_card(str(cert), words_file.read_text().strip(), gateway_address)
-            if card.get("ok"):
-                out("")
-                out("  Write this down and keep it somewhere you will find it:")
-                for line in card["lines"]:
-                    out(f"    {line}")
-                out("")
-                out("  You will be asked for the address, and to check the identity code,")
-                out("  when you set up each satellite.")
+        gateway_card = result.get("card")
+        pairing_port = result.get("pairing_port", 10704)
+        if gateway_card:
+            out("")
+            out("  Save this record somewhere private. These details are shown once here and")
+            out("  cannot be recovered through this installer after starting over or closing it.")
+            out(f"    Address: {gateway_address}")
+            out(f"    Pairing port: {pairing_port}")
+            for line in gateway_card["lines"]:
+                out(f"    {line}")
+            out("  The identity code proves you are talking to your own Satellite Gateway.")
+            out("  The pairing words are the security boundary that lets a device enrol.")
+            out("  Anyone with them and access to the pairing service can enrol a device.")
+            out("  You will need this record when adding each satellite, here or on another workbench.")
+            out("  This run carries it forward for you. Lost words must be replaced on the Satellite Gateway.")
         unit = result.get("pairing_unit") if isinstance(result, dict) else None
         if unit:
             out("")
             out("  The pairing service is ready. Start it with:")
             for line in result.get("pairing_unit_instructions", []):
                 out(f"    {line}")
+
+    if role.startswith("This machine") and prompt.yes_no("Add a satellite to this Satellite Gateway now?", default=True):
+        role = "Both, gateway first"
 
     managing = role.startswith("Change")
     if role.startswith("A satellite") or role.startswith("Both") or managing:
@@ -354,7 +382,7 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
             return 0
 
         host = prompt.text("Gateway address", default=gateway_address or None)
-        port = int(prompt.text("Pairing port", default="10704"))
+        port = int(prompt.text("Pairing port", default=str(pairing_port)))
         inspected = session.inspect_gateway(host, port)
         if not inspected.get("ok"):
             out(f"  Could not reach {host}:{port}: {inspected.get('error')}")
@@ -363,10 +391,16 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
         out("")
         out(f"  That gateway's identity code is  {code}")
         out("  This is how you prove you are talking to your own gateway and not another machine.")
+        carried = gateway_card if host == gateway_address and port == pairing_port else None
+        if carried:
+            out(f"  Saved during Satellite Gateway setup: {carried['identity_code']}")
+            if code != carried["identity_code"]:
+                out("  Stopped: the code does not match the Satellite Gateway just installed. No words were sent.")
+                return 1
         if not prompt.yes_no("Does it match the code you were given when the Satellite Gateway was set up?"):
             out("  Stopped. Nothing was sent, and the words were not used.")
             return 1
-        words = prompt.secret("Pairing words")
+        words = carried["words"] if carried else prompt.secret("Pairing words")
         name = prompt.text("A name for this device", default="") or None
         while not name:
             name = prompt.text("A name for this device (for example kitchen)") or None

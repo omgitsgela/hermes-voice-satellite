@@ -80,7 +80,8 @@ def build(output: Path, cache: Path) -> None:
         status = session.status()
         # Deliberate fixture, not discovery of the review computer's installation.
         status.update(hermes="desktop", hermes_explained="Hermes Desktop found. The Satellite Gateway can be installed beside it.",
-                      platform={"notes": [], "can_flash": True, "can_supervise": True}, dry_run=False)
+                      platform={"notes": [], "can_flash": True, "can_supervise": True}, dry_run=False,
+                      lan_address="192.0.2.24")
         voices = session.voice_catalogue()
         cache.mkdir(parents=True, exist_ok=True)
         for voice in voices["voices"]:

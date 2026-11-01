@@ -113,6 +113,32 @@ class ConsoleSpeech(unittest.TestCase):
         self.assertEqual(fields["voice"], "en_US-amy-medium")
 
 
+class GatewayDefaults(unittest.TestCase):
+    def test_status_reuses_the_guided_lan_detector(self):
+        import subprocess
+        from unittest.mock import patch
+
+        session = Session(ROOT, dry_run=True)
+        with patch("subprocess.run", return_value=subprocess.CompletedProcess(
+                [], 0, stdout="192.0.2.24\n", stderr="")) as run:
+            self.assertEqual(session.status()["lan_address"], "192.0.2.24")
+        argv = run.call_args.args[0]
+        self.assertIn("guided_detect_lan_ip", argv[2])
+        self.assertEqual(Path(argv[-1]), ROOT / "scripts/lib/guided.sh")
+
+    def test_unavailable_detector_does_not_supply_a_fake_address(self):
+        import subprocess
+        from unittest.mock import patch
+
+        session = Session(ROOT, dry_run=True)
+        for output in ("", "127.0.0.1\n", "::1\n"):
+            with patch("subprocess.run", return_value=subprocess.CompletedProcess(
+                    [], 0, stdout=output, stderr="")):
+                self.assertEqual(session.status()["lan_address"], "")
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            self.assertEqual(session.status()["lan_address"], "")
+
+
 class GuidedPages(unittest.TestCase):
     def test_welcome_and_short_pages_have_navigation_and_descriptions(self):
         from html.parser import HTMLParser

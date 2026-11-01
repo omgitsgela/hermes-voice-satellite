@@ -163,6 +163,64 @@ class LauncherDispatch(unittest.TestCase):
         self.assertNotIn("Traceback", finished.stderr)
 
 
+class StartOverRoute(unittest.TestCase):
+    def test_start_over_is_available_at_text_choice_confirmation_and_secret_prompts(self):
+        from hermes_installer import cli
+        from unittest.mock import patch
+
+        for method, args in (("text", ("Address",)), ("choice", ("Task", ["One"])),
+                             ("yes_no", ("Apply?",)), ("secret", ("Words",))):
+            with patch("builtins.input", return_value=":start-over"), \
+                    patch("getpass.getpass", return_value=":start-over"):
+                with self.assertRaises(cli.StartOver):
+                    getattr(cli.TerminalPrompt(), method)(*args)
+
+    def test_start_over_discards_the_current_task_and_returns_to_welcome(self):
+        from hermes_installer import cli
+        from unittest.mock import Mock
+
+        session = FakeSession()
+        session.close = Mock()
+        prompt = cli.ScriptedPrompt([":start-over", "4", "1", "1", "Example network",
+                                     "example-passphrase", "2", "y"])
+        lines = []
+        self.assertEqual(cli.run(session, prompt, out=lines.append), 0)
+        session.close.assert_called_once()
+        self.assertEqual(lines.count("  Hermes Voice Satellite"), 2)
+        self.assertFalse(any(c[0] == "install" for c in session.calls))
+
+
+class GatewayContinuation(unittest.TestCase):
+    def test_new_gateway_offers_a_satellite_and_reuses_its_record(self):
+        class GatewaySession(FakeSession):
+            dry_run = False
+
+            def status(self):
+                return {**super().status(), "lan_address": "192.0.2.24"}
+
+            def install_gateway(self, address, **fields):
+                self.calls.append(("gateway", address, fields))
+                return {"ok": True, "commands": [], "card": {
+                    "identity_code": "XK7F-9Q2M", "words": "private pairing words",
+                    "lines": ["Identity code: XK7F-9Q2M"]}, "pairing_port": 10704}
+
+            def pair(self, host, port, words, name, **kwargs):
+                self.used_words = words
+                return super().pair(host, port, words, name, **kwargs)
+
+        session = GatewaySession()
+        prompt = ScriptedPrompt(["1", "", "", "y", "y", "1", "1", "", "", "y",
+                                 "study", "n", "", "n", "n", "y"])
+        lines = []
+        self.assertEqual(run(session, prompt, out=lines.append), 0)
+        self.assertEqual(session.calls[0][1], "192.0.2.24")
+        self.assertEqual(session.used_words, "private pairing words")
+        self.assertNotIn("Pairing words", prompt.asked)
+        self.assertTrue(any(c[0] == "install" for c in session.calls))
+        self.assertIn("security boundary", " ".join(lines))
+        self.assertIn("another workbench", " ".join(lines))
+
+
 class DeviceRoute(unittest.TestCase):
     def test_a_workbench_without_hermes_can_still_set_up_a_device(self):
         session = FakeSession(hermes="none")

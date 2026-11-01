@@ -48,6 +48,12 @@ def run(preview: Path):
                     assert page.evaluate("document.activeElement.id") == name + "-title"
                     assert page.evaluate("window.scrollY") == 0
                     assert page.locator("#next").bounding_box()["y"] < 820
+                    assert page.locator("#start-over").is_visible()
+                    if name in ("start", "gateway", "device", "settings", "wake", "voice"):
+                        form = page.locator(f"#{name} .form-panel").bounding_box()
+                        help_box = page.locator(f"#{name} .help-panel").bounding_box()
+                        assert help_box["x"] >= form["x"] + form["width"], name
+                        assert abs(help_box["y"] - form["y"]) < 2, name
 
                 def next_to(name):
                     page.locator("#next").click()
@@ -90,6 +96,7 @@ def run(preview: Path):
                         assert manages[-1]["body"]["dry_run"] is False
                         assert manages[-1]["body"]["certs_dir"] is None
                         checks += 1
+                print(f"ROUTE {source.name} reduced={reduced}: welcome → start → device → connect → settings → network/wake → review → done; change-existing-device completed for USB + card, Wi-Fi + wake; no pairing or firmware writes.")
 
                 for card in (False, True):
                     start("device", card)
@@ -163,16 +170,94 @@ def run(preview: Path):
                 next_to("start")
                 page.locator("#role-gateway").check()
                 next_to("gateway")
-                page.locator("#dial").fill("gateway.example")
+                assert page.locator("#dial").input_value() == "192.0.2.24"
                 next_to("review")
                 next_to("done")
                 assert "XK7F-9Q2M" in page.locator("#result-details").inner_text()
+                for text in ("own Satellite Gateway", "security boundary", "shown once",
+                             "cannot be recovered", "each satellite", "another workbench"):
+                    assert text in page.locator("#done").inner_text()
+                assert page.locator("#next").inner_text() == "Add a satellite to this Satellite Gateway"
+                next_to("device")
+                page.locator('input[name=device]').first.check()
+                next_to("connect")
+                next_to("pair-host")
+                assert page.locator("#gwhost").input_value() == "192.0.2.24"
+                assert page.locator("#gwport").input_value() == "10704"
+                next_to("identity")
+                assert "XK7F-9Q2M" in page.locator("#saved-code").inner_text()
+                page.locator('input[name=match][value=yes]').check()
+                next_to("pair")
+                assert page.locator("#words").input_value() == "amber lantern copper thrush meadow"
+                page.locator("#devname").fill("study")
+                next_to("network")
+                calls = page.evaluate("window.PREVIEW_REQUESTS")
+                pairing = [c["body"] for c in calls if c["path"] == "/api/pair"][-1]
+                assert pairing["host"] == "192.0.2.24"
+                assert pairing["port"] == 10704
+                assert pairing["expected_code"] == "XK7F-9Q2M"
+                assert pairing["words"] == "amber lantern copper thrush meadow"
+                page.locator("#ssid").fill("Example network")
+                page.locator("#wifi-password").fill("example-passphrase")
+                next_to("wake")
+                next_to("voice")
+                next_to("review")
+                next_to("done")
+                print(f"ROUTE {source.name} reduced={reduced}: welcome → start → gateway → review → done → device → connect → pair-host → identity → pair → network → wake → voice → review → done; address, pairing port, identity code and words carried.")
                 assert not errors, errors
                 assert not network, network
                 checks += 1
+                # A second device keeps the record, but a changed identity never receives words.
+                next_to("device")
+                page.locator('input[name=device]').first.check()
+                next_to("connect")
+                next_to("pair-host")
+                page.evaluate("""() => {
+                    const original = window.fetch;
+                    window.fetch = async (path, options) => path === '/api/inspect'
+                        ? {ok:true,json:async()=>({ok:true,identity_code:'OTHER-CODE'})}
+                        : original(path, options);
+                    window.restoreFetch = () => { window.fetch = original; };
+                }""")
+                before_pairs = page.evaluate("window.PREVIEW_REQUESTS.filter(c=>c.path==='/api/pair').length")
+                page.locator("#next").click()
+                page.wait_for_function("!state.busy")
+                assert page.evaluate("state.page") == "pair-host"
+                assert "does not match" in page.locator("#message").inner_text()
+                assert page.locator("#words").input_value() == ""
+                assert page.evaluate("window.PREVIEW_REQUESTS.filter(c=>c.path==='/api/pair').length") == before_pairs
+                page.evaluate("window.restoreFetch()")
+                # Choosing a different host requires its own words, even if the fixture code matches.
+                page.locator("#gwhost").fill("different.example")
+                next_to("identity")
+                assert not page.locator("#saved-code").is_visible()
+                page.locator('input[name=match][value=yes]').check()
+                next_to("pair")
+                assert page.locator("#words").input_value() == ""
+                checks += 1
+                # Start over clears the same-run credentials, DOM secrets and task choices.
+                page.locator("#start-over").click()
+                page.wait_for_function("state.status !== undefined && state.page === 'welcome'")
+                at("welcome")
+                assert page.evaluate("!state.gateway && !state.role && state.history.length === 0")
+                for field in ("words", "gwhost", "devname", "wifi-password", "ssid"):
+                    assert page.locator("#" + field).input_value() == "", field
+                checks += 1
+                next_to("start")
+                page.locator("#role-gateway").check()
+                next_to("gateway")
+                page.set_viewport_size({"width": 390, "height": 820})
+                form = page.locator("#gateway .form-panel").bounding_box()
+                help_box = page.locator("#gateway .help-panel").bounding_box()
+                assert help_box["y"] >= form["y"] + form["height"]
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                assert page.locator("#next").bounding_box()["y"] < 820
+                checks += 1
+                assert not errors, errors
+                assert not network, network
                 context.close()
         browser.close()
-        print(f"BROWSER PASSED: {checks} end-to-end routes, shipped UI + standalone file, motion + reduced motion; sample playback, search, downloads, focus, back/forward and offline isolation.")
+        print(f"BROWSER PASSED: {checks} end-to-end routes, 0 failed; shipped UI + standalone file, motion + reduced motion; sample playback, search, downloads, focus, back/forward and offline isolation.")
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ from .secrets import CredentialStore
 #: then fails on a real install.
 RUNTIME_ASSETS = (
     "scripts/install-gateway.sh",
+    "scripts/lib/guided.sh",
     "scripts/install-esp32.sh",
     "scripts/deploy-to-card.sh",
     "scripts/esp32_provision.py",
@@ -128,8 +129,27 @@ class Session:
         return {"name": sys.platform, "can_flash": can_flash, "can_supervise": can_supervise,
                 "elevated": elevated, "notes": notes}
 
+    def lan_address(self) -> str:
+        """Use the guided installer's detector, without running an installation."""
+        import ipaddress
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                ["bash", "-c", 'source "$1"; guided_detect_lan_ip', "installer",
+                 str(self.repo_root / "scripts/lib/guided.sh")],
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+            address = ipaddress.ip_address(result.stdout.strip())
+            if result.returncode or address.is_loopback or address.is_unspecified:
+                return ""
+            return str(address)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            return ""
+
     def status(self) -> dict:
         return {
+            "lan_address": self.lan_address(),
             "platform": self.platform_report(),
             "hermes": self.state.hermes_shape,
             "hermes_explained": {

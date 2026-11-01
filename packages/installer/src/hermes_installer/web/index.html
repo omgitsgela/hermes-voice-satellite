@@ -132,6 +132,14 @@ input[type=search] { width: 100%; padding: 11px 13px; border-radius: 10px; color
 .voice-row label { flex: 1; }
 #voice-audio, #custom-audio { width: 100%; margin-top: 8px; }
 #plan { max-height: 160px; overflow: auto; }
+.shell { max-width: 1160px; }
+.page-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(250px, .58fr); gap: 28px; align-items: start; margin-top: 18px; }
+.form-panel, .help-panel { min-width: 0; }
+.help-panel { border-left: 1px solid var(--line); padding-left: 22px; color: var(--muted); }
+.help-panel p { margin-top: 0; }
+.help-panel details { margin-top: 12px; }
+.help-panel .notice { margin-bottom: 16px; }
+@media(max-width:760px) { .page-layout { grid-template-columns: minmax(0, 1fr); gap: 20px; } .help-panel { border-left: 0; border-top: 1px solid var(--line); padding: 18px 0 0; } .navigation { flex-wrap: wrap; } .navigation #page-count { display:none; } }
 @media(max-width:600px) { .shell { padding: 12px; } .card { padding: 18px; } .device-art { width: 95px; flex-basis: 95px; } .voice-row { flex-wrap: wrap; } #voice-list audio { width: 170px; } .lede { display:none; } }
 @media(prefers-reduced-motion:reduce) { .page { transition:none; } }
 </style></head><body><div class="shell">
@@ -148,105 +156,151 @@ input[type=search] { width: 100%; padding: 11px 13px; border-radius: 10px; color
 </section>
 <section class="card page hidden" id="start" data-page aria-labelledby="start-title">
 <h2 id="start-title" tabindex="-1">Choose what to set up</h2>
-<p class="hint">The Satellite Gateway is the voice service on your Hermes computer. A satellite is the microphone and speaker in a room.</p>
-<div class="notice" id="hermes-status">Checking this computer for Hermes…</div>
+<div class="page-layout"><div class="form-panel">
 <fieldset><legend>Your task</legend>
 <label class="choice"><input type="radio" name="role" value="gateway" id="role-gateway"><span><b>Set up the Satellite Gateway</b><span class="detail">Install the voice service on this computer. Hermes must already be running here. Hermes Desktop is recommended; a Hermes service install is also supported.</span></span></label>
 <label class="choice"><input type="radio" name="role" value="device"><span><b>Add a new satellite</b><span class="detail">Prepare its software and pair it with a Satellite Gateway you have already set up.</span></span></label>
 <label class="choice"><input type="radio" name="role" value="manage"><span><b>Change a device you already have</b><span class="detail">Change Wi-Fi or the wake word using a cable or card reader. Keep its existing pairing and firmware.</span></span></label>
 </fieldset>
+</div><aside class="help-panel" aria-label="Setup help">
+<p class="hint">The Satellite Gateway is the voice service on your Hermes computer. A satellite is the microphone and speaker in a room.</p>
+<div class="notice" id="hermes-status">Checking this computer for Hermes…</div>
 <details><summary>Hermes is not installed yet?</summary><p class="hint">Install Hermes on the Satellite Gateway computer using the <a href="https://hermes-agent.nousresearch.com/docs/" target="_blank" rel="noopener">official Hermes installation guide</a>. Then return here. Device preparation can run on a different computer.</p></details>
+</aside></div>
 </section>
 <section class="card page hidden" id="gateway" data-page aria-labelledby="gateway-title">
 <h2 id="gateway-title" tabindex="-1">Set up the Satellite Gateway</h2>
-<p class="hint">This will install the Satellite Gateway on this computer. You must have Hermes already running here. This computer will stay on to answer your satellites.</p>
+<div class="page-layout"><div class="form-panel">
 <label class="field" for="dial">Address your satellites can reach</label><input id="dial" type="text" placeholder="gateway.example.com or 192.0.2.10">
-<p class="hint">Use this computer's network address, not localhost. The Satellite Gateway listens for secure device connections and a separate pairing connection.</p>
 <div class="row"><div><label class="field" for="registry-port">Device registry port</label><input id="registry-port" type="number" value="10701"></div><div><label class="field" for="tls-port">Secure channel port</label><input id="tls-port" type="number" value="10702"></div></div>
+</div><aside class="help-panel" aria-label="Setup help">
+<p class="hint">This will install the Satellite Gateway on this computer. You must have Hermes already running here. This computer will stay on to answer your satellites.</p>
+<p class="hint">Use this computer's network address, not localhost. The Satellite Gateway listens for secure device connections and a separate pairing connection.</p>
 <div class="notice">Next, review the installation commands. Nothing is installed until you approve that review. Some steps may need administrator permission.</div>
+</aside></div>
 </section>
 <section class="card page hidden" id="device" data-page aria-labelledby="device-title">
 <h2 id="device-title" tabindex="-1">Which satellite do you have?</h2>
-<p class="hint">Choose the board you are preparing. This selects the correct connection, software and wake-model format. No device is written at this step.</p>
+<div class="page-layout"><div class="form-panel">
 <fieldset id="device-field"><legend>Device model</legend></fieldset>
+</div><aside class="help-panel" aria-label="Setup help">
+<p class="hint">Choose the board you are preparing. This selects the correct connection, software and wake-model format. No device is written at this step.</p>
+</aside></div>
 </section>
 <section class="card page hidden" id="connect" data-page aria-labelledby="connect-title">
 <h2 id="connect-title" tabindex="-1">Connect your satellite</h2>
-<p class="hint" id="connect-help"></p>
+<div class="page-layout"><div class="form-panel">
 <label class="field" for="connection">Device connection</label><select id="connection"></select>
 <div class="actions"><button id="refresh" class="ghost">Refresh connections</button></div>
 <div id="card-path" class="hidden"><label class="field" for="mount-manual">Or enter the mounted card path</label><input id="mount-manual" type="text" placeholder="/media/user/rootfs"></div>
+</div><aside class="help-panel" aria-label="Setup help">
+<p class="hint" id="connect-help"></p>
 <p class="hint" style="margin-top:18px">Continue checks the connection. On USB, it reads the board's identity so changes are sent to the device you selected.</p>
+</aside></div>
 </section>
 <section class="card page hidden" id="pair-host" data-page aria-labelledby="pair-host-title">
 <h2 id="pair-host-title" tabindex="-1">Find your Satellite Gateway</h2>
-<p class="hint">Enter the address and pairing port from Satellite Gateway setup. We will read its identity code before sending any pairing words.</p>
+<div class="page-layout"><div class="form-panel">
 <label class="field" for="gwhost">Satellite Gateway address</label><input id="gwhost" type="text" placeholder="gateway.example.com">
 <label class="field" for="gwport">Pairing port</label><input id="gwport" type="number" value="10704">
+</div><aside class="help-panel" aria-label="Setup help">
+<p class="hint">Enter the address and pairing port from Satellite Gateway setup. We will read its identity code before sending any pairing words.</p>
 <p class="hint">The pairing port is not the device registry port. The Satellite Gateway setup record lists both.</p>
+</aside></div>
 </section>
 <section class="card page hidden" id="identity" data-page aria-labelledby="identity-title">
 <h2 id="identity-title" tabindex="-1">Check the Satellite Gateway's identity</h2>
-<p class="hint">Compare this code with the one you saved when you set up the Satellite Gateway. Matching codes protect your pairing words from being sent to the wrong computer.</p>
+<div class="page-layout"><div class="form-panel">
 <p class="code" id="shown-code"></p>
+<p class="notice hidden" id="saved-code"></p>
 <fieldset><legend>Does it match your saved code?</legend>
 <label class="choice"><input type="radio" name="match" value="yes"><span><b>The codes match</b></span></label>
 <label class="choice"><input type="radio" name="match" value="no"><span><b>The codes do not match, or I cannot check</b><span class="detail">Go back and confirm the address or recover your saved code. Pairing will not continue.</span></span></label>
 </fieldset>
+</div><aside class="help-panel" aria-label="Setup help">
+<p class="hint">Compare this code with the one you saved when you set up the Satellite Gateway. Matching codes protect your pairing words from being sent to the wrong computer.</p>
+</aside></div>
 </section>
 <section class="card page hidden" id="pair" data-page aria-labelledby="pair-title">
 <h2 id="pair-title" tabindex="-1">Pair this satellite</h2>
-<p class="hint">The pairing words authorize this satellite to join the Satellite Gateway. It receives its own certificate and key; the words stay private.</p>
+<div class="page-layout"><div class="form-panel">
 <label class="field" for="words">Pairing words</label><input id="words" type="password" autocomplete="off">
 <label class="field" for="devname">A name for this satellite</label><input id="devname" type="text" placeholder="study">
 <p><label><input type="checkbox" id="remember"> Remember the pairing words on this computer</label></p>
 <label class="hidden" id="replace-option"><input type="checkbox" id="replace"> Replace this device's existing certificate</label>
+</div><aside class="help-panel" aria-label="Setup help">
+<p class="hint">The pairing words authorize this satellite to join the Satellite Gateway. It receives its own certificate and key; the words stay private.</p>
+</aside></div>
 </section>
 <section class="card page hidden" id="settings" data-page aria-labelledby="settings-title">
 <h2 id="settings-title" tabindex="-1">What can you change?</h2>
-<p class="hint">This satellite keeps its existing pairing and firmware. Choose only the settings you want to replace; everything else stays as it is.</p>
+<div class="page-layout"><div class="form-panel">
 <label class="choice"><input type="checkbox" id="change-network"><span><b>Wi-Fi network</b><span class="detail">Save a new network on the board, or copy a saved network to the Pi's card.</span></span></label>
 <label class="choice"><input type="checkbox" id="change-wake"><span><b>Wake word</b><span class="detail">Choose a model for this device or supply your own file.</span></span></label>
+</div><aside class="help-panel" aria-label="Setup help">
+<p class="hint">This satellite keeps its existing pairing and firmware. Choose only the settings you want to replace; everything else stays as it is.</p>
 <div class="notice" id="capabilities"></div>
 <p class="hint">The Satellite Gateway currently uses one voice for all satellites. Voice files and that shared selection are managed on its computer, not by changing a device's firmware.</p>
+</aside></div>
 </section>
 <section class="card page hidden" id="network" data-page aria-labelledby="network-title">
 <h2 id="network-title" tabindex="-1">Choose the Wi-Fi network</h2>
-<p class="hint" id="network-help">The satellite needs a network that can reach the Satellite Gateway. Leave the network blank to keep its current settings.</p>
+<div class="page-layout"><div class="form-panel">
 <label class="field" for="ssid">Wi-Fi network name</label><input id="ssid" type="text" autocomplete="off">
-<div id="wifi-password-box"><label class="field" for="wifi-password">Wi-Fi password</label><input id="wifi-password" type="password" autocomplete="off"><p class="hint" style="margin-top:12px">Used once: stored in a private temporary file, sent to the device, then deleted. It is not included in the command log.</p></div>
+<div id="wifi-password-box"><label class="field" for="wifi-password">Wi-Fi password</label><input id="wifi-password" type="password" autocomplete="off"></div>
+</div><aside class="help-panel" aria-label="Setup help">
+<p class="hint" id="network-help">The satellite needs a network that can reach the Satellite Gateway. Leave the network blank to keep its current settings.</p>
+<p class="hint" id="wifi-secret-help">The Wi-Fi password is used once: stored in a private temporary file, sent to the device, then deleted. It is not included in the command log.</p>
+</aside></div>
 </section>
 <section class="card page hidden" id="wake" data-page aria-labelledby="wake-title">
 <h2 id="wake-title" tabindex="-1">Choose the wake word</h2>
-<p class="hint">The satellite listens for this phrase before sending speech to Hermes. The default is <strong>hey hermes</strong>. Only compatible models are offered. Continuing downloads a selected third-party model to this computer for review; the device is not written until you approve.</p>
+<div class="page-layout"><div class="form-panel">
 <label class="field" for="wake-select">Wake phrase</label><select id="wake-select"></select>
-<p class="hint" id="wake-metrics" style="margin-top:12px"></p><p class="hint" id="wake-caveat"></p>
 <label class="field" for="wake-file">Or choose your own model file</label><input id="wake-file" type="file" accept=".onnx,.tflite">
-<p class="hint">Your own files are always accepted, without catalogue measurements. Choose ONNX for a Pi or TFLite for an ESP32.</p>
 <details><summary>Compare community measurements</summary><label class="field" for="community-query">Phrase to look up</label><input id="community-query" type="text"><button id="community-search" class="ghost">Look up measurements</button><div id="community-results"></div></details>
+</div><aside class="help-panel" aria-label="Setup help">
+<p class="hint">The satellite listens for this phrase before sending speech to Hermes. The default is <strong>hey hermes</strong>. Only compatible models are offered. Continuing downloads a selected third-party model to this computer for review; the device is not written until you approve.</p>
+<p class="hint" id="wake-metrics" style="margin-top:12px"></p><p class="hint" id="wake-caveat"></p>
+<p class="hint">Your own files are always accepted, without catalogue measurements. Choose ONNX for a Pi or TFLite for an ESP32.</p>
+</aside></div>
 </section>
 <section class="card page hidden" id="voice" data-page aria-labelledby="voice-title">
 <h2 id="voice-title" tabindex="-1">Listen to a voice</h2>
-<p class="hint">Browse the Piper catalogue and listen before downloading a model. Both HFC sample clips play offline. Other models download only when you ask.</p>
+<div class="page-layout"><div class="form-panel">
 <div class="row"><div><label class="field" for="voice-search">Search voices</label><input id="voice-search" type="search" placeholder="Name, language or model ID"></div><div><label class="field" for="voice-language">Language</label><select id="voice-language"><option value="">All languages</option></select></div></div>
 <fieldset id="voice-list"><legend>Voice catalogue</legend></fieldset><p class="hint" id="voice-count"></p>
 <button class="ghost" id="voice-download">Download selected voice</button><p class="hint" id="voice-note"></p>
 <details><summary>Use a voice file on this computer</summary><p class="hint">Choose the Piper .onnx and its .onnx.json. Listen to a line made by this voice before installing it.</p><label class="field" for="voice-file">Model and configuration</label><input id="voice-file" type="file" accept=".onnx,.json" multiple><div class="actions"><button id="voice-file-preview">Preview this file</button><button id="voice-file-use" disabled>Install this voice</button></div><audio id="custom-audio" controls class="hidden"></audio><p class="hint" id="custom-status"></p></details>
-<div class="notice">Voice downloads are saved on <strong>this computer</strong>. The Satellite Gateway uses one shared voice, not one per device. Continue keeps the current voice. Selecting a downloaded voice below affects a local Satellite Gateway only, after its next restart; this installer will not restart it.</div>
 <p><label><input type="checkbox" id="apply-voice"> Select this voice for the Satellite Gateway on this computer</label></p>
+</div><aside class="help-panel" aria-label="Setup help">
+<p class="hint">Browse the Piper catalogue and listen before downloading a model. Both HFC sample clips play offline. Other models download only when you ask.</p>
+<div class="notice">Voice downloads are saved on <strong>this computer</strong>. The Satellite Gateway uses one shared voice, not one per device. Continue keeps the current voice. Selecting a downloaded voice affects a local Satellite Gateway only, after its next restart; this installer will not restart it.</div>
+</aside></div>
 </section>
 <section class="card page hidden" id="review" data-page aria-labelledby="review-title">
 <h2 id="review-title" tabindex="-1">Review before applying</h2>
-<p class="hint" id="review-help">Read the changes and commands below. Go back to correct anything; apply only when you are ready.</p>
+<div class="page-layout"><div class="form-panel">
 <dl class="summary" id="summary"></dl><details><summary>Commands and permissions</summary><pre id="plan"></pre></details>
+</div><aside class="help-panel" aria-label="Setup help">
+<p class="hint" id="review-help">Read the changes and commands. Go back to correct anything; apply only when you are ready.</p>
 <div class="notice" id="review-scope"></div>
+</aside></div>
 </section>
 <section class="card page hidden" id="done" data-page aria-labelledby="done-title">
 <h2 id="done-title" tabindex="-1">Setup complete</h2>
-<p class="hint" id="done-copy"></p><div id="result-details"></div>
+<div class="page-layout"><div class="form-panel">
+<div id="result-details"></div>
+</div><aside class="help-panel" aria-label="Setup help">
+<p class="hint" id="done-copy"></p>
+<div class="notice hidden" id="save-help"><p><strong>Save this record somewhere private.</strong> These details are shown once here and cannot be recovered through this installer after closing or starting over.</p>
+<p><strong>Identity code:</strong> compare it when adding a satellite to prove you are talking to your own Satellite Gateway.</p>
+<p><strong>Pairing words:</strong> the security boundary that lets a device enrol. Anyone with the words and access to the pairing service can enrol a device. Keep them private.</p>
+<p>You will need all four details when adding each satellite, here or on another workbench. This run carries them forward. Lost words must be replaced on the Satellite Gateway before enrolling more devices.</p></div>
+</aside></div>
 </section>
 <div id="message" role="status" aria-live="polite" class="notice hidden"></div>
-<nav class="navigation" aria-label="Page navigation"><button id="back" class="ghost" disabled>Back</button><span id="page-count" class="hint"></span><button id="next" class="go">Get started</button></nav>
+<nav class="navigation" aria-label="Page navigation"><button id="start-over" class="ghost">Start over</button><button id="back" class="ghost" disabled>Back</button><span id="page-count" class="hint"></span><button id="next" class="go">Get started</button></nav>
 </main></div>
 <script>
 const $ = id => document.getElementById(id);
@@ -267,16 +321,17 @@ async function api(path, body) {
 function message(text, bad = false) { $("message").textContent = text; $("message").classList.toggle("hidden", !text); $("message").classList.toggle("bad", bad); }
 async function action(fn) {
   if (state.busy) return;
-  state.busy = true; $("next").disabled = true; $("back").disabled = true;
+  state.busy = true; $("next").disabled = true; $("back").disabled = true; $("start-over").disabled = true;
   message("Working… Keep this window open.");
   try { await fn(); message(""); }
   catch(error) { message(error.message, true); }
   finally { state.busy = false; navigation(); }
 }
 function navigation() {
+  $("start-over").disabled = state.busy;
   $("back").disabled = state.busy || !state.history.length || state.page === "done";
   $("next").disabled = state.busy || (state.page === "start" && !state.status);
-  $("next").textContent = ({welcome:"Get started",connect:"Connect and continue", "pair-host":"Check Satellite Gateway",pair:"Pair and continue", review:state.role === "manage" ? "Apply settings" : "Install",done:"Start another task"})[state.page] || "Continue";
+  $("next").textContent = ({welcome:"Get started",connect:"Connect and continue", "pair-host":"Check Satellite Gateway",pair:"Pair and continue", review:state.role === "manage" ? "Apply settings" : "Install",done:state.gateway ? "Add a satellite to this Satellite Gateway" : "Start another task"})[state.page] || "Continue";
   const groups = ["Welcome", "Hermes check", ...(state.role === "gateway" ? ["Satellite Gateway"] : ["Satellite", "Settings"]), "Review", "Done"];
   const group = ({welcome:0,start:1,gateway:2,device:2,connect:2,"pair-host":2,identity:2,pair:2,settings:3,network:3,wake:3,voice:3,review:groups.length-2,done:groups.length-1})[state.page];
   $("progress").innerHTML = groups.map((text,i) => `<li${i === group ? ' aria-current="step"' : ""}${i < group ? ' class="done"' : ""}>${i+1}. ${text}</li>`).join("");
@@ -298,12 +353,13 @@ async function show(page, back = false) {
 async function boot() {
   try {
     state.status = await api("/api/status");
+    if (!$("dial").value) $("dial").value = state.status.lan_address || "";
     $("hermes-status").textContent = state.status.hermes_explained + " " + (state.status.platform?.notes || []).join(" ");
     $("role-gateway").disabled = state.status.hermes === "none";
     if (state.status.hermes === "none") $("hermes-status").textContent = "Hermes was not found on this computer. Use the official Hermes installation guide below before installing a Satellite Gateway here. You can still prepare or change a device.";
     $("device-field").innerHTML = '<legend>Device model</legend>' + state.status.devices.map((d,i) => `<label class="choice"><input type="radio" name="device" value="${escapeHtml(d.id)}"><span class="device-art">${d.needs_card_reader ? art[0] : art[1]}</span><span><b>${escapeHtml(d.name)}</b><span class="detail">${escapeHtml(d.identify || d.description)}</span><span class="setup">${d.needs_card_reader ? "microSD card reader · ONNX" : "USB data cable · TFLite"}</span></span></label>`).join("");
   } catch(error) { message(error.message, true); }
-  navigation();
+  navigation(); $("welcome-title").focus({preventScroll:true});
 }
 function selected(name) { return document.querySelector(`input[name="${name}"]:checked`)?.value; }
 async function connections() {
@@ -320,6 +376,7 @@ async function choices() {
   $("wake-select").innerHTML = wake.wake_words.map(w=>`<option value="${escapeHtml(w.id)}">${escapeHtml(w.word)}${w.first_party ? " (default)" : ""}</option>`).join("");
   $("wake-caveat").textContent = wake.caveat; wakeMetrics();
   $("wifi-password-box").classList.toggle("hidden", state.device.needs_card_reader);
+  $("wifi-secret-help").classList.toggle("hidden", state.device.needs_card_reader);
   $("network-help").textContent = state.device.needs_card_reader ? "Enter the name of a saved Wi-Fi network on this computer. Its saved credentials will be copied to the card; no password is typed here. Leave blank to keep the card's current network." : "Enter a Wi-Fi network that can reach the Satellite Gateway, and its password. First-time ESP32 setup requires both before software is written. For a settings-only edit, uncheck the network change if you want to keep the current network.";
   $("capabilities").textContent = "Cable/card settings in this installer: Wi-Fi and wake word. Remote-capable according to this device profile: " + (state.device.remote_settings.join(", ") || "none") + ". Remote editing and enrolled-device discovery are not available in this installer yet. Use the Satellite Gateway's controls for those settings; use this connection for Wi-Fi and wake changes.";
 }
@@ -408,12 +465,14 @@ async function apply() {
     }
   }
   $("done-title").textContent=state.role === "manage" ? "Settings applied" : "Setup complete";
-  $("done-copy").textContent=state.role === "manage" ? (result.summary || "Settings saved.")+" Pairing and firmware were kept. Power-cycle the satellite to use its new settings." : state.role === "gateway" ? "The Satellite Gateway installation finished. Save its connection details below before adding a satellite." : state.device.needs_card_reader ? "Card setup is written. Safely eject the card, return it to the Pi and switch it on. Its connection to the Satellite Gateway has not been verified here." : "Device software and settings are written. Its connection to the Satellite Gateway has not been verified here.";
+  $("done-copy").textContent=state.role === "manage" ? (result.summary || "Settings saved.")+" Pairing and firmware were kept. Power-cycle the satellite to use its new settings." : state.role === "gateway" ? "The Satellite Gateway installation finished. Save its connection details before adding a satellite." : state.device.needs_card_reader ? "Card setup is written. Safely eject the card, return it to the Pi and switch it on. Its connection to the Satellite Gateway has not been verified here." : "Device software and settings are written. Its connection to the Satellite Gateway has not been verified here.";
   $("result-details").textContent = state.voiceNote || "";
+  $("save-help").classList.toggle("hidden", !result.card);
   if (result.dry_run) $("result-details").textContent += " Dry run: no installation changes were written.";
   if (result.card) {
-    $("result-details").innerHTML += `<dl class="summary"><dt>Address</dt><dd>${escapeHtml(result.card.dial_address)}</dd><dt>Identity code</dt><dd>${escapeHtml(result.card.identity_code)}</dd><dt>Pairing words (keep private)</dt><dd>${escapeHtml(result.card.words)}</dd></dl>`;
-    $("gwhost").value=$("dial").value.trim(); // Pairing port stays 10704, never the registry port.
+    state.gateway = {host:state.reviewedFields.dial_address, port:result.pairing_port || 10704,
+      identity_code:result.card.identity_code, words:result.card.words};
+    $("result-details").innerHTML += `<dl class="summary"><dt>Address</dt><dd>${escapeHtml(state.gateway.host)}</dd><dt>Pairing port</dt><dd>${state.gateway.port}</dd><dt>Identity code</dt><dd>${escapeHtml(result.card.identity_code)}</dd><dt>Pairing words (keep private)</dt><dd>${escapeHtml(result.card.words)}</dd></dl>`;
   }
   if (result.pairing_unit_instructions) $("result-details").innerHTML += `<p>Start the pairing service with:</p><pre>${escapeHtml(result.pairing_unit_instructions.join("\n"))}</pre>`;
   await show("done");
@@ -441,6 +500,11 @@ async function next() {
       if (!$("gwhost").value.trim()) throw new Error("Enter your Satellite Gateway's address.");
       const result=await api("/api/inspect",{host:$("gwhost").value.trim(),port:Number($("gwport").value)});
       state.checkedCode=result.identity_code; $("shown-code").textContent=result.identity_code;
+      const carried = state.gateway && state.gateway.host === $("gwhost").value.trim() && state.gateway.port === Number($("gwport").value);
+      $("saved-code").classList.toggle("hidden", !carried);
+      $("saved-code").textContent = carried ? "Saved during Satellite Gateway setup: " + state.gateway.identity_code : "";
+      $("words").value = carried && state.checkedCode === state.gateway.identity_code ? state.gateway.words : "";
+      if (carried && state.checkedCode !== state.gateway.identity_code) throw new Error("The identity code does not match the Satellite Gateway you just installed. No pairing words have been sent. Check the address before continuing.");
       document.querySelectorAll('input[name="match"]').forEach(r=>r.checked=false);
       await show("identity"); break;
     }
@@ -464,9 +528,19 @@ async function next() {
       if (following) await show(following); else await review(); break;
     }
     case "review": await apply(); break;
-    case "done": location.reload(); break;
+    case "done":
+      if (state.gateway) {
+        state.role="device"; state.paired=null; state.deviceIdentity=null; state.voiceNote="";
+        $("apply-voice").checked=false; $("devname").value=""; $("replace").checked=false;
+        $("replace-option").classList.add("hidden");
+        $("gwhost").value=state.gateway.host; $("gwport").value=state.gateway.port;
+        $("words").value=state.gateway.words; state.history=[];
+        await show("device", true);
+      } else location.reload();
+      break;
   }
 }
+$("start-over").onclick=()=>{ if (!state.busy) location.reload(); };
 $("next").onclick=()=>action(next);
 $("back").onclick=()=>action(async()=>{const previous=state.history.pop(); if(previous) await show(previous,true);});
 $("refresh").onclick=()=>action(connections);
