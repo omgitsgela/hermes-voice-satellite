@@ -46,7 +46,13 @@ MIN_VAD_FRAMES = 50
 
 LEVELS_LINE = re.compile(r"^  levels: room p20=(\d+) p50=(\d+) p90=(\d+) max=(\d+) \(n=(\d+)\)"
                          r" \| floor=(\d+) thr=(\d+)"
+                         # `soft_kept=N` is part of the line whenever the soft-speech path held
+                         # frames open (Option A). Leaving it out of the pattern made the regex
+                         # match NOTHING -- so every count read zero and the diagnostic blamed the
+                         # pipeline for its own parse failure. Optional here, so an older line
+                         # without it still parses.
                          r" \| frames: vad_speech=(\d+) gate_rejected=(\d+) accepted=(\d+)"
+                         r"(?: soft_kept=\d+)?"
                          r" \| vad_speech_rms med=(\d+) max=(\d+)$")
 
 
