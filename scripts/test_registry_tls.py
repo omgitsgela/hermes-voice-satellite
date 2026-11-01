@@ -297,7 +297,7 @@ async def t_config_paths() -> None:
 async def t_bridge_wiring() -> None:
     # The behaviour of a context and of a listener is covered above; what this pins is the wiring, which
     # is the part a later change can silently drop while every check above still passes.
-    source = (REPO / "Gateway" / "loop.py").read_text()
+    source = (REPO / "satellite_gateway" / "loop.py").read_text()
     assert "load_server_tls_context(" in source, "the Gateway must build the listener's context"
     for setting in ("REGISTRY_TLS_CERT_FILE", "REGISTRY_TLS_KEY_FILE", "REGISTRY_TLS_CLIENT_CA_FILE"):
         assert setting in source, f"the Gateway must read {setting}"
@@ -364,7 +364,7 @@ async def t_two_listeners_one_registry() -> None:
 
 @check("12", "the Gateway serves TLS on the TLS port and keeps plain text behind an explicit flag")
 async def t_migration_wiring() -> None:
-    source = (REPO / "Gateway" / "loop.py").read_text()
+    source = (REPO / "satellite_gateway" / "loop.py").read_text()
     assert "REGISTRY_TLS_PORT" in source and "REGISTRY_LEGACY_PLAINTEXT" in source
     # The load-bearing line: with a certificate present, the plain listener runs only when the
     # migration flag says so. Without a certificate it is the only listener, which is the local case.

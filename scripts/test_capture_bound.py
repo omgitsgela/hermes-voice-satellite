@@ -36,7 +36,7 @@ def check(label, got, want):
         failures.append(f"{label}: got {got!r}, wanted {want!r}")
 
 
-async def _nothing_queued():
+async def _nothing_queued(*_args, **_kwargs):
     """The new flow discards the opening moment first; a stub Gateway has no queue to drain."""
     return 0
 

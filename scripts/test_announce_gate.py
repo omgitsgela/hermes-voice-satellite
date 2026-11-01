@@ -49,13 +49,13 @@ def make_bridge():
     gateway.sat = DeadSat()
     gateway.turn_started_at = None
     gateway._ep = types.SimpleNamespace(reset=lambda: None)
-    return Gateway
+    return gateway
 
 
 def gate_is_active(gateway) -> bool:
     """Ask the real announcer predicate, not a copy of its logic."""
     probe = Announcer.__new__(Announcer)
-    probe.loop = Gateway
+    probe.loop = gateway
     # the announcer takes a callable here, not a value: it is built without a loop in some
     # deployments, so the timestamp is injected as a function
     probe._turn_started_at = lambda: getattr(gateway, "turn_started_at", None)
@@ -104,7 +104,7 @@ def make_early_return_bridge(transcript: str, local_reply: str = ""):
     gateway.say = say
     gateway._local_command = lambda _text: local_reply
     gateway.rotate_session = lambda _reason: None
-    return Gateway
+    return gateway
 
 
 async def main() -> int:

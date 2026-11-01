@@ -39,7 +39,7 @@ async def main():
     gateway._ep = Endpointer(silence_ms=700, min_speech_ms=250)
     order = []
 
-    async def discard():
+    async def discard(*_args, **_kwargs):
         order.append("discarded")
         return 2
 

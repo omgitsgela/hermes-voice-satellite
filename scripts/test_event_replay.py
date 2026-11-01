@@ -20,7 +20,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import satellite_gateway.loop as loop_module  # noqa: E402
 from wyoming.event import Event  # noqa: E402
 
-# Find the Gateway class rather than naming it: the module holds several classes, and guessing here
+# The session loop class, named explicitly: a sweep once rewrote this into a bare `Gateway`
+# that does not exist, and the old test runner scored the crash as "no verdict" and let it pass.
 # already cost one failed run.
 Loop = next(
     obj for obj in vars(loop_module).values()
@@ -56,7 +57,7 @@ def make_bridge(events):
     gateway = Loop.__new__(Loop)          # skip __init__: this tests two methods, not the world
     gateway.sat = FakeSat(events)
     gateway.self_trigger_count = 0
-    return Gateway
+    return gateway
 
 
 PLAYED = Event(type="played")
