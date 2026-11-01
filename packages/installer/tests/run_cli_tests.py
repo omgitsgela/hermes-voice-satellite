@@ -171,7 +171,7 @@ class DeviceRoute(unittest.TestCase):
         # existing device is the other thing this machine can do.
         code, prompt, _ = drive(session, ["1", "1", "1", "gateway.example", "10704", "y",
                                           "amber lantern copper thrush meadow", "kitchen",
-                                          "n", ""])
+                                          "n", "", "n", "n", "y"])
         self.assertEqual(code, 0)
         self.assertTrue(any(call[0] == "install" for call in session.calls))
 
@@ -183,8 +183,10 @@ class DeviceRoute(unittest.TestCase):
             "2",          # change a device already set up
             "1",          # device
             "1",          # port
-            "",           # keep the current Wi-Fi
-            "2",          # only the network above: nothing else
+            "Example network",
+            "example-passphrase",
+            "2",          # only the network above
+            "y",          # approve the reviewed settings
         ])
         self.assertEqual(code, 0)
         names = [call[0] for call in session.calls]
@@ -195,7 +197,7 @@ class DeviceRoute(unittest.TestCase):
     def test_the_device_identity_is_read_before_pairing(self):
         session = FakeSession()
         drive(session, ["2", "1", "1", "gateway.example", "10704", "y",
-                        "amber lantern copper thrush meadow", "kitchen", "n", ""])
+                        "amber lantern copper thrush meadow", "kitchen", "n", "", "n", "n", "y"])
         order = [call[0] for call in session.calls]
         self.assertLess(order.index("identity"), order.index("pair"),
                         "pairing ran before the device identity was read")
@@ -206,7 +208,8 @@ class DeviceRoute(unittest.TestCase):
     def test_the_pairing_port_defaults_to_the_pairing_listener(self):
         session = FakeSession()
         prompt = ScriptedPrompt(["2", "1", "1", "gateway.example", "", "y",
-                                 "amber lantern copper thrush meadow", "kitchen", "n", ""])
+                                 "amber lantern copper thrush meadow", "kitchen", "n", "",
+                                 "n", "n", "y"])
         with redirect_stdout(io.StringIO()):
             run(session, prompt, out=lambda *a, **k: None)
         inspect = next(call for call in session.calls if call[0] == "inspect")
@@ -222,7 +225,7 @@ class DeviceRoute(unittest.TestCase):
         session = FakeSession()
         code, prompt, _ = drive(session, ["2", "2", "1", "gateway.example", "10704", "y",
                                           "amber lantern copper thrush meadow", "bedroom", "n",
-                                          "home"])
+                                          "home", "n", "n", "y"])
         self.assertEqual(code, 0)
         install = next(call for call in session.calls if call[0] == "install")
         fields = install[2]

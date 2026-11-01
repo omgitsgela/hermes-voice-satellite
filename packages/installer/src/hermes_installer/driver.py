@@ -82,15 +82,27 @@ class Runner:
 
     def resolve(self, argv: Sequence[str]) -> tuple[str, ...]:
         """Turn a repository-relative script into an absolute one, so cwd cannot hide it."""
-        if not argv or self.repo_root is None:
-            return tuple(argv)
+        if not argv:
+            return ()
         first = str(argv[0])
-        if os.path.isabs(first):
-            return tuple(argv)
-        candidate = self.repo_root / first
-        if candidate.exists():
-            return (str(candidate), *[str(a) for a in argv[1:]])
-        return tuple(str(a) for a in argv)
+        candidate = Path(first)
+        if not candidate.is_absolute() and self.repo_root is not None:
+            candidate = self.repo_root / first
+        resolved = str(candidate) if candidate.exists() else first
+        rest = tuple(str(a) for a in argv[1:])
+        if Path(resolved).suffix == ".py":
+            # Helpers are source files (mode 0644), not executable programs. The frozen installer
+            # is the Python runtime on a clean machine; a shebang would silently require python3.
+            if getattr(sys, "frozen", False):
+                return (sys.executable, "--run-python", resolved, *rest)
+            python = sys.executable
+            if self.repo_root is not None:
+                venv = self.repo_root / ".venv" / ("Scripts/python.exe" if sys.platform == "win32"
+                                                    else "bin/python")
+                if venv.is_file():
+                    python = str(venv)
+            return (python, resolved, *rest)
+        return (resolved, *rest)
 
     def run(self, command: Command) -> StepResult:
         argv = self.resolve(command.argv)

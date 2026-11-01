@@ -6,7 +6,7 @@ cd "$ROOT" || exit 1
 status=0
 for suite in run_core_tests run_device_tests run_session_tests \
               run_pairing_server_tests run_e2e_pairing_tests run_cli_tests \
-              run_catalogue_tests; do
+              run_catalogue_tests run_ux_tests; do
     echo "== $suite"
     output=$(python3 "packages/installer/tests/$suite.py" 2>&1)
     code=$?

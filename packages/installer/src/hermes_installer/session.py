@@ -463,6 +463,8 @@ class Session:
                 {"id": v.id, "name": v.name, "language": v.language, "size_mb": v.size_mb,
                  "sample_url": catalogue.sample_path(v),
                  "bundled": catalogue.sample_path(v).startswith("/samples/"),
+                 "installed": all((self.repo_root / "voices" / (v.id + suffix)).is_file()
+                                  for suffix in (".onnx", ".onnx.json")),
                  "default": v.default}
                 for v in catalogue.voices()
             ],
@@ -650,7 +652,8 @@ class Session:
             origin = Path(str(source) + suffix)
             target = destination / (source.name + suffix)
             target.write_bytes(origin.read_bytes())
-        note = self._set_gateway_voice(source.stem, destination / source.name)
+        note = (self._set_gateway_voice(source.stem, destination / source.name) if apply
+                else "Voice installed on this computer; the shared Satellite Gateway voice is unchanged.")
         return {"ok": True, "voice": source.stem, "applied": apply, "apply_note": note}
 
     def download_voice(self, voice_id: str, *, apply: bool = False) -> dict:
@@ -919,13 +922,15 @@ class Session:
             self.registry.get(profile_id)
         except RegistryError as exc:
             return {"ok": False, "error": str(exc)}
-        if not (fields.get("wifi_ssid") or fields.get("certs_dir") or fields.get("wake_model")):
+        if not (fields.get("wifi_ssid") or fields.get("certs_dir") or fields.get("wake_model")
+                or fields.get("wake_word")):
             # The address is NOT required here: the device already has one, and re-typing it is not
             # a change. Only staging something new is.
             return {"ok": False,
                     "error": "nothing to change: choose a Wi-Fi network, a wake word, or pair again "
                              "to refresh the credentials"}
-        result = self.flash(profile_id, **{**fields, "step": "provision"})
+        result = self.flash(profile_id, **{**fields, "step": "provision",
+                                          "extra": {**dict(fields.get("extra") or {}), "manage_only": True}})
         result["mode"] = "manage"
         return result
 
@@ -958,7 +963,9 @@ class Session:
         request = DeviceRequest(
             device_name=str(fields.get("device_name") or ""),
             dial_address=str(fields.get("dial_address") or ""),
-            wake_word=str(fields.get("wake_word") or profile.wake_default),
+            wake_word=str(fields.get("wake_word") or
+                          ("" if (fields.get("extra") or {}).get("manage_only")
+                           else profile.wake_default)),
             voice=str(fields.get("voice") or "en_US-hfc_female-medium"),
             port=fields.get("port"),
             card_mount=fields.get("card_mount"),

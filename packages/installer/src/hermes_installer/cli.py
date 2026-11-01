@@ -93,13 +93,83 @@ class ScriptedPrompt:
         return self.text(message)
 
 
+def configure_speech(session: Session, prompt: Prompt, out, profile: dict, fields: dict) -> bool:
+    """Catalogue choices and custom files, shared with the graphical settings pages."""
+    if prompt.yes_no("Choose another wake word or a custom model file?", default=False):
+        data = session.wake_word_catalogue(profile["wake_format"])
+        out(data.get("caveat", ""))
+        entries = data.get("wake_words", [])
+        labels = [f"{w['word']}: {w['metrics_line']}" for w in entries] + ["Custom model file"]
+        choice = prompt.choice("Wake word", labels)
+        if choice == "Custom model file":
+            fields["wake_model"] = prompt.text("Model file path")
+            fields["wake_word"] = prompt.text("Model selector", default=Path(fields["wake_model"]).stem)
+        else:
+            entry = entries[labels.index(choice)]
+            fields["wake_word"] = entry["id"]
+            if not entry["first_party"]:
+                if not prompt.yes_no("Download this wake model?", default=False):
+                    return False
+                result = session.prepare_wake_word(profile["wake_format"], entry["id"])
+                if not result.get("ok"):
+                    out(result.get("error"))
+                    return False
+                fields["wake_model"] = result.get("path")
+    if not prompt.yes_no("Browse voices or preview a custom voice?", default=False):
+        return True
+    out("  Voices belong to the Satellite Gateway on this computer, not individual devices.")
+    out("  Downloads do not select a voice. Remote Satellite Gateway voice changes are not supported.")
+    query = prompt.text("Search name, model ID or language (blank for all)", default="")
+    data = session.voice_catalogue()
+    voices = [v for v in data["voices"]
+              if query.lower() in f"{v['name']} {v['id']} {v['language']}".lower()]
+    labels = [f"{v['name']} · {v['language']} · {v['size_mb']} MB" for v in voices]
+    choice = prompt.choice("Voice catalogue", labels + ["Custom voice file", "Keep current voice"])
+    if choice == "Keep current voice":
+        return True
+    if choice == "Custom voice file":
+        path = prompt.text("Piper .onnx path (its .onnx.json must be beside it)")
+        result = session.preview_voice_file(path)
+        if not result.get("ok") or not result.get("preview_url"):
+            out(result.get("error") or result.get("note"))
+            return False
+        preview_path = (Path.home() / ".cache/hermes-voice-satellite/previews"
+                        / result["preview_url"].rsplit("/", 1)[-1])
+        out(f"  Listen to the generated WAV: {preview_path}")
+        if not prompt.yes_no("Have you listened, and want to install this voice?", default=False):
+            return False
+        result = session.install_voice_file(path, apply=False)
+        out(result.get("apply_note") or result.get("note") or result.get("error"))
+        return bool(result.get("ok"))
+    voice = voices[labels.index(choice)]
+    fields["voice"] = voice["id"]
+    sample = voice["sample_url"]
+    if sample.startswith("/samples/"):
+        sample = str(Path(__file__).resolve().parent / "web" / sample.lstrip("/"))
+    out(f"  Listen before selecting: {sample}")
+    if not voice.get("installed"):
+        if not prompt.yes_no(f"Download {voice['name']} ({voice['size_mb']} MB) on this computer?",
+                             default=False):
+            return False
+        result = session.download_voice(voice["id"], apply=False)
+        if not result.get("ok"):
+            out(result.get("error"))
+            return False
+    fields["_apply_voice"] = prompt.yes_no(
+        "Select this shared voice for the local Satellite Gateway after its next restart?",
+        default=False,
+    )
+    return True
+
+
 def run(session: Session, prompt: Prompt, out=print) -> int:
     """The console flow. Returns a process exit code."""
     state = session.status()
     out("")
-    out("  Hermes voice installer")
+    out("  Hermes Voice Satellite")
     out("  ----------------------")
-    out("  Sets up the Satellite Gateway, a satellite, or both.")
+    out("  Connect a microphone and speaker to Hermes, or change an existing satellite.")
+    out("  We check Hermes first and show changes before asking permission to write them.")
     out("")
 
     # A workbench does not need Hermes. Setting up a satellite from a laptop that will never run
@@ -108,6 +178,7 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
     if state["hermes"] == "none":
         out("  Hermes is not installed on this machine.")
         out("  That only matters if this machine is meant to BE the Satellite Gateway.")
+        out("  Official Hermes installation guide: https://hermes-agent.nousresearch.com/docs/")
         out("")
         role = prompt.choice(
             "What are we setting up?",
@@ -127,6 +198,7 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
 
     gateway_address = ""
     if role.startswith("This machine") or role.startswith("Both"):
+        out("  This installs the Satellite Gateway on this computer. Hermes must already run here.")
         gateway_address = prompt.text(
             "The address devices will dial (LAN address or hostname, not 127.0.0.1)"
         )
@@ -256,6 +328,17 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
                 fields["wake_model"] = prompt.text(
                     "Model file to copy onto the device (blank if it already has this one)",
                     default="") or None
+            out("  Cable/card changes: Wi-Fi and wake word. Pairing and firmware stay unchanged.")
+            out("  Remote settings require the Satellite Gateway controls; remote editing is not available here.")
+            preview = session.manage_device(profile["id"], **{**fields, "dry_run": True})
+            if not preview.get("ok"):
+                out(preview.get("error") or preview.get("summary"))
+                return 1
+            for command in preview.get("commands", []):
+                out(f"    {command['description']}: {' '.join(command['argv'])}")
+            if not prompt.yes_no("Apply these settings (no pairing or firmware write)?", default=False):
+                out("  Nothing was changed.")
+                return 0
             result = session.manage_device(profile["id"], **fields)
             if not result["ok"]:
                 out(f"  {result.get('summary') or result.get('error')}")
@@ -322,6 +405,9 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
             if fields["wifi_ssid"]:
                 fields["wifi_password"] = prompt.secret("Wi-Fi password (used once, not stored)")
 
+        if not configure_speech(session, prompt, out, profile, fields):
+            return 1
+        apply_voice = fields.pop("_apply_voice", False)
         check = session.preflight(profile["id"], **fields)
         if not check["ok"]:
             out("  Not ready to install:")
@@ -332,7 +418,19 @@ def run(session: Session, prompt: Prompt, out=print) -> int:
 
         # Flash and staging are two stages: the software, then the Wi-Fi, dial address, credentials
         # and model where the device looks for them.
+        preview = session.install_device(profile["id"], **{**fields, "dry_run": True})
+        if not preview.get("ok"):
+            out(preview.get("error") or preview.get("summary"))
+            return 1
+        for command in preview.get("commands", []):
+            out(f"    {command['description']}: {' '.join(command['argv'])}")
+        if not prompt.yes_no("Install the device software and settings shown above?", default=False):
+            out("  Nothing was written to the device.")
+            return 0
         result = session.install_device(profile["id"], **fields)
+        if result.get("ok") and apply_voice:
+            selected = session.download_voice(fields["voice"], apply=True)
+            out(selected.get("apply_note") or selected.get("note") or selected.get("error"))
         if not result["ok"]:
             out(f"  {result.get('summary') or result.get('error')}")
             return 1

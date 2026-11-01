@@ -320,6 +320,18 @@ class PiDriver:
         # The default phrase needs no staging: it is what the device image already listens for, and
         # a run that changes nothing else must stay a no-op rather than invent work.
         if model is None and word == PROFILE.wake_default:
+            if request.extra.get("manage_only"):
+                # Selecting the default explicitly is still a change when the card currently
+                # selects another model. Keep its model search path and every unrelated key.
+                env_path = mount / "etc" / "voice-satellite" / "satellite.env"
+                try:
+                    existing = env_path.read_text()
+                except OSError:
+                    existing = ""
+                return runner.write_file(
+                    env_path, set_env_keys(existing, {"VS_WAKE_WORD": word}), mode=0o644,
+                    description=f"select the default wake word {word}",
+                )
             return StepResult(ok=True, summary="", commands=())
 
         # Any OTHER phrase without a model file would leave a satellite that never wakes, so it is

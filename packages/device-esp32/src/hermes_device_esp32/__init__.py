@@ -119,6 +119,41 @@ class Esp32Xvf3800Driver:
                 summary="the board's own identity is needed to stage settings, and it has not "
                         "been read yet. Read it from the device first.",
             )
+        if request.extra.get("manage_only"):
+            # First-time provisioning deliberately requires a complete credential set. A later
+            # settings edit must not enter that script: it would demand pairing again and replace
+            # unrelated settings. Use the existing console verbs for only the requested changes.
+            from hermes_installer.driver import merge
+
+            commands = []
+            base = (PROVISION_SCRIPT, "--port", request.port)
+            if request.wifi_ssid:
+                if not request.wifi_psk_file and not runner.dry_run:
+                    return StepResult(ok=False, summary="a Wi-Fi password is needed for this network")
+                commands.append(Command(
+                    (*base, "save-profile", request.wifi_ssid,
+                     request.wifi_psk_file or "<temporary-password-file>"),
+                    "save the selected Wi-Fi network", secret_file=request.wifi_psk_file,
+                ))
+            if request.wake_word or request.wake_model:
+                model = request.wake_model
+                if not model and request.wake_word == PROFILE.wake_default:
+                    model = f"firmware/esp32/models/{request.wake_word}.tflite"
+                if model:
+                    commands.append(Command(
+                        ("scripts/provision-device-model.py", "--port", request.port,
+                         "--model", model, "--name", request.wake_word),
+                        "write the selected wake model (not firmware)",
+                    ))
+                commands.append(Command((*base, "set-wake", request.wake_word),
+                                        "select the wake word"))
+            results = []
+            for command in commands:
+                result = runner.run(command)
+                results.append(result)
+                if not result.ok:
+                    return merge(*results)
+            return merge(*results, summary="Settings saved. Power-cycle the device to use them.")
         return runner.run(
             Command(
                 _argv(request, "--provision"),

@@ -1,10 +1,6 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Hermes Voice Satellite</title>
-<style>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hermes Voice Satellite</title><style>
   :root {
     --bg: #0b0d12;
     --panel: #141821;
@@ -108,1123 +104,380 @@
   .busy { color: #cfe0ff; font-size: 14px; margin-top: 14px; }
   footer { color: #93a0b8; font-size: 12.5px; text-align: center; margin-top: 26px; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
-</style>
-</head>
-<body>
-<div class="shell">
-  <header><span class="dot" aria-hidden="true"></span><h1>Hermes Voice Satellite</h1></header>
-  <p class="lede">Your voice device connects to the computer that runs Hermes. This tool calls that
-    computer the <strong>Satellite Gateway</strong>, and helps you set one up, add a device to one, or change a device you already have.</p>
 
-  <ol class="progress" id="progress" aria-label="Setup progress">
-    <li id="step-tab-1" aria-current="step">1. Start</li>
-    <li id="step-tab-2">2. Satellite Gateway</li>
-    <li id="step-tab-3">3. Device</li>
-  </ol>
-
-  <p class="sr-only" id="announce" role="status" aria-live="polite"></p>
-
-  <!-- ------------------------------------------------------------------ stage 1 -->
-  <section class="card" id="stage1" aria-labelledby="stage1-title">
-    <h2 id="stage1-title" tabindex="-1">What are we setting up?</h2>
-
-    <fieldset id="role-field">
-      <legend>Choose one to begin</legend>
-      <label class="choice">
-        <input type="radio" name="role" value="gateway" id="role-gateway" />
-        <span><b>Set up the Satellite Gateway on this computer</b>
-          <span class="detail">Installs the voice service beside Hermes and gives you the details
-            your devices will use.</span>
-          <span class="detail" id="hermes-line">Checking this computer for Hermes...</span>
-        </span>
-      </label>
-      <label class="choice">
-        <input type="radio" name="role" value="device" id="role-device" />
-        <span><b>Add a device to an existing Satellite Gateway</b>
-          <span class="detail">For a Satellite Gateway you already set up, on this computer or another one.</span>
-        </span>
-      </label>
-      <label class="choice">
-        <input type="radio" name="role" value="manage" id="role-manage" />
-        <span><b>Change a device I have already set up</b>
-          <span class="detail">Connect it again to change its Wi-Fi, its gateway address or its wake
-            word.</span>
-        </span>
-      </label>
-    </fieldset>
-
-    <div id="platform-note" class="notice warn hidden" style="margin-bottom:12px"></div>
-    <div id="hermes-missing" class="notice warn hidden">
-      Hermes was not found on this computer. Install Hermes here before setting up a gateway. If
-      Hermes already runs somewhere else, choose "Add a device to an existing Satellite Gateway" instead.
-    </div>
-
-    <details id="server-note">
-      <summary>Hermes runs on a server without a screen?</summary>
-      <p class="hint" style="margin-top:10px">Set up the Satellite Gateway there with the console installer
-        (<code>hermes-installer</code>). Then prepare each device on a computer that has its USB
-        cable or card reader, using the gateway details from that server.</p>
-    </details>
-
-    <div id="device-picker" class="hidden">
-      <h3>Which device are you setting up?</h3>
-      <fieldset id="device-field"><legend class="sr-only">Device model</legend></fieldset>
-      <details>
-        <summary>I'm not sure which device I have</summary>
-        <div id="device-help" class="hint" style="margin-top:10px"></div>
-      </details>
-      <div id="checklist" class="notice hidden" style="margin-top:16px"></div>
-    </div>
-
-    <div class="actions">
-      <button id="start-continue" class="go" disabled>Continue</button>
-    </div>
-  </section>
-
-  <!-- ------------------------------------------------------------------ stage 2 -->
-  <section class="card hidden" id="stage2" aria-labelledby="stage2-title">
-    <h2 id="stage2-title" tabindex="-1">Set up the Satellite Gateway</h2>
-    <p class="hint">This computer will keep the voice service running. Devices connect to it, so the
-      address below has to be one they can reach.</p>
-
-    <label class="field" for="dial">Satellite Gateway address</label>
-    <input id="dial" type="text" placeholder="192.0.2.10 or gateway.example.com"
-           aria-describedby="dial-help" />
-    <p class="hint" id="dial-help" style="margin-top:8px">Do not use localhost here if a device on
-      another computer will connect.</p>
-
-    <details>
-      <summary>Advanced network settings</summary>
-      <div class="row" style="margin-top:12px">
-        <div><label class="field" for="registry-port">Device registry port</label>
-          <input id="registry-port" type="number" value="10701" /></div>
-        <div><label class="field" for="tls-port">Secure channel port</label>
-          <input id="tls-port" type="number" value="10702" /></div>
-      </div>
-    </details>
-
-    <div class="actions">
-      <button id="review-gateway">Review Satellite Gateway setup</button>
-      <button id="install-gateway" class="go" disabled>Install Satellite Gateway</button>
-    </div>
-
-    <div id="gateway-review" class="hidden">
-      <h3>Before we install</h3>
-      <dl class="summary">
-        <dt>Satellite Gateway address</dt><dd id="review-address"></dd>
-        <dt>What changes</dt><dd>The voice service is installed beside Hermes, and this computer
-          starts keeping the devices' details.</dd>
-        <dt>Permission</dt><dd id="review-permission">You may be asked for an administrator
-          password.</dd>
-      </dl>
-      <details>
-        <summary>Technical details</summary>
-        <pre id="gateway-commands"></pre>
-      </details>
-    </div>
-
-    <div id="gateway-result" class="hidden">
-      <div id="gateway-status"></div>
-      <div id="gateway-card" class="hidden">
-        <h3>Keep these Satellite Gateway details</h3>
-        <dl class="summary">
-          <dt>Satellite Gateway address</dt><dd id="card-address"></dd>
-          <dt>Identity code</dt><dd class="code" style="font-size:22px" id="card-code"></dd>
-          <dt>Pairing words</dt><dd id="card-words"></dd>
-        </dl>
-        <p class="hint">You will compare the identity code when you add a device. Keep the pairing
-          words private, the same way you would keep a password.</p>
-        <div class="actions">
-          <button id="copy-card" class="ghost">Copy these details</button>
-          <button id="to-device-from-gateway" class="go">Continue to device setup</button>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ------------------------------------------------------------------ stage 3 -->
-  <section class="card hidden" id="stage3" aria-labelledby="stage3-title">
-    <h2 id="stage3-title" tabindex="-1">Add your device</h2>
-
-    <h3 id="connect-title">Connect your device</h3>
-    <div id="transport-usb">
-      <label class="field" for="port-select">Device connection</label>
-      <div class="row">
-        <div style="flex:2 1 260px"><select id="port-select" aria-describedby="port-help"></select></div>
-        <div style="flex:0 0 auto"><button id="refresh-ports" class="ghost">Refresh</button></div>
-      </div>
-      <p class="hint" id="port-help" style="margin-top:8px">Use a USB data cable, not a charging-only
-        one. A charging cable can power the device without letting this computer find it.</p>
-      <div class="actions"><button id="find-device">Read the device's identity</button></div>
-      <div id="device-id-status" class="busy hidden" aria-live="polite"></div>
-    </div>
-
-    <div id="transport-card" class="hidden">
-      <label class="field" for="mount-select">Card location</label>
-      <div class="row">
-        <div style="flex:2 1 260px"><select id="mount-select" aria-describedby="mount-help"></select></div>
-        <div style="flex:0 0 auto"><button id="refresh-mounts" class="ghost">Refresh</button></div>
-      </div>
-      <label class="field" for="mount-manual">Or type the path</label>
-      <input id="mount-manual" type="text" placeholder="/media/you/rootfs or /Volumes/rootfs" />
-      <p class="hint" id="mount-help" style="margin-top:8px">Shut the device down before removing its
-        card, then put the card in this computer's reader.</p>
-    </div>
-
-    <h3 id="connect-title-gateway">Connect to your Satellite Gateway</h3>
-    <p class="hint">Type the gateway's address. We will show its identity code so you can check it
-      against the one you saved.</p>
-    <div class="row">
-      <div><label class="field" for="gwhost">Satellite Gateway address</label>
-        <input id="gwhost" type="text" placeholder="192.0.2.10" /></div>
-      <div><label class="field" for="gwport">Pairing port</label>
-        <input id="gwport" type="text" value="10704" aria-describedby="gwport-help" /></div>
-    </div>
-    <p class="hint" id="gwport-help" style="margin-top:8px">Devices dial the registry port; this
-      pairing port is only used while setting one up. The gateway setup prints both.</p>
-    <div class="actions"><button id="check-gateway">Check the Satellite Gateway</button></div>
-    <div id="gateway-check-status" class="busy hidden" aria-live="polite"></div>
-
-    <div id="identity" class="hidden">
-      <h3>Check that this is your Satellite Gateway</h3>
-      <p class="hint">This Satellite Gateway shows:</p>
-      <div class="code" id="shown-code">----</div>
-      <p class="hint" style="margin-top:12px">Compare this with the identity code you saved during
-        gateway setup. Matching codes help you avoid connecting to a different computer.</p>
-      <div class="actions">
-        <button id="code-match" class="go">The codes match</button>
-        <button id="code-mismatch" class="ghost">The codes don't match</button>
-        <button id="code-missing" class="ghost">I don't have my saved code</button>
-      </div>
-      <div id="code-verdict" style="margin-top:14px"></div>
-    </div>
-
-    <div id="pair-panel" class="hidden">
-      <h3>Pair this device</h3>
-      <form id="pair-form" onsubmit="return false;">
-        <label class="field" for="words">Pairing words</label>
-        <input id="words" type="password" placeholder="five words" autocomplete="off" />
-        <label class="field" for="devname">A name for this device</label>
-        <input id="devname" type="text" placeholder="kitchen" autocomplete="off" />
-        <div class="check" style="display:flex;gap:10px;align-items:center;margin-top:14px">
-          <input id="remember" type="checkbox" />
-          <label for="remember" style="margin:0;text-transform:none;letter-spacing:0;font-size:14px">
-            Remember the pairing words on this computer</label>
-        </div>
-        <div class="actions"><button id="do-pair" class="go">Pair</button></div>
-      </form>
-      <div id="pair-status" class="busy hidden" aria-live="polite"></div>
-      <div id="pair-result" style="margin-top:14px"></div>
-    </div>
-
-    <div id="install-panel" class="hidden">
-      <h3>Install the software</h3>
-      <label class="field" for="ssid" id="ssid-label">Wi-Fi network</label>
-      <input id="ssid" type="text" placeholder="your network name" aria-describedby="ssid-help" />
-      <p class="hint" id="ssid-help" style="margin-top:8px">Leave this blank to keep the device's
-        current network settings.</p>
-
-      <div id="wifi-password-box" class="hidden">
-        <label class="field" for="wifi-password">Wi-Fi password</label>
-        <input id="wifi-password" type="password" autocomplete="off"
-               aria-describedby="wifi-help" />
-        <p class="hint" id="wifi-help" style="margin-top:8px">Used once, during setup. It is written
-          to a temporary file only you can read, given to the device, and deleted immediately.</p>
-      </div>
-
-      <h3>Voice and wake word</h3>
-      <label class="field" for="wake-select">Wake word</label>
-      <div class="row">
-        <div style="flex:2 1 260px"><select id="wake-select" aria-describedby="wake-caveat"></select></div>
-      </div>
-      <p class="hint" id="wake-metrics" style="margin-top:8px"></p>
-      <p class="hint" id="wake-caveat" style="margin-top:6px"></p>
-      <label class="field" for="wake-file">Or a model file on this computer</label>
-      <!-- A picker, not a typed path. The bytes are uploaded and written to a private cache file,
-           whose path is what the device provisioning step consumes. -->
-      <input id="wake-file" type="file" accept=".tflite,.onnx" />
-      <p class="hint" style="margin-top:8px">Leave blank to use the choice above. A file you supply is
-        used as-is and is not checked against anybody's measurements.</p>
-      <p class="hint hidden" id="wake-download-status" aria-live="polite"></p>
-
-      <details>
-        <summary>Compare community models for this phrase</summary>
-        <p class="hint" style="margin-top:10px">Reads published measurements from openwakeword.com.
-          Those models need an account to download, so this shows the figures only.</p>
-        <div class="row">
-          <div style="flex:2 1 240px"><input id="community-query" type="text"
-                 placeholder="a phrase, for example hey hermes" /></div>
-          <div style="flex:0 0 auto"><button id="community-search" class="ghost">Look up</button></div>
-        </div>
-        <div id="community-results" style="margin-top:12px"></div>
-      </details>
-
-      <label class="field" for="voice-select">Voice</label>
-      <div class="row">
-        <div style="flex:2 1 260px"><select id="voice-select"></select></div>
-        <div style="flex:0 0 auto"><button id="voice-preview" class="ghost">Listen</button></div>
-      </div>
-      <audio id="voice-audio" class="hidden"></audio>
-      <div class="actions"><button id="voice-download" class="ghost" disabled>Download this voice</button></div>
-      <label class="field" for="voice-file">Or a Piper voice on this computer</label>
-      <!-- A file picker, not a typed path: the model and its config are chosen together, and the
-           page sends their bytes because a browser will not reveal where they live. -->
-      <input id="voice-file" type="file" accept=".onnx,.json" multiple />
-      <div class="actions">
-        <button id="voice-file-preview" class="ghost">Listen to it</button>
-        <button id="voice-file-use" class="ghost">Use this voice</button>
-      </div>
-      <p class="hint hidden" id="voice-file-status" aria-live="polite"></p>
-      <p class="hint" id="voice-note" style="margin-top:8px"></p>
-      <p class="hint hidden" id="voice-download-status" aria-live="polite"></p>
-
-      <div id="speech-info" class="notice" style="margin-top:16px"></div>
-
-      <div class="actions">
-        <button id="review-device">Review setup</button>
-        <button id="install-device" class="go" disabled>Install device software</button>
-      </div>
-
-      <div id="device-review" class="hidden">
-        <h3>Before we install</h3>
-        <dl class="summary" id="device-summary"></dl>
-        <details><summary>Technical details</summary><pre id="device-commands"></pre></details>
-      </div>
-
-      <div id="install-status" class="busy hidden" aria-live="polite"></div>
-      <div id="install-result" style="margin-top:14px"></div>
-    </div>
-  </section>
-
-  <footer>This installer runs locally on this computer and connects to your Satellite Gateway during setup.</footer>
-</div>
-
+:root { color-scheme: dark; }
+.shell { max-width: 960px; padding: 20px 22px; height: 100dvh; display: flex; flex-direction: column; }
+.lede { margin: 6px 0 14px 26px; font-size: 13px; }
+ol.progress { margin-bottom: 12px; gap: 6px; }
+ol.progress li { padding: 4px 9px; font-size: 12px; }
+main { min-height: 0; flex: 1; display: flex; flex-direction: column; }
+.page { min-height: 0; overflow-y: auto; flex: 1; margin: 0; opacity: 1; transition: opacity 140ms ease; }
+.page.fade-out { opacity: 0; }
+.page h2 { font-size: 23px; }
+.page h2:focus { outline: none; }
+.navigation { flex: none; margin-top: 12px; display: flex; align-items: center; gap: 12px; }
+.navigation #next { margin-left: auto; }
+#message { padding: 8px 12px; margin: 8px 0 0; max-height: 100px; overflow: auto; }
+#welcome { display: flex; flex-direction: column; justify-content: center; padding: 40px; }
+#welcome h2 { font-size: clamp(28px, 4vw, 42px); max-width: 20ch; }
+#welcome p { max-width: 60ch; }
+.device-art { width: 150px; flex: 0 0 150px; }
+.device-art svg { width: 100%; height: 86px; }
+#device-field .choice { align-items: center; }
+input[type=search] { width: 100%; padding: 11px 13px; border-radius: 10px; color: var(--text); background: #0d1118; border: 1px solid var(--line); font: inherit; }
+#voice-list { max-height: 225px; overflow-y: auto; margin-top: 12px; }
+#voice-list .choice { padding: 10px 12px; margin-bottom: 6px; }
+#voice-list audio { width: 210px; height: 34px; }
+.voice-row { display: flex; align-items: center; gap: 12px; }
+.voice-row label { flex: 1; }
+#voice-audio, #custom-audio { width: 100%; margin-top: 8px; }
+#plan { max-height: 160px; overflow: auto; }
+@media(max-width:600px) { .shell { padding: 12px; } .card { padding: 18px; } .device-art { width: 95px; flex-basis: 95px; } .voice-row { flex-wrap: wrap; } #voice-list audio { width: 170px; } .lede { display:none; } }
+@media(prefers-reduced-motion:reduce) { .page { transition:none; } }
+</style></head><body><div class="shell">
+<header><span class="dot" aria-hidden="true"></span><h1>Hermes Voice Satellite</h1></header>
+<p class="lede">Voice devices for Hermes · Satellite Gateway and device setup</p>
+<ol class="progress" id="progress" aria-label="Setup progress"></ol>
+<p class="sr-only" id="announce" role="status" aria-live="polite"></p>
+<main>
+<section class="card page" id="welcome" data-page aria-labelledby="welcome-title">
+<h2 id="welcome-title" tabindex="-1">Bring Hermes into the room.</h2>
+<p>Hermes Voice Satellite connects a microphone and speaker to Hermes, so you can speak a wake word, ask a question, and hear the answer.</p>
+<p class="hint">Start here to install the Satellite Gateway beside Hermes, add a satellite, or change an existing device. We will check what is available and show what will change before you approve it.</p>
+<div class="notice">You need Hermes already running on the computer that will host the Satellite Gateway. A separate computer preparing a device does not need Hermes.</div>
+</section>
+<section class="card page hidden" id="start" data-page aria-labelledby="start-title">
+<h2 id="start-title" tabindex="-1">Choose what to set up</h2>
+<p class="hint">The Satellite Gateway is the voice service on your Hermes computer. A satellite is the microphone and speaker in a room.</p>
+<div class="notice" id="hermes-status">Checking this computer for Hermes…</div>
+<fieldset><legend>Your task</legend>
+<label class="choice"><input type="radio" name="role" value="gateway" id="role-gateway"><span><b>Set up the Satellite Gateway</b><span class="detail">Install the voice service on this computer. Hermes must already be running here. Hermes Desktop is recommended; a Hermes service install is also supported.</span></span></label>
+<label class="choice"><input type="radio" name="role" value="device"><span><b>Add a new satellite</b><span class="detail">Prepare its software and pair it with a Satellite Gateway you have already set up.</span></span></label>
+<label class="choice"><input type="radio" name="role" value="manage"><span><b>Change a device you already have</b><span class="detail">Change Wi-Fi or the wake word using a cable or card reader. Keep its existing pairing and firmware.</span></span></label>
+</fieldset>
+<details><summary>Hermes is not installed yet?</summary><p class="hint">Install Hermes on the Satellite Gateway computer using the <a href="https://hermes-agent.nousresearch.com/docs/" target="_blank" rel="noopener">official Hermes installation guide</a>. Then return here. Device preparation can run on a different computer.</p></details>
+</section>
+<section class="card page hidden" id="gateway" data-page aria-labelledby="gateway-title">
+<h2 id="gateway-title" tabindex="-1">Set up the Satellite Gateway</h2>
+<p class="hint">This will install the Satellite Gateway on this computer. You must have Hermes already running here. This computer will stay on to answer your satellites.</p>
+<label class="field" for="dial">Address your satellites can reach</label><input id="dial" type="text" placeholder="gateway.example.com or 192.0.2.10">
+<p class="hint">Use this computer's network address, not localhost. The Satellite Gateway listens for secure device connections and a separate pairing connection.</p>
+<div class="row"><div><label class="field" for="registry-port">Device registry port</label><input id="registry-port" type="number" value="10701"></div><div><label class="field" for="tls-port">Secure channel port</label><input id="tls-port" type="number" value="10702"></div></div>
+<div class="notice">Next, review the installation commands. Nothing is installed until you approve that review. Some steps may need administrator permission.</div>
+</section>
+<section class="card page hidden" id="device" data-page aria-labelledby="device-title">
+<h2 id="device-title" tabindex="-1">Which satellite do you have?</h2>
+<p class="hint">Choose the board you are preparing. This selects the correct connection, software and wake-model format. No device is written at this step.</p>
+<fieldset id="device-field"><legend>Device model</legend></fieldset>
+</section>
+<section class="card page hidden" id="connect" data-page aria-labelledby="connect-title">
+<h2 id="connect-title" tabindex="-1">Connect your satellite</h2>
+<p class="hint" id="connect-help"></p>
+<label class="field" for="connection">Device connection</label><select id="connection"></select>
+<div class="actions"><button id="refresh" class="ghost">Refresh connections</button></div>
+<div id="card-path" class="hidden"><label class="field" for="mount-manual">Or enter the mounted card path</label><input id="mount-manual" type="text" placeholder="/media/user/rootfs"></div>
+<p class="hint" style="margin-top:18px">Continue checks the connection. On USB, it reads the board's identity so changes are sent to the device you selected.</p>
+</section>
+<section class="card page hidden" id="pair-host" data-page aria-labelledby="pair-host-title">
+<h2 id="pair-host-title" tabindex="-1">Find your Satellite Gateway</h2>
+<p class="hint">Enter the address and pairing port from Satellite Gateway setup. We will read its identity code before sending any pairing words.</p>
+<label class="field" for="gwhost">Satellite Gateway address</label><input id="gwhost" type="text" placeholder="gateway.example.com">
+<label class="field" for="gwport">Pairing port</label><input id="gwport" type="number" value="10704">
+<p class="hint">The pairing port is not the device registry port. The Satellite Gateway setup record lists both.</p>
+</section>
+<section class="card page hidden" id="identity" data-page aria-labelledby="identity-title">
+<h2 id="identity-title" tabindex="-1">Check the Satellite Gateway's identity</h2>
+<p class="hint">Compare this code with the one you saved when you set up the Satellite Gateway. Matching codes protect your pairing words from being sent to the wrong computer.</p>
+<p class="code" id="shown-code"></p>
+<fieldset><legend>Does it match your saved code?</legend>
+<label class="choice"><input type="radio" name="match" value="yes"><span><b>The codes match</b></span></label>
+<label class="choice"><input type="radio" name="match" value="no"><span><b>The codes do not match, or I cannot check</b><span class="detail">Go back and confirm the address or recover your saved code. Pairing will not continue.</span></span></label>
+</fieldset>
+</section>
+<section class="card page hidden" id="pair" data-page aria-labelledby="pair-title">
+<h2 id="pair-title" tabindex="-1">Pair this satellite</h2>
+<p class="hint">The pairing words authorize this satellite to join the Satellite Gateway. It receives its own certificate and key; the words stay private.</p>
+<label class="field" for="words">Pairing words</label><input id="words" type="password" autocomplete="off">
+<label class="field" for="devname">A name for this satellite</label><input id="devname" type="text" placeholder="study">
+<p><label><input type="checkbox" id="remember"> Remember the pairing words on this computer</label></p>
+<label class="hidden" id="replace-option"><input type="checkbox" id="replace"> Replace this device's existing certificate</label>
+</section>
+<section class="card page hidden" id="settings" data-page aria-labelledby="settings-title">
+<h2 id="settings-title" tabindex="-1">What can you change?</h2>
+<p class="hint">This satellite keeps its existing pairing and firmware. Choose only the settings you want to replace; everything else stays as it is.</p>
+<label class="choice"><input type="checkbox" id="change-network"><span><b>Wi-Fi network</b><span class="detail">Save a new network on the board, or copy a saved network to the Pi's card.</span></span></label>
+<label class="choice"><input type="checkbox" id="change-wake"><span><b>Wake word</b><span class="detail">Choose a model for this device or supply your own file.</span></span></label>
+<div class="notice" id="capabilities"></div>
+<p class="hint">The Satellite Gateway currently uses one voice for all satellites. Voice files and that shared selection are managed on its computer, not by changing a device's firmware.</p>
+</section>
+<section class="card page hidden" id="network" data-page aria-labelledby="network-title">
+<h2 id="network-title" tabindex="-1">Choose the Wi-Fi network</h2>
+<p class="hint" id="network-help">The satellite needs a network that can reach the Satellite Gateway. Leave the network blank to keep its current settings.</p>
+<label class="field" for="ssid">Wi-Fi network name</label><input id="ssid" type="text" autocomplete="off">
+<div id="wifi-password-box"><label class="field" for="wifi-password">Wi-Fi password</label><input id="wifi-password" type="password" autocomplete="off"><p class="hint" style="margin-top:12px">Used once: stored in a private temporary file, sent to the device, then deleted. It is not included in the command log.</p></div>
+</section>
+<section class="card page hidden" id="wake" data-page aria-labelledby="wake-title">
+<h2 id="wake-title" tabindex="-1">Choose the wake word</h2>
+<p class="hint">The satellite listens for this phrase before sending speech to Hermes. The default is <strong>hey hermes</strong>. Only compatible models are offered. Continuing downloads a selected third-party model to this computer for review; the device is not written until you approve.</p>
+<label class="field" for="wake-select">Wake phrase</label><select id="wake-select"></select>
+<p class="hint" id="wake-metrics" style="margin-top:12px"></p><p class="hint" id="wake-caveat"></p>
+<label class="field" for="wake-file">Or choose your own model file</label><input id="wake-file" type="file" accept=".onnx,.tflite">
+<p class="hint">Your own files are always accepted, without catalogue measurements. Choose ONNX for a Pi or TFLite for an ESP32.</p>
+<details><summary>Compare community measurements</summary><label class="field" for="community-query">Phrase to look up</label><input id="community-query" type="text"><button id="community-search" class="ghost">Look up measurements</button><div id="community-results"></div></details>
+</section>
+<section class="card page hidden" id="voice" data-page aria-labelledby="voice-title">
+<h2 id="voice-title" tabindex="-1">Listen to a voice</h2>
+<p class="hint">Browse the Piper catalogue and listen before downloading a model. Both HFC sample clips play offline. Other models download only when you ask.</p>
+<div class="row"><div><label class="field" for="voice-search">Search voices</label><input id="voice-search" type="search" placeholder="Name, language or model ID"></div><div><label class="field" for="voice-language">Language</label><select id="voice-language"><option value="">All languages</option></select></div></div>
+<fieldset id="voice-list"><legend>Voice catalogue</legend></fieldset><p class="hint" id="voice-count"></p>
+<button class="ghost" id="voice-download">Download selected voice</button><p class="hint" id="voice-note"></p>
+<details><summary>Use a voice file on this computer</summary><p class="hint">Choose the Piper .onnx and its .onnx.json. Listen to a line made by this voice before installing it.</p><label class="field" for="voice-file">Model and configuration</label><input id="voice-file" type="file" accept=".onnx,.json" multiple><div class="actions"><button id="voice-file-preview">Preview this file</button><button id="voice-file-use" disabled>Install this voice</button></div><audio id="custom-audio" controls class="hidden"></audio><p class="hint" id="custom-status"></p></details>
+<div class="notice">Voice downloads are saved on <strong>this computer</strong>. The Satellite Gateway uses one shared voice, not one per device. Continue keeps the current voice. Selecting a downloaded voice below affects a local Satellite Gateway only, after its next restart; this installer will not restart it.</div>
+<p><label><input type="checkbox" id="apply-voice"> Select this voice for the Satellite Gateway on this computer</label></p>
+</section>
+<section class="card page hidden" id="review" data-page aria-labelledby="review-title">
+<h2 id="review-title" tabindex="-1">Review before applying</h2>
+<p class="hint" id="review-help">Read the changes and commands below. Go back to correct anything; apply only when you are ready.</p>
+<dl class="summary" id="summary"></dl><details><summary>Commands and permissions</summary><pre id="plan"></pre></details>
+<div class="notice" id="review-scope"></div>
+</section>
+<section class="card page hidden" id="done" data-page aria-labelledby="done-title">
+<h2 id="done-title" tabindex="-1">Setup complete</h2>
+<p class="hint" id="done-copy"></p><div id="result-details"></div>
+</section>
+<div id="message" role="status" aria-live="polite" class="notice hidden"></div>
+<nav class="navigation" aria-label="Page navigation"><button id="back" class="ghost" disabled>Back</button><span id="page-count" class="hint"></span><button id="next" class="go">Get started</button></nav>
+</main></div>
 <script>
-const $ = (id) => document.getElementById(id);
-const state = {
-  status: null, role: null, device: null, reviewed: false,
-  checkedCode: null, paired: null, installed: false
-};
-
-function announce(text) {
-  $("announce").textContent = "";
-  setTimeout(() => { $("announce").textContent = text; }, 30);
-}
-
+const $ = id => document.getElementById(id);
+const state = { page: "welcome", history: [], role: null, device: null, voices: [], voice: "en_US-hfc_female-medium", customPreviewed: false, busy: false };
+const art = ["<svg viewBox=\"0 0 220 110\" role=\"img\" aria-label=\"Raspberry Pi Zero 2 W board\">\n              <rect x=\"14\" y=\"16\" width=\"168\" height=\"78\" rx=\"6\" fill=\"#1c6b3a\" stroke=\"#0d3d21\"/>\n              <rect x=\"22\" y=\"24\" width=\"42\" height=\"62\" rx=\"2\" fill=\"#245e35\"/>\n              <rect x=\"70\" y=\"18\" width=\"106\" height=\"10\" rx=\"2\" fill=\"#c9a227\"/>\n              <g fill=\"#0f2c19\">\n                <rect x=\"75\" y=\"20\" width=\"3\" height=\"6\"/><rect x=\"83\" y=\"20\" width=\"3\" height=\"6\"/>\n                <rect x=\"91\" y=\"20\" width=\"3\" height=\"6\"/><rect x=\"99\" y=\"20\" width=\"3\" height=\"6\"/>\n                <rect x=\"107\" y=\"20\" width=\"3\" height=\"6\"/><rect x=\"115\" y=\"20\" width=\"3\" height=\"6\"/>\n                <rect x=\"123\" y=\"20\" width=\"3\" height=\"6\"/><rect x=\"131\" y=\"20\" width=\"3\" height=\"6\"/>\n                <rect x=\"139\" y=\"20\" width=\"3\" height=\"6\"/><rect x=\"147\" y=\"20\" width=\"3\" height=\"6\"/>\n                <rect x=\"155\" y=\"20\" width=\"3\" height=\"6\"/><rect x=\"163\" y=\"20\" width=\"3\" height=\"6\"/>\n              </g>\n              <rect x=\"176\" y=\"34\" width=\"34\" height=\"20\" rx=\"2\" fill=\"#9aa1a6\"/>\n              <rect x=\"176\" y=\"60\" width=\"34\" height=\"16\" rx=\"2\" fill=\"#9aa1a6\"/>\n              <rect x=\"14\" y=\"56\" width=\"14\" height=\"22\" rx=\"2\" fill=\"#2b2b2b\"/>\n              <text x=\"20\" y=\"94\" font-size=\"7\" fill=\"#8fc9a4\">Pi Zero 2 W</text>\n            </svg>", "<svg viewBox=\"0 0 220 110\" role=\"img\" aria-label=\"reSpeaker XVF3800 four microphone array\">\n              <circle cx=\"110\" cy=\"55\" r=\"46\" fill=\"#12211b\" stroke=\"#2f5d50\"/>\n              <circle cx=\"110\" cy=\"55\" r=\"34\" fill=\"none\" stroke=\"#2f5d50\" stroke-dasharray=\"3 5\"/>\n              <rect x=\"92\" y=\"39\" width=\"36\" height=\"32\" rx=\"3\" fill=\"#1d3b30\" stroke=\"#3d7a66\"/>\n              <text x=\"98\" y=\"59\" font-size=\"8\" fill=\"#8fbfae\">XMOS</text>\n              <g fill=\"#0a0a0a\" stroke=\"#4b4b4b\">\n                <circle cx=\"110\" cy=\"16\" r=\"6\"/><circle cx=\"110\" cy=\"94\" r=\"6\"/>\n                <circle cx=\"72\" cy=\"55\" r=\"6\"/><circle cx=\"148\" cy=\"55\" r=\"6\"/></g>\n              <g fill=\"#8fbfae\" opacity=\".8\">\n                <circle cx=\"110\" cy=\"9\" r=\"1.6\"/><circle cx=\"110\" cy=\"101\" r=\"1.6\"/>\n                <circle cx=\"65\" cy=\"55\" r=\"1.6\"/><circle cx=\"155\" cy=\"55\" r=\"1.6\"/></g>\n              <text x=\"82\" y=\"106\" font-size=\"7\" fill=\"#8fc9a4\">XVF3800 array</text>\n            </svg>"];
+const escapeHtml = value => String(value ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+function announce(text) { $("announce").textContent = text; }
 async function api(path, body) {
-  const headers = { "X-Installer-Token": window.INSTALLER_TOKEN || "" };
-  const options = { headers };
-  if (body !== undefined) {
-    headers["Content-Type"] = "application/json";
-    options.method = "POST";
-    options.body = JSON.stringify(body);
+  try {
+    const options = {headers: {"X-Installer-Token": window.INSTALLER_TOKEN || ""}};
+    if (body !== undefined) { options.method = "POST"; options.headers["Content-Type"] = "application/json"; options.body = JSON.stringify(body); }
+    const response = await fetch(path, options);
+    const data = await response.json();
+    if (!response.ok || data.ok === false) throw new Error(data.error || data.summary || data.log || "The operation did not complete.");
+    return data;
+  } catch(error) { throw new Error(error.message || "The installer cannot be reached. Check the connection and try again."); }
+}
+function message(text, bad = false) { $("message").textContent = text; $("message").classList.toggle("hidden", !text); $("message").classList.toggle("bad", bad); }
+async function action(fn) {
+  if (state.busy) return;
+  state.busy = true; $("next").disabled = true; $("back").disabled = true;
+  message("Working… Keep this window open.");
+  try { await fn(); message(""); }
+  catch(error) { message(error.message, true); }
+  finally { state.busy = false; navigation(); }
+}
+function navigation() {
+  $("back").disabled = state.busy || !state.history.length || state.page === "done";
+  $("next").disabled = state.busy || (state.page === "start" && !state.status);
+  $("next").textContent = ({welcome:"Get started",connect:"Connect and continue", "pair-host":"Check Satellite Gateway",pair:"Pair and continue", review:state.role === "manage" ? "Apply settings" : "Install",done:"Start another task"})[state.page] || "Continue";
+  const groups = ["Welcome", "Hermes check", ...(state.role === "gateway" ? ["Satellite Gateway"] : ["Satellite", "Settings"]), "Review", "Done"];
+  const group = ({welcome:0,start:1,gateway:2,device:2,connect:2,"pair-host":2,identity:2,pair:2,settings:3,network:3,wake:3,voice:3,review:groups.length-2,done:groups.length-1})[state.page];
+  $("progress").innerHTML = groups.map((text,i) => `<li${i === group ? ' aria-current="step"' : ""}${i < group ? ' class="done"' : ""}>${i+1}. ${text}</li>`).join("");
+  $("page-count").textContent = $(state.page+"-title").textContent;
+}
+async function show(page, back = false) {
+  const previous = $(state.page);
+  if (page !== state.page) {
+    previous.classList.add("fade-out");
+    if (!matchMedia("(prefers-reduced-motion: reduce)").matches) await new Promise(resolve => setTimeout(resolve,140));
+    previous.classList.add("hidden"); previous.classList.remove("fade-out");
+    if (!back) state.history.push(state.page);
+    state.page = page;
+    const next = $(page); next.classList.add("fade-out"); next.classList.remove("hidden"); next.scrollTop = 0;
+    requestAnimationFrame(() => next.classList.remove("fade-out"));
   }
-  const response = await fetch(path, options);
-  try { return await response.json(); }
-  catch (error) { return { ok: false, error: "The installer did not answer properly." }; }
+  navigation(); $(page+"-title").focus({preventScroll:true}); announce($(page+"-title").textContent);
 }
-
-function visibleSteps() {
-  if (state.role === "device" || state.role === "manage") return [1, 3];
-  return state.role === "gateway" ? [1, 2] : [1, 2, 3];
-}
-
-function relabelProgress() {
-  // Number the steps a person will actually take, so a route that skips the gateway reads
-  // "1. Start  2. Device" rather than leaving a hole at 2.
-  const names = { 1: "Start", 2: "Satellite Gateway", 3: "Device" };
-  const shown = visibleSteps();
-  shown.forEach((n, index) => {
-    $("step-tab-" + n).textContent = `${index + 1}. ${names[n]}`;
-  });
-}
-
-function show(stage) {
-  // A route only has the steps it will actually take: setting up a gateway does not add a device,
-  // and adding a device does not set up a gateway on this computer.
-  const visible = visibleSteps();
-  relabelProgress();
-  for (const n of [1, 2, 3]) {
-    $("stage" + n).classList.toggle("hidden", n !== stage);
-    const tab = $("step-tab-" + n);
-    tab.classList.toggle("hidden", !visible.includes(n));
-    if (n === stage) tab.setAttribute("aria-current", "step");
-    else tab.removeAttribute("aria-current");
-    tab.classList.toggle("done", n < stage);
-  }
-  const heading = $("stage" + stage + "-title");
-  heading.focus();
-  window.scrollTo({ top: 0, behavior: "smooth" });
-}
-
-function escapeHtml(value) {
-  return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-/* ------------------------------------------------------------------ stage 1 */
-
-function renderDevices() {
-  const field = $("device-field");
-  field.querySelectorAll(".choice").forEach((node) => node.remove());
-  for (const device of state.status.devices) {
-    const id = "device-" + device.id;
-    const label = document.createElement("label");
-    label.className = "choice";
-    const setup = device.needs_card_reader
-      ? "Setup: remove the microSD card and put it in a reader"
-      : "Setup: USB data cable";
-    label.innerHTML = `
-      <input type="radio" name="device" id="${id}" value="${escapeHtml(device.id)}" />
-      <span>
-        <b>${escapeHtml(device.name)}<span class="pill">${escapeHtml(device.vendor)}</span></b>
-        <span class="detail">${escapeHtml(device.identify || device.description || "")}</span>
-        <span class="setup">${setup}</span>
-      </span>`;
-    field.appendChild(label);
-  }
-  field.querySelectorAll("input").forEach((input) => { input.onchange = selectDevice; });
-
-  $("device-help").innerHTML = state.status.devices.map((device) =>
-    `<p style="margin:0 0 10px"><strong>${escapeHtml(device.name)}</strong><br>${
-      escapeHtml(device.identify || device.description || "")}</p>`).join("");
-}
-
-function selectDevice(event) {
-  state.device = state.status.devices.find((d) => d.id === event.target.value) || null;
-  state.reviewed = false;
-  $("install-device").disabled = true;
-  if (!state.device) return;
-  const card = state.device.needs_card_reader;
-  $("checklist").classList.remove("hidden");
-  $("checklist").innerHTML = `
-    <strong>Before you start</strong>
-    <ul class="checklist">
-      <li>Your ${escapeHtml(state.device.name)}.</li>
-      <li>${card ? "Its microSD card, and a card reader connected to this computer."
-                 : "A USB data cable (not a charging-only cable)."}</li>
-      <li>Your Wi-Fi network name, if you want it changed.</li>
-      <li>The Satellite Gateway address, identity code and pairing words from its setup.</li>
-      <li>A working connection from this computer to the Satellite Gateway.</li>
-    </ul>`;
-  updateStartButton();
-}
-
-function updateStartButton() {
-  const needsDevice = state.role === "device" || state.role === "manage";
-  const ready = needsDevice ? Boolean(state.device) : Boolean(state.role);
-  $("start-continue").disabled = !ready;
-}
-
 async function boot() {
-  state.status = await api("/api/status");
-  const hermes = state.status.hermes;
-  $("hermes-line").textContent = hermes === "none"
-    ? "Hermes is not installed on this computer."
-    : state.status.hermes_explained;
-
-  const platform = state.status.platform || {};
-  if ((platform.notes || []).length) {
-    $("platform-note").classList.remove("hidden");
-    $("platform-note").innerHTML = (platform.notes || []).map(escapeHtml).join("<br>");
-  }
-  state.platform = platform;
-  if (hermes === "none") {
-    $("role-gateway").disabled = true;
-    $("hermes-missing").classList.remove("hidden");
-  }
-  if (state.status.dry_run) {
-    const note = document.createElement("div");
-    note.className = "notice warn";
-    note.textContent = "Practice run: every step is shown and nothing is changed.";
-    $("stage1").prepend(note);
-  }
-  renderDevices();
-}
-
-function applyRoute() {
-  $("device-picker").classList.toggle("hidden",
-    state.role !== "device" && state.role !== "manage");
-  const keep = visibleSteps();
-  for (const n of [1, 2, 3]) $("step-tab-" + n).classList.toggle("hidden", !keep.includes(n));
-  relabelProgress();
-  updateStartButton();
-}
-
-document.querySelectorAll('input[name="role"]').forEach((input) => {
-  input.onchange = () => {
-    state.role = input.value;
-    applyRoute();
-  };
-});
-
-$("start-continue").onclick = () => {
-  if (state.role === "gateway") { show(2); return; }
-  state.mode = state.role === "manage" ? "manage" : "install";
-  prepareTransport();
-  show(3);
-};
-
-/* ------------------------------------------------------------------ stage 2 */
-
-$("review-gateway").onclick = async () => {
-  const address = $("dial").value.trim();
-  if (!address) { failGate("Enter the address your devices will use.", "dial"); return; }
-  const ports = { registry_port: Number($("registry-port").value || 10701),
-                  tls_port: Number($("tls-port").value || 10702) };
-  const result = await api("/api/gateway", { dial_address: address, ...ports, dry_run: true });
-  if (!result.ok) { failGate(result.error || result.log || "That address cannot be used.", "dial"); return; }
-  $("gateway-review").classList.remove("hidden");
-  $("review-address").textContent = address;
-  $("gateway-commands").textContent = (result.commands || []).map((c) => c.join(" ")).join("\n");
-  $("install-gateway").disabled = false;
-  $("install-gateway").className = "go";
-  state.reviewed = true;
-  announce("Setup reviewed. Installing is the next step.");
-};
-
-function failGate(message, focusId) {
-  $("gateway-review").classList.add("hidden");
-  $("install-gateway").disabled = true;
-  $("gateway-status").innerHTML = `<div class="notice bad">${escapeHtml(message)}</div>`;
-  $("gateway-result").classList.remove("hidden");
-  if (focusId) $(focusId).focus();
-}
-
-$("install-gateway").onclick = async () => {
-  const button = $("install-gateway");
-  button.disabled = true;
-  button.textContent = "Installing...";
-  $("gateway-status").innerHTML =
-    `<div class="notice">Installing the voice service. Keep this window open.</div>`;
-  $("gateway-result").classList.remove("hidden");
-  announce("Installing the gateway.");
-
-  const result = await api("/api/gateway", {
-    dial_address: $("dial").value.trim(),
-    registry_port: Number($("registry-port").value || 10701),
-    tls_port: Number($("tls-port").value || 10702),
-    dry_run: false
-  });
-
-  button.textContent = "Install Satellite Gateway";
-  if (!result.ok) {
-    button.disabled = false;
-    $("gateway-status").innerHTML =
-      `<div class="notice bad">The gateway was not installed: ${
-        escapeHtml(result.error || "see the technical details")}</div>
-       <details><summary>Technical details</summary><pre>${
-         escapeHtml(result.log || "")}</pre></details>`;
-    announce("The gateway install failed.");
-    return;
-  }
-  $("gateway-status").innerHTML = result.dry_run
-    ? `<div class="notice warn">Practice run: the gateway was not installed. This is what would
-        have happened.</div>`
-    : `<div class="notice ok">The Satellite Gateway is installed on this computer.</div>`;
-  if (result.pairing_unit) {
-    $("gateway-status").insertAdjacentHTML("beforeend",
-      `<div class="notice"><strong>One more step to let devices pair.</strong>
-        <p style="margin:8px 0 0">The pairing service is written but not started. Run these:</p>
-        <pre>${(result.pairing_unit_instructions || []).map(escapeHtml).join("\n")}</pre>
-      </div>`);
-  }
-  if (result.card) {
-    $("gateway-card").classList.remove("hidden");
-    $("card-address").textContent = result.card.dial_address;
-    $("card-code").textContent = result.card.identity_code;
-    $("card-words").textContent = result.card.words;
-    state.card = result.card;
-  }
-  announce("Gateway installed. Keep the details shown.");
-};
-
-$("copy-card").onclick = async () => {
-  if (!state.card) return;
-  const text = [
-    "Satellite Gateway address: " + state.card.dial_address,
-    "Identity code: " + state.card.identity_code,
-    "Pairing words: " + state.card.words
-  ].join("\n");
   try {
-    await navigator.clipboard.writeText(text);
-    $("copy-card").textContent = "Copied";
-  } catch (error) {
-    $("copy-card").textContent = "Select the text above to copy it";
-  }
-};
-
-$("to-device-from-gateway").onclick = () => {
-  if (state.card) {
-    const [host, port] = state.card.dial_address.replace(/^[a-z]+:\/\//, "").split(":");
-    $("gwhost").value = host || "";
-    if (port) $("gwport").value = port;
-  }
-  // Straight to stage 3 with no device selected would leave the install panel unbuildable, so this
-  // goes back to the device question and carries the rest of the state with it.
-  state.role = "device";
-  $("role-device").checked = true;
-  applyRoute();
-  show(1);
-  announce("Gateway ready. Choose the device you want to add.");
-  const first = $("device-field").querySelector("input");
-  if (first) first.focus();
-};
-
-/* ------------------------------------------------------------------ stage 3 */
-
-function resetIdentity() {
-  state.generation = (state.generation || 0) + 1;
-  state.checkedCode = null;
-  state.paired = null;
-  $("identity").classList.add("hidden");
-  $("pair-panel").classList.add("hidden");
-  $("install-panel").classList.add("hidden");
-  $("code-verdict").innerHTML = "";
-  $("pair-result").innerHTML = "";
+    state.status = await api("/api/status");
+    $("hermes-status").textContent = state.status.hermes_explained + " " + (state.status.platform?.notes || []).join(" ");
+    $("role-gateway").disabled = state.status.hermes === "none";
+    if (state.status.hermes === "none") $("hermes-status").textContent = "Hermes was not found on this computer. Use the official Hermes installation guide below before installing a Satellite Gateway here. You can still prepare or change a device.";
+    $("device-field").innerHTML = '<legend>Device model</legend>' + state.status.devices.map((d,i) => `<label class="choice"><input type="radio" name="device" value="${escapeHtml(d.id)}"><span class="device-art">${d.needs_card_reader ? art[0] : art[1]}</span><span><b>${escapeHtml(d.name)}</b><span class="detail">${escapeHtml(d.identify || d.description)}</span><span class="setup">${d.needs_card_reader ? "microSD card reader · ONNX" : "USB data cable · TFLite"}</span></span></label>`).join("");
+  } catch(error) { message(error.message, true); }
+  navigation();
 }
-
-$("gwhost").addEventListener("input", resetIdentity);
-$("gwport").addEventListener("input", resetIdentity);
-
-$("check-gateway").onclick = async () => {
-  const host = $("gwhost").value.trim();
-  const port = Number($("gwport").value || 10702);
-  if (!host) { $("gwhost").focus(); return; }
-  const generation = state.generation || 0;
-  $("gateway-check-status").classList.remove("hidden");
-  $("gateway-check-status").textContent = "Checking the gateway...";
-  announce("Checking the gateway.");
-  const result = await api("/api/inspect", { host, port });
-  if ((state.generation || 0) !== generation) {
-    // The address changed while this request was in flight; its answer describes another gateway.
-    $("gateway-check-status").classList.add("hidden");
-    return;
-  }
-  $("gateway-check-status").classList.add("hidden");
-
-  if (!result.ok) {
-    $("gateway-check-status").classList.remove("hidden");
-    $("gateway-check-status").innerHTML = `
-      <div class="notice bad">
-        <strong>We couldn't reach the Satellite Gateway at ${escapeHtml(host)}:${port}.</strong>
-        <p style="margin:8px 0 0">Check the address against your saved gateway details. Make sure the
-        gateway computer is on and the voice service is running. If it is on another network or a
-        server, this computer and your device both need a working route to it.</p>
-        <p style="margin:8px 0 0">A successful check here confirms this computer can reach the
-        gateway. The device's own connection is checked after installation.</p>
-      </div>`;
-    announce("The gateway could not be reached.");
-    return;
-  }
-  state.checkedCode = result.identity_code;
-  $("shown-code").textContent = result.identity_code;
-  $("identity").classList.remove("hidden");
-  $("code-match").focus();
-  announce("Identity code shown. Compare it with your saved code.");
-};
-
-$("code-match").onclick = () => {
-  $("code-verdict").innerHTML =
-    `<div class="notice ok">Thank you. Enter the pairing words from Satellite Gateway setup.</div>`;
-  $("pair-panel").classList.remove("hidden");
-  $("words").focus();
-};
-
-$("code-mismatch").onclick = () => {
-  $("code-verdict").innerHTML = `
-    <div class="notice bad"><strong>Don't pair yet.</strong>
-      <p style="margin:8px 0 0">Check the Satellite Gateway address and compare the code again. If you set the
-      gateway up again, use the code from the most recent setup.</p></div>`;
-  $("pair-panel").classList.add("hidden");
-  announce("Codes did not match. Pairing is paused.");
-};
-
-$("code-missing").onclick = () => {
-  $("code-verdict").innerHTML = `
-    <div class="notice warn">Go back to the gateway's setup record and confirm its identity before
-      continuing. Without the saved code there is nothing to compare, and this check is the only
-      thing that tells your gateway apart from another computer.</div>`;
-  $("pair-panel").classList.add("hidden");
-};
-
-async function pairWith(replace) {
-  if (!state.checkedCode) return;
-  const host = $("gwhost").value.trim();
-  const port = Number($("gwport").value || 10702);
-  $("do-pair").disabled = true;
-  $("pair-status").classList.remove("hidden");
-  $("pair-status").textContent = "Pairing with the gateway...";
-  announce("Pairing with the gateway.");
-
-  const result = await api("/api/pair", {
-    host, port, words: $("words").value, device_name: $("devname").value.trim(),
-    device_id: state.deviceIdentity || null,
-    expected_code: state.checkedCode, remember: $("remember").checked,
-    replace: Boolean(replace)
-  });
-
-  $("do-pair").disabled = false;
-  $("pair-status").classList.add("hidden");
-
-  if (!result.ok) {
-    const message = String(result.error || "Pairing did not complete.");
-    const alreadyKnown = /exists|already/i.test(message);
-    $("pair-result").innerHTML = `<div class="notice bad">${escapeHtml(message)}</div>` +
-      (alreadyKnown
-        ? `<div class="actions"><button id="replace-cert" class="go">Replace its certificate</button></div>
-           <p class="hint">A device that was flashed before is already known to the gateway. Replacing
-           its certificate lets it come back without you having to start over.</p>`
-        : "");
-    if (alreadyKnown) {
-      $("replace-cert").onclick = () => pairWith(true);
-    }
-    announce("Pairing did not complete.");
-    return;
-  }
-  state.paired = result;
-  const rememberLine = result.storage_error
-    ? `The pairing words were not saved: ${escapeHtml(result.storage_error)}.`
-    : (result.remembered_in ? `Pairing words were saved in ${escapeHtml(result.remembered_in)}.`
-                            : "The pairing words were not remembered on this computer.");
-  $("pair-result").innerHTML = `<div class="notice ok">Paired with ${
-    escapeHtml(result.identity_code)}. ${rememberLine}</div>`;
-  $("install-panel").classList.remove("hidden");
-  prepareInstallPanel();
-  announce("Paired. Ready to install the device software.");
-}
-
-$("do-pair").onclick = () => pairWith(false);
-
-/* ------------------------------------------------------------------ device install */
-
-function prepareTransport() {
-  if (!state.device) return;
+function selected(name) { return document.querySelector(`input[name="${name}"]:checked`)?.value; }
+async function connections() {
   const card = state.device.needs_card_reader;
-  $("transport-usb").classList.toggle("hidden", card);
-  $("transport-card").classList.toggle("hidden", !card);
-  if (card) loadMounts(); else loadPorts();
+  $("card-path").classList.toggle("hidden", !card);
+  $("connect-help").textContent = card ? "Shut down your Pi, remove its microSD card and insert it in this computer's reader. Choose the main system partition, not the boot partition. Nothing is formatted." : "Connect the ESP32-S3 with a USB data cable, not a charging-only cable. Use the ESP32 connection, not the XMOS audio USB port. We will read its existing identity.";
+  const result = await api(card ? "/api/mounts" : "/api/ports");
+  const choices = card ? result.mounts.map(m=>({value:m.mount,label:m.mount})) : result.ports.map(p=>({value:p.device,label:p.device+" · "+p.description}));
+  $("connection").innerHTML = choices.length ? choices.map(c=>`<option value="${escapeHtml(c.value)}">${escapeHtml(c.label)}</option>`).join("") : '<option value="">No connection found. Connect the device and refresh.</option>';
 }
-
-async function loadChoices() {
-  if (!state.device) return;
-  const wake = await api("/api/wake-words?format=" + encodeURIComponent(state.device.wake_format));
-  const select = $("wake-select");
-  if (wake.ok) {
-    select.innerHTML = wake.wake_words.map((entry) => {
-      const label = entry.first_party ? `${entry.word} (recommended)` : entry.word;
-      return `<option value="${escapeHtml(entry.id)}">${escapeHtml(label)}</option>`;
-    }).join("");
-    state.wakeEntries = wake.wake_words;
-    showWakeMetrics();
-    $("wake-caveat").textContent = wake.caveat;
-    select.onchange = showWakeMetrics;
-  } else {
-    select.innerHTML = `<option value="">${escapeHtml(wake.error || "no wake words")}</option>`;
-  }
-
-  const voices = await api("/api/voices");
-  if (voices.ok) {
-    const voiceSelect = $("voice-select");
-    voiceSelect.innerHTML = voices.voices.map((voice) =>
-      `<option value="${escapeHtml(voice.id)}"${voice.default ? " selected" : ""}>${
-        escapeHtml(voice.name)} · ${voice.size_mb} MB</option>`).join("");
-    state.voices = voices.voices;
-    $("voice-note").textContent = voices.note;
-    voiceSelect.onchange = showVoiceNote;
-    showVoiceNote();
-  }
+async function choices() {
+  const wake = await api("/api/wake-words?format="+encodeURIComponent(state.device.wake_format));
+  state.wakeEntries = wake.wake_words;
+  $("wake-select").innerHTML = wake.wake_words.map(w=>`<option value="${escapeHtml(w.id)}">${escapeHtml(w.word)}${w.first_party ? " (default)" : ""}</option>`).join("");
+  $("wake-caveat").textContent = wake.caveat; wakeMetrics();
+  $("wifi-password-box").classList.toggle("hidden", state.device.needs_card_reader);
+  $("network-help").textContent = state.device.needs_card_reader ? "Enter the name of a saved Wi-Fi network on this computer. Its saved credentials will be copied to the card; no password is typed here. Leave blank to keep the card's current network." : "Enter a Wi-Fi network that can reach the Satellite Gateway, and its password. First-time ESP32 setup requires both before software is written. For a settings-only edit, uncheck the network change if you want to keep the current network.";
+  $("capabilities").textContent = "Cable/card settings in this installer: Wi-Fi and wake word. Remote-capable according to this device profile: " + (state.device.remote_settings.join(", ") || "none") + ". Remote editing and enrolled-device discovery are not available in this installer yet. Use the Satellite Gateway's controls for those settings; use this connection for Wi-Fi and wake changes.";
 }
-
-function showWakeMetrics() {
-  const entry = (state.wakeEntries || []).find((item) => item.id === $("wake-select").value);
-  $("wake-metrics").textContent = entry ? entry.metrics_line : "";
+function wakeMetrics() { $("wake-metrics").textContent = state.wakeEntries?.find(w=>w.id === $("wake-select").value)?.metrics_line || ""; }
+async function voiceChoices() {
+  const data = await api("/api/voices"); state.voices = data.voices;
+  $("voice-language").innerHTML = '<option value="">All languages</option>' + [...new Set(data.voices.map(v=>v.language))].map(l=>`<option>${escapeHtml(l)}</option>`).join("");
+  renderVoices();
 }
-
-function showVoiceNote() {
-  const voice = (state.voices || []).find((item) => item.id === $("voice-select").value);
-  $("voice-preview").disabled = !(voice && voice.sample_url);
-  $("voice-download").disabled = !voice;
+function renderVoices() {
+  const query = $("voice-search").value.toLowerCase().trim(), lang = $("voice-language").value;
+  const found = state.voices.filter(v=>(!lang || v.language === lang) && `${v.id} ${v.name} ${v.language}`.toLowerCase().includes(query));
+  $("voice-list").innerHTML = '<legend>Voice catalogue</legend>' + found.map((v,i)=>`<div class="voice-row"><label class="choice"><input type="radio" name="voice" value="${escapeHtml(v.id)}"${v.id === state.voice ? " checked" : ""}><span><b>${escapeHtml(v.name)}${v.default ? " · default" : ""}</b><span class="detail">${escapeHtml(v.language)} · ${v.size_mb} MB · ${v.installed ? "Installed" : "Download on demand"} · ${v.bundled ? "offline sample" : "online sample"}</span></span></label><audio controls preload="none" aria-label="Sample: ${escapeHtml(v.name)}" src="${escapeHtml(v.sample_url)}"></audio></div>`).join("");
+  $("voice-count").textContent = found.length ? `${found.length} of ${state.voices.length} voices. Selected: ${state.voices.find(v=>v.id === state.voice)?.name || state.voice}.` : "No matching voices. Clear the search or choose another language. Your selection is unchanged.";
+  $("voice-list").querySelectorAll('input[name="voice"]').forEach(r=>r.onchange=()=>{ state.voice=r.value; $("apply-voice").checked=false; renderVoices(); });
+  const voice = state.voices.find(v=>v.id === state.voice);
+  $("voice-download").disabled = !voice || voice.installed;
+  $("voice-download").textContent = voice?.installed ? "Selected voice is installed" : `Download ${voice?.name || "selected voice"} (${voice?.size_mb || "?"} MB)`;
 }
-
-$("voice-download").onclick = async () => {
-  const id = $("voice-select").value;
-  const voice = (state.voices || []).find((item) => item.id === id);
-  if (!voice) return;
-  // A voice is tens of megabytes, so this asks first and says how much.
-  if (!window.confirm(`Download ${voice.name}? It is about ${voice.size_mb} MB.`)) return;
-  const status = $("voice-download-status");
-  status.classList.remove("hidden");
-  status.textContent = `Downloading ${voice.name}...`;
-  const result = await api("/api/voice", { voice: id, apply: true });
-  if (!result.ok) { status.textContent = result.error || "The download did not complete."; return; }
-  status.textContent = result.apply_note || "Downloaded.";
-  announce("Voice downloaded.");
-};
-
-function readAsBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(",", 2)[1] || "");
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-}
-
-async function voiceFile(action) {
-  const picked = [...(($("voice-file").files) || [])];
-  const status = $("voice-file-status");
-  status.classList.remove("hidden");
-  if (!picked.length) {
-    status.textContent = "Choose the Piper .onnx model and its .json first.";
-    return;
-  }
-  status.textContent = action === "preview" ? "Synthesising a line..." : "Installing the voice...";
-  let files;
-  try {
-    files = await Promise.all(picked.map(async (file) => ({
-      name: file.name, content_b64: await readAsBase64(file),
-    })));
-  } catch (err) {
-    status.textContent = "That file could not be read: " + err;
-    return;
-  }
-  const result = await api("/api/voice-custom", { files, action });
-  if (!result.ok) { status.textContent = result.error || "That voice could not be used."; return; }
-  if (action === "preview") {
-    if (result.practice) { status.textContent = result.note; return; }
-    const audio = $("voice-audio");
-    audio.src = result.preview_url;
-    try { await audio.play(); status.textContent = "That is the voice, spoken by itself."; }
-    catch (error) { status.textContent = "The preview was made but this browser would not play it."; }
-    return;
-  }
-  status.textContent = result.apply_note || "Voice installed.";
-  announce("Voice installed.");
-}
-
-$("voice-file-preview").onclick = () => voiceFile("preview");
-$("voice-file-use").onclick = () => voiceFile("install");
-
-$("community-search").onclick = async () => {
-  const query = ($("community-query").value || "").trim();
-  if (!query) { $("community-query").focus(); return; }
-  $("community-results").innerHTML = `<p class="hint">Looking up ${escapeHtml(query)}...</p>`;
-  const result = await api("/api/wake-words/community?q=" + encodeURIComponent(query));
-  if (!result.ok) { $("community-results").innerHTML =
-    `<div class="notice bad">${escapeHtml(result.error || "That lookup failed.")}</div>`; return; }
-  const rows = (result.results || []).map((row) =>
-    `<tr><td>${escapeHtml(row.word)}</td><td>${row.recall ?? "-"}%</td>` +
-    `<td>${row.fa_per_hour ?? "-"}</td><td>${row.downloads}</td></tr>`).join("");
-  $("community-results").innerHTML = rows
-    ? `<table style="width:100%;border-collapse:collapse;font-size:13.5px">
-         <thead><tr><th style="text-align:left">Word</th><th style="text-align:left">Recall</th>
-         <th style="text-align:left">False/hour</th><th style="text-align:left">Downloads</th></tr></thead>
-         <tbody>${rows}</tbody></table>
-         <p class="hint" style="margin-top:10px">${escapeHtml(result.note || "")}</p>
-         <p class="hint">${escapeHtml(result.caveat || "")}</p>`
-    : `<p class="hint">${escapeHtml(result.note || "Nothing found for that phrase.")}</p>`;
-};
-
-$("voice-preview").onclick = async () => {
-  const voice = (state.voices || []).find((item) => item.id === $("voice-select").value);
-  if (!voice || !voice.sample_url) return;
-  const audio = $("voice-audio");
-  audio.src = voice.sample_url;
-  try { await audio.play(); }
-  catch (error) { $("voice-note").textContent =
-    "This browser would not play the preview. The voice can still be chosen."; }
-};
-
-function prepareInstallPanel() {
-  if (!state.device) return;
-  const card = state.device.needs_card_reader;
-  loadChoices();
-  $("wifi-password-box").classList.toggle("hidden", card);
-  $("ssid-label").textContent = card ? "Copy which saved Wi-Fi network" : "Wi-Fi network";
-  $("install-device").textContent = state.mode === "manage"
-    ? "Apply these settings"
-    : (card ? "Write card setup" : "Install device software");
-
-  const remote = state.device.remote_settings.length;
-  const cable = state.device.cable_settings.length;
-  $("speech-info").innerHTML = `
-    <strong>Wake word and voice</strong>
-    <p style="margin:8px 0 0">This device answers to
-      <strong>${escapeHtml(state.device.wake_default)}</strong>. Wake-word performance varies with
-      the room, the microphone and how you speak, so you can try another later.</p>
-    <p style="margin:8px 0 0">Wi-Fi, the gateway address, the credentials and the wake word are
-      changed by running this installer again with the ${card ? "card" : "cable"}.
-      Volume, LED brightness and the wake threshold are the gateway's settings and are changed from
-      the gateway, which is not part of this installer yet.</p>`;
-
-}
-
-async function loadPorts() {
-  const select = $("port-select");
-  const result = await api("/api/ports");
-  const ports = (result.ports || []);
-  select.innerHTML = ports.length
-    ? ports.map((p) => `<option value="${escapeHtml(p.device)}">${
-        escapeHtml(p.device)}${p.description ? " (" + escapeHtml(p.description) + ")" : ""}</option>`).join("")
-    : `<option value="">No device found. Connect it, then choose Refresh.</option>`;
-}
-
-async function loadMounts() {
-  const select = $("mount-select");
-  const result = await api("/api/mounts");
-  const mounts = (result.mounts || []);
-  select.innerHTML = mounts.length
-    ? mounts.map((m) => `<option value="${escapeHtml(m.mount)}">${escapeHtml(m.mount)}</option>`).join("")
-    : `<option value="">No card found. Put the card in the reader, then choose Refresh.</option>`;
-}
-
-$("refresh-ports").onclick = () => loadPorts();
-$("refresh-mounts").onclick = () => loadMounts();
-
-$("find-device").onclick = async () => {
-  const port = $("port-select").value;
-  if (!port) {
-    $("device-id-status").classList.remove("hidden");
-    $("device-id-status").textContent = "No device found. Connect it, then choose Refresh.";
-    return;
-  }
-  $("find-device").disabled = true;
-  $("device-id-status").classList.remove("hidden");
-  $("device-id-status").textContent = "Reading the device's identity...";
-  const result = await api("/api/device-id", { profile: state.device.id, port });
-  $("find-device").disabled = false;
-  if (!result.ok) {
-    $("device-id-status").textContent = result.error || "The device did not answer.";
-    return;
-  }
-  state.deviceIdentity = result.device_id;
-  $("device-id-status").innerHTML =
-    `This device calls itself <strong>${escapeHtml(result.device_id)}</strong>. Its certificate will
-     be issued for that identity, so the gateway can recognise it.`;
-  announce("Device identity read.");
-};
-
 function deviceFields(dryRun) {
-  const card = state.device.needs_card_reader;
-  const ssid = $("ssid").value.trim();
-  return {
-    device_profile: state.device.id,
-    device_id: state.deviceIdentity || null,
-    device_name: $("devname").value.trim() || "satellite",
-    dial_address: state.paired ? state.paired.dial_address : "",
-    port: card ? null : ($("port-select").value || null),
-    // A detected mount is a convenience; a typed path is the fallback for anything unusual.
-    card_mount: card
-      ? (($("mount-manual").value || "").trim() || ($("mount-select").value || null))
-      : null,
-    wifi_ssid: ssid || null,
-    wifi_password: (!card && ssid) ? ($("wifi-password").value || null) : null,
-    certs_dir: state.paired ? state.paired.certs_dir : null,
-    // A file the person supplies wins; otherwise the chosen entry's phrase, without its badge.
-    // The picker has no path of its own, so `state.wakeModelPath` is the upload result.
-    wake_model: state.wakeModelPath || null,
-    // The model's identifier, never its display text: the catalogue shows "hey hermes" and the
-    // device needs "hey_hermes". Sending the phrase meant the installer did not recognise its own
-    // default and provisioned a different model than the one on screen.
-    wake_word: state.wakeModelName || ($("wake-select").value || state.device.wake_default),
-    voice: ($("voice-select").value || "en_US-hfc_female-medium"),
-    dry_run: dryRun
-  };
+  const managing = state.role === "manage";
+  return {device_profile:state.device.id, device_id:state.deviceIdentity || null,
+    device_name: managing ? "" : $("devname").value.trim(),
+    dial_address:state.paired?.dial_address || "", certs_dir:managing ? null : state.paired?.certs_dir,
+    port:state.device.needs_card_reader ? null : $("connection").value,
+    card_mount:state.device.needs_card_reader ? ($("mount-manual").value.trim() || $("connection").value) : null,
+    wifi_ssid:(!managing || $("change-network").checked) ? ($("ssid").value.trim() || null) : null,
+    wifi_password:(!state.device.needs_card_reader && (!managing || $("change-network").checked) && $("ssid").value.trim()) ? $("wifi-password").value : null,
+    wake_word:(!managing || $("change-wake").checked) ? (state.wakeModelName || $("wake-select").value) : null,
+    wake_model:(!managing || $("change-wake").checked) ? (state.wakeModelPath || null) : null,
+    voice:state.voice, dry_run:dryRun};
 }
-
 async function ensureWakeModel(dryRun) {
-  const typed = ($("wake-file").value || "").trim();
-  if (typed) return typed;
+  if (state.role === "manage" && !$("change-wake").checked) return null;
+  const files = [...$("wake-file").files];
+  if (files.length && !state.wakeModelPath) {
+    const file = files[0];
+    const result = await api("/api/wake-model-upload",{files:[{name:file.name,content_b64:await readAsBase64(file)}]});
+    state.wakeModelPath = result.path; state.wakeModelName = result.name;
+  }
+  if (state.wakeModelPath) return state.wakeModelPath;
   const id = $("wake-select").value;
-  const entry = (state.wakeEntries || []).find((item) => item.id === id);
-  // A first-party phrase is already on the device or provisioned by its installer.
-  if (!entry || entry.first_party) return null;
-  if (state.wakeModelFor === id && state.wakeModelPath) return state.wakeModelPath;
-  if (dryRun) {
-    $("wake-download-status").classList.remove("hidden");
-    $("wake-download-status").textContent =
-      `${entry.word} will be downloaded and verified during installation.`;
-    return null;
-  }
-  $("wake-download-status").classList.remove("hidden");
-  $("wake-download-status").textContent = `Fetching ${entry.word}...`;
-  const result = await api("/api/wake-word", { format: state.device.wake_format, model: id });
-  if (!result.ok) {
-    $("wake-download-status").textContent = result.error || "That model could not be fetched.";
-    return null;
-  }
-  state.wakeModelPath = result.path;
-  state.wakeModelFor = id;
-  $("wake-download-status").textContent = result.downloaded
-    ? "Downloaded and verified." : "Using the copy already on this computer.";
-  return result.path;
+  const entry = state.wakeEntries.find(w=>w.id===id);
+  if (entry?.first_party) return null;
+  const result = await api("/api/wake-word",{format:state.device.wake_format,model:id});
+  state.wakeModelPath = result.path; return result.path;
 }
-
-$("wake-file").addEventListener("change", async (event) => {
-  const file = event.target.files[0];
-  const status = $("wake-download-status");
-  status.classList.remove("hidden");
-  if (!file) { state.wakeModelPath = null; state.wakeModelName = null; status.textContent = ""; return; }
-  status.textContent = `Reading ${file.name}...`;
-  let content_b64;
-  try { content_b64 = await readAsBase64(file); }
-  catch (err) { status.textContent = `That file could not be read: ${err}`; return; }
-  const result = await api("/api/wake-model-upload", { files: [{ name: file.name, content_b64 }] });
-  if (!result.ok) {
-    state.wakeModelPath = null; state.wakeModelName = null;
-    status.textContent = result.error || "That model could not be used.";
-    return;
-  }
-  state.wakeModelPath = result.path;
-  state.wakeModelName = result.name;
-  status.textContent = `${file.name} will be used as-is.`;
-});
-
-$("review-device").onclick = async () => {
-  const fields = deviceFields(true);
-  fields.wake_model = await ensureWakeModel(true) || fields.wake_model;
-
-  const check = await api("/api/preflight", fields);
-  if (!check.ok || (check.problems || []).length) {
-    $("device-review").classList.add("hidden");
-    $("install-device").disabled = true;
-    $("install-device").className = "ghost";
-    $("install-result").innerHTML =
-      `<div class="notice bad"><strong>Not ready to install:</strong>
-        <ul class="checklist">${(check.problems || [check.error || "that step cannot run yet"])
-          .map((problem) => `<li>${escapeHtml(problem)}</li>`).join("")}</ul>
-        <p style="margin:8px 0 0">Nothing has been written.</p></div>`;
-    announce("Not ready to install.");
-    return;
-  }
-
-  const result = await api("/api/flash", fields);
-  if (!result.ok) { renderDeviceProblem(result); return; }
-  $("device-review").classList.remove("hidden");
-  $("device-summary").innerHTML = `
-    <dt>Device</dt><dd>${escapeHtml(state.device.name)}</dd>
-    <dt>Name</dt><dd>${escapeHtml(fields.device_name)}</dd>
-    <dt>Gateway</dt><dd>${escapeHtml(fields.dial_address || "the paired Satellite Gateway")}</dd>
-    <dt>Connection</dt><dd>${state.device.needs_card_reader
-      ? "card in a reader" : "USB cable"}</dd>
-    <dt>Wi-Fi</dt><dd>${fields.wifi_ssid ? escapeHtml(fields.wifi_ssid)
-      : "keep the current settings"}</dd>
-    <dt>Wake word</dt><dd>${escapeHtml(fields.wake_word)}</dd>
-    <dt>Voice</dt><dd>${escapeHtml(fields.voice)}</dd>`;
-  $("device-commands").textContent = (result.commands || [])
-    .map((c) => c.argv.join(" ")).join("\n");
-  $("install-device").disabled = false;
-  $("install-device").className = "go";
-  announce("Device setup reviewed.");
-};
-
-$("install-device").onclick = async () => {
-  const button = $("install-device");
-  const card = state.device.needs_card_reader;
-  button.disabled = true;
-  button.textContent = card ? "Writing card setup..." : "Installing...";
-  $("install-status").classList.remove("hidden");
-  $("install-status").textContent = card
-    ? "Writing setup files to the card. Keep the card reader connected."
-    : "Installing software on the device. Keep the USB cable connected.";
-  announce(card ? "Writing the card." : "Installing the device software.");
-
-  const fields = deviceFields(false);
-  // Install is the moment the model must actually exist: a chosen catalogue entry is fetched and
-  // verified here, and the device is written with that file.
-  const modelPath = await ensureWakeModel(false);
-  if (modelPath) fields.wake_model = modelPath;
-  else if (!$("wake-file").value.trim()) {
-    const entry = (state.wakeEntries || []).find((e) => e.id === $("wake-select").value);
-    if (entry && !entry.first_party && !state.wakeModelPath) {
-      button.disabled = false;
-      button.textContent = card ? "Write card setup" : "Install device software";
-      $("install-status").classList.add("hidden");
-      return;  // the status line already explains what went wrong
+function readAsBase64(file) { return new Promise((resolve,reject)=> { const reader=new FileReader(); reader.onload=()=>resolve(String(reader.result).split(",",2)[1]); reader.onerror=()=>reject(new Error("The file could not be read.")); reader.readAsDataURL(file); }); }
+async function customFiles() { return Promise.all([...$("voice-file").files].map(async f=>({name:f.name,content_b64:await readAsBase64(f)}))); }
+function settingsPages() { return [ ...(state.role !== "manage" || $("change-network").checked ? ["network"] : []), ...(state.role !== "manage" || $("change-wake").checked ? ["wake"] : []), ...(state.role !== "manage" ? ["voice"] : []) ]; }
+async function review() {
+  let result, fields;
+  if (state.role === "gateway") {
+    fields={dial_address:$("dial").value.trim(),registry_port:Number($("registry-port").value),tls_port:Number($("tls-port").value),dry_run:true};
+    if (!fields.dial_address) throw new Error("Enter the network address your satellites will use.");
+    result=await api("/api/gateway",fields);
+  } else {
+    if (state.role !== "manage" && $("apply-voice").checked && !state.voices.find(v=>v.id === state.voice)?.installed) throw new Error("Download the selected voice first, or keep the current Satellite Gateway voice.");
+    await ensureWakeModel(true); fields=deviceFields(true);
+    if (state.role === "manage") {
+      if ($("change-network").checked && !fields.wifi_ssid) throw new Error("Enter a Wi-Fi network, or uncheck the network change.");
+      result=await api("/api/manage",fields);
+    } else {
+      const check=await api("/api/preflight",fields);
+      if (check.problems?.length) throw new Error(check.problems.join("; "));
+      result=await api("/api/flash",fields);
     }
   }
-  const endpoint = state.mode === "manage" ? "/api/manage" : "/api/flash";
-  const result = await api(endpoint, fields);
-  $("install-status").classList.add("hidden");
-  button.textContent = state.mode === "manage"
-    ? "Apply these settings"
-    : (card ? "Write card setup" : "Install device software");
-
-  if (!result.ok) { button.disabled = false; renderDeviceProblem(result); return; }
-
-  if (state.mode === "manage") {
-    $("install-result").innerHTML = `
-      <div class="notice ok"><strong>Settings applied.</strong>
-        <p style="margin:8px 0 0">${escapeHtml(result.summary || "")}</p>
-        <p style="margin:8px 0 0">Volume, LED brightness and the wake threshold are gateway settings
-        and are not changed here.</p></div>`;
-    announce("Settings applied.");
-    return;
-  }
-
-  const preview = Boolean(result.dry_run);
-  $("install-result").innerHTML = preview
-    ? `<div class="notice warn"><strong>Practice run: nothing was written.</strong>
-        <p style="margin:8px 0 0">This is what the install would run.</p></div>
-       <details><summary>What would run</summary><pre>${
-         (result.commands || []).map((c) => c.argv.join(" ")).join("\n")}</pre></details>`
-    : `
-    <div class="notice ok"><strong>${card ? "Card setup written." : "Software installed."}</strong>
-      <p style="margin:8px 0 0">${card
-        ? "Eject the card, put it back in the device, and switch the device on."
-        : "The device is restarting now."}</p>
-      <p style="margin:8px 0 0"><strong>Device connected: not checked yet.</strong> The voice
-      check happens when the device starts and appears on the gateway.</p>
-    </div>
-    <div class="actions">
-      <button id="add-another" class="ghost">Add another device</button>
-    </div>`;
-  const another = $("add-another");
-  if (another) {
-    another.onclick = () => {
-      state.paired = null;
-      state.checkedCode = null;
-      state.device = null;
-      state.deviceIdentity = null;
-      document.querySelectorAll('input[name="device"]').forEach((radio) => {
-        radio.checked = false;
-      });
-      $("checklist").classList.add("hidden");
-      $("install-panel").classList.add("hidden");
-      $("identity").classList.add("hidden");
-      $("pair-panel").classList.add("hidden");
-      $("pair-result").innerHTML = "";
-      $("install-result").innerHTML = "";
-      $("device-review").classList.add("hidden");
-      applyRoute();
-      show(1);
-      announce("Choose the next device.");
-    };
-  }
-  announce(preview ? "Practice run complete. Nothing was written."
-                   : "Device software installed. The device will check in when it starts.");
-};
-
-function renderDeviceProblem(result) {
-  const message = String(result.error || result.summary || "");
-  const out = $("install-result");
-  if (/no USB port|No device found/i.test(message)) {
-    out.innerHTML = `<div class="notice bad"><strong>We couldn't find the device over USB.</strong>
-      <p style="margin:8px 0 0">Connect it with a USB data cable. Try another cable or USB port, then
-      choose Refresh. A charging-only cable can power the device without letting this computer find
-      it.</p></div>`;
-  } else if (/no etc directory|not the card's root/i.test(message)) {
-    out.innerHTML = `<div class="notice bad"><strong>This isn't the card location the device
-      needs.</strong>
-      <p style="margin:8px 0 0">Choose the card's main system partition rather than the small boot
-      partition, and don't format the card.</p></div>`;
-  } else {
-    out.innerHTML = `<div class="notice bad">${escapeHtml(message || "That step did not complete.")}</div>`;
-  }
-  announce("That step did not complete.");
+  state.reviewedFields=fields;
+  const pairs = state.role === "gateway" ? [["Task","Install the Satellite Gateway"],["Address",fields.dial_address],["Hermes",state.status.hermes_explained]] : [["Task",state.role === "manage" ? "Change settings only — no pairing or firmware" : "Install and provision satellite"],["Device",state.device.name],["Network",fields.wifi_ssid || "Keep current network"],["Wake word",fields.wake_word || "Keep current wake word"],["Voice",$("apply-voice").checked && state.role !== "manage" ? state.voice+" (shared local Satellite Gateway voice)" : "Keep current Satellite Gateway voice"]];
+  $("summary").innerHTML=pairs.map(([k,v])=>`<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd>`).join("");
+  $("plan").textContent=(result.commands || []).map(c=>Array.isArray(c) ? c.join(" ") : `${c.description}${c.elevation ? " (administrator permission)" : ""}
+${c.argv.join(" ")}`).join("\n\n") || result.summary || "No external commands.";
+  $("review-scope").textContent=state.role === "manage" ? "Only the selected Wi-Fi and/or wake settings will be written. Pairing and firmware stay unchanged. No service is restarted. Power-cycle the satellite afterwards." : "Approve only the changes shown above. The commands list any required administrator permission. Keep the device connection attached until setup finishes.";
+  await show("review");
 }
-
-boot();
-</script>
-</body>
-</html>
+async function apply() {
+  let result;
+  if (state.role === "gateway") result=await api("/api/gateway",{...state.reviewedFields,dry_run:false});
+  else {
+    await ensureWakeModel(false);
+    result=await api(state.role === "manage" ? "/api/manage" : "/api/flash",deviceFields(false));
+    if (state.role !== "manage" && $("apply-voice").checked) {
+      try { const voice=await api("/api/voice",{voice:state.voice,apply:true}); state.voiceNote=voice.apply_note || voice.note || "Shared voice selected for the next Satellite Gateway restart."; }
+      catch(error) { state.voiceNote="Device setup completed, but the voice was not selected: "+error.message; }
+    }
+  }
+  $("done-title").textContent=state.role === "manage" ? "Settings applied" : "Setup complete";
+  $("done-copy").textContent=state.role === "manage" ? (result.summary || "Settings saved.")+" Pairing and firmware were kept. Power-cycle the satellite to use its new settings." : state.role === "gateway" ? "The Satellite Gateway installation finished. Save its connection details below before adding a satellite." : state.device.needs_card_reader ? "Card setup is written. Safely eject the card, return it to the Pi and switch it on. Its connection to the Satellite Gateway has not been verified here." : "Device software and settings are written. Its connection to the Satellite Gateway has not been verified here.";
+  $("result-details").textContent = state.voiceNote || "";
+  if (result.dry_run) $("result-details").textContent += " Dry run: no installation changes were written.";
+  if (result.card) {
+    $("result-details").innerHTML += `<dl class="summary"><dt>Address</dt><dd>${escapeHtml(result.card.dial_address)}</dd><dt>Identity code</dt><dd>${escapeHtml(result.card.identity_code)}</dd><dt>Pairing words (keep private)</dt><dd>${escapeHtml(result.card.words)}</dd></dl>`;
+    $("gwhost").value=$("dial").value.trim(); // Pairing port stays 10704, never the registry port.
+  }
+  if (result.pairing_unit_instructions) $("result-details").innerHTML += `<p>Start the pairing service with:</p><pre>${escapeHtml(result.pairing_unit_instructions.join("\n"))}</pre>`;
+  await show("done");
+}
+async function next() {
+  switch(state.page) {
+    case "welcome": await show("start"); break;
+    case "start": {
+      const role=selected("role"); if (!role) throw new Error("Choose the task you want to perform.");
+      state.role=role; state.paired=null; state.deviceIdentity=null; state.voiceNote=""; $("apply-voice").checked=false;
+      await show(role === "gateway" ? "gateway" : "device"); break;
+    }
+    case "gateway": await review(); break;
+    case "device": {
+      state.device=state.status.devices.find(d=>d.id===selected("device")); if (!state.device) throw new Error("Choose your satellite model.");
+      state.wakeModelPath=null; state.wakeModelName=null; $("wake-file").value="";
+      await connections(); await choices(); await show("connect"); break;
+    }
+    case "connect": {
+      const connection=$('connection').value || $("mount-manual").value.trim(); if (!connection) throw new Error("Choose a device connection or enter the mounted card path.");
+      if (!state.device.needs_card_reader) { const identity=await api("/api/device-id",{profile:state.device.id,port:connection}); state.deviceIdentity=identity.device_id; }
+      await show(state.role === "manage" ? "settings" : "pair-host"); break;
+    }
+    case "pair-host": {
+      if (!$("gwhost").value.trim()) throw new Error("Enter your Satellite Gateway's address.");
+      const result=await api("/api/inspect",{host:$("gwhost").value.trim(),port:Number($("gwport").value)});
+      state.checkedCode=result.identity_code; $("shown-code").textContent=result.identity_code;
+      document.querySelectorAll('input[name="match"]').forEach(r=>r.checked=false);
+      await show("identity"); break;
+    }
+    case "identity": if (selected("match") !== "yes") throw new Error("Confirm the matching saved identity code, or go back and check the Satellite Gateway address. No pairing words have been sent."); await show("pair"); break;
+    case "pair": {
+      if (!$("words").value.trim() || !$("devname").value.trim()) throw new Error("Enter the pairing words and a name for this satellite.");
+      try { state.paired=await api("/api/pair",{host:$("gwhost").value.trim(),port:Number($("gwport").value),words:$("words").value,device_name:$("devname").value.trim(),device_id:state.deviceIdentity || null,expected_code:state.checkedCode,remember:$("remember").checked,replace:$("replace").checked}); }
+      catch(error) { if (/exists|already/i.test(error.message)) $("replace-option").classList.remove("hidden"); throw error; }
+      $("words").value=""; await show("network"); break;
+    }
+    case "settings": {
+      const pages=settingsPages(); if (!pages.length) throw new Error("Choose Wi-Fi, wake word, or both to change."); await show(pages[0]); break;
+    }
+    case "network":
+      if (state.role !== "manage" && !state.device.needs_card_reader && !$("ssid").value.trim()) throw new Error("Enter a Wi-Fi network and password. First-time ESP32 setup requires both before any firmware is written.");
+      if ($("ssid").value.trim() && !state.device.needs_card_reader && !$("wifi-password").value) throw new Error("Enter the new network's Wi-Fi password, or leave the network name blank to keep the current network.");
+      // fall through: each settings page advances in the selected order.
+    case "wake": case "voice": {
+      const pages=settingsPages(), index=pages.indexOf(state.page), following=pages[index+1];
+      if (following === "voice") await voiceChoices();
+      if (following) await show(following); else await review(); break;
+    }
+    case "review": await apply(); break;
+    case "done": location.reload(); break;
+  }
+}
+$("next").onclick=()=>action(next);
+$("back").onclick=()=>action(async()=>{const previous=state.history.pop(); if(previous) await show(previous,true);});
+$("refresh").onclick=()=>action(connections);
+$("wake-select").onchange=()=>{state.wakeModelPath=null;state.wakeModelName=null;$("wake-file").value="";wakeMetrics();};
+$("wake-file").onchange=()=>{state.wakeModelPath=null;state.wakeModelName=null;};
+$("voice-search").oninput=renderVoices; $("voice-language").onchange=renderVoices;
+$("voice-download").onclick=()=>action(async()=>{const id=state.voice; const result=await api("/api/voice",{voice:id,apply:false}); const voice=state.voices.find(v=>v.id===id); if(!result.practice) voice.installed=true; renderVoices(); $("voice-note").textContent=result.practice ? result.note : "Downloaded on this computer. The Satellite Gateway's voice has not been changed.";});
+$("voice-file").onchange=()=>{state.customPreviewed=false;state.customGeneration=(state.customGeneration || 0)+1;$("voice-file-use").disabled=true;$("custom-audio").classList.add("hidden");};
+$("voice-file-preview").onclick=()=>action(async()=>{const generation=state.customGeneration || 0; const files=await customFiles(); if(!files.length) throw new Error("Choose the model and its JSON configuration first."); const result=await api("/api/voice-custom",{files,action:"preview",apply:false}); if(!result.preview_url) throw new Error(result.note || "This voice could not be previewed. Nothing has been installed."); if ((state.customGeneration || 0) !== generation) throw new Error("The chosen files changed. Preview the current selection before installing it."); const audio=$("custom-audio"); audio.src=result.preview_url; audio.classList.remove("hidden"); await audio.play(); state.customPreviewed=true; $("voice-file-use").disabled=false; $("custom-status").textContent="Preview ready. Installing copies the model on this computer; it does not change the shared voice.";});
+$("voice-file-use").onclick=()=>action(async()=>{if(!state.customPreviewed) throw new Error("Preview this voice first."); const result=await api("/api/voice-custom",{files:await customFiles(),action:"install",apply:false}); $("custom-status").textContent=result.apply_note || result.note || "Voice installed on this computer. The shared Satellite Gateway voice is unchanged.";});
+$("community-search").onclick=()=>action(async()=>{const data=await api("/api/wake-words/community?q="+encodeURIComponent($("community-query").value)); $("community-results").textContent=(data.results || []).map(w=>`${w.word}: recall ${w.recall ?? "not published"}; false activations/hour ${w.fa_per_hour ?? "not published"}`).join("\n")+"\n"+(data.note || "")+"\n"+(data.caveat || "");});
+document.addEventListener("play",event=>{if(event.target.tagName === "AUDIO") document.querySelectorAll("audio").forEach(a=>{if(a!==event.target)a.pause();});},true);
+navigation(); boot();
+</script></body></html>

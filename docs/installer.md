@@ -226,19 +226,76 @@ with no network at all.
   published sample on demand.
 - **A voice of your own is supported**: point at a Piper `.onnx` with its `.json` beside it, hear a line
   synthesised through it before deciding, and only then is it copied to the gateway's voice directory
-  and selected.
+  on the local Satellite Gateway computer. Copying a model and selecting a shared voice are separate
+  actions: downloading or installing a model alone does not change the current voice.
 
 The public API at `openwakeword.com/api` is used for *measurements only*: search and detail are
 anonymous, while downloading a model from that library needs an account. Its numbers are surfaced for
 comparison; the download path stays on the free sources.
+
+## Guided pages and offline preview
+
+The web interface begins with a welcome splash, checks for Hermes early, and separates each decision
+into a short page. Each page explains what will happen. Back/Continue stay outside the scrolling
+content, page changes fade out/in, and reduced-motion users get an immediate transition. On a small
+screen a long catalogue or expanded technical details may still scroll inside the page; navigation
+does not move. Heading focus, a polite status region, native labelled controls and an ordered
+`aria-current` progress list are retained. The two approved hardware SVG drawings are unchanged.
+
+Voice choices come from `/api/voices`: search by name, model ID or language, filter by language,
+listen to each sample, then deliberately download via `/api/voice`. An offline sample clip is not
+an installed model; both `.onnx` and `.onnx.json` must exist before a voice is marked installed.
+The catalogue currently offers five checked-in Piper voices. It is not a live index of all Piper
+models. Selecting a shared voice is opt-in and applies to a **local** Satellite Gateway on its next
+restart; no restart is performed by the voice picker. Per-device voices remain issue #120.
+
+Build a self-contained click-through file from the exact shipped markup/script:
+
+```sh
+python scripts/build-installer-preview.py --output <preview.html>
+```
+
+Only its API transport is replaced with an offline fixture. All five catalogue samples are embedded
+MP3 data URLs; generation fetches uncached sample clips, but the resulting file needs no server,
+CDN, network or adjacent asset folder. The preview has a small badge, not different product copy.
+It never contacts hardware or a running Satellite Gateway. It cannot synthesize an arbitrary Piper
+model in a browser: that action reports the missing local runtime rather than substituting a bundled
+clip and claiming it is the uploaded voice. Use the real installer to validate a custom voice.
+
+Optional development-only browser acceptance (Playwright is not an installer runtime dependency):
+
+```sh
+python -m pip install playwright
+python -m playwright install chromium
+python packages/installer/tests/browser_ux.py --preview <preview.html>
+```
+
+These tests drive both the generated file and the shipped interface with offline API fixtures.
+They cover both device types, management and installation routes, back/forward, retry, focus,
+reduced motion, voice search/download, real sample playback and no outbound network requests.
+Backend command plans, no-flash management and console decisions run in the ordinary local gate.
+Browser fixture success is not a claim that hardware was flashed or a live service reconfigured.
+
+### Remaining design gaps
+
+Network-first authenticated fleet discovery/editing is not implemented by the installer backend.
+The device profile's remote-capable setting names are displayed, but this UI does not pretend to
+apply them remotely. Pairing remains available for adding a new device; a later cable/card settings
+edit does not pair again. Implement a read/update management API before adding a network-first screen.
+The backend still has one shared local voice and no remote voice-library upload; do not present
+voice download on a workbench as a change to a different Satellite Gateway. Dependency consent still
+uses the engine's command plan rather than a structured three-class package inventory; that inventory
+needs an engine contract before it can be shown reliably.
 
 ## Changing a device later
 
 Two entries, deliberately separated by what is actually reachable:
 
 - **"Change a device I have already set up"** in the interface, and the same choice in the console,
-  re-stages what lives on the device or its card: Wi-Fi, the gateway address, the credentials and the
-  wake word. It never reflashes, and it refuses with a list of reasons when there is nothing to apply.
+  changes Wi-Fi and/or the wake word on the connected device or its card. The person chooses which
+  settings to replace, reviews the command plan, and explicitly applies it. Existing credentials,
+  pairing and firmware are preserved. Nothing selected means nothing to apply. The ESP32 path uses
+  targeted console commands, not the first-time installer (which requires a complete credential set).
 - **Volume, LED brightness and the wake threshold are gateway settings.** They are not changed here,
   and the interface says so instead of implying otherwise. Teaching the installer to reach the gateway
   is the work left for later.
@@ -269,16 +326,12 @@ A device that was reflashed has no certificate of its own any more, and the enro
 existing id. Pairing therefore takes an explicit `"replace": true`, which is passed through as `--force`.
 A device is never silently replaced: taking over another device's identity has to be asked for.
 
-## Continuous integration
+## Local acceptance gate
 
-`.github/workflows/installer.yml` runs all six suites on Linux, Windows and macOS at Python 3.11 and
-3.12, checks the public-data rule on Linux, and **builds the standalone bundle on all three
-platforms**, uploading each as an artifact. Every build is then run with the Python environment
-stripped, because that is the promise the packaging makes.
-
-The first two runs of this workflow were red on Windows and both times the failures were real
-information: eleven tests had assumed a shell, and three more had baked a POSIX path or a POSIX `PATH`
-into an assertion. The product was right; the tests were parochial.
+There is no CI. GitHub hosts the code and issues; tests run locally. Run
+`bash scripts/check-all.sh` and require its final `GATE PASSED` line before merging.
+`--build` compiles firmware; it is not needed for installer interface work.
+`--bundle` additionally builds and exercises the standalone executable.
 
 ## Running the pairing endpoint as a service
 
