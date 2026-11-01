@@ -115,7 +115,7 @@ class ConfigPersistenceTests(unittest.TestCase):
             # could report failure after disk has committed the new generation.
             with patch("satellite_gateway.config_plane.os.chmod", side_effect=OSError("chmod unavailable")):
                 try:
-                    result = plane.set_desired("test-device", {"mic_gain": 50})
+                    result = plane.set_desired("test-device", {"mic_volume": 50})
                 except OSError:
                     self.fail("save must not fail after committing the candidate")
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
@@ -162,11 +162,11 @@ class ConfigPersistenceTests(unittest.TestCase):
                 generation = 1 if existing else 0
                 with patch.object(plane, "_save", side_effect=OSError(errno.ENOSPC, "disk full")):
                     with self.assertRaises(OSError):
-                        plane.set_desired("test-device", {"mic_gain": 50},
+                        plane.set_desired("test-device", {"mic_volume": 50},
                                           expected_generation=generation)
                 self.assertEqual(plane.list_devices(), before, "failed save must not publish desired state")
                 self.assertEqual(path.read_bytes() if path.exists() else None, disk)
-                result = plane.set_desired("test-device", {"mic_gain": 50},
+                result = plane.set_desired("test-device", {"mic_volume": 50},
                                            expected_generation=generation)
                 self.assertEqual(result["generation"], generation + 1)
                 self.assertEqual(ConfigPlane(path).get_device("test-device"), result)

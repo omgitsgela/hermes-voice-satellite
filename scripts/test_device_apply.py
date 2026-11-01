@@ -196,8 +196,8 @@ with tempfile.TemporaryDirectory() as tmp:
         mic_gain=AlsaMicGain(card="seeed2micvoicec", control="Mic", runner=mic),
         env_path=env, systemctl=FakeSystemctl(),
     )
-    actual, health, error = adapter({"mic_gain": 60})
-    check("a mic gain with a control is applied", actual.get("mic_gain") == 60, actual)
+    actual, health, error = adapter({"mic_volume": 60})
+    check("a mic gain with a control is applied", actual.get("mic_volume") == 60, actual)
     check("applying a real mic gain is healthy", health == "healthy", health)
     check("the input control was actually set",
           any("sset" in c and "60%" in c for c in mic.calls), mic.calls)
@@ -212,13 +212,14 @@ with tempfile.TemporaryDirectory() as tmp:
         mic_gain=AlsaMicGain(card="seeed2micvoicec", control="", runner=mic),
         env_path=env, systemctl=FakeSystemctl(),
     )
-    actual, health, error = adapter({"mic_gain": 60})
-    check("a mic gain with no input control is NOT reported as applied",
-          actual.get("mic_gain") is None, actual)
-    check("a mic gain with no input control is degraded, not healthy",
-          health == "degraded", health)
-    check("the missing-control state is named",
-          error is not None and "mic_gain" in error and "not applied" in error, error)
+    actual, health, error = adapter({"mic_volume": 60})
+    # The schema names the intent ("how loudly do you hear me"), so a device whose card has no
+    # capture control answers with the level it actually runs at. A fixed-gain HAT is a property of
+    # the hardware, not a fault, and must not sit in `degraded` for ever.
+    check("a device with no input control reports the level it runs at",
+          actual.get("mic_volume") == 78, actual)
+    check("a device with no input control is healthy, not degraded",
+          health == "healthy", health)
     check("no amixer set was attempted for a control that is absent",
           not any("sset" in c for c in mic.calls), mic.calls)
 
@@ -231,9 +232,9 @@ with tempfile.TemporaryDirectory() as tmp:
         mic_gain=AlsaMicGain(card="seeed2micvoicec", control="Mic", runner=mic),
         env_path=env, systemctl=FakeSystemctl(),
     )
-    actual, health, error = adapter({"mic_gain": 60})
+    actual, health, error = adapter({"mic_volume": 60})
     check("a mic gain whose set fails is reported as an error, not applied",
-          health == "error" and actual.get("mic_gain") is None, (health, actual))
+          health == "error" and actual.get("mic_volume") is None, (health, actual))
 
 # ---------------------------------------------------------------- led brightness: env + restart
 

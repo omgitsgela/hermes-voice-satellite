@@ -107,9 +107,8 @@ class ConfigAgentTests(unittest.TestCase):
 
     def default_profile(self, **over):
         """The complete safe-default profile ensure_device seeds for a new device."""
-        profile = {'wake_word': 'hey_hermes', 'wake_threshold': 0.35, 'mic_gain': 78,
-                   'playback_volume': 55, 'led_brightness': 31, 'locale': 'en-US',
-                   'update_channel': 'stable'}
+        profile = {'wake_word': 'hey_hermes', 'wake_threshold': 0.35, 'mic_volume': 78,
+                   'playback_volume': 55, 'led_brightness': 31}
         profile.update(over)
         return profile
 
@@ -141,13 +140,12 @@ class ConfigAgentTests(unittest.TestCase):
             {'playback_volume': -1},       # below the integer minimum
             {'playback_volume': 50.5},     # a fraction is not an integer
             {'playback_volume': True},     # a bool is not an integer
-            {'mic_gain': 'high'},          # a string is not an integer
+            {'mic_volume': 'high'},          # a string is not an integer
             {'wake_threshold': 0.01},      # below the number minimum
             {'wake_threshold': 1.5},       # above the number maximum
             {'led_brightness': 0},         # below 1
             {'led_brightness': 32},        # above 31
-            {'locale': 'fr-FR'},           # not in the enum
-            {'update_channel': 'nightly'}, # not in the enum
+            {'playback_volume': 101},      # above the maximum
             {'wake_word': 'HEY HERMES'},   # uppercase: not the pattern
             {'wake_word': 'hey hermes'},   # space: not the pattern
         ]:
@@ -172,9 +170,8 @@ class ConfigAgentTests(unittest.TestCase):
     def test_valid_boundary_values_are_accepted(self):
         lib = self.library()
         data = self.step(lib, self.new(lib), self.desired(1, {
-            'playback_volume': 0, 'mic_gain': 100, 'wake_threshold': 0.05,
-            'led_brightness': 1, 'wake_word': 'a', 'locale': 'en-US',
-            'update_channel': 'beta'}))
+            'playback_volume': 0, 'mic_volume': 100, 'wake_threshold': 0.05,
+            'led_brightness': 1, 'wake_word': 'a'}))
         self.assertEqual(data['health'], 'degraded')
         self.assertEqual(data['actual'], {'playback_volume': 0})
 

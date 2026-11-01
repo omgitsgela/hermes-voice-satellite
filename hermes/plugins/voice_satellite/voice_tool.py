@@ -54,7 +54,7 @@ _ACTIONS = (
 _SETTINGS = (
     "wake_word",
     "wake_threshold",
-    "mic_gain",
+    "mic_volume",
     "playback_volume",
     "led_brightness",
     "locale",

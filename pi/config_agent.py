@@ -28,7 +28,7 @@ _WAKE_WORD = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 SUPPORTED: dict[str, dict[str, Any]] = {
     "wake_word": {"type": "string", "pattern": _WAKE_WORD},
     "wake_threshold": {"type": "number", "minimum": 0.05, "maximum": 0.99},
-    "mic_gain": {"type": "integer", "minimum": 0, "maximum": 100},
+    "mic_volume": {"type": "integer", "minimum": 0, "maximum": 100},
     "playback_volume": {"type": "integer", "minimum": 0, "maximum": 100},
     "led_brightness": {"type": "integer", "minimum": 1, "maximum": 31},
     "locale": {"type": "string", "enum": ["en-US"]},

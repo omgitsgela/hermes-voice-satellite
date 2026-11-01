@@ -39,7 +39,7 @@ async def main() -> int:
             "schema_version": 1,
             "device_id": "kitchen-1",
             "generation": 2,
-            "settings": {"wake_word": "hey_hermes", "mic_gain": 78},
+            "settings": {"wake_word": "hey_hermes", "mic_volume": 78},
         })
         report = await agent.apply_event(event)
         check("valid desired state is applied once", len(applied) == 1, applied)
@@ -70,7 +70,7 @@ async def main() -> int:
             "schema_version": 1,
             "device_id": "study-1",
             "generation": 3,
-            "settings": {"mic_gain": 80},
+            "settings": {"mic_volume": 80},
         }))
         check("desired state for another device is rejected",
               wrong_device.data["health"] == "error" and len(applied) == 1, wrong_device)
@@ -85,7 +85,7 @@ async def main() -> int:
             "schema_version": 1,
             "device_id": "kitchen-2",
             "generation": 1,
-            "settings": {"mic_gain": 70},
+            "settings": {"mic_volume": 70},
         }))
         check("a device with no hardware adapter reports staged state honestly",
               staged_report.data["health"] == "degraded"

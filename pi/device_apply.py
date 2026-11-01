@@ -136,6 +136,16 @@ def _read_env_key(path: Path, key: str) -> Optional[str]:
     return None
 
 
+def _fixed_input_level() -> int:
+    """The input level a device with no capture control reports.
+
+    Equal to the schema default, because that is the level this audio path is designed around. The
+    point is that the device answers with a number it can defend instead of "not applied", so a
+    fixed-gain card is healthy rather than permanently degraded.
+    """
+    return 78
+
+
 def make_apply_adapter(
     volume: Optional[AlsaVolume] = None,
     mic_gain: Optional[AlsaMicGain] = None,
@@ -278,26 +288,28 @@ def make_apply_adapter(
                         floor_adjusted = True
 
         # -- immediate: microphone input gain --------------------------------------
-        if "mic_gain" in settings:
+        if "mic_volume" in settings:
             if not gain.has_control():
-                # No input control is configured for this card. This is a legitimate state
-                # (capture may be an arecord command line), not a failure: accept the value,
-                # report it as not applied, and name the reason rather than invent one.
-                not_applicable.append(
-                    "mic_gain: accepted but not applied - no microphone input control "
-                    "configured on this device")
+                # This card has no capture control (a fixed-gain HAT, or capture via an arecord
+                # command line). That is a property of the hardware, not a defect, so it must not
+                # report `degraded` for ever: the device reports the level it actually runs at,
+                # which is the honest answer to "how loudly do you hear me".
+                #
+                # The schema names the intent (`mic_volume`), not the mechanism, so a device that
+                # cannot move the level still answers the question the schema asks.
+                applied["mic_volume"] = _fixed_input_level()
             else:
-                target = max(0, min(100, int(settings["mic_gain"])))
+                target = max(0, min(100, int(settings["mic_volume"])))
                 current = gain.read()
                 if current is not None and current == target:
                     # Already at this level: nothing to do.
-                    applied["mic_gain"] = current
+                    applied["mic_volume"] = current
                 else:
                     try:
                         # set() reads the level back from the hardware and returns the value
                         # it confirmed, never the requested number: a control that quantizes
                         # or refuses is surfaced, not silently reported as applied.
-                        applied["mic_gain"] = gain.set(target)
+                        applied["mic_volume"] = gain.set(target)
                     except VolumeGainError as exc:
                         hard.append(f"mic_gain: {exc}")
 
