@@ -210,6 +210,9 @@ class Handler(BaseHTTPRequestHandler):
                     str(body.get("voice", "")), apply=bool(body.get("apply", False))
                 ))
                 return
+            if self.path == "/api/wake-model-upload":
+                self._json(self.session.wake_model_from_upload(body.get("files")))
+                return
             if self.path == "/api/wake-word":
                 self._json(self.session.prepare_wake_word(
                     str(body.get("format", "")), str(body.get("model", ""))

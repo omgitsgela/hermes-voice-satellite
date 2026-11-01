@@ -501,6 +501,48 @@ class Session:
                 return str(candidate)
         return shutil.which("piper")
 
+    def wake_model_from_upload(self, files: Any) -> dict:
+        """A wake model chosen in a file dialog, ready to hand to the device provisioning step.
+
+        Unlike a voice, this file is not copied into the Gateway: it is written to the board's model
+        partition over the cable. So the job here is only to get the bytes somewhere private with a
+        predictable name, and hand back a path the existing provisioning path already understands.
+
+        It stays in the cache rather than being deleted afterwards: it is a file the person chose,
+        the install may be retried with it, and re-uploading a model to retry a flash is a silly
+        thing to demand. Mode 0600, as with every other file this installer writes for itself.
+        """
+        import base64
+
+        if not isinstance(files, list) or len(files) != 1:
+            return {"ok": False, "error": "Choose one wake model file (.tflite or .onnx)."}
+        item = files[0] or {}
+        name = Path(str(item.get("name") or "")).name
+        if not name or name in {".", ".."}:
+            return {"ok": False, "error": "That file has no usable name."}
+        if Path(name).suffix.lower() not in {".tflite", ".onnx"}:
+            return {"ok": False,
+                    "error": (f"{name} is not a wake model; the file ends in .tflite or .onnx.")}
+        try:
+            content = base64.b64decode(str(item.get("content_b64") or ""), validate=True)
+        except (ValueError, TypeError):
+            return {"ok": False, "error": f"{name} did not arrive intact; try choosing it again."}
+        if not content:
+            return {"ok": False, "error": f"{name} is empty."}
+        if len(content) > 8 * 1024 * 1024:
+            return {"ok": False,
+                    "error": (f"{name} is {len(content) // 1024} KB, which is far larger than a wake "
+                              "model; check you chose the right file.")}
+
+        destination = Path.home() / ".cache" / "hermes-voice-satellite" / "wake-models" / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        handle = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(handle, "wb") as opened:
+            opened.write(content)
+        # The selector the firmware needs is the model's own name, which is what the file stem is.
+        return {"ok": True, "path": str(destination), "name": destination.stem,
+                "size": len(content)}
+
     def voice_from_upload(self, files: Any, *, action: str = "preview", apply: bool = True) -> dict:
         """A voice chosen in a file dialog, rather than typed as a path.
 

@@ -340,7 +340,9 @@
       <p class="hint" id="wake-metrics" style="margin-top:8px"></p>
       <p class="hint" id="wake-caveat" style="margin-top:6px"></p>
       <label class="field" for="wake-file">Or a model file on this computer</label>
-      <input id="wake-file" type="text" placeholder="path to a .tflite or .onnx file" />
+      <!-- A picker, not a typed path. The bytes are uploaded and written to a private cache file,
+           whose path is what the device provisioning step consumes. -->
+      <input id="wake-file" type="file" accept=".tflite,.onnx" />
       <p class="hint" style="margin-top:8px">Leave blank to use the choice above. A file you supply is
         used as-is and is not checked against anybody's measurements.</p>
       <p class="hint hidden" id="wake-download-status" aria-live="polite"></p>
@@ -1019,13 +1021,12 @@ function deviceFields(dryRun) {
     wifi_password: (!card && ssid) ? ($("wifi-password").value || null) : null,
     certs_dir: state.paired ? state.paired.certs_dir : null,
     // A file the person supplies wins; otherwise the chosen entry's phrase, without its badge.
-    wake_model: ($("wake-file").value || "").trim() || null,
+    // The picker has no path of its own, so `state.wakeModelPath` is the upload result.
+    wake_model: state.wakeModelPath || null,
     // The model's identifier, never its display text: the catalogue shows "hey hermes" and the
     // device needs "hey_hermes". Sending the phrase meant the installer did not recognise its own
     // default and provisioned a different model than the one on screen.
-    wake_word: (($("wake-file").value || "").trim()
-      ? (($("wake-file").value || "").trim().split(/[\\/]/).pop() || "custom").replace(/\.[^.]+$/, "")
-      : ($("wake-select").value || state.device.wake_default)),
+    wake_word: state.wakeModelName || ($("wake-select").value || state.device.wake_default),
     voice: ($("voice-select").value || "en_US-hfc_female-medium"),
     dry_run: dryRun
   };
@@ -1058,6 +1059,26 @@ async function ensureWakeModel(dryRun) {
     ? "Downloaded and verified." : "Using the copy already on this computer.";
   return result.path;
 }
+
+$("wake-file").addEventListener("change", async (event) => {
+  const file = event.target.files[0];
+  const status = $("wake-download-status");
+  status.classList.remove("hidden");
+  if (!file) { state.wakeModelPath = null; state.wakeModelName = null; status.textContent = ""; return; }
+  status.textContent = `Reading ${file.name}...`;
+  let content_b64;
+  try { content_b64 = await readAsBase64(file); }
+  catch (err) { status.textContent = `That file could not be read: ${err}`; return; }
+  const result = await api("/api/wake-model-upload", { files: [{ name: file.name, content_b64 }] });
+  if (!result.ok) {
+    state.wakeModelPath = null; state.wakeModelName = null;
+    status.textContent = result.error || "That model could not be used.";
+    return;
+  }
+  state.wakeModelPath = result.path;
+  state.wakeModelName = result.name;
+  status.textContent = `${file.name} will be used as-is.`;
+});
 
 $("review-device").onclick = async () => {
   const fields = deviceFields(true);

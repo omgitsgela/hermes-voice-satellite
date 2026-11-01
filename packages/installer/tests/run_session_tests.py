@@ -82,6 +82,56 @@ class InterfaceSendsIdentifiers(unittest.TestCase):
         self.assertNotIn("textContent", body)
 
 
+class WakeModelUpload(unittest.TestCase):
+    """A wake model chosen in a file dialog: staged privately, then handed to the provisioning step."""
+
+    @staticmethod
+    def upload(name="mine.tflite", body=b"model-bytes"):
+        import base64
+
+        return [{"name": name, "content_b64": base64.b64encode(body).decode()}]
+
+    def test_a_model_is_staged_privately_and_named_for_the_selector(self):
+        import os
+        import stat
+
+        from hermes_installer.session import Session
+
+        result = Session(Path.cwd(), dry_run=True).wake_model_from_upload(self.upload())
+        self.assertTrue(result["ok"], result)
+        staged = Path(result["path"])
+        self.assertTrue(staged.exists())
+        self.assertEqual(result["name"], "mine", "the selector is the file stem")
+        self.assertEqual(stat.S_IMODE(staged.stat().st_mode), 0o600)
+        os.unlink(staged)
+
+    def test_a_file_that_is_not_a_wake_model_is_refused(self):
+        from hermes_installer.session import Session
+
+        result = Session(Path.cwd(), dry_run=True).wake_model_from_upload(self.upload("song.mp3"))
+        self.assertFalse(result["ok"])
+        self.assertIn("not a wake model", result["error"])
+
+    def test_a_path_in_the_filename_cannot_escape(self):
+        from hermes_installer.session import Session
+
+        result = Session(Path.cwd(), dry_run=True).wake_model_from_upload(
+            self.upload("../../etc/passwd.tflite")
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(Path(result["path"]).name, "passwd.tflite")
+        Path(result["path"]).unlink(missing_ok=True)
+
+    def test_an_absurdly_large_file_is_refused(self):
+        from hermes_installer.session import Session
+
+        result = Session(Path.cwd(), dry_run=True).wake_model_from_upload(
+            self.upload(body=b"x" * (9 * 1024 * 1024))
+        )
+        self.assertFalse(result["ok"])
+        self.assertIn("larger than a wake model", result["error"])
+
+
 class VoiceUpload(unittest.TestCase):
     """A voice chosen in a file dialog arrives as bytes, because a browser hides the path.
 
