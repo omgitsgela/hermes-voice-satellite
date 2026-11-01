@@ -29,7 +29,6 @@ enum { WY_CFG_HEALTH_UNKNOWN = 0, WY_CFG_HEALTH_HEALTHY = 1,
  *                       NOT in `actual` yet (nothing to apply to), remembered as pending.
  *   - mic_gain, led_brightness : the XMOS codec / APA102 strip -- no adapter installed
  *                       yet; not in `actual`, contribute `degraded`.
- *   - locale, update_channel : not device-applied (Satellite Gateway: next_turn / next_update_check);
  *                       recorded, not in `actual`. */
 typedef struct wy_config wy_config;
 size_t wy_config_size(void);
