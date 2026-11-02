@@ -40,55 +40,49 @@ voice and to any audio it generates.
 
 ## What this project does with models
 
-**The ESP32 firmware bundles a default wake model** at `firmware/esp32/models/`
-(`okay_nabu.tflite` from [esphome/micro-wake-word-models](https://github.com/esphome/micro-wake-word-models),
-Apache-2.0, with attribution in that directory's `NOTICE.md`). Apache-2.0 permits
-redistribution, so the bundled default is clean for a public prebuilt bundle. The
-previous default, `hey_hermes` (microwakeword.com community library, personal and
-non-commercial only), remains in the tree as a documented **rollback** model for the
-ESP32; it must not enter any public bundle, and the Pi's model is fetched at install
-time by whoever installs the Pi.
+**The ESP32 firmware bundles a default wake model** at `firmware/esp32/models/`:
+`hey_hermes.tflite`, trained through the microwakeword.com hosted trainer's community library, with
+attribution and its manifest in that directory's `NOTICE.md`. Its terms are personal and
+non-commercial only.
+
+That is a deliberate choice (recorded 2026-11-01): the repository's own code is under the PolyForm
+Noncommercial License 1.0.0, and the default model matches what this project is. The model that a
+plain install gets is the one the project is built around, not a placeholder.
+
+**A commercial deployment must switch models.** Neither the community model's terms nor this
+repository's licence grant commercial use. The switch does not need a firmware rebuild: each model
+carries its own inference policy (cutoff, window, step, arena) inside the model blob, written from
+its `.json` manifest at provision time, so changing the model is a provisioning step. The clean
+routes are the Apache-2.0 `okay_nabu.tflite` in this tree, a model you train with the open-source
+toolkit, or a model you license from its operator.
 
 **The Pi side fetches its model at install time** rather than shipping one in the image, which keeps
 that licence question with the person installing it.
 
-The restricted hosted-trainer models (the `hey_hermes` community model and anything from the
-openwakeword.com or microwakeword.com libraries) carry the non-commercial default above. A
-commercial deployment has three clean routes: buy a commercial licence from the model's operator,
-switch to one of the pre-trained Apache-2.0 models, or train your own with the open-source toolkit.
-
 **Firmware is the case to handle carefully.** A model compiled into a firmware image is being
-redistributed, so embedding a community model in a published binary is a licence question rather than a
-technical one. Where a model has to be inside an image, use one whose licence permits redistribution,
-or have the installer fetch the model separately and keep it out of the distributed image.
-
-That is why the bundled ESP32 default is the Apache-2.0 `okay_nabu` rather than a community-library
-model: a published image must redistribute a model whose licence allows it. The restricted models in
-this tree — the `hey_hermes` rollback pair and anything hosted-trainer sourced — stay out of public
-artifacts and are covered by their own terms on the home network.
+redistributed, so embedding a community model in a published binary is a licence question rather than
+a technical one. This project answers it by publishing under a non-commercial licence and naming the
+default model's terms plainly, here and in `NOTICE.md`; a redistributor who needs different terms
+switches the model and, if they redistribute the firmware, reviews that model's licence themselves.
 
 ## Release readiness: the bundled ESP32 model
 
-The bundled model `firmware/esp32/models/okay_nabu.tflite`
-([esphome/micro-wake-word-models](https://github.com/esphome/micro-wake-word-models)) is
-licensed **Apache-2.0**, which permits redistribution. The bundle was deliberately switched to it
-on 2026-10-20 (from `hey_hermes`, microwakeword.com community library, personal and
-non-commercial only), and the delivered bytes are byte-identical to the upstream repository's
-`models/v2/okay_nabu.tflite` (SHA-256 pinned in `NOTICE.md` and
-`scripts/test_esp32_wake_scorer.py`). The bundled default is therefore clean for a public
-prebuilt bundle.
+The shipped default is `firmware/esp32/models/hey_hermes.tflite` (microwakeword.com community
+library, personal and non-commercial only). Its delivered bytes and the four numbers in its manifest
+are pinned by `NOTICE.md` and `scripts/test_esp32_wake_scorer.py`, so a silent substitution is
+caught. It is the firmware's compiled default word, the installer's default choice, and the model
+`install-esp32.sh` provisions when no model is named.
 
-The rollback model `hey_hermes.tflite` stays in the tree for the ESP32 rollback. Restoring it is a
-three-step move, not one command: provision its blob, point the board's `wake_word` selector at
-`hey_hermes`, and revert the compile-time inference parameters in `wy_mww_params_default()`
-(0.5/5/10/32000) with a firmware rebuild — `firmware/esp32/models/NOTICE.md` walks through all three.
-A public release must not include it in any release asset or image — its personal/non-commercial
-terms do not grant redistribution. If a future rollback to it is wanted in a *published*
-artifact, the original three routes still apply: a commercial licence from microwakeword.com
-(<https://microwakeword.com/license>), another Apache-2.0 swap, or fetch-at-install
-(`install-esp32.sh --download-model <url>` stages a model that way, and the model is written
-to its own flash partition at provision time, never part of the app bundle). This is a
-description of the licence terms and the release decision they force, not legal advice.
+The Apache-2.0 alternative, `okay_nabu.tflite`
+([esphome/micro-wake-word-models](https://github.com/esphome/micro-wake-word-models)), also ships in
+the tree, with its own manifest. Switching to it is one provisioning run
+(`install-esp32.sh --provision --model firmware/esp32/models/okay_nabu.tflite --model-name
+okay_nabu ...`); the device scores it with the 0.97 cutoff from its own manifest, not with the
+default's 0.5. `firmware/esp32/models/NOTICE.md` has the exact command and the manifest rules.
+
+The model partition is written at provision time and is never part of the application flash
+bundle, so a model swap and a firmware update are separate operations. This is a description of the
+licence terms and the release decision they force, not legal advice.
 
 ## Changing the model
 

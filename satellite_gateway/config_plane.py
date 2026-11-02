@@ -34,7 +34,7 @@ DEVICE_SETTING_SCHEMA: dict[str, dict[str, Any]] = {
     },
     "wake_word": {
         "type": "string", "pattern": _WAKE_WORD.pattern,
-        "default": "okay_nabu", "apply": "wake_service_restart",
+        "default": "hey_hermes", "apply": "wake_service_restart",
     },
     "wake_threshold": {
         "type": "number", "minimum": 0.05, "maximum": 0.99,
@@ -310,18 +310,12 @@ class ConfigPlane:
     ) -> dict[str, Any]:
         """Create a newly enrolled device with the complete safe default profile.
 
-        The wake word is seeded per platform, because each installer ships exactly one model
-        to the device and a desired value whose model is absent reads as a permanent degraded
-        report. The platform signal is `firmware_version`, not the device id: an ESP32 board
-        always reports `esp32-<elf sha256>`, computed by its own firmware from the linked ELF
-        (main/gateway_task.c), while a Pi never sets VOICE_FIRMWARE_VERSION and reports "".
-        The device id is NOT a platform signal: ESP32 boards derive theirs from the factory
-        MAC (main/device_identity.c), but a Pi's is whatever name the operator chose at
-        install time (scripts/install-pi.sh writes it verbatim into VOICE_DEVICE_ID), so a Pi
-        called "esp32-study" must still be treated as a Pi. The ESP32 bundles `okay_nabu`
-        (firmware/esp32/models/); the Pi installer (scripts/install-pi.sh) provisions
-        `hey_hermes.tflite` and writes only the device's own config. `set_desired` remains
-        the way to move a device to any other word once its model is deployed.
+        The wake word default is `hey_hermes` on every platform, because that is the model both
+        installers provision: the ESP32's bundled default (firmware/esp32/models/) and the Pi's
+        installer model (scripts/install-pi.sh). A desired value whose model is absent reads as a
+        permanent degraded report, so the default has to be the model that is actually on the
+        device. `set_desired` remains the way to move a device to any other word once its model is
+        deployed (for example an Apache-2.0 model in a commercial deployment).
         """
         candidate = deepcopy(self._state)
         record = self._record(device_id, state=candidate)
@@ -351,14 +345,6 @@ class ConfigPlane:
                 name: spec["default"] for name, spec in DEVICE_SETTING_SCHEMA.items()
                 if not spec.get("capability")
             }
-            # Seed the wake word to match the model each installer actually ships, so a
-            # freshly enrolled device is healthy on first apply instead of reporting a
-            # model it does not have (see the docstring). firmware_version, not the
-            # device id, is the platform signal: the ESP32 firmware computes it from the
-            # running image, a Pi reports "", and an operator can name a Pi anything.
-            firmware_version = clean_metadata.get("firmware_version", "")
-            if not firmware_version.startswith("esp32-"):
-                record["desired"]["wake_word"] = "hey_hermes"
             record["generation"] = 1
             record["desired_updated_at"] = _utc_now()
             changed = True

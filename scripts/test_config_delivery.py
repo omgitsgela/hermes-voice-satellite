@@ -81,28 +81,20 @@ async def main() -> int:
         check("desired event carries the complete generation",
               desired_event.type == CONFIG_DESIRED_EVENT
               and desired_event.data["generation"] == 1
-              and desired_event.data["settings"]["wake_word"] == "okay_nabu",
+              and desired_event.data["settings"]["wake_word"] == "hey_hermes",
               desired_event)
 
-        # A Pi registers under an operator name, and its firmware_version is "" (the Pi
-        # never sets VOICE_FIRMWARE_VERSION). The Pi installer ships hey_hermes.tflite, so a
-        # fresh Pi must be seeded hey_hermes; seeding it the ESP32's okay_nabu would report
-        # permanent degraded (model absent) even though the Pi's own wake word works.
-        pi_slot = FakeSlot("study-pi")
-        loop.registry.add(pi_slot)
-        await loop._on_device_registered(pi_slot)
-        check("a fresh Pi is seeded the model its installer ships",
-              pi_slot.connection.events[0].data["settings"]["wake_word"] == "hey_hermes",
-              pi_slot.connection.events[0])
-        # The device id is operator-chosen on a Pi, so a Pi named like an ESP32 board must
-        # still be treated as a Pi: the platform signal is the firmware the image reports,
-        # not the name the operator picked.
-        pi_misnamed = FakeSlot("esp32-study")
-        loop.registry.add(pi_misnamed)
-        await loop._on_device_registered(pi_misnamed)
-        check("a Pi named esp32-* is still seeded the Pi model",
-              pi_misnamed.connection.events[0].data["settings"]["wake_word"] == "hey_hermes",
-              pi_misnamed.connection.events[0])
+        # One default for every platform: both installers provision hey_hermes, so a
+        # freshly enrolled device of either kind starts on the model that is actually on
+        # the box. There is no platform guess to get wrong, and an operator-chosen device
+        # name cannot change the answer.
+        for name in ("study-pi", "esp32-study"):
+            other = FakeSlot(name)
+            loop.registry.add(other)
+            await loop._on_device_registered(other)
+            check(f"a fresh device named {name!r} is seeded the bundled model",
+                  other.connection.events[0].data["settings"]["wake_word"] == "hey_hermes",
+                  other.connection.events[0])
 
         changed = loop.config_plane.set_desired(
             "esp32-68ee8f4b5988", {"mic_volume": 82, "voice": "en_US-hfc_female-medium"}, expected_generation=1)

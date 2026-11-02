@@ -199,9 +199,10 @@ The four things staged to the board:
    by `scripts/provision-device-tls.py` (never through the console, because the console echoes what
    it is sent, and a private key through a line protocol is a private key in a log), and read back
    to prove the write.
-2. **Wake model** — the bundled default is `okay_nabu` (`firmware/esp32/models/okay_nabu.tflite`,
-   attribution and licence in `firmware/esp32/models/NOTICE.md`). `--model` takes any local model;
-   `--download-model` fetches one.
+2. **Wake model** — the bundled default is `hey_hermes` (`firmware/esp32/models/hey_hermes.tflite`,
+   attribution and licence in `firmware/esp32/models/NOTICE.md`; personal and non-commercial, so a
+   commercial deployment switches to a model whose terms allow it). `--model` takes any local model
+   with its `.json` manifest beside it; `--download-model` fetches one.
 3. **Endpoint** — `tls://host:port` (or `tcp://` for a trusted LAN). This is what the board dials;
    it is staged separately from the credential region on purpose, so the two cannot drift apart.
 4. **Wi-Fi profile** — the SSID and the passphrase file. The device reports the profile's presence,
@@ -342,6 +343,29 @@ journalctl -u wyoming-satellite -u outbound-satellite -n 40
 A device that registers shows up in the Satellite Gateway log with its identity; a device that cannot reach
 the Satellite Gateway shows a dial failure with the host and port it is trying. Speaking to the device is the
 only real test of the wake word, and see *Verify* in `README.md` for the surface checks.
+
+## 5. Upgrading an existing install
+
+`scripts/update-gateway.sh` moves an existing checkout to a newer revision. It updates code and
+dependencies and restarts the service; it does not rewrite `satellite-gateway.env`, the registry TLS
+material, the enrolment token or the device credentials. Run it as the user that owns the checkout:
+
+```sh
+scripts/update-gateway.sh --base ~/hermes-voice-satellite --check     # where am I, how far behind
+scripts/update-gateway.sh --base ~/hermes-voice-satellite --dry-run   # the exact steps, no writes
+scripts/update-gateway.sh --base ~/hermes-voice-satellite             # fast-forward, deps, restart
+```
+
+It refuses a dirty tree (pass `--allow-dirty` to keep local edits and still try), refuses a
+directory that is not a git checkout, and fast-forwards only: diverged history is a manual merge, not
+something a deploy script should paper over. If the update changes the unit template, the script says
+so and `scripts/install-gateway.sh` is the idempotent step that re-renders it; your env survives that
+too. After any update, verify what the running process loaded rather than trusting `active` (see
+*Verify* in `README.md`).
+
+A satellite does not need this: the ESP32 is updated by re-provisioning its model or flashing a new
+application bundle, and the Pi by its own installer. The model partition and the application region
+are separate, so a firmware update never disturbs a provisioned model or its credentials.
 
 ## Where things live
 

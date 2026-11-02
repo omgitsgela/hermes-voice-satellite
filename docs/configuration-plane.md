@@ -115,7 +115,7 @@ the host already did, because a host is not a trust boundary for a device.
 | Setting | Type | Bounds | Default | Applies by |
 |---|---|---|---|---|
 | `voice` | string | safe Piper model ID or `default` | `default` | Satellite Gateway, next synthesis |
-| `wake_word` | string | `^[a-z0-9][a-z0-9_-]{0,63}$` | `okay_nabu` | wake service restart |
+| `wake_word` | string | `^[a-z0-9][a-z0-9_-]{0,63}$` | `hey_hermes` | wake service restart |
 | `wake_threshold` | number | 0.05 – 0.99 | `0.35` | wake service restart |
 | `mic_volume` | integer | 0 – 100 | `78` | immediate |
 | `playback_volume` | integer | 0 – 100 | `55` | immediate |
@@ -157,8 +157,8 @@ than hidden:
 ### What `wake_threshold` does and does not do on a microWakeWord device
 
 On the ESP32 satellite the wake detector runs a microWakeWord model whose scorer gates FIRST: it returns
-a score only when its sliding-window mean crosses the model's own `probability_cutoff` (0.97 in the
-bundled `okay_nabu` manifest), and returns `0.0` at every other frame. The fleet's `wake_threshold` is a
+a score only when its sliding-window mean crosses the model's own `probability_cutoff` (0.5 in the
+bundled `hey_hermes` manifest, 0.97 in the `okay_nabu` alternative), and returns `0.0` at every other frame. The fleet's `wake_threshold` is a
 SECOND gate applied to that score.
 
 The consequence is worth stating plainly, because it makes the setting look more powerful than it is:
@@ -224,13 +224,12 @@ not the reported state: a device can be connected and unconverged, or converged 
 ### Monotonic generations
 
 Every desired-state write increments `generation` by exactly one. Generation `0` means "never written";
-enrolment seeds generation `1` with the full default profile. The seeded `wake_word` is platform-aware:
-an ESP32 (the image reports `firmware_version` `esp32-…`, computed from the running ELF) is seeded
-`okay_nabu`, the model its firmware bundles; every other device is a Pi, seeded `hey_hermes`, the
-model its installer provisions — so a fresh device matches the model already on the box instead of
-reporting a permanent missing-model degradation. The device id is deliberately not the signal: a Pi's
-is an operator-chosen name. Move any device to any other word with `set_desired` once the model is
-deployed. Generations never go backwards and are never
+enrolment seeds generation `1` with the full default profile, whose `wake_word` is `hey_hermes`, the
+model both installers provision (the ESP32's bundled default and the Pi's installer model). That keeps
+a fresh device matching the model already on the box instead of reporting a permanent missing-model
+degradation, and it needs no platform guess: one default for both device types. Move any device to any
+other word with `set_desired` once that model is deployed, for example an Apache-2.0 model in a
+commercial deployment. Generations never go backwards and are never
 reused, so a device can discard a stale or replayed write by comparison alone.
 
 ### Atomic, private persistence

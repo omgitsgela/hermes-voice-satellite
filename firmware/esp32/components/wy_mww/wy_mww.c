@@ -12,13 +12,14 @@ void wy_mww_params_default(wy_mww_params *out)
 {
     if (out == NULL)
         return;
-    /* Exactly firmware/esp32/models/okay_nabu.json (the `micro` block of the bundled
+    /* Exactly firmware/esp32/models/hey_hermes.json (the `micro` block of the bundled
      * default model); scripts/test_esp32_wake_scorer.py pins these against the
-     * shipped file. */
-    out->probability_cutoff = 0.97f;
+     * shipped file. These defaults only apply to a model provisioned without its
+     * manifest (header v1); a v2 blob carries its own policy. */
+    out->probability_cutoff = 0.5f;
     out->sliding_window_size = 5u;
     out->feature_step_ms = 10u;
-    out->tensor_arena_size = 26080u;
+    out->tensor_arena_size = 32000u;
     out->feature_size = WY_MWW_FEATURE_SIZE;
 }
 

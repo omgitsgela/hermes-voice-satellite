@@ -84,6 +84,37 @@ class Esp32Commands(unittest.TestCase):
         self.assertNotIn("--wake-word", argv)
 
     @posix_only
+    def test_the_bundled_alternative_model_resolves_to_its_own_file(self):
+        """Choosing okay_nabu must carry okay_nabu's file, not the default's.
+
+        The script's own default is the bundled hey_hermes; passing no --model
+        while selecting another word provisions the wrong model under the wrong
+        selector, which is a configured satellite that never wakes.
+        """
+        argv = esp32.DRIVER.flash(self.request(wake_word="okay_nabu"), dry()).commands[0].argv
+        self.assertEqual(argv[argv.index("--model") + 1],
+                         "firmware/esp32/models/okay_nabu.tflite")
+        self.assertEqual(argv[argv.index("--model-name") + 1], "okay_nabu")
+
+    @posix_only
+    def test_an_unknown_wake_word_without_its_model_is_refused(self):
+        result = esp32.DRIVER.flash(self.request(wake_word="computer"), dry())
+        self.assertFalse(result.ok)
+        self.assertIn("no model in this checkout", result.summary)
+        self.assertIn("hey_hermes", result.summary)
+        self.assertFalse(result.commands)
+
+    @posix_only
+    def test_manage_only_provisions_the_selected_bundled_model(self):
+        result = esp32.DRIVER.provision(
+            self.request(wake_word="okay_nabu", extra={"manage_only": True}), dry())
+        joined = [" ".join(c.argv) for c in result.commands]
+        model_commands = [line for line in joined if "provision-device-model.py" in line]
+        self.assertEqual(len(model_commands), 1, joined)
+        self.assertIn("firmware/esp32/models/okay_nabu.tflite", model_commands[0])
+        self.assertIn("--name okay_nabu", model_commands[0])
+
+    @posix_only
     def test_wifi_is_staged_with_the_passphrase_in_a_file_never_an_argument(self):
         result = esp32.DRIVER.flash(self.request(wifi_ssid="home", wifi_psk_file="/run/psk"), dry())
         argv = result.commands[0].argv

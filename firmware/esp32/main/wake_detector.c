@@ -20,13 +20,19 @@
  * live in the hermes_cfg namespace next to the agent's state blob. When a key is absent (first
  * boot, or the Satellite Gateway never sent the setting) the schema defaults below are used -- the same
  * defaults wyoming_config.c validates against. wake_threshold is stored as a "%f" string and
- * wake_word as the model SELECTOR string (underscore form, e.g. okay_nabu), NOT the detection
+ * wake_word as the model SELECTOR string (underscore form, e.g. hey_hermes), NOT the detection
  * name (WYAKE_WORD_NAME). See the plan's D5. */
 #define WAKE_NVS_NAMESPACE "hermes_cfg"
 #define WAKE_NVS_THRESHOLD "wake_threshold"
 #define WAKE_NVS_WORD      "wake_word"
 #define WAKE_DEFAULT_THRESHOLD 0.35
-#define WAKE_DEFAULT_WORD      "okay_nabu"
+/* The wake word this firmware answers to when nothing has been provisioned or
+ * configured. It must be the model the installer ships by default, because a
+ * device whose selector is absent falls back here and a name that matches no
+ * model leaves it deaf. The default is the non-commercial community model by
+ * decision (see docs/wake-word-licensing.md); the licensed alternative is a
+ * different model, provisioned deliberately, never a silent fallback. */
+#define WAKE_DEFAULT_WORD      "hey_hermes"
 
 /* The post-stream deaf window (the plan's "deaf lead-in after speech"): after a stream ends the
  * detector stays deaf this long so it does not re-fire on the answer's tail or the done tone. The
@@ -43,7 +49,15 @@ static struct {
 
     uint8_t *model;         /* loader-owned PSRAM buffer: header + model bytes (real model only) */
     size_t model_len;
+    size_t model_header_len;/* header bytes in `model`: 108 (v1) or 120 (v2) */
     int have_real_model;    /* 1 = a validated real model loaded, 0 = the safe placeholder */
+
+    /* The model's own inference policy, when the provisioned blob carried one
+     * (header version 2). A v1 blob has none and the compiled defaults apply,
+     * which is what every device provisioned before the policy moved into the
+     * blob was scored with. */
+    struct wy_mww_scorer_params policy;
+    int have_policy;
 
     wy_mww_scorer *scorer;  /* the #110 scorer: real inference over `model`, NULL without one */
     int scorer_cold;        /* 1 = cold-start the streaming scorer before its next frame */
@@ -102,20 +116,25 @@ static void scorer_teardown(void) {
 
 /* Build the real scorer over the validated model bytes the loader kept (the
  * WKM1 header is ours; the scorer consumes the tflite bytes that follow). The
- * inference parameters are the wy_mww defaults, which are exactly the shipped
- * manifest's values (models/okay_nabu.json: cutoff 0.97, window 5, 10 ms
- * steps, 26080 arena) -- pinned against that file by
- * scripts/test_esp32_wake_scorer.py. Returns 0 when real inference is live. */
+ * inference policy comes from the blob itself when it carries one (header v2,
+ * written from the model's own JSON manifest by the provisioner); a v1 blob
+ * falls back to wy_mww_params_default(), which is what it was scored with
+ * before the policy moved into the blob. Passing the model's own cutoff/window/
+ * arena is what makes a model swap a provisioning step instead of a firmware
+ * rebuild: hey_hermes wants 0.5 and a 32 KB arena, okay_nabu wants 0.97 and
+ * 26080. Returns 0 when real inference is live. */
 static int scorer_setup(void) {
-    if (!wd.model || wd.model_len <= WY_MODEL_HEADER_SIZE) {
+    if (!wd.model || wd.model_len <= wd.model_header_len) {
         ESP_LOGW("wake", "scorer_setup: no model bytes (model=%p len=%u)",
                  (void *)wd.model, (unsigned)wd.model_len);
         return -1;
     }
-    ESP_LOGI("wake", "scorer_setup: building scorer over %u bytes",
-             (unsigned)(wd.model_len - WY_MODEL_HEADER_SIZE));
-    wd.scorer = wy_mww_scorer_create(wd.model + WY_MODEL_HEADER_SIZE,
-                                     wd.model_len - WY_MODEL_HEADER_SIZE, NULL);
+    ESP_LOGI("wake", "scorer_setup: building scorer over %u bytes policy=%s",
+             (unsigned)(wd.model_len - wd.model_header_len),
+             wd.have_policy ? "blob" : "defaults");
+    wd.scorer = wy_mww_scorer_create(wd.model + wd.model_header_len,
+                                     wd.model_len - wd.model_header_len,
+                                     wd.have_policy ? &wd.policy : NULL);
     wd.scorer_cold = 1;
     ESP_LOGI("wake", "scorer_setup: scorer=%p", (void *)wd.scorer);
     return wd.scorer ? 0 : -1;
@@ -166,22 +185,28 @@ static int model_load(void *user, const char *model_name, void **out_model, size
 
     const esp_partition_t *part =
         esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "model");
-    if (part && part->size >= WY_MODEL_HEADER_SIZE) {
+    if (part && part->size >= WY_MODEL_HEADER_SIZE_V1) {
         /* Read the header first to learn the model's real length before allocating. This is a
          * header-ONLY read, so it must go through wy_model_header_peek (fixed fields, no
          * whole-blob length check) -- NOT wy_model_header_parse, whose "does the blob hold
          * data_len bytes" check can never pass against a buffer holding only the header. Using
          * parse here made the entire real-model branch unreachable and silently discarded every
          * valid provisioned model. The authoritative whole-blob parse happens below on the full
-         * read, where that length check is exactly right. */
+         * read, where that length check is exactly right.
+         *
+         * The buffer is the LARGEST header (v2, 120 bytes) so one read serves both versions; a
+         * v1 blob's 12 trailing bytes are model data that peek never looks at. */
         uint8_t header_buf[WY_MODEL_HEADER_SIZE];
         if (esp_partition_read(part, 0, header_buf, sizeof(header_buf)) == ESP_OK) {
             wy_model_header header;
-            if (wy_model_header_peek(header_buf, sizeof(header_buf), &header) == 0 &&
+            size_t header_len = 0;
+            if (wy_model_header_peek(header_buf, sizeof(header_buf), &header) == 0)
+                header_len = wy_model_header_size_for(header.version);
+            if (header_len > 0 &&
                 header.data_len > 0 &&
-                (uint64_t)WY_MODEL_HEADER_SIZE + header.data_len <= part->size &&
+                (uint64_t)header_len + header.data_len <= part->size &&
                 model_name && strcmp(header.name, model_name) == 0) {
-                size_t total = (size_t)WY_MODEL_HEADER_SIZE + header.data_len;
+                size_t total = header_len + header.data_len;
                 uint8_t *buf = heap_caps_malloc(total, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
                 if (buf && esp_partition_read(part, 0, buf, total) == ESP_OK) {
                     /* Re-parse on the full buffer (authoritative) and verify SHA-256 over the
@@ -190,14 +215,29 @@ static int model_load(void *user, const char *model_name, void **out_model, size
                     unsigned char digest[WY_MODEL_SHA256_LEN];
                     const mbedtls_md_info_t *info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
                     if (wy_model_header_parse(buf, total, &full) == 0 && info &&
-                        mbedtls_md(info, buf + WY_MODEL_HEADER_SIZE, full.data_len, digest) == 0 &&
+                        mbedtls_md(info, buf + header_len, full.data_len, digest) == 0 &&
                         memcmp(digest, full.sha256, WY_MODEL_SHA256_LEN) == 0) {
                         if (wd.model) heap_caps_free(wd.model);
                         wd.model = buf;
                         wd.model_len = total;
+                        wd.model_header_len = header_len;
                         wd.have_real_model = 1;
+                        /* The model carries its own scoring policy from v2 onward. A v1 blob
+                         * has none, and the compiled defaults are what it was scored with. */
+                        wd.have_policy = full.version == WY_MODEL_VERSION ? 1 : 0;
+                        if (wd.have_policy) {
+                            wd.policy.probability_cutoff = full.policy.probability_cutoff;
+                            wd.policy.sliding_window_size = full.policy.sliding_window_size;
+                            wd.policy.feature_step_ms = full.policy.feature_step_ms;
+                            wd.policy.tensor_arena_size = full.policy.tensor_arena_size;
+                            ESP_LOGI("wake", "model policy: cutoff=%.2f window=%u step=%u arena=%u",
+                                     (double)wd.policy.probability_cutoff,
+                                     (unsigned)wd.policy.sliding_window_size,
+                                     (unsigned)wd.policy.feature_step_ms,
+                                     (unsigned)wd.policy.tensor_arena_size);
+                        }
                         /* The scorer consumes the model bytes that follow the header. */
-                        *out_model = buf + WY_MODEL_HEADER_SIZE;
+                        *out_model = buf + header_len;
                         *out_len = full.data_len;
                         return 0;
                     }
@@ -216,7 +256,9 @@ static int model_load(void *user, const char *model_name, void **out_model, size
         wd.model = NULL;
         wd.model_len = 0;
     }
+    wd.model_header_len = 0;
     wd.have_real_model = 0;
+    wd.have_policy = 0;
     *out_model = (void *)placeholder;
     *out_len = sizeof(placeholder);
     return 0;

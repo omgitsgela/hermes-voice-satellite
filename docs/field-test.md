@@ -99,8 +99,9 @@ scripts/install-esp32.sh --provision --port <usb-port> \
 
 Provisioning is a **set, not a menu**: TLS credential, wake model, endpoint and Wi-Fi profile
 are all required and an incomplete set is refused before a byte is written. The wake model
-default to the bundled `okay_nabu` (`firmware/esp32/models/`, licence note in its
-`NOTICE.md`); `--model <file>` or `--download-model <url>` stage a different one.
+defaults to the bundled `hey_hermes` (`firmware/esp32/models/`, licence note in its
+`NOTICE.md`); `--model <file>` (with its `.json` manifest beside it) or `--download-model <url>`
+stages a different one.
 `<psk-file>` holds exactly the Wi-Fi passphrase (plus one trailing newline) — the passphrase
 moves as a file path, never through argv.
 
@@ -174,9 +175,10 @@ port in `satellite-gateway.env`.
 
 ## 6. Speak the wake word (the acceptance test)
 
-Stand at normal speaking distance and say the wake word — **"Okay Nabu"** on the ESP32
-(say it clearly: its 0.97 cutoff is the selectivity gate) — **"Hey Hermes"** on the Pi —
-then ask one short question.
+Stand at normal speaking distance and say the wake word: **"Hey Hermes"** on both an ESP32 and a
+Pi, which is what both installers provision by default. (An ESP32 switched to the Apache-2.0
+alternative answers to **"Okay Nabu"** instead; its 0.97 cutoff is the selectivity gate, so say it
+clearly.) Then ask one short question.
 
 **Success looks like:** the awake chime plays immediately, and a spoken answer comes back
 within a few seconds. On the Pi that is the whole test: the acoustic wake word is live.
@@ -194,10 +196,10 @@ answer path without speaking, or when the room is too noisy to test acoustically
 detector; follow the turn in `journalctl --user -u hermes-voice-satellite -f`. No chime at all —
 the detector did not fire: ESP32, `WAKE_STATUS` on the console (re-run the provision step if no
 model is loaded); Pi, `journalctl -u wyoming-openwakeword -u wake-shim` and check the model
-file exists. Too many false wakes in a busy room — say the phrase less clearly at first
-(the bundled `okay_nabu` model ships `probability_cutoff 0.97`, already near the top of its
-range, so the cutoff is barely a lever: `firmware/esp32/models/NOTICE.md`), and check the
-room and the microphone before reaching for settings.
+file exists. Too many false wakes in a busy room: check the room and the microphone first, then
+the model's own selectivity. The bundled `hey_hermes` ships `probability_cutoff` 0.5 and
+`okay_nabu` ships 0.97, and that number, not the engine threshold, is the real lever
+(`firmware/esp32/models/NOTICE.md`).
 
 ---
 

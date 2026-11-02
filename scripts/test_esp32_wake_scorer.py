@@ -9,12 +9,14 @@ probability-cutoff decision) and the ESP/TFLite-Micro driver around it
 -std=c11 -Wall -Wextra -Werror and pins every number that must agree between
 four places that cannot see each other at runtime:
 
-  1. firmware/esp32/models/okay_nabu.json -- the provisioner's manifest
-     (probability_cutoff, sliding_window_size, feature_step_size,
+  1. firmware/esp32/models/hey_hermes.json -- the manifest of the bundled
+     default model (probability_cutoff, sliding_window_size, feature_step_size,
      tensor_arena_size). The device cannot read it (the model partition
      carries the bare .tflite under the WKM1 header), so the firmware's
-     wy_mww_params_default() IS the manifest; this test fails if they drift.
-  2. firmware/esp32/models/okay_nabu.tflite -- the model tensor layout the
+     wy_mww_params_default() must equal it; this test fails if they drift. A
+     provisioned model also carries these numbers in its own v2 blob header,
+     so the defaults are the fallback, not the only path.
+  2. firmware/esp32/models/hey_hermes.tflite -- the model tensor layout the
      scorer validates at init ([1, stride, 40] int8 in, [1, 1] uint8 out),
      read here with a minimal flatbuffer walker so the feature dimensions are
      grounded in the shipped file rather than assumed.
@@ -44,7 +46,7 @@ MWW = COMP / 'wy_mww'
 MODELS = ROOT / 'firmware/esp32/models'
 
 # The delivered SHA-256 of the bundled model, as recorded in models/NOTICE.md.
-NOTICE_TFLITE_SHA256 = '0689abe1912a95a3318a0d8cb2e67bad0cbcfe3e24dd6e050c75debddfb6f891'
+NOTICE_TFLITE_SHA256 = '377545239b78e0671a92f1ae7a4bbbf9a18c170263edb9aba3db5f23fcb0ed4e'
 
 # TensorType bytes of the tflite flatbuffer schema (schema_generated.h).
 TENSOR_TYPE_UINT8 = 3
@@ -233,9 +235,10 @@ class WakeScorerPolicyTests(unittest.TestCase):
     # ---- the manifest: firmware defaults vs the shipped JSON -----------------
 
     def test_defaults_are_the_shipped_manifest(self):
-        """wy_mww_params_default() IS the runtime manifest (the device cannot
-        read the JSON), so it must equal models/okay_nabu.json exactly."""
-        manifest = json.loads((MODELS / 'okay_nabu.json').read_text())
+        """wy_mww_params_default() is the fallback policy (a model provisioned
+        without its manifest), so it must equal the bundled default model's
+        models/hey_hermes.json exactly."""
+        manifest = json.loads((MODELS / 'hey_hermes.json').read_text())
         micro = manifest['micro']
         self.assertEqual(manifest['version'], 2, 'microWakeWord v2 streaming model')
         defaults = self.mww.defaults()
@@ -247,13 +250,13 @@ class WakeScorerPolicyTests(unittest.TestCase):
         self.assertEqual(defaults.feature_size, 40)
 
     def test_manifest_parser_reads_the_real_file(self):
-        text = (MODELS / 'okay_nabu.json').read_text()
+        text = (MODELS / 'hey_hermes.json').read_text()
         rc, params = self.mww.parse(text)
         self.assertEqual(rc, 0)
-        self.assertAlmostEqual(params.probability_cutoff, 0.97, places=6)
+        self.assertAlmostEqual(params.probability_cutoff, 0.5, places=6)
         self.assertEqual(params.sliding_window_size, 5)
         self.assertEqual(params.feature_step_ms, 10)
-        self.assertEqual(params.tensor_arena_size, 26080)
+        self.assertEqual(params.tensor_arena_size, 32000)
 
     def test_manifest_parser_tolerates_layout_but_not_nonsense(self):
         reordered = ('{"micro": {"tensor_arena_size": 4096, "feature_step_size": 20,\n'
@@ -286,7 +289,7 @@ class WakeScorerPolicyTests(unittest.TestCase):
         """The scorer validates this layout on-device; the numbers are pinned
         here against the shipped file so '40 features, stride from the tensor'
         is grounded, not assumed."""
-        info = parse_tflite_io(MODELS / 'okay_nabu.tflite')
+        info = parse_tflite_io(MODELS / 'hey_hermes.tflite')
         self.assertEqual(info['version'], 3, 'tflite schema version')
         self.assertEqual(len(info['inputs']), 1)
         self.assertEqual(len(info['outputs']), 1)
@@ -307,7 +310,7 @@ class WakeScorerPolicyTests(unittest.TestCase):
         self.assertTrue(1 <= inp['shape'][1] <= 32)
 
     def test_model_bytes_are_the_notice_bytes(self):
-        digest = hashlib.sha256((MODELS / 'okay_nabu.tflite').read_bytes()).hexdigest()
+        digest = hashlib.sha256((MODELS / 'hey_hermes.tflite').read_bytes()).hexdigest()
         self.assertEqual(digest, NOTICE_TFLITE_SHA256,
                          'the bundled model changed without a NOTICE.md update')
 
@@ -375,37 +378,27 @@ class WakeScorerPolicyTests(unittest.TestCase):
         score = lib.wy_mww_stream_push(C.byref(s), 128)
         self.assertAlmostEqual(score, 636.0 / 1275.0, places=5)
 
-    def test_bundled_cutoff_is_the_strict_one(self):
-        """okay_nabu is the bundled default and it ships cutoff 0.97 (cutoff_q
-        247). That selectivity is load-bearing: a partial match that would
-        cross the old 0.5 default (window mean ~0.5-0.6) must NOT fire at
-        0.97, or the swap would wake on near-misses. A genuine match is a
-        sustained high probability; the crossing score is the window mean, so
-        it is always above the cutoff (and far above the 0.35 engine
-        threshold) when it crosses."""
-        # The firmware's compile-time policy, read through the same seam the
-        # device uses.
+    def test_bundled_cutoff_is_the_model_own_gate(self):
+        """The bundled default ships cutoff 0.5 (cutoff_q 127), the value in
+        its own manifest, and the firmware defaults must agree with it. The
+        cutoff is the model's primary selectivity gate: the scorer reports a
+        score only when the 5-slice window mean crosses it. A window mean at
+        or below the cutoff must NOT fire; a sustained match must."""
         d = self.mww.defaults()
-        self.assertAlmostEqual(d.probability_cutoff, 0.97, places=6)
-        s = self.mww.stream(cutoff=0.97, window=5)  # cutoff_q = 247
+        self.assertAlmostEqual(d.probability_cutoff, 0.5, places=6)
+        s = self.mww.stream(cutoff=0.5, window=5)  # cutoff_q = 127
         lib = self.mww.lib
-        # A partial match: five slices at quantized 0.5 (128). At the old 0.5
-        # cutoff (635) this is a detection; at 247*5 == 1235 it is not.
+        # A weak match: five slices at quantized 0.4 (102) sum to 510, under
+        # 127 * 5 == 635, so no detection.
         for _ in range(5):
-            self.assertEqual(lib.wy_mww_stream_push(C.byref(s), 128), 0.0)
-        # Even a strong-but-not-sustained match (four highs, one gap) stays
-        # under: (4 * 255 + 0) = 1020 <= 1235.
-        s2 = self.mww.stream(cutoff=0.97, window=5)
-        for v in (255, 255, 255, 0, 255):
-            self.assertEqual(lib.wy_mww_stream_push(C.byref(s2), v), 0.0)
-        # A sustained match crosses on the fifth high: 1275 > 1235. The score
-        # is the window mean -- 1.0 here -- comfortably above the engine
-        # threshold, so the detection survives the second gate.
-        s3 = self.mww.stream(cutoff=0.97, window=5)
+            self.assertEqual(lib.wy_mww_stream_push(C.byref(s), 102), 0.0)
+        # A sustained match at the cutoff: 5 * 128 == 640 > 635 crosses on the
+        # fifth high, and the score is the window mean (640 / 1275).
+        s2 = self.mww.stream(cutoff=0.5, window=5)
         for _ in range(4):
-            self.assertEqual(lib.wy_mww_stream_push(C.byref(s3), 255), 0.0)
-        self.assertAlmostEqual(lib.wy_mww_stream_push(C.byref(s3), 255),
-                               1275.0 / 1275.0, places=6)
+            self.assertEqual(lib.wy_mww_stream_push(C.byref(s2), 128), 0.0)
+        self.assertAlmostEqual(lib.wy_mww_stream_push(C.byref(s2), 128),
+                               640.0 / 1275.0, places=6)
 
     def test_detection_is_one_shot_and_the_window_refills(self):
         s = self.mww.stream(cutoff=0.5, window=5)
