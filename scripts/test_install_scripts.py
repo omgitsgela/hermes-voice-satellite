@@ -208,6 +208,61 @@ class InstallScriptTests(unittest.TestCase):
             # no source build exists, so the source-tree check (--build) must not be attempted
             self.assertNotIn('--build ', result.stdout)
 
+    def test_esp32_coprocessor_is_its_own_operation(self):
+        """The audio chip lives on its own USB socket and only appears in Safe Mode, so it
+        cannot share a run with the ESP32 steps: every combination must be refused with the
+        reason and the remedy, not silently run one of the two."""
+        for other in ('--flash', '--provision', '--build'):
+            with self.subTest(other=other):
+                result = run(ESP32, '--coprocessor', other, '--port', '/dev/ttyACM0')
+                combined = result.stdout + result.stderr
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('cannot be combined', combined)
+                self.assertIn('separate operations', combined)
+                self.assertIn('USB', combined, 'the refusal must name the physical reason')
+
+    def test_esp32_coprocessor_dry_run_writes_nothing_to_the_esp32(self):
+        """The chip run's whole plan is one hash-verified DFU write of the pinned image. It must
+        not touch the ESP32 (no write_flash, no idf.py) and must name the Safe Mode + socket
+        procedure, so an operator who only reads the dry run knows what to re-cable."""
+        result = run(ESP32, '--dry-run', '--coprocessor')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('dfu-util -R -e -a 1 -D', result.stdout)
+        self.assertIn('firmware/stock/xmos-official-v1.0.9-48k-master-dfu.bin', result.stdout)
+        self.assertIn('verified: sha256 6380851a', result.stdout)
+        self.assertNotIn('write_flash', result.stdout)
+        self.assertNotIn('idf.py', result.stdout)
+        # The physical setup is printed, not left to the docs.
+        self.assertIn('Safe Mode', result.stdout)
+        self.assertIn('audio jack', result.stdout)
+
+    def test_esp32_restore_factory_selects_the_stock_image(self):
+        """--restore-factory implies the chip operation (there is nothing else it can mean) and
+        switches to the stock v1.0.4 image with its own pinned hash."""
+        result = run(ESP32, '--dry-run', '--restore-factory')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('firmware/stock/xmos-official-v1.0.4-dfu.bin', result.stdout)
+        self.assertIn('verified: sha256 6c665251', result.stdout)
+
+    def test_esp32_coprocessor_refuses_an_image_that_is_not_the_pinned_one(self):
+        """The hash gate is the difference between "a co-processor image" and "the image this
+        project verified". A stock-named file with different bytes must be refused BEFORE
+        dfu-util is consulted -- a tampered checkout never reaches the wire."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / 'repo'
+            (repo / 'scripts' / 'lib').mkdir(parents=True)
+            (repo / 'firmware' / 'stock').mkdir(parents=True)
+            shutil.copy(ESP32, repo / 'scripts' / 'install-esp32.sh')
+            shutil.copy(ROOT / 'scripts' / 'lib' / 'guided.sh',
+                        repo / 'scripts' / 'lib' / 'guided.sh')
+            tampered = repo / 'firmware' / 'stock' / 'xmos-official-v1.0.9-48k-master-dfu.bin'
+            tampered.write_bytes(b'not the image the hash says it is')
+            result = run(repo / 'scripts' / 'install-esp32.sh', '--coprocessor')
+            combined = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('does not match the pinned hash', combined)
+            self.assertIn('want 6380851a', combined, 'the refusal must show the expected hash')
+
     def test_esp32_flash_verifies_written_bundle_even_with_a_build_tree(self):
         """Checking source components is not verification of the file actually flashed."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -608,6 +663,7 @@ class GuidedModeTests(unittest.TestCase):
         answers = [
             'n',                                     # write the firmware to the satellite?
             'y',                                     # set the satellite up?
+            'n',                                     # write the audio chip? (separate operation)
             '/dev/ttyACM0',                          # satellite serial port
             '/srv/gateway/state/registry-tls',        # certificates folder
             'esp32-test',                            # name this satellite is enrolled under
@@ -632,7 +688,7 @@ class GuidedModeTests(unittest.TestCase):
         have to know the scheme or the port. Both are filled in, and the resolved address is said
         out loud so nothing happens silently. A port that IS given is respected, so a gateway on a
         non-standard port still works."""
-        base = ['n', 'y', '/dev/ttyACM0', '/srv/gateway/state/registry-tls', 'esp32-test']
+        base = ['n', 'y', 'n', '/dev/ttyACM0', '/srv/gateway/state/registry-tls', 'esp32-test']
         tail = ['TestNet', '/tmp/psk.txt', 'n', 'no']
 
         result = self.run_guided(ESP32, base + ['192.0.2.10'] + tail)
@@ -667,7 +723,7 @@ class GuidedModeTests(unittest.TestCase):
         three so the design is not closed off, but only the network link is carried today -- so
         asking for usb must be EXPLAINED, not accepted, or the person is handed a satellite that
         cannot connect. The refusal must also offer the way that does work."""
-        base = ['n', 'y', '/dev/ttyACM0', '/srv/gateway/state/registry-tls', 'esp32-test']
+        base = ['n', 'y', 'n', '/dev/ttyACM0', '/srv/gateway/state/registry-tls', 'esp32-test']
         tail = ['TestNet', '/tmp/psk.txt', 'n', 'no']
 
         # 'usb' is refused with a reason; the re-prompt then takes a real address
@@ -695,7 +751,7 @@ class GuidedModeTests(unittest.TestCase):
         every surface a person or a log can see."""
         secret = 'an-extremely-secret-passphrase'
         answers = [
-            'n', 'y', '/dev/ttyACM0', '/srv/gateway/state/registry-tls', 'esp32-test',
+            'n', 'y', 'n', '/dev/ttyACM0', '/srv/gateway/state/registry-tls', 'esp32-test',
             'tls://192.0.2.10:10702', 'TestNet', secret,
             'n', 'no',
         ]
@@ -727,6 +783,7 @@ class GuidedModeTests(unittest.TestCase):
             answers = [
                 'n',                                  # write the firmware to the board?
                 'y',                                  # set the board up?
+                'n',                                  # write the audio chip? (separate operation)
                 '/dev/ttyACM0',                       # board serial port
                 token,                                # setup code (five words)
                 'esp32-enroll-fb',                    # name this board is enrolled under
@@ -770,6 +827,7 @@ class GuidedModeTests(unittest.TestCase):
             answers = [
                 'n',                                  # write the firmware to the satellite?
                 'y',                                  # set the satellite up?
+                'n',                                  # write the audio chip? (separate operation)
                 '/dev/ttyACM0',                       # satellite serial port
                 token,                                # setup code (five words)
                 'esp32-enroll-dr',                    # name this satellite is enrolled under
@@ -814,7 +872,7 @@ class GuidedModeTests(unittest.TestCase):
             psk = Path(tmp) / 'psk.txt'
             psk.write_text('a-test-passphrase\n')
             answers = [
-                'n', 'y', '/dev/ttyACM0', token, 'esp32-reissue',
+                'n', 'y', 'n', '/dev/ttyACM0', token, 'esp32-reissue',
                 'tls://192.0.2.10:10702', 'TestNet', str(psk),
                 'y',                                     # issue a new certificate?
                 # NOTE the order: the reissue question is asked inside the enrol step, which
@@ -920,7 +978,7 @@ class GuidedModeTests(unittest.TestCase):
     def test_answering_no_at_the_confirmation_aborts_with_nothing_written(self):
         """The confirmation is a real gate: an explicit no must abort before any command runs."""
         cases = (
-            (ESP32, ['n', 'y', '/dev/ttyACM0', '/srv/gateway/state/registry-tls',
+            (ESP32, ['n', 'y', 'n', '/dev/ttyACM0', '/srv/gateway/state/registry-tls',
                      'esp32-test', 'tls://192.0.2.10:10702', 'TestNet', '/tmp/psk.txt',
                      'n', 'no']),
             (PI, ['/opt/wyoming-satellite', 'kitchen', 'hey_hermes', 'pi',
@@ -948,7 +1006,7 @@ class GuidedModeTests(unittest.TestCase):
     def test_a_bad_answer_is_reprompted_with_the_flag_rules_reason(self):
         """Guided validation mirrors the flag rules: an ftp:// endpoint is refused with the same
         reason the flag path would die with, and the flow re-prompts instead of accepting it."""
-        answers = ['n', 'y', '/dev/ttyACM0', '/srv/gateway/state/registry-tls', 'esp32-test',
+        answers = ['n', 'y', 'n', '/dev/ttyACM0', '/srv/gateway/state/registry-tls', 'esp32-test',
                    'ftp://192.0.2.10:10702',                       # rejected, re-prompt
                    'tls://192.0.2.10:10702',                       # accepted
                    'TestNet', '/tmp/psk.txt', 'n', 'yes']
@@ -970,6 +1028,7 @@ class GuidedModeTests(unittest.TestCase):
     PROV_ANSWERS = [
         '',                                      # write the firmware? (seeded n by --provision)
         '',                                      # set the board up? (seeded y)
+        '',                                      # write the audio chip? (seeded n; separate op)
         '/dev/ttyACM0',                          # board serial port
         '/srv/gateway/state/registry-tls',        # certificates folder
         'esp32-test',                            # name this board is enrolled under
@@ -980,7 +1039,7 @@ class GuidedModeTests(unittest.TestCase):
         'yes',                                   # confirm
     ]
     # A flash-only run (defaults seeded by --flash): write, set up, port, compile, confirm.
-    FLASH_ANSWERS = ['', '', '', '', 'yes']
+    FLASH_ANSWERS = ['', '', '', '', '', 'yes']
     # A Pi run with no registry link (endpoint answered 'none'): base, device name, wake word,
     # user, endpoint, env path, satellite port, confirm.
     PI_SKIP_ANSWERS = ['', '', '', '', 'none', '', '', 'yes']
@@ -1141,6 +1200,7 @@ class FlagSurfaceGuardTests(unittest.TestCase):
             '--wifi-ssid': 'TypedNet',
             '--wifi-psk-file': '/srv/typed/psk.txt',
             '--expected-bundle-sha256': 'b' * 64,
+            '--coprocessor-image': '/srv/typed/xmos-image.bin',
         },
         'install-pi.sh': {
             '--base': '/srv/typed-base',
@@ -1212,9 +1272,11 @@ class FlagSurfaceGuardTests(unittest.TestCase):
                         '' if flag == '--satellite-port' else '10700',
                         'no']
         elif script.name == 'install-esp32.sh':
-            # flash / provision accept their seeded defaults; the compile-yourself question is
-            # asked LAST, after the detail prompts, so its answer sits just before the confirm.
-            fp = ['', '']
+            # flash / provision accept their seeded defaults; the audio-chip question follows
+            # them (seeded n unless --coprocessor is typed), and the compile-yourself question
+            # is asked LAST, after the detail prompts, so its answer sits just before the
+            # confirm.
+            fp = ['', '', '']
             if flag == '--build':                 # seeded n/n/y: no detail prompts run
                 answers = fp + ['', 'no']
             elif flag == '--provision':           # seeded n/y/n: the full provision prompt set
@@ -1222,6 +1284,10 @@ class FlagSurfaceGuardTests(unittest.TestCase):
                                 'tls://192.0.2.10:10702', 'TestNet', '/tmp/psk.txt', '', 'no']
             elif flag == '--flash':               # seeded y/n/n: only the port
                 answers = fp + ['/dev/ttyACM0', '', 'no']
+            elif flag == '--coprocessor':         # seeded n/n/y: chip run, no detail prompts
+                answers = fp + ['', '', 'no']
+            elif flag == '--restore-factory':     # implies the chip run: seeded n/n/y, factory
+                answers = fp + ['', '', 'no']     # question answered; no compile prompt runs
             else:
                 # No action flag typed: seeded flash + provision, so every prompt runs. The
                 # prompt belonging to the flag under test accepts the typed default ('').

@@ -193,6 +193,11 @@ input[type=search] { width: 100%; padding: 11px 13px; border-radius: 10px; color
 <h2 id="connect-title" tabindex="-1">Connect your satellite</h2>
 <div class="page-layout"><div class="form-panel">
 <label class="field" for="connection">Device connection</label><select id="connection"></select>
+<fieldset id="chip-operation" class="hidden"><legend>Which chip does this run write?</legend>
+<label class="choice"><input type="radio" name="chipop" value="esp32" checked><span><b>The ESP32 (normal setup)</b><span class="detail">Firmware, settings and pairing over the board's usual USB socket. This is the everyday path.</span></span></label>
+<label class="choice"><input type="radio" name="chipop" value="coprocessor"><span><b>The audio chip (XVF3800 co-processor)</b><span class="detail">A SEPARATE operation: the cable moves to the chip's own USB socket (next to the audio jack) and the board goes into Safe Mode (hold Mute while re-applying power until the red LED blinks). A first-time board needs this write or its microphones stay dead; --restore-factory returns the chip to its stock image.</span></span></label>
+<label class="choice hidden" id="chipop-factory-row"><input type="checkbox" id="chipop-factory"><span><b>Return the audio chip to its stock factory image</b><span class="detail">The hash-verified stock image from this project's firmware/stock/. The ESP32 side is a separate operation either way.</span></span></label>
+</fieldset>
 <div class="actions"><button id="refresh" class="ghost">Refresh connections</button></div>
 <div id="card-path" class="hidden"><label class="field" for="mount-manual">Or enter the mounted card path</label><input id="mount-manual" type="text" placeholder="/media/user/rootfs"></div>
 </div><aside class="help-panel" aria-label="Setup help">
@@ -404,7 +409,12 @@ function selected(name) { return document.querySelector(`input[name="${name}"]:c
 async function connections() {
   const card = state.device.needs_card_reader;
   $("card-path").classList.toggle("hidden", !card);
-  $("connect-help").textContent = card ? "Shut down your Pi, remove its microSD card and insert it in this computer's reader. Choose the main system partition, not the boot partition. Nothing is formatted." : "Connect the ESP32-S3 with a USB data cable, not a charging-only cable. Use the ESP32 connection, not the XMOS audio USB port. We will read its existing identity.";
+  // A board with a second chip gets the two-operation choice up front: the chips cannot share
+  // one cabling, so the installer writes one chip per run and says so on the connection page.
+  $("chip-operation").classList.toggle("hidden", !state.device.coprocessor_flash || state.role === "manage");
+  $("chipop-factory-row").classList.add("hidden");
+  $("chipop-factory").checked = false;
+  $("connect-help").textContent = card ? "Shut down your Pi, remove its microSD card and insert it in this computer's reader. Choose the main system partition, not the boot partition. Nothing is formatted." : (state.device.coprocessor_flash ? "Connect the board with a USB data cable, not a charging-only cable. For the ESP32 use the ESP32 socket; for the audio chip use its own socket by the audio jack with the board in Safe Mode. Only one chip per run." : "Connect the ESP32-S3 with a USB data cable, not a charging-only cable. Use the ESP32 connection, not the XMOS audio USB port. We will read its existing identity.");
   const result = await api(card ? "/api/mounts" : "/api/ports");
   const choices = card ? result.mounts.map(m=>({value:m.mount,label:m.mount})) : result.ports.map(p=>({value:p.device,label:p.device+" · "+p.description}));
   $("connection").innerHTML = choices.length ? choices.map(c=>`<option value="${escapeHtml(c.value)}">${escapeHtml(c.label)}</option>`).join("") : '<option value="">No connection found. Connect the device and refresh.</option>';
@@ -473,6 +483,12 @@ async function review() {
     fields={dial_address:$("dial").value.trim(),registry_port:Number($("registry-port").value),tls_port:Number($("tls-port").value),dry_run:true};
     if (!fields.dial_address) throw new Error("Enter the network address your satellites will use.");
     result=await api("/api/gateway",fields);
+  } else if (state.chipOp === "coprocessor") {
+    // The audio chip operation: no pairing, no settings, no wake model. One DFU write of a
+    // hash-verified image, through the chip's own socket in Safe Mode.
+    fields={device_profile:state.device.id, port:$("connection").value || null,
+      extra:{coprocessor_factory:$("chipop-factory").checked}, dry_run:true};
+    result=await api("/api/coprocessor",fields);
   } else {
     if (state.role !== "manage" && $("apply-voice").checked && !state.voices.find(v=>v.id === state.voice)?.installed) throw new Error("Download the selected voice first, or keep the current Satellite Gateway voice.");
     await ensureWakeModel(true); fields=deviceFields(true);
@@ -486,11 +502,11 @@ async function review() {
     }
   }
   state.reviewedFields=fields;
-  const pairs = state.role === "gateway" ? [["Task","Install the Satellite Gateway"],["Address",fields.dial_address],["Hermes",state.status.hermes_explained]] : [["Task",state.role === "manage" ? "Change settings only — no pairing or firmware" : "Install and provision satellite"],["Device",state.device.name],["Network",fields.wifi_ssid || "Keep current network"],["Wake word",fields.wake_word || "Keep current wake word"],["Voice",$("apply-voice").checked && state.role !== "manage" ? state.voice+" (shared local Satellite Gateway voice)" : "Keep current Satellite Gateway voice"]];
+  const pairs = state.role === "gateway" ? [["Task","Install the Satellite Gateway"],["Address",fields.dial_address],["Hermes",state.status.hermes_explained]] : state.chipOp === "coprocessor" ? [["Task","Write the audio chip (XVF3800) — separate operation"],["Image",$("chipop-factory").checked ? "stock factory (v1.0.4, hash-pinned)" : "project 48 kHz master (v1.0.9, hash-pinned)"],["Connection",fields.port || "choose one above"]] : [["Task",state.role === "manage" ? "Change settings only — no pairing or firmware" : "Install and provision satellite"],["Device",state.device.name],["Network",fields.wifi_ssid || "Keep current network"],["Wake word",fields.wake_word || "Keep current wake word"],["Voice",$("apply-voice").checked && state.role !== "manage" ? state.voice+" (shared local Satellite Gateway voice)" : "Keep current Satellite Gateway voice"]];
   $("summary").innerHTML=pairs.map(([k,v])=>`<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd>`).join("");
   $("plan").textContent=(result.commands || []).map(c=>Array.isArray(c) ? c.join(" ") : `${c.description}${c.elevation ? " (administrator permission)" : ""}
 ${c.argv.join(" ")}`).join("\n\n") || result.summary || "No external commands.";
-  $("review-scope").textContent=state.role === "manage" ? "Only the selected Wi-Fi and/or wake settings will be written. Pairing and firmware stay unchanged. No service is restarted. Power-cycle the satellite afterwards." : "Approve only the changes shown above. The commands list any required administrator permission. Keep the device connection attached until setup finishes.";
+  $("review-scope").textContent=state.role === "manage" ? "Only the selected Wi-Fi and/or wake settings will be written. Pairing and firmware stay unchanged. No service is restarted. Power-cycle the satellite afterwards." : state.chipOp === "coprocessor" ? "This run writes only the audio chip. Before approving: the cable must be in the chip's own USB socket (next to the audio jack) and the board in Safe Mode (hold Mute while re-applying power until the red LED blinks). The ESP32 side is a separate run of this installer." : "Approve only the changes shown above. The commands list any required administrator permission. Keep the device connection attached until setup finishes.";
   await show("review");
 }
 async function apply() {
@@ -501,7 +517,11 @@ async function apply() {
   }
   let result;
   if (state.role === "gateway") result=await api("/api/gateway",{...state.reviewedFields,dry_run:false});
-  else {
+  else if (state.chipOp === "coprocessor") {
+    // Same single write as the dry-run review above; the Safe Mode + socket warning was on the
+    // review page, and the script re-checks the DFU enumeration itself.
+    result=await api("/api/coprocessor",{...state.reviewedFields,dry_run:false});
+  } else {
     await ensureWakeModel(false);
     result=await api(state.role === "manage" ? "/api/manage" : "/api/flash",deviceFields(false));
     if (state.role !== "manage" && $("apply-voice").checked) {
@@ -509,8 +529,8 @@ async function apply() {
       catch(error) { state.voiceNote="Device setup completed, but the voice was not selected: "+error.message; }
     }
   }
-  $("done-title").textContent=state.role === "manage" ? "Settings applied" : "Setup complete";
-  $("done-copy").textContent=state.role === "manage" ? (result.summary || "Settings saved.")+" Pairing and firmware were kept. Power-cycle the satellite to use its new settings." : state.role === "gateway" ? "The Satellite Gateway installation finished. Save its connection details before adding a satellite." : state.device.needs_card_reader ? "Card setup is written. Safely eject the card, return it to the Pi and switch it on. Its connection to the Satellite Gateway has not been verified here." : "Device software and settings are written. Its connection to the Satellite Gateway has not been verified here.";
+  $("done-title").textContent=state.role === "manage" ? "Settings applied" : state.chipOp === "coprocessor" ? "Audio chip written" : "Setup complete";
+  $("done-copy").textContent=state.role === "manage" ? (result.summary || "Settings saved.")+" Pairing and firmware were kept. Power-cycle the satellite to use its new settings." : state.chipOp === "coprocessor" ? "The audio chip write finished. Move the cable back to the ESP32 socket and power the board normally; its boot bring-up line should read version=1.0.9 (or 1.0.4 after a factory restore). The ESP32 side is a separate run of this installer." : state.role === "gateway" ? "The Satellite Gateway installation finished. Save its connection details before adding a satellite." : state.device.needs_card_reader ? "Card setup is written. Safely eject the card, return it to the Pi and switch it on. Its connection to the Satellite Gateway has not been verified here." : "Device software and settings are written. Its connection to the Satellite Gateway has not been verified here.";
   $("result-details").textContent = (state.voiceNote || "") + (state.consentLog ? " Dependency consent recorded: " + state.consentLog : "");
   $("save-help").classList.toggle("hidden", !result.card);
   if (result.dry_run) $("result-details").textContent += " Dry run: no installation changes were written.";
@@ -527,7 +547,7 @@ async function next() {
     case "welcome": await show("start"); break;
     case "start": {
       const role=selected("role"); if (!role) throw new Error("Choose the task you want to perform.");
-      state.role=role; state.paired=null; state.deviceIdentity=null; state.voiceNote=""; $("apply-voice").checked=false;
+      state.role=role; state.paired=null; state.deviceIdentity=null; state.voiceNote=""; state.chipOp=null; $("apply-voice").checked=false;
       await show(role === "gateway" ? "gateway" : role === "fleet" ? "pair-host" : "device"); break;
     }
     case "gateway": await review(); break;
@@ -538,6 +558,15 @@ async function next() {
     }
     case "connect": {
       const connection=$('connection').value || $("mount-manual").value.trim(); if (!connection) throw new Error("Choose a device connection or enter the mounted card path.");
+      // The audio chip is its own operation: different socket, different recovery mode, one
+      // write per run. Chosen here, it skips pairing and settings entirely and reviews as its
+      // own task; the ESP32 side then takes a second run of this installer.
+      if (state.device.coprocessor_flash && selected("chipop") === "coprocessor") {
+        state.chipOp="coprocessor";
+        await review();
+        break;
+      }
+      state.chipOp="esp32";
       if (!state.device.needs_card_reader) { const identity=await api("/api/device-id",{profile:state.device.id,port:connection}); state.deviceIdentity=identity.device_id; }
       await show(state.role === "manage" ? "settings" : "pair-host"); break;
     }
@@ -583,7 +612,7 @@ async function next() {
     case "review": await apply(); break;
     case "done":
       if (state.gateway) {
-        state.role="device"; state.paired=null; state.deviceIdentity=null; state.voiceNote="";
+        state.role="device"; state.paired=null; state.deviceIdentity=null; state.voiceNote=""; state.chipOp=null;
         $("apply-voice").checked=false; $("devname").value=""; $("replace").checked=false;
         $("replace-option").classList.add("hidden");
         $("gwhost").value=state.gateway.host; $("gwport").value=state.gateway.port;
@@ -597,6 +626,10 @@ $("start-over").onclick=()=>action(async()=>{await api("/api/reset",{}); locatio
 $("next").onclick=()=>action(next);
 $("back").onclick=()=>action(async()=>{const previous=state.history.pop(); if(previous) await show(previous,true);});
 $("refresh").onclick=()=>action(connections);
+// The audio chip's factory-image option only means anything when the audio chip was chosen.
+document.querySelectorAll('input[name="chipop"]').forEach(r=>r.onchange=()=>{
+  $("chipop-factory-row").classList.toggle("hidden", selected("chipop") !== "coprocessor");
+});
 $("wake-select").onchange=()=>{state.wakeModelPath=null;state.wakeModelName=null;$("wake-file").value="";wakeMetrics();};
 $("wake-file").onchange=()=>{state.wakeModelPath=null;state.wakeModelName=null;};
 $("voice-search").oninput=renderVoices; $("voice-language").onchange=renderVoices;

@@ -53,6 +53,12 @@ RUNTIME_ASSETS = (
     "hermes/systemd/hermes-voice-satellite-gateway.service.in",
     # TLS provisioning reads the partition table to know where credentials may be written.
     "firmware/esp32/partitions.csv",
+    # The co-processor step writes these hash-pinned images; without them the separate
+    # audio-chip operation has nothing to write.
+    "firmware/stock/README.md",
+    "firmware/stock/xmos-official-v1.0.9-48k-master-dfu.bin",
+    "firmware/stock/xmos-official-v1.0.4-dfu.bin",
+    "firmware/stock/esp32-full-flash-8mb.bin",
     "requirements.txt",
     "satellite-gateway.env.example",
 )
@@ -190,6 +196,7 @@ class Session:
                     "identify": p.identify,
                     "remote_settings": list(p.remote_settings),
                     "cable_settings": list(p.cable_settings),
+                    "coprocessor_flash": p.coprocessor_flash,
                     "settings": {
                         key: {"apply": s.apply, "remote": s.remote, "help": s.help}
                         for key, s in p.settings.items()

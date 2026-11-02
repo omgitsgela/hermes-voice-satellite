@@ -18,7 +18,7 @@ strictly idempotent. The installers live in `scripts/`:
 | Script | Where it runs | What it does |
 |---|---|---|
 | `install-gateway.sh` | the gateway host, next to Hermes | venv, `satellite-gateway.env`, registry TLS, user unit, Hermes plugin + config |
-| `install-esp32.sh` | a machine with the ESP32 attached by USB | build, bundle, flash, and provision a board |
+| `install-esp32.sh` | a machine with the board attached by USB | build, bundle, flash, and provision a board — or write the audio chip (`--coprocessor`), a separate operation on its own USB socket |
 | `install-pi.sh` | the Pi itself (as root) | venv, units, `satellite.env`, the registry link, services |
 | `issue-registry-tls.py` | the gateway host | mint the CA / server certificate, enroll devices, verify the set |
 
@@ -195,10 +195,24 @@ reverse. A restored ESP32 stops talking to any gateway until someone provisions 
 
 Installing onto a **stock** XVF3800 board (never flashed before)? The current firmware runs the
 I2S link at 48 kHz with the co-processor as clock master, which a stock v1.0.4 co-processor does
-not speak — the microphone path stays dead until the co-processor gets the 48 kHz master image
-(shipped at `firmware/stock/xmos-official-v1.0.9-48k-master-dfu.bin`; Safe Mode + `dfu-util`
-procedure in [`firmware/stock/README.md`](../firmware/stock/README.md)). Check the first boot's
-bring-up line: `version=1.0.9` means the pairing is right, `version=1.0.4` means it is not.
+not speak — the microphone path stays dead until the co-processor gets the 48 kHz master image.
+That is a **separate installer operation**, not part of `--flash`: the chip has its own USB-C
+socket (next to the audio jack) and only enters DFU in Safe Mode (hold Mute while re-applying
+power until the red LED blinks). One installer run writes exactly one chip:
+
+```sh
+scripts/install-esp32.sh --coprocessor                # write the 48 kHz master image (v1.0.9)
+scripts/install-esp32.sh --coprocessor --restore-factory   # back to the vendor image (v1.0.4)
+```
+
+Both images ship in `firmware/stock/` with pinned SHA-256s that the installer verifies before
+touching the wire, and the run refuses to start until `dfu-util -l` actually sees the board in
+DFU — which is also the check that the cable is in the right socket. A fresh install onto a stock
+board is therefore two runs: `--flash`/`--provision` (ESP32 socket, normal mode), then
+`--coprocessor` (chip socket, Safe Mode). Check the first normal boot's bring-up line:
+`version=1.0.9` means the pairing is right, `version=1.0.4` means the chip write did not land and
+the microphone path stays dead until it does. Full manual procedure and pairing table:
+[`firmware/stock/README.md`](../firmware/stock/README.md).
 
 Provisioning is a **set, not a menu**: TLS credential, wake model, endpoint, and Wi-Fi profile are
 all required, because a board missing any one is a dead board. An incomplete provision is refused

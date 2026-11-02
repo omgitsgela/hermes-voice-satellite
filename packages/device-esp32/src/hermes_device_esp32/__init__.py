@@ -34,6 +34,7 @@ PROFILE = DeviceProfile(
     voice="local_piper",
     wake_default="hey_hermes",
     first_party=True,
+    coprocessor_flash=True,
     description=(
         "A small box with a four-microphone array and its own speaker. The audio processing runs on "
         "the array itself, so the board only carries the stream."
@@ -141,6 +142,26 @@ class Esp32Xvf3800Driver:
                 secret_file=request.wifi_psk_file,
             )
         )
+
+    def coprocessor(self, request: DeviceRequest, runner: Runner) -> StepResult:
+        """Write the XVF3800 audio chip over DFU: a SEPARATE operation from flash/provision.
+
+        The chip has its own USB-C socket (next to the audio jack) and only appears while the
+        board is in Safe Mode (hold Mute while re-applying power until the red LED blinks), so
+        the installer runs it as its own step with its own cabling, never alongside the ESP32
+        write. A first-time board needs it: the current firmware runs the I2S link at 48 kHz
+        with the chip as clock master, and the stock image leaves the microphone path dead
+        (firmware/stock/README.md, "Co-processor coupling").
+        """
+        require_posix("Writing the audio chip")
+        argv = [INSTALL_SCRIPT, "--coprocessor"]
+        if (request.extra or {}).get("coprocessor_factory"):
+            argv.append("--restore-factory")
+        return runner.run(Command(
+            tuple(argv),
+            "write the audio chip (separate operation: its own USB socket, Safe Mode, "
+            "hash-verified image)",
+        ))
 
     def provision(self, request: DeviceRequest, runner: Runner) -> StepResult:
         """A later run: change the staged settings without reflashing the application."""
