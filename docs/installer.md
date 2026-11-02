@@ -412,7 +412,7 @@ to keep a long command alive in a terminal for a gateway to work.
 
 ```sh
 scripts/build-installer.sh --check   # what would be used
-scripts/build-installer.sh           # build into dist/hermes-installer/
+scripts/build-installer.sh           # build into dist/hermes-voice-satellite/
 ```
 
 The result runs with no Python, no virtualenv and no pip on the target machine, and it carries the
@@ -438,7 +438,7 @@ whose window is empty; `--status` in a clean environment is the check that catch
 ## Reviewing this
 
 ```sh
-bash scripts/test-installer.sh            # seven suites, offline, about a minute
+bash scripts/test-installer.sh            # eight suites, offline, a few minutes
 bash scripts/build-installer.sh           # a standalone bundle in dist/hermes-voice-satellite/
 hermes-voice-satellite --gui              # the interface (add --dry-run to preview only)
 hermes-voice-satellite                    # the same flow, in a console
@@ -469,8 +469,9 @@ both frontends, the credential store with the remember checkbox, the drivers for
 their real scripts, device installation as two checked stages, the wake-word and voice catalogues
 including bundled default samples, live community measurements, a verified voice download and a
 voice of your own with a synthesised preview, the "change a device later" path, the platform report,
-the console flow, the web UI with its token-gated API, per-platform builds, and 166 offline tests
-including one that pairs the shipping client with the real endpoint over real TLS.
+the console flow, the web UI with its token-gated API, per-platform builds, and the offline
+suite (`scripts/test-installer.sh`); one of its tests pairs the shipping client with the real
+endpoint over real TLS.
 
 A device setup is two stages because flashing is not staging: the flash writes the software, and the
 provision step puts Wi-Fi, the dial address, the credentials and the model where the device looks for
