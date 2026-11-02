@@ -72,7 +72,8 @@ notification, and the moment your hands are full.
                  | HTTP loopback only: POST /v1/runs + SSE events
                  v
   Hermes Agent
-      gateway API server bound to 127.0.0.1:8642; the voice surface follows its default model
+      gateway API server bound to 127.0.0.1:8642; the voice surface uses the `voice-fast` route unless
+      `VOICE_ROUTE_ALIAS` is set to something else
       plugins: voice_satellite, plus whatever else your install enables
       a small set of core patches, see hermes/patches/
 ```
@@ -81,12 +82,13 @@ The device is inert unless the Satellite Gateway dials in, and the Satellite Gat
 server is loopback, the wake shim's control port is loopback, and the announcement endpoint requires a
 token.
 
-**Two connection shapes exist in this design, and the second one is being built.** Today the **device is the
-server**: it listens on 10700 and the Satellite Gateway dials it, which is why the device needs a reachable address.
-The decided direction (issue #61) **inverts that**: satellites dial the Satellite Gateway, the Satellite Gateway runs a Wyoming
-server with a registry of connected devices, and nothing has to reach the device at all. The event
-vocabulary is identical either way. A local gateway stays the most private option; a Gateway on a public
-endpoint terminates TLS in the Satellite Gateway itself and authenticates each device with its own credential.
+**The device dials the Satellite Gateway.** It listens on 10701, keeps a registry of connected devices, and
+runs each conversation over the device's own connection (issue #61). Nothing has to reach the device, so no
+port forwarding is needed and the device needs no fixed address. The older shape — the device as a Wyoming
+server and the Satellite Gateway dialling it at 10700 — survives only as an explicit rollback
+(`VOICE_DIRECT_DIAL_FALLBACK=1`); the event vocabulary is identical either way. A local Gateway stays the most
+private option; a Gateway on a public endpoint terminates TLS in the Satellite Gateway itself and authenticates
+each device with its own credential.
 
 **The satellite's own Wyoming listener is a different matter.** `wyoming-satellite` binds
 `tcp://0.0.0.0:10700`, so any device on the LAN can reach it, and Wyoming has no authentication or
@@ -191,7 +193,7 @@ synthetic-Gateway and hardware-test boundaries.
 3. Apply the configuration keys from `hermes/config/voice-surface.example.yaml` to
    `~/.hermes/config.yaml`. The surface deliberately has **no** `platform_toolsets.api_server` entry:
    it inherits the default toolset list, which is how it runs at full parity.
-4. Write `satellite-gateway.env` at the project root from `bridge.env.example` and set at least
+4. Write `satellite-gateway.env` at the project root from `satellite-gateway.env.example` and set at least
    `VOICE_SATELLITE_HOST` to the address of this installation's satellite. This is the host side's one
    configuration file: `satellite_gateway/config.py` reads it (a real environment variable always wins over the
    file, and the file wins over the default in the code), and the user unit points at it too, so one
@@ -227,8 +229,8 @@ those scripts do, for reference and for a device you want to wire by hand.
 
 ```bash
 # the Satellite Gateway is alive and connected
-systemctl --user status hermes-voice-satellite
-journalctl --user -u hermes-voice-satellite -n 30
+systemctl --user status hermes-voice-satellite-gateway.service
+journalctl --user -u hermes-voice-satellite-gateway.service -n 30
 
 # what the voice surface actually resolves (it runs at parity with a normal conversation,
 # so the tool_search Gateway is expected here)
@@ -323,25 +325,30 @@ it.
 
 ## Status and known gaps
 
-- **Connection direction is being inverted (issue #61).** Satellites dial the Satellite Gateway, which runs a Wyoming
+- **Connection direction is inverted (issue #61).** Satellites dial the Satellite Gateway, which runs a Wyoming
   server and keeps a device registry, so a device needs no reachable address and no port forwarding anywhere.
-  Decided 2026-09-24, reviewed before implementation, and **partly built**: a device can dial in, register and
-  be tracked, the Satellite Gateway stays up and keeps listening with no device present instead of exiting for a restart,
-  and the device-side service that dials on every boot is in `pi/systemd/` with `scripts/deploy-to-card.sh`
-  installing it. What is **not** built yet: leasing a registered device, so a device that dials in is tracked
-  but carries no audio, and the older dial-in path is still the one that carries a conversation. The migration
-  keeps both shapes available until the new path is proven on one device.
+  Decided 2026-09-24 and built: a device dials in, registers, and is leased — the conversation runs over the
+  device's own connection (`satellite_gateway/lease.py`), every registered device is armed and supervised, and
+  the installer's network flow manages the enrolled fleet (settings, per-device voice). The older direct-dial
+  shape remains as an explicit rollback (`VOICE_DIRECT_DIAL_FALLBACK=1`), not as the working path. What is
+  **not** built: the `usb://` and `bt://` transports — the endpoint vocabulary and the installers understand
+  them, and an installer asked for one says so plainly rather than producing a satellite that cannot connect.
 
 - Verified working as of 2026-09-22/23: wake word, follow-up mode, announcements, LED states.
 - Behaviour worth knowing: **follow-up mode** keeps listening for about **fifteen seconds** after an answer,
   so a conversation continues without repeating the wake word. **Announcements** queue behind any
   conversation in progress, open with a distinct wake tone, and are spoken only when the room is quiet.
-- **The voice surface runs at full parity with a normal Hermes conversation** on the gateway's default
-  model, so it inherits the normal fallback chain. Measured 2026-09-24 with this repository's own Verify
-  block: **21 toolsets, 19 tools, about 8.4k tokens of tool schema**.
-  It is no longer narrowed, and it no longer pins a voice-specific model route.
-- **One satellite only.** The Satellite Gateway dials one configured address and the session is a single session.
-- The host side's configuration is `satellite-gateway.env` (template `bridge.env.example`); the device side's is
+- **The voice surface runs at full parity with a normal Hermes conversation.** Measured 2026-09-24 with this
+  repository's own Verify block: **21 toolsets, 19 tools, about 8.4k tokens of tool schema**. It is no longer
+  narrowed. It does **not** follow the Gateway's default model, though: the Gateway sends a route alias on every
+  run, `VOICE_ROUTE_ALIAS`, which defaults to `voice-fast` (`gateway.api_server.model_routes` in
+  `~/.hermes/config.yaml`, `deepseek` / `deepseek-flash` here). Set `VOICE_ROUTE_ALIAS=` to run on the Gateway's
+  default model and its fallback chain instead.
+- **Registry mode runs one conversation per device.** Every registered satellite is armed, leased and
+  supervised, so several can live under one Gateway and the one that wins a wake carries that turn. A
+  deployment still on the dial-out shape has the single configured address instead; `usb://` and `bt://`
+  remain vocabulary only.
+- The host side's configuration is `satellite-gateway.env` (template `satellite-gateway.env.example`); the device side's is
   `/etc/voice-satellite/satellite.env` (template `pi/systemd/satellite.env`). The repository itself
   carries no installation-specific value: `scripts/check-no-personal-data.sh` fails if one gets back in.
 - `voices/`, `logs/`, `audio/` and `state/` are intentionally not committed.

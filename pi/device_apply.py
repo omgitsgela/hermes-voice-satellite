@@ -16,7 +16,7 @@ restarted with it: a value written to the env file but whose restart failed stay
 **Two tiers of change, by whether they bounce a device service:**
 
 - **Immediate** (no restart): `playback_volume` (ALSA output, via `volume_control`) and
-  `mic_gain` (ALSA input, via `mic_gain_control`). Written straight to the hardware and read
+  `mic_volume` (ALSA input, via `mic_gain_control`). Written straight to the hardware and read
   back; no service is touched.
 - **Restart-class** (durable, one coupled restart): `led_brightness`, `wake_threshold` and
   `wake_word` are written to the device's env file and applied by restarting the coupled audio
@@ -311,7 +311,10 @@ def make_apply_adapter(
                         # or refuses is surfaced, not silently reported as applied.
                         applied["mic_volume"] = gain.set(target)
                     except VolumeGainError as exc:
-                        hard.append(f"mic_gain: {exc}")
+                        # Named for the setting the operator set. `mic_gain` was the old key and
+                        # naming it here put an error about a setting the schema no longer has
+                        # into the fleet view.
+                        hard.append(f"mic_volume: {exc}")
 
         # -- restart-class: env-file writes, one coupled restart at the end --------
         for name in ("led_brightness", "wake_threshold", "wake_word"):

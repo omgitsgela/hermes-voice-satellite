@@ -235,6 +235,11 @@ with tempfile.TemporaryDirectory() as tmp:
     actual, health, error = adapter({"mic_volume": 60})
     check("a mic gain whose set fails is reported as an error, not applied",
           health == "error" and actual.get("mic_volume") is None, (health, actual))
+    # The report reaches the fleet view as this string, where the operator looks up the setting they
+    # set. `mic_gain` was renamed to `mic_volume`, so an error naming the old key points at a setting
+    # that no longer exists anywhere in the schema.
+    check("a failed mic write names the setting the operator set, not the retired key",
+          error is not None and "mic_volume" in error and "mic_gain" not in error, error)
 
 # ---------------------------------------------------------------- led brightness: env + restart
 

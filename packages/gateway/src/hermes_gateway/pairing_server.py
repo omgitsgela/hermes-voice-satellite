@@ -50,6 +50,33 @@ def valid_device_id(value: str) -> bool:
     """A device id becomes a filename, so it is validated where it is used, not where it arrives."""
     return bool(DEVICE_ID.fullmatch(value)) and value not in RESERVED_NAMES
 
+
+#: Anything that is not part of the identity grammar separates words in a friendly name.
+_NAME_SEPARATORS = re.compile(r"[^a-z0-9._-]+")
+
+
+def device_id_from_name(name: str) -> str:
+    """The identity a room name becomes: "Living Room" turns into "living-room".
+
+    A device id is a certificate identity and a filename at once, so the gateway's grammar
+    decides what it may be. The person, though, types a room name, not an identifier: answering
+    "Living Room" with "a device name is required" is a false statement about what they did.
+    So a friendly name is translated here, and the translated identity is what the workbench
+    shows and what the certificate is issued for.
+
+    Returns "" when nothing usable survives, which is the caller's cue to ask again rather than
+    to invent an identity.
+    """
+    text = _NAME_SEPARATORS.sub("-", str(name or "").strip().lower())
+    text = re.sub(r"-{2,}", "-", text).strip("-._")[:64]
+    if not text or not text[0].isalnum():
+        return ""
+    if text in RESERVED_NAMES:
+        # A name Windows refuses as a filename. It is still the person's name for the room, so
+        # keep it readable rather than rejecting it.
+        text = (text + "-device")[:64]
+    return text
+
 MAX_BODY_BYTES = 4096
 
 
@@ -212,7 +239,8 @@ class PairingService:
         if not isinstance(device_id, str) or not valid_device_id(device_id):
             # The id becomes a filename, so it is checked before it can reach the filesystem.
             raise PairingRefused(
-                "a device name is required: lowercase letters, digits, hyphen or underscore"
+                "that satellite identity cannot be used: it may contain only lowercase letters, "
+                "digits, hyphen or underscore, starting with a letter or digit"
             )
 
         # One lock around the whole attempt: the rate decision and the record must not interleave

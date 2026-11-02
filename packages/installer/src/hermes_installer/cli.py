@@ -370,7 +370,13 @@ def _run(session: Session, prompt: Prompt, out) -> int:
     if role.startswith("A satellite") or role.startswith("Both") or managing:
         devices = state["devices"]
         if not devices:
-            out("  No device packages are installed, so there is nothing to set up.")
+            problems = state.get("load_errors") or []
+            if problems:
+                out("  No device package could be loaded, so there is nothing to set up:")
+                for problem in problems:
+                    out(f"    {problem}")
+            else:
+                out("  No device packages are installed, so there is nothing to set up.")
             return 1
 
         # The device comes first, because pairing issues a certificate for the device's own identity
