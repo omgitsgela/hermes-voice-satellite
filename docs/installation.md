@@ -224,9 +224,9 @@ with a manifest that names every component at its offset with size and hash, pro
 build's own flash map:
 
 ```
-offset=0x0      bootloader/bootloader.bin       21168   sha256=09935581...
+offset=0x0      bootloader/bootloader.bin       21168   sha256=ef1cef3b...
 offset=0x8000   partition_table/partition-table.bin 3072 sha256=31d35d02...
-offset=0x10000  hermes_esp32_diagnostic.bin    1204432  sha256=0f0c5da7...
+offset=0x10000  hermes_esp32_diagnostic.bin    1233328  sha256=b16a5766...
 ```
 
 The manifest carries the bundle's own hash as a `bundle_sha256=` header, so a prebuilt bundle you
@@ -283,8 +283,9 @@ and the satellite stops waking.
 The wake model is a second, separate write to the `model` partition — that is what
 `install-esp32.sh --provision` does, and it is why the model swap never required an app rebuild.
 
-The current reviewed bundle (the one the manifest above describes) is 1,269,968 bytes,
-`sha256 b6354a66c6d6d25c23b72ca399b1f3840e31de2fc78299120602a74b81c44103`. The prebuilt bundle and
+The current reviewed bundle (the one the manifest above describes) is 1,298,864 bytes,
+`sha256 2d67d25fb3d648ca79383758ca509d2269eafd5b7bf59c7c43345e953283e436`, built from the
+release tag's firmware sources with ESP-IDF v6.1. The prebuilt bundle and
 its manifest ship together as a release asset. `install-esp32.sh --flash` verifies the bundle's own
 hash (`--verify`, no build tree) before writing it — that is the gate between "a file named
 `flash.bundle.bin`" and "the reviewed image". `install-esp32.sh --build` is the opt-in path that
