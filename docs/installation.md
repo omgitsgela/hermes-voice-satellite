@@ -187,6 +187,12 @@ venv is the intended home:
 `python3 -m venv .venv && .venv/bin/pip install esptool pyserial cryptography`. Without
 it the installer stops up front with that exact command, instead of failing part-way through a flash.
 
+Handing a board back, or starting over from the vendor state? The verified out-of-box images for
+both chips ship in `firmware/stock/`, and
+[`firmware/stock/README.md`](../firmware/stock/README.md) gives the capture-first restore
+procedure (a full-chip write at `0x0` is the one correct use of it) and the stock→project path in
+reverse. A restored ESP32 stops talking to any gateway until someone provisions it.
+
 Provisioning is a **set, not a menu**: TLS credential, wake model, endpoint, and Wi-Fi profile are
 all required, because a board missing any one is a dead board. An incomplete provision is refused
 before a byte is written. Everything secret moves as a file path — the certificate directory, the

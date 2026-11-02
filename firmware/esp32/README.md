@@ -32,7 +32,9 @@ PSRAM at 80 MHz with the SDK startup memory test enabled. Flashing is the deploy
 [`docs/installation.md`](../../docs/installation.md) and
 [`docs/field-test.md`](../../docs/field-test.md): the application region only, at the manifest's
 offsets, never a chip erase (the model, credentials, NVS and PHY calibration live outside the app
-region), and never the merged image at `0x0`.
+region), and never the merged image at `0x0`. The one exception is a deliberate return to the
+device's out-of-box state: the verified factory images and that procedure live in
+[`firmware/stock/README.md`](../stock/README.md).
 
 The diagnostic self-check is not exhaustive RAM qualification, and the host tests do not prove MCU
 boot or acoustic behaviour. ESP-IDF's stack high-water API reports bytes, unlike upstream FreeRTOS's
