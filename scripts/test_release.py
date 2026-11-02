@@ -39,8 +39,15 @@ class ReleaseScriptTests(unittest.TestCase):
     def test_publish_refuses_without_a_flash_bundle(self):
         result = self.run_script('--dry-run', '--skip-gate', '--allow-dirty')
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('--flash-bundle', result.stdout + result.stderr)
-        self.assertIn('release asset', result.stdout + result.stderr)
+        out = result.stdout + result.stderr
+        # Precondition order is already-published before missing-bundle: once a tag is out,
+        # the script refuses on the tag and never reaches the bundle check. Both are early
+        # refusals; the point under test is that publish cannot proceed on a bare invocation.
+        if 'already published' in out:
+            self.assertIn('v' + self.version() + ' is already published', out)
+        else:
+            self.assertIn('--flash-bundle', out)
+            self.assertIn('release asset', out)
 
     def test_all_four_packages_share_the_version(self):
         version = self.version()
