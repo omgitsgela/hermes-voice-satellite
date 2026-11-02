@@ -207,6 +207,25 @@ them, and the pattern is written down with the contract rather than with the inc
 [`configuration-plane.md`](configuration-plane.md) for the configuration plane and
 [`timers-and-alarms.md`](timers-and-alarms.md) for the timer store.
 
+## Bug work, filed from a full-stack audit (2026-11-01)
+
+A read of the Gateway, the installer, both firmwares and the documentation produced eight defects,
+each reproduced before it was filed. They are listed here so this stays the single index of open work.
+
+| Issue | What is broken |
+|---|---|
+| [#140](https://github.com/omgitsgela/hermes-voice-satellite/issues/140) | The installer's settings page says remote editing does not exist, while the same installer offers it |
+| [#141](https://github.com/omgitsgela/hermes-voice-satellite/issues/141) | The voice page says the Gateway has one shared voice, while per-device voices ship |
+| [#142](https://github.com/omgitsgela/hermes-voice-satellite/issues/142) | A satellite named "Living Room" is refused as though no name were given |
+| [#143](https://github.com/omgitsgela/hermes-voice-satellite/issues/143) | A device package that fails to import vanishes, leaving an empty list and no reason |
+| [#144](https://github.com/omgitsgela/hermes-voice-satellite/issues/144) | The README's verify block names a systemd unit and an env template that do not exist |
+| [#145](https://github.com/omgitsgela/hermes-voice-satellite/issues/145) | The README status section describes the pre-fleet system as current |
+| [#146](https://github.com/omgitsgela/hermes-voice-satellite/issues/146) | The README says the voice surface does not pin a model route; the Gateway pins `voice-fast` |
+| [#147](https://github.com/omgitsgela/hermes-voice-satellite/issues/147) | A failed microphone write reports the retired key `mic_gain` |
+
+Every one of these is a defect in behaviour or copy the repository already claims, so none of them
+needed a design decision first.
+
 ## Done
 
 - **48 kHz audio path** — the I2S link now runs at 48 kHz in both directions, matching the Seeed

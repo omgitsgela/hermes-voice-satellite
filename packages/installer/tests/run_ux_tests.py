@@ -4,6 +4,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -167,6 +168,109 @@ class GuidedPages(unittest.TestCase):
         self.assertIn("aria-current", html)
         self.assertIn("fade-out", html)
         self.assertNotIn('behavior: "smooth"', html)
+
+
+class NamesAndPackages(unittest.TestCase):
+    """The identity a room name becomes, and what a broken device package says."""
+
+    def test_a_room_name_becomes_an_identity_the_gateway_accepts(self):
+        from hermes_gateway.pairing_server import device_id_from_name, valid_device_id
+        for typed, identity in {
+            "Living Room": "living-room",
+            "Study": "study",
+            "Kitchen-1": "kitchen-1",
+            "  Primary   Bedroom  ": "primary-bedroom",
+            "Attic/loft": "attic-loft",
+            "con": "con-device",
+        }.items():
+            self.assertEqual(device_id_from_name(typed), identity, typed)
+            self.assertTrue(valid_device_id(identity), typed)
+
+    def test_a_name_with_nothing_usable_is_refused_rather_than_invented(self):
+        from hermes_gateway.pairing_server import device_id_from_name
+        for typed in ("", "   ", "!!!", "---"):
+            self.assertEqual(device_id_from_name(typed), "", repr(typed))
+
+    def test_pairing_normalises_the_name_and_reports_the_identity_it_issued(self):
+        session = Session(ROOT, dry_run=True)
+        result = session.pair("gateway.example", 10704, "amber lantern copper thrush meadow",
+                              "Living Room", expected_code="XK7F-9Q2M")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["device_id"], "living-room")
+
+    def test_pairing_refuses_a_name_that_cannot_be_an_identity(self):
+        session = Session(ROOT, dry_run=True)
+        result = session.pair("gateway.example", 10704, "words", "!!!", expected_code="XK7F-9Q2M")
+        self.assertFalse(result["ok"])
+        self.assertIn("letter or digit", result["error"])
+
+    def test_card_provisioning_uses_the_identity_pairing_issued(self):
+        from unittest.mock import patch
+
+        from hermes_installer.driver import StepResult
+
+        session = Session(ROOT, dry_run=True)
+        profile = session.registry.get("pi-reSpeaker-2mic")
+        captured = []
+
+        class RecordingDriver:
+            PROFILE = profile
+
+            def flash(self, request, runner):
+                captured.append(request)
+                return StepResult(ok=True, summary="recorded", dry_run=True)
+
+        class Registry:
+            def get(self, _):
+                return profile
+
+            def driver(self, _):
+                return RecordingDriver()
+
+        with patch.object(session, "registry", Registry()):
+            session.flash("pi-reSpeaker-2mic", device_name="Living Room",
+                          card_mount="/media/example/rootfs", dial_address="")
+        self.assertEqual(captured[0].device_id, "living-room")
+
+    def test_a_broken_device_package_is_recorded_not_silently_dropped(self):
+        import sys
+        from hermes_installer import registry as registry_module
+
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory) / "hermes_device_broken.py"
+            package.write_text("import module_that_is_not_installed\n")
+            sys.path.insert(0, directory)
+            try:
+                found = registry_module.DeviceRegistry()
+                with unittest.mock.patch.object(
+                        registry_module.DeviceRegistry, "FIRST_PARTY", ("hermes_device_broken",)):
+                    found.discover()
+            finally:
+                sys.path.remove(directory)
+                sys.modules.pop("hermes_device_broken", None)
+        self.assertEqual(len(found.load_errors), 1, found.load_errors)
+        self.assertIn("hermes_device_broken", found.load_errors[0])
+        self.assertIn("module_that_is_not_installed", found.load_errors[0])
+
+
+class ShippedCopy(unittest.TestCase):
+    """The interface must not deny a feature the same interface offers."""
+
+    def setUp(self):
+        self.html = (ROOT / "packages/installer/src/hermes_installer/web/index.html").read_text()
+
+    def test_the_remote_flow_is_offered_and_the_settings_page_points_at_it(self):
+        self.assertIn('value="fleet"', self.html)
+        self.assertNotIn("Remote editing and enrolled-device discovery are not available", self.html)
+        self.assertIn("Manage satellites over the network", self.html)
+
+    def test_per_device_voice_is_offered_and_the_voice_page_says_so(self):
+        self.assertIn("Assign this voice to this satellite", self.html)
+        self.assertNotIn("one shared voice, not one per device", self.html)
+
+    def test_a_device_package_that_failed_to_load_is_shown(self):
+        self.assertIn("state.status.load_errors", self.html)
+        self.assertIn("A device package could not be loaded", self.html)
 
 
 if __name__ == "__main__":

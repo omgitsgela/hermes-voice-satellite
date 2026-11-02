@@ -10,7 +10,7 @@ the voice loop still dials the satellite.
 
 Installation-specific values (the satellite's address, the gateway's port, the session id, ...) are
 never literals here. They come from the environment first and from `satellite-gateway.env` (at the project
-root, git-ignored, see `bridge.env.example`) second, so a clone on another machine is configured by
+root, git-ignored, see `satellite-gateway.env.example`) second, so a clone on another machine is configured by
 copying the example file rather than by editing source. The host's systemd unit points at the same
 file, so one file is the whole host-side configuration. Same pattern on the device side:
 `pi/systemd/satellite.env`. See issue #45.

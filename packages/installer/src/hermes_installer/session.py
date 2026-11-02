@@ -22,6 +22,18 @@ from .registry import DeviceRegistry, RegistryError
 from .secrets import CredentialStore
 
 
+def _identity_for(device_name: str, device_id: str | None = None) -> str:
+    """The identity to issue, from the board's own id when there is one, else from the room name.
+
+    Pairing, card provisioning and the saved credential files all key off one string, so it is
+    derived in exactly one place. A person types "Living Room"; the certificate, the card's
+    environment and the file names all need "living-room".
+    """
+    from hermes_gateway.pairing_server import device_id_from_name
+
+    return str(device_id or "").strip() or device_id_from_name(device_name)
+
+
 #: The parts of the checkout an installation actually runs. A bundle has to carry all of them.
 #: Everything an installation actually reads. The list is deliberately wider than "the scripts":
 #: a bundle that ships the engine but not the service it installs passes a scripts-only check and
@@ -500,7 +512,15 @@ class Session:
         # `device_name` is the pet name a person chose; `device_id` is what the gateway issues the
         # certificate for, and what provisioning later resolves files by. They are not the same
         # thing, and conflating them produces a device the registry will not recognise.
-        enroll_as = device_id or device_name
+        #
+        # A person types "Living Room", which is not an identity the gateway can accept (its grammar
+        # is lowercase letters, digits, dot, dash and underscore). Translating the name here is what
+        # keeps a room name usable; the translated identity is returned so the interface can show
+        # what was actually issued.
+        enroll_as = _identity_for(device_name, device_id)
+        if not enroll_as:
+            return {"ok": False,
+                    "error": "Give the satellite a name with at least one letter or digit in it."}
         if not expected_code:
             # Pairing is two-phase on purpose: inspect_gateway() shows the code, the person confirms
             # it, and only then does this function run with the code they confirmed.
@@ -510,6 +530,7 @@ class Session:
             # A practice run must not ask the gateway to issue a certificate, and must not touch the
             # credential store. Pairing is not a preview-able operation: it changes the gateway.
             return {"ok": True, "practice": True, "identity_code": expected_code,
+                    "device_id": enroll_as,
                     "dial_address": f"tls://{host}:{port}", "remembered_in": None,
                     "certs_dir": None, "storage_error": None}
         try:
@@ -537,11 +558,12 @@ class Session:
         self.certs_dir = self._materialise_credentials(credentials)
         self.state.paired = {
             "host": host, "port": port, "identity_code": credentials.identity_code,
-            "dial_address": credentials.dial_address,
+            "dial_address": credentials.dial_address, "device_id": enroll_as,
         }
         return {
             "ok": True,
             "identity_code": credentials.identity_code,
+            "device_id": enroll_as,
             "dial_address": credentials.dial_address,
             "remembered_in": backend,
             "storage_error": storage_error,
@@ -1129,7 +1151,11 @@ class Session:
             wifi_psk_file=secret_path or fields.get("wifi_psk_file"),
             # Device-specific inputs must survive the session, or a third-party driver can never
             # receive anything the shared UI did not happen to know about.
-            device_id=fields.get("device_id"),
+            #
+            # The identity a card is provisioned under must be the one pairing issued, so a room
+            # name typed on the pairing page reaches the card as the same string the certificate
+            # names. A cable device already carries its own id and this passes it through.
+            device_id=_identity_for(str(fields.get("device_name") or ""), fields.get("device_id")) or None,
             card_user=str(fields.get("card_user") or "satellite"),
             certs_dir=fields.get("certs_dir"),
             registry_file=fields.get("registry_file") or (

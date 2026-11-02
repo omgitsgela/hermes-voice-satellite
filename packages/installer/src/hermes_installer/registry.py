@@ -50,7 +50,16 @@ class DeviceRegistry:
         for module_name in self.FIRST_PARTY:
             try:
                 module = __import__(module_name)
-            except ImportError:
+            except ModuleNotFoundError as exc:
+                # A device package that is not installed at all is the normal partial install, and
+                # saying nothing about it is right. A package that IS installed but cannot import
+                # one of its own dependencies is not: without this the person gets an empty device
+                # list and nothing to act on, which reads as "this installer supports nothing".
+                if exc.name != module_name:
+                    self.load_errors.append(f"{module_name}: {exc}")
+                continue
+            except ImportError as exc:
+                self.load_errors.append(f"{module_name}: {exc}")
                 continue
             profile = getattr(module, "PROFILE", None)
             if profile is not None and profile.id not in self._profiles:
