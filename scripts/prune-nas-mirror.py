@@ -8,9 +8,11 @@ behind. A stale skills/ tree survived that way until it was found by hand.
 Runs after the mirror. Dry by default; --apply actually deletes, which is what the cron wrapper uses.
 Silent when there is nothing to do, because a notification about nothing is noise.
 
-Nothing outside the repository own tracked files is ever touched. private/, upstream/ and the mirror
-own generated files live inside the mirror folder and must survive every prune: the device images, the
-enclosure files under a no-redistribution licence, and the upstream bundles.
+Nothing outside the repository own tracked files is ever touched. private/, upstream/,
+release-assets/ and the mirror own generated files live inside the mirror folder and must survive
+every prune: the device images, the enclosure files under a no-redistribution licence, the upstream
+bundles, and the GitHub release assets (built installer, flash bundle, manifest) that the mirror
+fetches separately because they are not tracked files.
 """
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ import sys
 
 from nas_paths import mirror_root as configured_mirror_root
 
-PROTECTED_TOP = {"private", "upstream", ".git"}
+PROTECTED_TOP = {"private", "upstream", "release-assets", ".git"}
 PROTECTED_NAMES = {"hermes-voice-satellite.bundle", "SYNC-INFO.txt", "README-what-this-is.md"}
 REPO = pathlib.Path(__file__).resolve().parent.parent
 

@@ -14,6 +14,11 @@ Design notes, each of them learned the hard way:
   * every file is verified by size and sha256 rather than trusting the copy call.
   * a `git bundle` carries the whole history in one file, so the backup can be cloned from directly
     if GitHub is ever the thing that dies.
+  * GitHub *release assets* (the built installer, the flash bundle, the manifest) are not tracked
+    files, so the tracked-file walk cannot see them. They are fetched separately into
+    `release-assets/<tag>/` and verified against the sha256 digest GitHub publishes per asset.
+    A new release is picked up automatically: the walk is driven by the releases API, not by
+    hardcoded names.
 
 Exit codes: 0 all good, 1 something failed (the cron job reports failures only).
 """
@@ -21,10 +26,12 @@ Exit codes: 0 all good, 1 something failed (the cron job reports failures only).
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 from nas_paths import mirror_root
@@ -35,7 +42,7 @@ REPO = Path(__file__).resolve().parent.parent
 
 README_TEXT = """# hermes-voice-satellite (NAS backup)
 
-This is a **one-way backup copy** of a private repository
+This is a **one-way backup copy** of the repository
 `github.com/omgitsgela/hermes-voice-satellite`. GitHub is the authoritative source; nothing here
 should ever be edited by hand, and changes made here are overwritten on the next sync.
 
@@ -45,6 +52,10 @@ Contents:
 - `hermes-voice-satellite.bundle`, a complete git history in one file. To restore from it:
 
       git clone hermes-voice-satellite.bundle hermes-voice-satellite
+
+- `release-assets/<tag>/`, every GitHub release asset (the built installer tarball, the flash
+  bundle and its manifest), fetched from the releases API and sha256-verified against GitHub's
+  published digests. The list per release is echoed in `SYNC-INFO.txt`.
 
 Kept current by `scripts/mirror-to-nas.py` in the repository, run on a schedule and reported only
 when it fails.
@@ -57,6 +68,96 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _gh_token() -> str:
+    return (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
+
+
+def list_release_assets(api_base: str = "https://api.github.com") -> list[dict]:
+    """Every published release asset: {tag, name, size, sha256, url}.
+
+    GitHub publishes a `sha256:` digest per release asset, so the mirror verifies downloads
+    against GitHub's own anchor instead of trusting the transfer. Releases whose assets predate
+    digests are still mirrored, verified by size and recorded hash only. The repo is public, so
+    plain HTTPS works; the token (cron's env usually has one) only buys rate-limit headroom.
+    """
+    req_headers = {"Accept": "application/vnd.github+json",
+                   "User-Agent": "hermes-voice-satellite-nas-mirror"}
+    token = _gh_token()
+    if token:
+        req_headers["Authorization"] = f"Bearer {token}"
+    assets: list[dict] = []
+    page = 1
+    while True:
+        url = f"{api_base}/repos/omgitsgela/hermes-voice-satellite/releases?per_page=100&page={page}"
+        with urllib.request.urlopen(urllib.request.Request(url, headers=req_headers),
+                                    timeout=60) as resp:
+            releases = json.load(resp)
+        if not releases:
+            break
+        for rel in releases:
+            for a in rel.get("assets", []):
+                digest = (a.get("digest") or "").removeprefix("sha256:")
+                assets.append({"tag": rel["tag_name"], "name": a["name"],
+                               "size": a["size"], "sha256": digest,
+                               "url": a["browser_download_url"]})
+        # Stop on a short page as well as an empty one: a server that repeats its last page
+        # instead of returning [] must not turn this into an endless loop.
+        if len(releases) < 100:
+            break
+        page += 1
+    return assets
+
+
+def download_release_asset(asset: dict, dest: Path) -> None:
+    """Fetch to a temp file, verify, then rename into place. A partial GVFS write never becomes
+    the visible copy, and a size/hash mismatch is an exception, not a half-file."""
+    req_headers = {"User-Agent": "hermes-voice-satellite-nas-mirror"}
+    token = _gh_token()
+    if token:
+        req_headers["Authorization"] = f"Bearer {token}"
+    tmp = dest.with_name(dest.name + ".part")
+    try:
+        with urllib.request.urlopen(urllib.request.Request(asset["url"], headers=req_headers),
+                                    timeout=600) as resp, tmp.open("wb") as out:
+            shutil.copyfileobj(resp, out, 1 << 20)
+        actual = sha256(tmp)
+        if tmp.stat().st_size != asset["size"]:
+            raise RuntimeError(f"size mismatch: got {tmp.stat().st_size}, want {asset['size']}")
+        if asset["sha256"] and actual != asset["sha256"]:
+            raise RuntimeError(f"sha256 mismatch: got {actual}, GitHub digest says {asset['sha256']}")
+        os.replace(tmp, dest)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def sync_release_assets(nas_dir: Path, problems: list[str]) -> list[str]:
+    """Mirror every GitHub release asset under release-assets/<tag>/. Returns one summary line
+    per asset (also written to SYNC-INFO, so drift is auditable)."""
+    lines: list[str] = []
+    try:
+        assets = list_release_assets()
+    except Exception as exc:
+        problems.append(f"release assets: could not list releases: {exc}")
+        return lines
+    for a in assets:
+        # GitHub asset names are single path-free segments; tag comes from GitHub too. Belt and
+        # braces anyway: a '/' or '..' in either would walk outside the mirror.
+        if "/" in a["name"] or ".." in a["name"] or "/" in a["tag"] or ".." in a["tag"]:
+            problems.append(f"release assets: refusing unsafe name {a['tag']!r}/{a['name']!r}")
+            continue
+        dest = nas_dir / "release-assets" / a["tag"] / a["name"]
+        try:
+            if dest.is_file() and (not a["sha256"] or sha256(dest) == a["sha256"]):
+                lines.append(f"  {a['tag']}/{a['name']} {a['size']} B (unchanged)")
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            download_release_asset(a, dest)
+            lines.append(f"  {a['tag']}/{a['name']} {a['size']} B sha256 {sha256(dest)}")
+        except Exception as exc:
+            problems.append(f"release assets: {a['tag']}/{a['name']}: {exc}")
+    return lines
 
 
 def git(*args: str) -> str:
@@ -118,6 +219,11 @@ def main() -> int:
     except (OSError, subprocess.CalledProcessError) as exc:
         problems.append(f"bundle failed: {exc}")
 
+    # GitHub release assets: the built installer, flash bundle and manifest. These are not
+    # tracked files, so the walk above cannot see them; without this the NAS copy silently
+    # misses every release. Driven by the releases API, so future releases appear on their own.
+    release_lines = sync_release_assets(NAS_DIR, problems)
+
     README.write_text(README_TEXT)
     (NAS_DIR / "SYNC-INFO.txt").write_text(
         f"repo: github.com/omgitsgela/hermes-voice-satellite\n"
@@ -125,6 +231,7 @@ def main() -> int:
         f"commit date and subject: {subject}\n"
         f"file count (tracked): {len(tracked)}\n"
         f"bundle: {'ok' if bundle_ok else 'FAILED'}\n"
+        f"release assets:\n" + ("\n".join(release_lines) or "  none") + "\n"
         f"live tree dirty at sync time: {'yes' if dirty else 'no'}\n"
     )
 

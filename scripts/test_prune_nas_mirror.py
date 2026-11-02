@@ -91,6 +91,8 @@ with tempfile.TemporaryDirectory() as tmp:
         "private/makerworld-enclosure/DO-NOT-PUBLISH.md",
         "upstream/wyoming.bundle",
         "upstream/MANIFEST.md",
+        "release-assets/v1.0.0/flash.bundle.bin",
+        "release-assets/v1.0.0/hermes-voice-satellite-1.0.0-linux-x86_64.tar.gz",
     ]
     generated = ["SYNC-INFO.txt", "README-what-this-is.md", "hermes-voice-satellite.bundle"]
     for rel in protected + generated:
