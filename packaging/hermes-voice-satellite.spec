@@ -25,6 +25,10 @@ pathex = [
 # (See STRIP above for why stripping is platform-conditional.)
 datas = [
     (str(PACKAGES / "installer" / "src" / "hermes_installer" / "web"), "hermes_installer/web"),
+    (str(PACKAGES / "installer" / "src" / "hermes_installer" / "piper-checksums.json"), "hermes_installer"),
+    (str(PACKAGES / "installer" / "src" / "hermes_installer" / "wake-checksums.json"), "hermes_installer"),
+    # Host venv imports the shared catalogue source independently of the frozen executable.
+    (str(PACKAGES / "installer" / "src"), "packages/installer/src"),
     # The engine, not just the front end. Without these the bundle can report what it sees and then
     # has nothing to run: the gateway install, the device flash and the card writer are all scripts.
     (str(ROOT / "scripts"), "scripts"),

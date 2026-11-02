@@ -253,6 +253,8 @@ class VoiceLoop:
         from satellite_gateway.config_plane import ConfigPlane
 
         self.config_plane = ConfigPlane(FLEET_CONFIG_STATE_FILE)
+        from satellite_gateway import tts
+        tts.set_voice_resolver(self.config_plane.voice_for)
         # The device the configuration plane addresses. Empty until a device registers, at
         # which point `_adopt_device` sets it to the id that device actually used.
         #
@@ -2192,7 +2194,7 @@ class VoiceLoop:
             "schema_version": 1,
             "device_id": device_id,
             "generation": record["generation"],
-            "settings": record["desired"],
+            "settings": self.config_plane.device_settings(record),
         }))
 
     async def _on_device_control_event(self, device_id: str, event: Event) -> bool:

@@ -86,6 +86,7 @@ class Session:
         registry: DeviceRegistry | None = None,
         store: CredentialStore | None = None,
         dry_run: bool = False,
+        log_dir: Path | None = None,
     ) -> None:
         self.repo_root = _resolve_repo_root(repo_root)
         self.registry = registry or DeviceRegistry()
@@ -102,6 +103,8 @@ class Session:
         self._certs_tmp: Path | None = None
         self._certs_dirs: list[Path] = []
         self.state = SessionState()
+        import uuid
+        self.run_log_path = (log_dir or Path.home() / ".cache/hermes-voice-satellite/installer-runs") / (uuid.uuid4().hex + ".jsonl")
         self.state.hermes_shape = gateway_module.detect_hermes()
 
     # -- what the first screen needs -----------------------------------------------------------
@@ -238,6 +241,57 @@ class Session:
 
     # -- gateway ------------------------------------------------------------------------------
 
+    def _record_consent(self, kind: str, details: dict) -> None:
+        import json
+        from datetime import datetime, timezone
+        event = {"event": "consent", "kind": kind, "confirmed": True,
+                 "at": datetime.now(timezone.utc).isoformat(), **details}
+        line = json.dumps(event, sort_keys=True)
+        if not self.dry_run:
+            self.run_log_path.parent.mkdir(parents=True, exist_ok=True)
+            handle = os.open(self.run_log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            with os.fdopen(handle, "a") as stream:
+                stream.write(line + "\n")
+        self.state.log.append(line)
+
+    def dependency_inventory(self) -> dict:
+        import hashlib
+        import json
+        requirements = self.repo_root / "requirements.txt"
+        packages = [line.strip() for line in requirements.read_text().splitlines()
+                    if line.strip() and not line.lstrip().startswith("#")] if requirements.exists() else []
+        dependencies = [
+            {"what": "Python runtime, pyserial, cryptography, web layer and assets", "class": 1,
+             "why": "Run the installer, identify devices, pair securely and render this interface.",
+             "size_mb": None, "packages": ["Python", "pyserial", "cryptography", "stdlib HTTP", "HTML/CSS/JS and audio"]},
+            {"what": "Hermes host Python", "class": 2,
+             "why": "Create the Satellite Gateway virtual environment on its host; never downloaded by this installer.",
+             "size_mb": 0, "packages": ["Host Python with venv"]},
+            {"what": "Administrator permission", "class": 2,
+             "why": "Write cards and install system services when required. The host supplies elevation.",
+             "size_mb": 0, "packages": ["Host elevation"]},
+            {"what": "Satellite Gateway Python packages", "class": 3,
+             "why": "Local speech recognition, speech synthesis and satellite transport in a dedicated virtual environment.",
+             "size_mb": None, "packages": packages},
+            {"what": "Satellite Gateway default Piper model", "class": 3,
+             "why": "Generate local speech. Extra voices are separate, explicit downloads.",
+             "size_mb": 60, "packages": ["Piper default model and configuration"]},
+        ]
+        digest = hashlib.sha256(json.dumps(dependencies, sort_keys=True).encode()).hexdigest()
+        return {"ok": True, "id": digest, "dependencies": dependencies}
+
+    def consent_dependencies(self, inventory_id: str, confirmed: bool) -> dict:
+        inventory = self.dependency_inventory()
+        if confirmed is not True or inventory_id != inventory["id"]:
+            return {"ok": False, "error": "Review the current package list and explicitly approve it."}
+        try:
+            self._record_consent("dependencies", {"inventory": inventory})
+        except OSError as exc:
+            return {"ok": False, "error": f"Could not record dependency consent: {exc}"}
+        self._dependency_consent = inventory_id
+        return {"ok": True, "inventory_id": inventory_id, "recorded": True,
+                "run_log": str(self.run_log_path) if not self.dry_run else None}
+
     def install_gateway(
         self,
         dial_address: str,
@@ -260,10 +314,13 @@ class Session:
         # Session dry-run is a CEILING, not a default: a client asking for a real run cannot
         # override a session that was started in preview mode.
         preview_only = True if self.dry_run else bool(dry_run)
-        from .environment import merge
+        if not preview_only and getattr(self, "_dependency_consent", None) != self.dependency_inventory()["id"]:
+            return {"ok": False, "error": "Explicit dependency consent is required before installing packages."}
+        from .environment import merge, host_python
 
         ok, output = gateway_module.run_commands(
-            commands, dry_run=preview_only, cwd=self.repo_root, env=merge()
+            commands, dry_run=preview_only, cwd=self.repo_root,
+            env=merge({"HERMES_HOST_PYTHON": host_python()})
         )
         self.state.log.append(output)
         result = {"ok": ok, "log": output, "commands": [list(c) for c in commands],
@@ -321,6 +378,97 @@ class Session:
                 "lines": list(card.lines())}
 
     # -- pairing ------------------------------------------------------------------------------
+
+    def fleet_authenticate(self, host: str, port: int, words: str, code: str) -> dict:
+        self._fleet = {"host": host, "port": port, "words": words, "code": code}
+        try:
+            result = self.fleet_devices()
+            if not result.get("ok"):
+                self._fleet = None
+            return result
+        except (PairingError, OSError, ValueError) as exc:
+            self._fleet = None
+            return {"ok": False, "error": str(exc)}
+
+    def _fleet_request(self, path: str, method: str = "GET", payload: dict | None = None) -> dict:
+        from .pairing import TlsTransport
+        from .identity import matches
+        target = getattr(self, "_fleet", None)
+        if not target:
+            return {"ok": False, "error": "Authenticate to the Satellite Gateway first."}
+        conn = TlsTransport(GatewayRef(target["host"], int(target["port"])), timeout=180)
+        try:
+            if not matches(conn.peer_certificate_der(), target["code"]):
+                raise PairingError("The Satellite Gateway identity changed; no pairing words were sent.")
+            return conn.post_json("/manage", {"words": target["words"], "path": path,
+                "method": method, "payload": payload or {}})
+        except (PairingError, OSError, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+        finally:
+            conn.close()
+
+    def fleet_devices(self) -> dict:
+        data = self._fleet_request("/config/devices")
+        if not data.get("ok"):
+            return data
+        schema = self._fleet_request("/config/schema")
+        if not data.get("ok") or not schema.get("ok"):
+            return data if not data.get("ok") else schema
+        for device in data.get("devices", []):
+            metadata = device.get("metadata") or {}
+            profile_id = metadata.get("profile_id") or (
+                "esp32-xvf3800" if metadata.get("firmware_version", "").startswith("esp32-")
+                else "pi-reSpeaker-2mic")
+            try:
+                profile = self.registry.get(profile_id)
+            except RegistryError:
+                device.update(remote_settings=[], cable_settings=[], profile_id=profile_id,
+                              profile_note="Unknown device profile; no remote writes offered.")
+                continue
+            device.update(profile_id=profile.id,
+                name=metadata.get("name") or device["device_id"],
+                remote_settings=list(profile.remote_settings),
+                cable_settings=sorted(set(profile.cable_settings) | {"tls_credentials", "wake_model"}))
+        return {**data, "schema": schema.get("device_settings", {})}
+
+    def fleet_update(self, device_id: str, settings: dict, generation: int) -> dict:
+        if self.dry_run:
+            return {"ok": False, "error": "Dry run: remote setting writes are disabled."}
+        if not isinstance(settings, dict) or not settings:
+            return {"ok": False, "error": "Choose at least one named remote setting."}
+        fleet = self.fleet_devices()
+        if not fleet.get("ok"):
+            return fleet
+        device = next((d for d in fleet.get("devices", []) if d["device_id"] == device_id), None)
+        if not device:
+            return {"ok": False, "error": "Device is not enrolled on this Satellite Gateway."}
+        blocked = set(settings) - set(device["remote_settings"])
+        if blocked:
+            return {"ok": False, "error": "Needs a cable or card: " + ", ".join(sorted(blocked))}
+        result = self._fleet_request("/config/devices/" + device_id + "/desired", "PUT",
+            {"settings": settings, "expected_generation": generation})
+        if not result.get("ok"):
+            return result
+        # A successful write means accepted, not applied. Always read the exact target again.
+        return self._fleet_request("/config/devices/" + device_id)
+
+    def fleet_voices(self, voice: str | None = None, consent: bool = False) -> dict:
+        if voice and self.dry_run:
+            return {"ok": False, "error": "Dry run: remote voice downloads are disabled."}
+        if voice:
+            if consent is not True:
+                return {"ok": False, "error": "Approve this voice download first."}
+            try:
+                self._record_consent("remote_voice", {"voice": voice})
+            except OSError as exc:
+                return {"ok": False, "error": f"Could not record voice download consent: {exc}"}
+            result = self._fleet_request("/config/voices", "POST", {"voice": voice, "consent": True})
+            if not result.get("ok"):
+                return result
+        readback = self._fleet_request("/config/voices")
+        if voice and readback.get("ok") and voice not in readback.get("installed", []):
+            return {"ok": False, "error": "The Satellite Gateway readback does not show this voice installed; no assignment was made."}
+        return readback
 
     def inspect_gateway(self, host: str, port: int) -> dict:
         """Connect and report the identity code so the UI can ask the person to compare it."""
@@ -452,13 +600,17 @@ class Session:
     def close(self) -> None:
         """Remove every temporary credential directory. A private key must not outlive the session."""
         self._discard_certs_dir()
+        self._fleet = None
+        self._dependency_consent = None
 
     # -- what can be chosen -------------------------------------------------------------------
 
-    def wake_word_catalogue(self, fmt: str | None = None, query: str = "") -> dict:
+    def wake_word_catalogue(self, fmt: str | None = None, query: str = "", *, refresh: bool = False) -> dict:
         from . import catalogue
 
         try:
+            if refresh:
+                catalogue.refresh_wake_words()
             entries = catalogue.wake_words(fmt, query)
         except catalogue.CatalogueError as exc:
             return {"ok": False, "error": str(exc)}
@@ -473,9 +625,10 @@ class Session:
             ],
         }
 
-    def voice_catalogue(self) -> dict:
+    def voice_catalogue(self, *, refresh: bool = False) -> dict:
         from . import catalogue
-
+        if refresh:
+            catalogue.refresh_voices()
         return {
             "ok": True,
             "default": catalogue.default_voice().id,
@@ -694,32 +847,15 @@ class Session:
                     "applied": False,
                     "note": f"In a real run this would download {voice.size_mb} MB and select it."}
 
-        # The service resolves a voice as <checkout>/voices/<VOICE_PIPER_VOICE>.onnx[.json]. A
-        # download into a cache, or a VOICE_CONFIG key nothing reads, leaves the Gateway speaking
-        # with the previous voice after its restart.
-        voices_dir = self.repo_root / "voices"
-        model = voices_dir / f"{voice.id}.onnx"
-        config = voices_dir / f"{voice.id}.onnx.json"
-        # The Hugging Face layout is <lang>/<locale>/<name>/<quality>/<name>.onnx, where the folder
-        # uses an underscore and the file uses a hyphen. Deriving it once, from the id, keeps the
-        # catalogue and the URL from drifting apart.
-        language, rest = voice.id.split("-", 1)
-        name, quality = rest.rsplit("-", 1)
-        # The folder is the speaker name exactly as published: `hfc_female`, not `hfc/female`. The
-        # slash-splitting version built a URL that 404s for both shipped default voices.
-        folder = name
-        base = (f"https://huggingface.co/rhasspy/piper-voices/resolve/main/"
-                f"{language[:2]}/{language}/{folder}/{quality}/{voice.id}.onnx")
-
-        downloaded = []
-        for target, url in ((model, base), (config, base + ".json")):
-            if target.exists():
-                continue
-            try:
-                catalogue.download(url, target)
-            except Exception as exc:  # noqa: BLE001 - a failed download is an answer
-                return {"ok": False, "error": f"could not fetch {target.name}: {exc}"}
-            downloaded.append(str(target))
+        try:
+            self._record_consent("local_voice", {"voice": voice.id, "size_mb": voice.size_mb})
+            verified = catalogue.download_voice_files(voice.id, self.repo_root / "voices")
+        except (OSError, ValueError, catalogue.CatalogueError) as exc:
+            return {"ok": False, "error": str(exc)}
+        self.state.log.append(f"consent: voice download {voice.id}; SHA-256 verified")
+        model = self.repo_root / "voices" / f"{voice.id}.onnx"
+        config = Path(str(model) + ".json")
+        downloaded = verified["downloaded"]
 
         result = {"ok": True, "voice": voice.id, "model": str(model), "config": str(config),
                   "downloaded": downloaded, "applied": False}
@@ -731,8 +867,8 @@ class Session:
     def _set_gateway_voice(self, voice_id: str, model: Path) -> str:
         """Point this gateway at a voice, by editing the Gateway environment in place.
 
-        The Gateway speaks with one voice today; per-device voices are issue #120. This sets the one it
-        has, and says so rather than implying more.
+        This changes only the fallback voice. Explicit per-device selections in the configuration
+        plane are independent and take effect on their next speech synthesis.
         """
         env = self.repo_root / "satellite-gateway.env"
         if not env.exists():
@@ -778,10 +914,11 @@ class Session:
 
         suffix = Path(urllib.parse.urlparse(entry.source_url).path).suffix or ".tflite"
         target = Path.home() / ".cache" / "hermes-voice-satellite" / "models" / f"{entry.id}{suffix}"
-        if target.exists():
+        if target.exists() and entry.sha256 and catalogue.sha256_of(target) == entry.sha256:
             return {"ok": True, "path": str(target), "word": entry.word, "downloaded": False}
         try:
-            catalogue.download(entry.source_url, target, expect_sha256=entry.sha256)
+            self._record_consent("wake_model", {"model": entry.id, "format": fmt})
+            catalogue.download(entry.source_url, target, expect_sha256=entry.sha256, require_hash=True)
         except Exception as exc:  # noqa: BLE001 - a failed download is an answer
             return {"ok": False, "error": f"could not fetch {entry.id}: {exc}"}
         return {"ok": True, "path": str(target), "word": entry.word, "downloaded": True}
@@ -935,8 +1072,7 @@ class Session:
 
         Wi-Fi, the dial address, the credentials and the wake model live on the device or its card, so
         this stages them again. Volume, brightness and the wake threshold are gateway-side settings and
-        are deliberately NOT pretended here: the gateway owns them and this installer cannot reach it
-        yet.
+        are edited through fleet_update instead: this method only handles the cable/card path.
         """
         try:
             self.registry.get(profile_id)

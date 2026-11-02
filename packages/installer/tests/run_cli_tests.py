@@ -195,6 +195,14 @@ class GatewayContinuation(unittest.TestCase):
         class GatewaySession(FakeSession):
             dry_run = False
 
+            def dependency_inventory(self):
+                return {"id":"test-inventory", "dependencies":[{"class":3,"what":"Speech packages",
+                    "why":"Local speech", "size_mb":None, "packages":["piper-tts==1.8.0"]}]}
+
+            def consent_dependencies(self, inventory_id, confirmed):
+                self.consent = (inventory_id, confirmed)
+                return {"ok":True}
+
             def status(self):
                 return {**super().status(), "lan_address": "192.0.2.24"}
 
@@ -209,12 +217,14 @@ class GatewayContinuation(unittest.TestCase):
                 return super().pair(host, port, words, name, **kwargs)
 
         session = GatewaySession()
-        prompt = ScriptedPrompt(["1", "", "", "y", "y", "1", "1", "", "", "y",
+        prompt = ScriptedPrompt(["1", "", "", "y", "y", "y", "1", "1", "", "", "y",
                                  "study", "n", "", "n", "n", "y"])
         lines = []
         self.assertEqual(run(session, prompt, out=lines.append), 0)
         self.assertEqual(session.calls[0][1], "192.0.2.24")
         self.assertEqual(session.used_words, "private pairing words")
+        self.assertEqual(session.consent, ("test-inventory", True))
+        self.assertTrue(any("piper-tts==1.8.0" in line for line in lines))
         self.assertNotIn("Pairing words", prompt.asked)
         self.assertTrue(any(c[0] == "install" for c in session.calls))
         self.assertIn("security boundary", " ".join(lines))

@@ -25,7 +25,7 @@ import hashlib
 import json
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -171,6 +171,7 @@ class Voice:
     size_mb: int = 60
     licence: str = ""
     default: bool = False
+    files: dict = field(default_factory=dict)
 
     @property
     def sample_is_local(self) -> bool:
@@ -231,12 +232,92 @@ def sample_path(voice: Voice) -> str:
     return voice.sample_url
 
 
+_LIVE_VOICES: tuple[Voice, ...] = ()
+PIPER_INDEX = "https://huggingface.co/rhasspy/piper-voices/resolve/main/voices.json"
+PIPER_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main/"
+
+
+def _get_json(url):
+    with urllib.request.urlopen(url, timeout=10) as response:
+        return json.loads(response.read())
+
+
+def refresh_voices(*, get_json=None) -> tuple[Voice, ...]:
+    """Read the published library; a failed refresh never removes the offline snapshot."""
+    global _LIVE_VOICES
+    try:
+        index = (get_json or _get_json)(PIPER_INDEX)
+        entries = {v.id: v for v in VOICES}
+        for key, item in index.items():
+            if not isinstance(item, dict) or not item.get("files"):
+                continue
+            if not all(not path.startswith("/") and ".." not in path.split("/")
+                       for path in item["files"]):
+                continue
+            old = entries.get(key)
+            language = (item.get("language") or {}).get("code", key.split("-")[0])
+            model = next((path for path in item["files"] if path.endswith(".onnx")), "")
+            if not model:
+                continue
+            entries[key] = Voice(
+                id=key, name=old.name if old else item.get("name", key), language=language,
+                sample_url=old.sample_url if old else PIPER_BASE + model.rsplit("/", 1)[0] + "/samples/speaker_0.mp3",
+                remote_sample_url=old.remote_sample_url if old else "",
+                default=old.default if old else False,
+                size_mb=round(sum(f.get("size_bytes", 0) for f in item["files"].values()) / 1_000_000),
+                licence="see the piper-voices model card", files=item["files"],
+            )
+        _LIVE_VOICES = tuple(entries.values())
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return voices()
+
+
 def voices() -> tuple[Voice, ...]:
-    return VOICES
+    return _LIVE_VOICES or VOICES
 
 
 def default_voice() -> Voice:
     return next(v for v in VOICES if v.default)
+
+
+_LIVE_WAKE: tuple[WakeWord, ...] = ()
+
+
+def refresh_wake_words(*, get_json=None) -> tuple[WakeWord, ...]:
+    """Free microWakeWord and openWakeWord sources, never account-only downloads."""
+    global _LIVE_WAKE
+    fetch = get_json or _get_json
+    entries = {(w.format, w.id): w for w in WAKE_WORDS}
+    try:
+        tree = fetch("https://api.github.com/repos/esphome/micro-wake-word-models/git/trees/main?recursive=1")
+        for item in tree.get("tree", []):
+            path = item.get("path", "")
+            if item.get("type") != "blob" or not path.startswith("models/") or not path.endswith(".tflite"):
+                continue
+            name = Path(path).stem
+            if (TFLITE, name) not in entries:
+                entries[TFLITE, name] = WakeWord(name, name.replace("_", " "), TFLITE,
+                    "https://github.com/esphome/micro-wake-word-models/raw/main/" + path,
+                    licence="see upstream model card", note="Free source; download requires a trusted SHA-256.")
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    try:
+        release = fetch("https://api.github.com/repos/dscripka/openWakeWord/releases/tags/v0.5.1")
+        for item in release.get("assets", []):
+            name = item.get("name", "")
+            if not name.endswith(".onnx") or name.startswith(("embedding_", "melspectrogram", "silero_")):
+                continue
+            key = name.rsplit("_v", 1)[0] if "_v" in name else Path(name).stem
+            digest = item.get("digest") or ""
+            if (ONNX, key) not in entries:
+                entries[ONNX, key] = WakeWord(key, key.replace("_", " "), ONNX,
+                    item["browser_download_url"], sha256=digest.removeprefix("sha256:") if digest else None,
+                    licence="see upstream model card")
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        pass
+    _LIVE_WAKE = tuple(entries.values())
+    return wake_words()
 
 
 def wake_words(fmt: str | None = None, query: str = "") -> tuple[WakeWord, ...]:
@@ -249,7 +330,7 @@ def wake_words(fmt: str | None = None, query: str = "") -> tuple[WakeWord, ...]:
         raise CatalogueError(f"unknown wake-word format {fmt!r}; expected one of {', '.join(FORMATS)}")
     needle = query.strip().lower()
     found = [
-        entry for entry in WAKE_WORDS
+        entry for entry in (_LIVE_WAKE or WAKE_WORDS)
         if (fmt is None or entry.format == fmt) and (not needle or needle in entry.word.lower())
     ]
     return tuple(sorted(
@@ -263,9 +344,13 @@ def wake_words(fmt: str | None = None, query: str = "") -> tuple[WakeWord, ...]:
 
 
 def find(model_id: str, fmt: str) -> WakeWord:
-    for entry in WAKE_WORDS:
+    for entry in (_LIVE_WAKE or WAKE_WORDS):
         if entry.id == model_id and entry.format == fmt:
-            return entry
+            try:
+                trusted = json.loads(Path(__file__).with_name("wake-checksums.json").read_text())
+            except (OSError, ValueError):
+                trusted = {}
+            return replace(entry, sha256=entry.sha256 or trusted.get(entry.source_url))
     raise CatalogueError(f"no {fmt} model called {model_id!r} in the catalogue")
 
 
@@ -287,12 +372,15 @@ def download(
     expect_sha256: str | None = None,
     opener: Callable[[str], bytes] | None = None,
     timeout: float = 60.0,
+    require_hash: bool = False,
 ) -> Path:
     """Fetch a model or voice to `destination`, verifying it when a hash is known.
 
     A file that fails the check is deleted rather than left in place: a half-verified model that is
     flashed into a device is worse than no model at all.
     """
+    if require_hash and (not expect_sha256 or len(expect_sha256) != 64):
+        raise CatalogueError("No published SHA-256 for this download; refused.")
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".part")
     if opener is None:
@@ -312,6 +400,42 @@ def download(
             )
     temporary.replace(destination)
     return destination
+
+
+def voice_trust_snapshot() -> dict:
+    return json.loads(Path(__file__).with_name("piper-checksums.json").read_text())
+
+
+def download_voice_files(voice_id: str, directory: Path) -> dict:
+    """Install any voice in the SHA-256 trust snapshot, alongside all existing voices.
+
+    Library discovery is live. New files absent from this trust snapshot are refused rather than
+    silently downgraded to the upstream index's MD5. Refresh the snapshot with the maintainer script.
+    """
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", voice_id):
+        raise CatalogueError("Invalid voice identifier")
+    trust = voice_trust_snapshot()
+    try:
+        locale, rest = voice_id.split("-", 1)
+        name, quality = rest.rsplit("-", 1)
+    except ValueError:
+        raise CatalogueError("A Piper voice ID must include locale, name and quality.") from None
+    stem = f"{locale.split('_')[0]}/{locale}/{name}/{quality}/{voice_id}.onnx"
+    paths = [stem, stem + ".json"]
+    if not all(trust["sha256"].get(path) for path in paths):
+        raise CatalogueError("This voice has no trusted SHA-256 snapshot yet; download refused.")
+    downloaded = []
+    for path in paths:
+        target = directory / Path(path).name
+        expected = trust["sha256"][path]
+        if target.is_file() and sha256_of(target) == expected:
+            continue
+        url = f"https://huggingface.co/rhasspy/piper-voices/resolve/{trust['revision']}/{path}"
+        download(url, target, expect_sha256=expected, require_hash=True)
+        downloaded.append(str(target))
+    return {"ok": True, "voice": voice_id, "downloaded": downloaded, "sha256_verified": True,
+            "revision": trust["revision"]}
 
 
 # -- live measurements ------------------------------------------------------------------------

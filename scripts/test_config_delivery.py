@@ -105,15 +105,19 @@ async def main() -> int:
               pi_misnamed.connection.events[0])
 
         changed = loop.config_plane.set_desired(
-            "esp32-68ee8f4b5988", {"mic_volume": 82}, expected_generation=1)
+            "esp32-68ee8f4b5988", {"mic_volume": 82, "voice": "en_US-hfc_female-medium"}, expected_generation=1)
         sent = await loop._dispatch_device_config("esp32-68ee8f4b5988", changed)
         check("API writes dispatch over the live device connection",
               sent is True and slot.connection.events[-1].data["generation"] == 2,
               slot.connection.events[-1])
 
+        check("host voice selection is never sent to device firmware",
+              "voice" not in slot.connection.events[-1].data["settings"]
+              and loop.config_plane.voice_for("esp32-68ee8f4b5988") == "en_US-hfc_female-medium",
+              slot.connection.events[-1])
         report = Event(type=CONFIG_REPORTED_EVENT, data={
             "generation": 2,
-            "actual": changed["desired"],
+            "actual": slot.connection.events[-1].data["settings"],
             "health": "healthy",
             "error": None,
         })

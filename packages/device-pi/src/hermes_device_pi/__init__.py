@@ -48,6 +48,10 @@ PROFILE = DeviceProfile(
         "The card comes out of that slot."
     ),
     settings={
+        "voice": Setting("voice", "next_turn", remote=True,
+                         help="Synthesized on the Satellite Gateway; independent for each device."),
+        "tls_credentials": Setting("tls_credentials", "cable", remote=False),
+        "wake_model": Setting("wake_model", "cable", remote=False),
         "playback_volume": Setting("playback_volume", "immediate", remote=True),
         "mic_volume": Setting("mic_volume", "immediate", remote=True),
         "led_brightness": Setting("led_brightness", "service_restart", remote=True),

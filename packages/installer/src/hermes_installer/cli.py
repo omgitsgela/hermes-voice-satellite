@@ -106,7 +106,7 @@ class ScriptedPrompt:
 def configure_speech(session: Session, prompt: Prompt, out, profile: dict, fields: dict) -> bool:
     """Catalogue choices and custom files, shared with the graphical settings pages."""
     if prompt.yes_no("Choose another wake word or a custom model file?", default=False):
-        data = session.wake_word_catalogue(profile["wake_format"])
+        data = session.wake_word_catalogue(profile["wake_format"], refresh=True)
         out(data.get("caveat", ""))
         entries = data.get("wake_words", [])
         labels = [f"{w['word']}: {w['metrics_line']}" for w in entries] + ["Custom model file"]
@@ -127,13 +127,12 @@ def configure_speech(session: Session, prompt: Prompt, out, profile: dict, field
                 fields["wake_model"] = result.get("path")
     if not prompt.yes_no("Browse voices or preview a custom voice?", default=False):
         return True
-    out("  Voices belong to the Satellite Gateway on this computer, not individual devices.")
-    out("  Downloads do not select a voice. Remote Satellite Gateway voice changes are not supported.")
+    out("  This cable path downloads local voice files. Manage enrolled satellites over the network to download on a remote Satellite Gateway and assign a separate voice per device.")
     query = prompt.text("Search name, model ID or language (blank for all)", default="")
-    data = session.voice_catalogue()
+    data = session.voice_catalogue(refresh=True)
     voices = [v for v in data["voices"]
               if query.lower() in f"{v['name']} {v['id']} {v['language']}".lower()]
-    labels = [f"{v['name']} · {v['language']} · {v['size_mb']} MB" for v in voices]
+    labels = [f"{v['name']} · {v['language']} · {v['size_mb']} MB" + (" · bundled offline sample · fast" if v.get("bundled") else "") + (" · default" if v.get("default") else "") for v in voices]
     choice = prompt.choice("Voice catalogue", labels + ["Custom voice file", "Keep current voice"])
     if choice == "Keep current voice":
         return True
@@ -172,6 +171,77 @@ def configure_speech(session: Session, prompt: Prompt, out, profile: dict, field
     return True
 
 
+def manage_fleet(session: Session, prompt: Prompt, out) -> int:
+    host = prompt.text("Satellite Gateway address")
+    port = int(prompt.text("Pairing port", default="10704"))
+    inspected = session.inspect_gateway(host, port)
+    if not inspected.get("ok"):
+        out(inspected.get("error"))
+        return 1
+    out("  Satellite Gateway identity code: " + inspected["identity_code"])
+    if not prompt.yes_no("Does it match your saved identity code?", default=False):
+        out("  No pairing words were sent.")
+        return 0
+    result = session.fleet_authenticate(host, port, prompt.secret("Pairing words"), inspected["identity_code"])
+    while result.get("ok"):
+        devices = result.get("devices", [])
+        if not devices:
+            out("  No enrolled satellites.")
+            return 0
+        labels = [f"{d.get('name', d['device_id'])} · {d['health']} · " +
+                  ("converged" if d['converged'] else "pending") for d in devices]
+        chosen = prompt.choice("Enrolled satellites", labels + ["Finish"])
+        if chosen == "Finish":
+            return 0
+        device = devices[labels.index(chosen)]
+        out("  Remote-capable: " + ", ".join(device["remote_settings"]))
+        out("  Cable/card only: " + ", ".join(device["cable_settings"]))
+        action = prompt.choice("Setting", device["remote_settings"] + ["Refresh reported state", "Finish"])
+        if action == "Finish":
+            return 0
+        if action == "Refresh reported state":
+            result = session.fleet_devices()
+            continue
+        if action == "voice":
+            data = session.fleet_voices()
+            query = prompt.text("Search voice name or language (blank for all)", default="").lower()
+            voices = [v for v in data.get("voices", []) if query in (v["id"] + " " + v["name"] + " " + v["language"]).lower()]
+            labels = [f"{v['id']} · {v['size_mb']} MB · " + ("installed" if v["installed"] else "download required") for v in voices]
+            choice = prompt.choice("Satellite Gateway voice library", labels + ["Satellite Gateway default"])
+            voice = None if choice == "Satellite Gateway default" else voices[labels.index(choice)]
+            if voice and not voice["installed"]:
+                if not prompt.yes_no(f"Approve downloading {voice['id']} ({voice['size_mb']} MB) on the Satellite Gateway?", default=False):
+                    continue
+                downloaded = session.fleet_voices(voice["id"], consent=True)
+                if not downloaded.get("ok"):
+                    out(downloaded.get("error"))
+                    return 1
+            value = voice["id"] if voice else "default"
+        else:
+            spec = result.get("schema", {}).get(action, {})
+            out("  Schema: " + json.dumps(spec))
+            value = prompt.text("Desired value", default=str(device.get("desired", {}).get(action, "")))
+            if spec.get("type") == "integer":
+                value = int(value)
+            elif spec.get("type") == "number":
+                value = float(value)
+        if prompt.yes_no(f"Apply {action}={value} to {device['device_id']}?", default=False):
+            updated = session.fleet_update(device["device_id"], {action: value}, device["generation"])
+            if not updated.get("ok"):
+                out(updated.get("error"))
+                return 1
+            actual = updated["device"]
+            out("  " + ("Converged" if actual["converged"] else "Accepted; pending device report"))
+            out("  Desired: " + json.dumps(actual.get("desired", {})))
+            out("  Reported: " + json.dumps(actual.get("reported", {})))
+            out("  Satellite Gateway applied: " + json.dumps(actual.get("gateway_reported", {})))
+            if actual.get("last_error"):
+                out("  Device error: " + actual["last_error"])
+        result = session.fleet_devices()
+    out(result.get("error"))
+    return 1
+
+
 def run(session: Session, prompt: Prompt, out=print) -> int:
     """The console flow. Returns a process exit code."""
     while True:
@@ -203,7 +273,7 @@ def _run(session: Session, prompt: Prompt, out) -> int:
         role = prompt.choice(
             "What are we setting up?",
             ["A satellite, using a gateway that already exists",
-             "Change a device I have already set up"],
+             "Change a device I have already set up", "Manage enrolled satellites over the network"],
         )
     else:
         out(f"  Found: {state['hermes_explained']}")
@@ -215,6 +285,9 @@ def _run(session: Session, prompt: Prompt, out) -> int:
             ["This machine as the Satellite Gateway", "A satellite on this machine's card or cable",
              "Both, gateway first", "Change a device I have already set up"],
         )
+
+    if role == "Manage enrolled satellites over the network":
+        return manage_fleet(session, prompt, out)
 
     gateway_address = ""
     gateway_card = None
@@ -240,6 +313,19 @@ def _run(session: Session, prompt: Prompt, out) -> int:
         out("  About to run:")
         for command in preview["commands"]:
             out(f"    {' '.join(command)}")
+        inventory = session.dependency_inventory()
+        for dependency in inventory["dependencies"]:
+            out(f"  Class {dependency['class']}: {dependency['what']} — {dependency['why']}")
+            out("    Size: " + (str(dependency['size_mb']) + " MB" if dependency['size_mb'] is not None else "unknown"))
+            out("    " + ", ".join(dependency["packages"]))
+        if not prompt.yes_no("Approve installing these class-3 packages and model? (recorded in the run log)", default=False):
+            out("  No packages were installed.")
+            return 0
+        consent = session.consent_dependencies(inventory["id"], True)
+        if not consent.get("ok"):
+            out(consent.get("error"))
+            return 1
+        out("  Dependency consent recorded" + (": " + consent["run_log"] if consent.get("run_log") else "."))
         if not prompt.yes_no("Run it?", default=True):
             out("  Nothing was changed.")
             return 0

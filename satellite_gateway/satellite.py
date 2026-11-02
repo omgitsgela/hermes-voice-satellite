@@ -312,7 +312,7 @@ class SatelliteClient:
 
         return TtsStream(self.send, pace=pace,
                          lock=getattr(self, "_playback_lock_override", None),
-                         fmt=self.out_format())
+                         fmt=self.out_format(), device_id=getattr(self, "device_id", None))
 
     # -- playback -----------------------------------------------------------
 

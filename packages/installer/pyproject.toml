@@ -26,4 +26,4 @@ hermes-installer = "hermes_installer.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-hermes_installer = ["web/*"]
+hermes_installer = ["web/*", "web/samples/*", "*-checksums.json"]

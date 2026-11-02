@@ -130,12 +130,12 @@ class Handler(BaseHTTPRequestHandler):
             params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             fmt = (params.get("format") or [None])[0]
             search = (params.get("q") or [""])[0]
-            self._json(self.session.wake_word_catalogue(fmt, search))
+            self._json(self.session.wake_word_catalogue(fmt, search, refresh="refresh=1" in self.path))
             return
-        if self.path == "/api/voices":
+        if self.path.startswith("/api/voices"):
             if not self._guard():
                 return
-            self._json(self.session.voice_catalogue())
+            self._json(self.session.voice_catalogue(refresh="refresh=1" in self.path))
             return
         self._json({"error": "not found"}, 404)
 
@@ -150,6 +150,30 @@ class Handler(BaseHTTPRequestHandler):
             return
         body = self._read_json()
         try:
+            if self.path == "/api/dependencies":
+                self._json(self.session.dependency_inventory())
+                return
+            if self.path == "/api/dependency-consent":
+                self._json(self.session.consent_dependencies(str(body.get("id", "")), body.get("confirmed") is True))
+                return
+            if self.path == "/api/fleet-auth":
+                self._json(self.session.fleet_authenticate(str(body.get("host", "")),
+                    int(body.get("port", 10704)), str(body.get("words", "")), str(body.get("code", ""))))
+                return
+            if self.path == "/api/fleet":
+                self._json(self.session.fleet_devices())
+                return
+            if self.path == "/api/fleet-update":
+                self._json(self.session.fleet_update(str(body.get("device_id", "")),
+                    body.get("settings") or {}, body.get("generation")))
+                return
+            if self.path == "/api/fleet-voices":
+                self._json(self.session.fleet_voices(body.get("voice"), body.get("consent") is True))
+                return
+            if self.path == "/api/reset":
+                self.session.close()
+                self._json({"ok": True})
+                return
             if self.path == "/api/gateway":
                 self._json(
                     self.session.install_gateway(

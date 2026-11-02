@@ -34,6 +34,23 @@ window.fetch = async (path, options = {}) => {
   let result = {ok:true};
   switch(url.pathname) {
     case '/api/status': result = fixture.status; break;
+    case '/api/dependencies': result = fixture.dependencies; break;
+    case '/api/dependency-consent': result = {ok:body.confirmed === true && body.id === fixture.dependencies.id,recorded:true}; break;
+    case '/api/reset': break;
+    case '/api/fleet-auth': result = fixture.fleet; break;
+    case '/api/fleet': result = fixture.fleet; break;
+    case '/api/fleet-update': {
+      const device=fixture.fleet.devices.find(d=>d.device_id===body.device_id);
+      if(!device || body.generation!==device.generation) result={ok:false,error:'Device generation changed; refresh before writing.'};
+      else if(Object.keys(body.settings).some(k=>!device.remote_settings.includes(k))) result={ok:false,error:'This setting requires a cable or card.'};
+      else {Object.assign(device.desired,body.settings); device.generation++; if(device.connected){Object.assign(device.reported,body.settings); device.converged=true;} else device.converged=false; result={ok:true,device};}
+      break;
+    }
+    case '/api/fleet-voices': {
+      if(body.voice){const voice=fixture.voices.voices.find(v=>v.id===body.voice); if(!body.consent || !voice) result={ok:false,error:'Approve the voice download first.'}; else voice.installed=true;}
+      if(result.ok) result={ok:true,voices:fixture.voices.voices,installed:fixture.voices.voices.filter(v=>v.installed).map(v=>v.id)};
+      break;
+    }
     case '/api/voices': result = fixture.voices; break;
     case '/api/wake-words': result = fixture.wake[url.searchParams.get('format')]; break;
     case '/api/ports': result.ports = [{device:'/dev/example-satellite',description:'ESP32 USB data connection'}]; break;
@@ -99,7 +116,23 @@ def build(output: Path, cache: Path) -> None:
                 content = cached.read_bytes()
             voice["sample_url"] = "data:audio/mpeg;base64," + base64.b64encode(content).decode()
             voice["installed"] = False
-        payload = {"status": status, "voices": voices, "wake": {
+        fleet_devices = []
+        for i, profile in enumerate(session.registry.all()):
+            settings = {"playback_volume":55,"mic_volume":78,"led_brightness":31,
+                        "wake_threshold":0.35,"wake_word":profile.wake_default,"voice":"default"}
+            fleet_devices.append({"device_id":f"satellite-{i+1}", "name":f"Satellite {i+1}",
+                "profile_id":profile.id, "health":"healthy", "connected":i == 0,
+                "generation":1,"desired":dict(settings),"reported":dict(settings),"converged":True,
+                "remote_settings":list(profile.remote_settings),
+                "cable_settings":list(profile.cable_settings)+["tls_credentials","wake_model"]})
+        fleet = {"ok":True,"devices":fleet_devices,"schema":{
+            "playback_volume":{"type":"integer","minimum":0,"maximum":100},
+            "mic_volume":{"type":"integer","minimum":0,"maximum":100},
+            "led_brightness":{"type":"integer","minimum":1,"maximum":31},
+            "wake_threshold":{"type":"number","minimum":0.05,"maximum":0.99},
+            "wake_word":{"type":"string"}}}
+        payload = {"status": status, "voices": voices, "dependencies":session.dependency_inventory(),
+                   "fleet":fleet, "wake": {
             fmt: session.wake_word_catalogue(fmt) for fmt in ("openwakeword_onnx", "microwakeword_tflite")
         }}
         adapter = ADAPTER.replace("PREVIEW_DATA", json.dumps(payload).replace("</", "<\\/"))

@@ -250,6 +250,44 @@ class PairingService:
             self._record_success(source)
         return payload
 
+    def manage(self, words: str, path: str, method: str, payload: dict,
+               source: str = "unknown") -> dict:
+        """TLS workbench access, without issuing a device certificate or exposing the host token."""
+        allowed = ((method == "GET" and path in {"/config/schema", "/config/devices", "/config/voices"})
+                   or (method == "POST" and path == "/config/voices")
+                   or (method == "GET" and re.fullmatch(r"/config/devices/[a-z0-9][a-z0-9._-]{0,63}", path))
+                   or (method == "PUT" and re.fullmatch(r"/config/devices/[a-z0-9][a-z0-9._-]{0,63}/desired", path)))
+        with self._lock:
+            self._check_rate(source)
+            if not self._words_match(words):
+                self._record_failure(source)
+                raise PairingRefused("the pairing words are not correct")
+            if not allowed:
+                raise PairingRefused("management route is not allowed")
+            self._record_success(source)
+            # Successful authenticated browsing may make several requests in a row. Failures still
+            # use the same backoff and lockout as enrolment.
+            self._source_state(source).last_attempt = float("-inf")
+        return self._config_request(path, method, payload)
+
+    def _config_request(self, path: str, method: str, payload: dict) -> dict:
+        import os
+        import urllib.request
+        import urllib.error
+        token = os.environ.get("VOICE_ANNOUNCE_TOKEN")
+        if not token:
+            token = (self.config.state_dir / "announce-token.txt").read_text().strip()
+        # This address is host-owned, never accepted from the workbench (no arbitrary proxy/SSRF).
+        base = os.environ.get("VOICE_CONFIG_LOCAL_URL", "http://127.0.0.1:8765").rstrip("/")
+        request = urllib.request.Request(base + path, method=method,
+            data=json.dumps(payload).encode() if method != "GET" else None,
+            headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=180) as response:
+                return json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            return json.loads(exc.read())
+
     def server_pin_hex(self) -> str:
         """The fingerprint a device pins: SHA-256 of the server certificate's DER form."""
         server_crt = self.config.tls_dir() / "server.crt"
@@ -304,7 +342,7 @@ class PairingHandler(BaseHTTPRequestHandler):
         self._send(405, {"ok": False, "error": "pairing accepts POST only"})
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib naming
-        if self.path.rstrip("/") != "/pair":
+        if self.path.rstrip("/") not in {"/pair", "/manage"}:
             self._send(404, {"ok": False, "error": "not found"})
             return
         content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
@@ -323,10 +361,17 @@ class PairingHandler(BaseHTTPRequestHandler):
 
         source = self.client_address[0] if self.client_address else "unknown"
         try:
-            payload = self.service.pair(
-                str(body.get("words", "")), str(body.get("device", "")), source,
-                replace=bool(body.get("replace", False)),
-            )
+            if not isinstance(body, dict):
+                raise PairingRefused("the body must be an object")
+            if self.path.rstrip("/") == "/manage":
+                payload = self.service.manage(str(body.get("words", "")),
+                    str(body.get("path", "")), str(body.get("method", "GET")),
+                    body.get("payload") or {}, source)
+            else:
+                payload = self.service.pair(
+                    str(body.get("words", "")), str(body.get("device", "")), source,
+                    replace=bool(body.get("replace", False)),
+                )
         except PairingRefused as exc:
             message = str(exc)
             status = 429 if "too many attempts" in message else (

@@ -230,6 +230,8 @@ class Announcer:
         app.router.add_get("/timers", self._handle_timers_get)
         app.router.add_post("/timers", self._handle_timers_post)
         app.router.add_get("/configure", self._handle_config_page)
+        app.router.add_get("/config/voices", self._handle_voices)
+        app.router.add_post("/config/voices", self._handle_voices)
         app.router.add_get("/config/schema", self._handle_config_schema)
         app.router.add_get("/config/devices", self._handle_config_devices)
         app.router.add_get("/config/devices/{device_id}", self._handle_config_device)
@@ -518,6 +520,23 @@ class Announcer:
         if unavailable is not None:
             return unavailable
         devices = self.config_plane.list_devices(connected_ids=self._connected_device_ids())
+        # A certificate can be enrolled before its device has ever connected. Show that device too,
+        # but never guess its profile or invent reported health, and do not mutate state on a GET.
+        credentials_file = getattr(self.enrollment, "credentials_file", None)
+        if credentials_file is not None:
+            try:
+                credentials = json.loads(Path(credentials_file).read_text())
+                known = {device["device_id"] for device in devices}
+                for device_id in sorted(set(credentials.values()) - known):
+                    if not isinstance(device_id, str):
+                        continue
+                    devices.append({"device_id": device_id, "name": device_id,
+                        "metadata": {"profile_id": "unknown"}, "health": "unknown",
+                        "connected": False, "generation": 0, "reported_generation": None,
+                        "desired": {}, "reported": {}, "drift": {}, "converged": False,
+                        "last_error": "Enrolled; waiting for the first device report."})
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
         return web.json_response({"ok": True, "count": len(devices), "devices": devices})
 
     async def _handle_config_device(self, request: web.Request) -> web.Response:
@@ -535,6 +554,42 @@ class Announcer:
         except KeyError:
             return web.json_response({"ok": False, "error": "device not found"}, status=404)
         return web.json_response({"ok": True, "device": device})
+
+    @staticmethod
+    def _check_voice_selection(settings):
+        if not isinstance(settings, dict):
+            raise ConfigValidationError("settings must be a JSON object")
+        selection = settings.get("voice")
+        if selection is not None:
+            if not isinstance(selection, str):
+                raise ConfigValidationError("voice must be a string")
+            if selection != "default":
+                tts.voice_paths(selection)
+
+    async def _handle_voices(self, request: web.Request) -> web.Response:
+        if not self._authorised(request):
+            return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+        from satellite_gateway.voice_library import library
+        catalogue = library()
+        if request.method == "POST":
+            try:
+                body = await request.json()
+                if not isinstance(body, dict) or body.get("consent") is not True:
+                    raise ValueError("Explicit download consent is required.")
+                result = await asyncio.to_thread(catalogue.download_voice_files,
+                    str(body.get("voice", "")), Path(tts.VOICE_MODEL).parent)
+                return web.json_response(result)
+            except (ValueError, OSError, catalogue.CatalogueError) as exc:
+                return web.json_response({"ok": False, "error": str(exc)}, status=400)
+        entries = list(await asyncio.to_thread(catalogue.refresh_voices))
+        installed = tts.installed_voices()
+        known = {entry.id for entry in entries}
+        entries.extend(catalogue.Voice(id=voice, name=voice, language="custom", size_mb=0)
+                       for voice in installed if voice not in known)
+        return web.json_response({"ok": True, "installed": installed,
+            "voices": [{"id": v.id, "name": v.name, "language": v.language,
+                        "size_mb": v.size_mb, "installed": v.id in installed,
+                        "bundled": v.sample_is_local, "default": v.default} for v in entries]})
 
     async def _handle_config_desired(self, request: web.Request) -> web.Response:
         if not self._authorised(request):
@@ -555,11 +610,12 @@ class Announcer:
                 status=400)
         device_id = request.match_info.get("device_id", "")
         try:
+            self._check_voice_selection(body.get("settings"))
             device = self.config_plane.set_desired(
                 device_id, body.get("settings"), expected_generation=expected)
         except ConfigConflict as exc:
             return web.json_response({"ok": False, "error": str(exc)}, status=409)
-        except ConfigValidationError as exc:
+        except ValueError as exc:
             return web.json_response({"ok": False, "error": str(exc)}, status=400)
 
         dispatched = False
@@ -618,8 +674,9 @@ class Announcer:
             )
 
         try:
+            self._check_voice_selection(settings)
             records = self.config_plane.set_desired_fleet(settings, device_ids=device_ids)
-        except ConfigValidationError as exc:
+        except ValueError as exc:
             return web.json_response({"ok": False, "error": str(exc)}, status=400)
 
         connected = set(self._connected_device_ids())
@@ -935,7 +992,11 @@ class Announcer:
             failures_here: list[str] = []
             for sat in self._delivery_targets():
                 try:
-                    await sat.play_wav(wav, wait_for_played=False)
+                    device_id = getattr(sat, "device_id", None)
+                    selected = self.config_plane.voice_for(device_id) if self.config_plane else None
+                    target_wav = (await asyncio.to_thread(self._build_wav, item, device_id)
+                                  if selected else wav)
+                    await sat.play_wav(target_wav, wait_for_played=False)
                     spoken_on += 1
                 except Exception as exc:  # noqa: BLE001 - a device that is gone must not kill the rest
                     name = getattr(sat, "device_id", "satellite")
@@ -966,17 +1027,22 @@ class Announcer:
         self._log({"id": item.id, "outcome": "spoken", "source": item.source, "key": item.key,
                    "text": item.text, "waited_seconds": round(waited, 2)})
 
-    def _build_wav(self, item: Announcement) -> Path:
+    def _build_wav(self, item: Announcement, device_id: str | None = None) -> Path:
         """Wake tone and speech as one clip, with a beat between them and one playback session."""
-        speech = AUDIO_OUT / f"announce-{item.id}.wav"
-        tts.synthesize_to_wav(item.text, speech)
+        import hashlib
+        suffix = "-" + hashlib.sha256(device_id.encode()).hexdigest()[:16] if device_id else ""
+        speech = AUDIO_OUT / f"announce-{item.id}{suffix}.wav"
+        if device_id:
+            tts.synthesize_to_wav(item.text, speech, device_id=device_id)
+        else:
+            tts.synthesize_to_wav(item.text, speech)
         sound_path = ANNOUNCE_SOUNDS.get(item.sound)
         if sound_path is None:
             return speech
         if not sound_path.exists():
             _LOGGER.warning("%s sound missing at %s; announcing without it", item.sound, sound_path)
             return speech
-        out = AUDIO_OUT / f"announce-{item.id}-full.wav"
+        out = AUDIO_OUT / f"announce-{item.id}{suffix}-full.wav"
         _concat_wavs([sound_path, speech], out)
         return out
 

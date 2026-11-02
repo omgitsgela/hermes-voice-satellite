@@ -13,7 +13,7 @@ import logging
 import wave
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Protocol, Callable
 
 from piper.voice import PiperVoice
 from piper.config import SynthesisConfig
@@ -60,12 +60,83 @@ def load_voice(model_path: str = str(VOICE_MODEL),
     return PiperVoice.load(model_path, config_path=config_path)
 
 
-def synthesize_to_wav(text: str, out_path: Path) -> Path:
+class TtsProvider(Protocol):
+    def chunks(self, text: str, voice: str | None = None) -> Iterator[tuple[bytes, int, int, int]]: ...
+    def wav(self, text: str, path: Path, voice: str | None = None) -> None: ...
+
+
+_voice_resolver: Callable[[str | None], str | None] = lambda device_id: None
+
+
+def set_voice_resolver(resolver):
+    global _voice_resolver
+    _voice_resolver = resolver
+
+
+def installed_voices(directory: Path | None = None) -> list[str]:
+    directory = directory or Path(VOICE_MODEL).parent
+    return sorted(path.stem for path in directory.glob("*.onnx")
+                  if Path(str(path) + ".json").is_file())
+
+
+def voice_paths(voice_id: str | None):
+    if not voice_id or voice_id == "default":
+        return VOICE_MODEL, VOICE_CONFIG
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", voice_id):
+        raise ValueError("invalid voice identifier")
+    model = Path(VOICE_MODEL).parent / (voice_id + ".onnx")
+    config = Path(str(model) + ".json")
+    if not model.is_file() or not config.is_file():
+        raise ValueError(f"voice is not installed: {voice_id}")
+    return model, config
+
+
+class PiperProvider:
+    def wav(self, text, path, voice=None):
+        model, config = voice_paths(voice)
+        loaded = load_voice(str(model), str(config)) if voice else load_voice()
+        syn = build_synthesis_config() if not voice else SynthesisConfig()
+        if voice and PIPER_LENGTH_SCALE is not None:
+            syn.length_scale = PIPER_LENGTH_SCALE
+        with wave.open(str(path), "wb") as wav_file:
+            loaded.synthesize_wav(text, wav_file, syn_config=syn)
+
+    def chunks(self, text, voice=None):
+        model, config = voice_paths(voice)
+        loaded = load_voice(str(model), str(config)) if voice else load_voice()
+        syn = build_synthesis_config() if not voice else SynthesisConfig()
+        if voice and PIPER_LENGTH_SCALE is not None:
+            syn.length_scale = PIPER_LENGTH_SCALE
+        for chunk in loaded.synthesize(text, syn_config=syn):
+            if chunk.audio_int16_bytes:
+                yield chunk.audio_int16_bytes, chunk.sample_rate, chunk.sample_width, chunk.sample_channels
+
+
+PROVIDER: TtsProvider = PiperProvider()
+
+
+def synthesize_to_wav(text: str, out_path: Path, *, device_id: str | None = None) -> Path:
     """Synthesize `text` to a WAV file and return its path."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    voice = load_voice()
-    with wave.open(str(out_path), "wb") as wav_file:
-        voice.synthesize_wav(text, wav_file, syn_config=build_synthesis_config())
+    PROVIDER.wav(text, out_path, _voice_resolver(device_id))
+    # The library includes low/high voices at other native rates. Keep WAV speech compatible
+    # with the fixed-format announcement tones; streaming uses its existing per-device converter.
+    with wave.open(str(out_path), "rb") as source:
+        fmt = (source.getframerate(), source.getsampwidth(), source.getnchannels())
+        if fmt != SND_FORMAT:
+            from wyoming.audio import AudioChunk, AudioChunkConverter
+            converted = AudioChunkConverter(*SND_FORMAT).convert(
+                AudioChunk(rate=fmt[0], width=fmt[1], channels=fmt[2],
+                           audio=source.readframes(source.getnframes())))
+        else:
+            converted = None
+    if converted is not None:
+        with wave.open(str(out_path), "wb") as target:
+            target.setnchannels(converted.channels)
+            target.setsampwidth(converted.width)
+            target.setframerate(converted.rate)
+            target.writeframes(converted.audio)
     _LOGGER.info("synthesized %d chars -> %s", len(text), out_path.name)
     return out_path
 
@@ -83,17 +154,13 @@ def describe_wav(path: Path) -> dict:
         }
 
 
-def synthesize_chunks(text: str) -> Iterator[tuple[bytes, int, int, int]]:
+def synthesize_chunks(text: str, *, device_id: str | None = None) -> Iterator[tuple[bytes, int, int, int]]:
     """Yield (pcm, rate, width, channels) as Piper produces it.
 
     Streaming instead of writing a WAV first is what lets the satellite start speaking
     before the whole sentence has been synthesized.
     """
-    voice = load_voice()
-    for chunk in voice.synthesize(text, syn_config=build_synthesis_config()):
-        pcm = chunk.audio_int16_bytes
-        if pcm:
-            yield pcm, chunk.sample_rate, chunk.sample_width, chunk.sample_channels
+    yield from PROVIDER.chunks(text, _voice_resolver(device_id))
 
 
 class TtsStream:
@@ -110,7 +177,7 @@ class TtsStream:
     """
 
     def __init__(self, send, *, pace: float = 2.0, lock=None,
-                 fmt: tuple[int, int, int] | None = None) -> None:
+                 fmt: tuple[int, int, int] | None = None, device_id: str | None = None) -> None:
         from wyoming.audio import AudioChunk, AudioChunkConverter, AudioStart, AudioStop
 
         self._AudioChunk = AudioChunk
@@ -121,6 +188,7 @@ class TtsStream:
         self._fmt = fmt or SND_FORMAT
         self._converter = AudioChunkConverter(*self._fmt)
         self._send = send
+        self._device_id = device_id
         self._pace = pace
         self._seconds_sent = 0.0
         self._chars_sent = 0
@@ -203,7 +271,9 @@ class TtsStream:
         sent = 0.0
         chunks_sent = 0
         _LOGGER.info("tts: synthesis started (%d chars)", len(text))
-        for pcm, rate, width, channels in synthesize_chunks(text):
+        chunks = (synthesize_chunks(text, device_id=self._device_id) if self._device_id
+                  else synthesize_chunks(text))
+        for pcm, rate, width, channels in chunks:
             converted = self._converter.convert(
                 self._AudioChunk(rate=rate, width=width, channels=channels, audio=pcm))
             # Piper yields whole sentences, not bounded transport frames. Embedded peers

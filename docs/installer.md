@@ -206,8 +206,14 @@ them as if they were:
 
 ## Choosing a wake word, and choosing a voice
 
-`hermes_installer.catalogue` is a checked-in snapshot of what can be chosen, so the installer works
-with no network at all.
+`hermes_installer.catalogue` reads the published `rhasspy/piper-voices/voices.json` library when
+browsing voices. Search by name/model ID/language and filter by language. The checked-in snapshot
+remains available offline; a failed refresh never removes it. HFC female remains the default, with
+HFC male beside it: both have bundled offline samples and are marked as fast choices.
+
+Wake-word browsing refreshes free microWakeWord GitHub models and openWakeWord release assets,
+scoped to the selected device's model format. A custom ONNX/TFLite file remains accepted regardless
+of catalogue membership or published measurements.
 
 - **A device is only offered wake words in its own format.** openWakeWord ONNX for a Pi, microWakeWord
   TFLite for an ESP32. They are not interchangeable, and the catalogue refuses a model in the wrong
@@ -218,8 +224,14 @@ with no network at all.
 - **Our own phrase is first, and says so.** `hey hermes` exists in both formats, is the default, and
   carries no third-party trademark problem. The rest are listed honestly: `alexa` and `hey jarvis` are
   named as other people's marks, not recommendations.
-- **A download is verified or discarded.** Entries may carry a SHA-256; a mismatch deletes the file
-  rather than leaving something half-trusted to flash into a device.
+- **A download is SHA-256 verified or refused.** Both Piper model and configuration are checked
+  against `piper-checksums.json`, at its pinned upstream revision; existing files are rechecked too.
+  The live index uses MD5, which is not silently accepted as SHA-256. A new voice without a trust
+  snapshot is visible but its download is refused. Maintainers refresh the snapshot with
+  `scripts/refresh-piper-checksums.py`: LFS SHA-256 authenticates model weights and Git blob IDs
+  authenticate small configurations before recording their SHA-256. No weights are fetched by
+  that refresh. Free wake downloads likewise require a trusted SHA-256 (snapshot maintained with
+  `scripts/refresh-wake-checksums.py`); unpinned new entries are refused, and custom files stay available.
 - **Voices default to HFC female**, with HFC male beside it. **The two default voices ship their
   sample clips**, 87 KB and 93 KB, served from the package itself, so the choice is audible with no
   network at all (`web/samples/NOTICE.md` records where they came from). Every other voice plays its
@@ -245,9 +257,11 @@ does not move. Heading focus, a polite status region, native labelled controls a
 Voice choices come from `/api/voices`: search by name, model ID or language, filter by language,
 listen to each sample, then deliberately download via `/api/voice`. An offline sample clip is not
 an installed model; both `.onnx` and `.onnx.json` must exist before a voice is marked installed.
-The catalogue currently offers five checked-in Piper voices. It is not a live index of all Piper
-models. Selecting a shared voice is opt-in and applies to a **local** Satellite Gateway on its next
-restart; no restart is performed by the voice picker. Per-device voices remain issue #120.
+The five-entry snapshot is only the offline fallback, not the live library. Local cable/card voice
+selection can still update the fallback voice for a local Satellite Gateway's next restart. For
+per-device selection, choose **Manage satellites over the network**: models download on the target
+Satellite Gateway, not the workbench. Several model/config pairs coexist in its `voices/` directory;
+assignments take effect on the next synthesis without a service restart.
 
 Build a self-contained click-through file from the exact shipped markup/script:
 
@@ -276,16 +290,70 @@ reduced motion, voice search/download, real sample playback and no outbound netw
 Backend command plans, no-flash management and console decisions run in the ordinary local gate.
 Browser fixture success is not a claim that hardware was flashed or a live service reconfigured.
 
-### Remaining design gaps
+### Network-first fleet management
 
-Network-first authenticated fleet discovery/editing is not implemented by the installer backend.
-The device profile's remote-capable setting names are displayed, but this UI does not pretend to
-apply them remotely. Pairing remains available for adding a new device; a later cable/card settings
-edit does not pair again. Implement a read/update management API before adding a network-first screen.
-The backend still has one shared local voice and no remote voice-library upload; do not present
-voice download on a workbench as a change to a different Satellite Gateway. Dependency consent still
-uses the engine's command plan rather than a structured three-class package inventory; that inventory
-needs an engine contract before it can be shown reliably.
+Choose **Manage satellites over the network** (console: **Manage enrolled satellites over the
+network**) before selecting any cable or device. Enter the Satellite Gateway address and pairing
+port, compare its certificate-derived identity code, and then supply its pairing words. This does
+not enroll another device or replace any certificate. Words stay in session memory; Start over
+clears the authenticated target. Each request rechecks the certificate identity before sending words.
+
+The pairing TLS endpoint proxies only an allowlisted configuration API to the host's loopback
+configuration plane. Its bearer token never leaves the Satellite Gateway. `VOICE_CONFIG_LOCAL_URL`
+on the pairing service overrides the local configuration-plane address if the default loopback port
+8765 is changed. Do not expose the token-authenticated HTTP plane merely to use the installer remotely.
+
+The fleet page and console show enrolled devices (including certificates enrolled before first
+connection), names, connected/offline state,
+health, remote-capable controls and cable/card-only capabilities from each device profile. Explicit
+profile IDs are supported; existing devices are identified by their firmware metadata, not their
+chosen name. Playback/microphone volume, LED brightness and wake threshold are editable remotely;
+wake-word selection is remote only where the profile declares it (currently Pi). The ESP32 profile
+requires its cable for wake-word selection. Wi-Fi, dial address, TLS credentials and wake model files
+are never offered as remote writes. Selecting a wake word does not install its model.
+
+Writes use the displayed generation, reject stale generations, and read the exact device back.
+Accepted/dispatched does not mean applied: reported values, generation and health decide convergence.
+Offline devices remain pending. Dry-run sessions may browse but refuse remote writes and model
+downloads. Refresh reported state to observe later acknowledgements; errors
+remain visible rather than turning a pending write into a success claim.
+
+The fleet voice picker searches the target host's live library and installed models. The explicit
+**Approve and download** action shows the model size and records consent; assignment is a separate
+operation on the chosen satellite. `voice=default` uses the host fallback. `voice` is host-owned,
+never sent to Pi/ESP32 configuration agents, so old device software does not reject the new field.
+Streaming replies and announcements choose their destination satellite's voice through the TTS
+provider interface. Piper is the implemented provider; paid/hosted providers are not integrated.
+
+### Dependency consent before installation
+
+The welcome page and gateway review show a structured inventory (`what`, `why`, class, package list,
+size where known). The console prints the same inventory. Unknown sizes are explicitly unknown.
+
+1. **Bundled in the executable:** Python runtime, pyserial, cryptography, stdlib web layer and assets.
+2. **Provided by the host:** the Hermes host's Python for the Satellite Gateway venv and host elevation
+   for disk/service writes. The installer does not download a Python or an elevation mechanism.
+3. **Installed only with consent:** the exact pinned `requirements.txt` package list and the default
+   Piper model. Optional voice/model downloads have their own explicit actions and sizes.
+
+A default-off confirmation is required before any gateway install command executes. Confirmation is
+bound to the current inventory's SHA-256 and recorded with the full inventory in the session run log;
+changing the package list invalidates it. Accepted consent is also saved as private, mode-0600 JSONL
+in `~/.cache/hermes-voice-satellite/installer-runs/`; GUI and console show that log path. Failure to
+record consent blocks installation. The host runtime is preferred from Hermes’ installed venv;
+`HERMES_HOST_PYTHON` (or `HERMES_PYTHON`) explicitly chooses its Python, with host `python3` as the
+compatibility fallback. No Python runtime is downloaded for the host. Previewing commands does not
+grant consent. Direct engine
+scripts remain manual operator tools; installer GUI and console share this backend consent guard.
+
+### Verification boundary
+
+The standalone preview uses offline fleet/device-report fixtures, including a connected device that
+converges and an offline device that stays pending. Browser acceptance exercises authentication,
+remote editing, voice download consent/assignment and dependency refusal/approval in both the shipped
+UI and standalone file. `scripts/test_installer_fleet_network.py` additionally exercises real local TLS
+pairing transport and real token-authenticated HTTP handlers, with fixture device acknowledgements.
+Neither result claims live-device execution, a service restart or deployment.
 
 ## Changing a device later
 
@@ -296,9 +364,9 @@ Two entries, deliberately separated by what is actually reachable:
   settings to replace, reviews the command plan, and explicitly applies it. Existing credentials,
   pairing and firmware are preserved. Nothing selected means nothing to apply. The ESP32 path uses
   targeted console commands, not the first-time installer (which requires a complete credential set).
-- **Volume, LED brightness and the wake threshold are gateway settings.** They are not changed here,
-  and the interface says so instead of implying otherwise. Teaching the installer to reach the gateway
-  is the work left for later.
+- **Manage satellites over the network** edits remote-capable volume, LED and wake settings through
+  the authenticated Satellite Gateway and assigns a separate voice per satellite. No cable, firmware
+  flash, certificate replacement or live-service restart is part of this route.
 
 ## What this machine can do
 

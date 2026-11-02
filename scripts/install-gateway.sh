@@ -207,14 +207,15 @@ echo "== 1. gateway virtualenv ($BASE/.venv) =="
 # The Satellite Gateway runs inside its own virtualenv, so this role needs a Python 3 to build one.
 # Checking here turns a mid-install "python3: not found" into one sentence about a prerequisite.
 # Flashing a device does NOT need this: a standalone bundle carries its own runtime for that.
-if [ "$DRY_RUN" = 0 ] && ! command -v python3 >/dev/null 2>&1; then
+HOST_PYTHON="${HERMES_HOST_PYTHON:-python3}"
+if [ "$DRY_RUN" = 0 ] && ! command -v "$HOST_PYTHON" >/dev/null 2>&1; then
     die "installing the Satellite Gateway needs Python 3 on this machine, because the service runs in its own virtualenv. Install python3, or run this step on the machine that will host it."
 fi
 if [ "$DRY_RUN" = 0 ] && [ -x "$BASE/.venv/bin/python" ] && \
    "$BASE/.venv/bin/python" -c 'import wyoming, faster_whisper' 2>/dev/null; then
     echo "   venv already has wyoming + faster-whisper; leaving it alone"
 else
-    run python3 -m venv "$BASE/.venv"
+    run "$HOST_PYTHON" -m venv "$BASE/.venv"
     run "$BASE/.venv/bin/python" -m pip install -r "$BASE/requirements.txt"
     run "$BASE/.venv/bin/python" -m pip check
     # The Piper voice the Gateway speaks with (not committed; the unit's WorkingDirectory expects
@@ -237,7 +238,7 @@ print(PIPER_VOICE_NAME)' "$BASE" 2>/dev/null || true)"
         run "$VOICE_PY" "$BASE/scripts/fetch-voice.py" "$PIPER_VOICE_NAME" --download-dir "$BASE/voices"
     else
         echo "   Gateway voice: $PIPER_VOICE_NAME"
-        run "$BASE/.venv/bin/python" -m piper.download_voices --download-dir "$BASE/voices" "$PIPER_VOICE_NAME"
+        run "$BASE/.venv/bin/python" "$BASE/scripts/download-piper-voice.py" --download-dir "$BASE/voices" "$PIPER_VOICE_NAME"
     fi
 fi
 

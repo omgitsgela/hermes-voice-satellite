@@ -1,0 +1,9 @@
+{
+  "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/alexa_v0.1.onnx": "6ff566a01d12670e8d9e3c59da32651db1575d17272a601b7f8a39283dfbae3e",
+  "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/hey_jarvis_v0.1.onnx": "94a13cfe60075b132f6a472e7e462e8123ee70861bc3fb58434a73712ee0d2cb",
+  "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/hey_mycroft_v0.1.onnx": "c2a311e8fa1338de89c31b3b46dc4dffd4af2f9a8d6ddead48893c2d301b1f18",
+  "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/hey_rhasspy_v0.1.onnx": "5a9b3ed3be2910e35780e097905aa9f35a9c10038df47914cf2b3ec4d670f6ea",
+  "https://github.com/esphome/micro-wake-word-models/raw/main/models/alexa.tflite": "2fcbfbb18462667b1763b05c1080cb2d2891bcad499624c60cbd1d7e4e1c0337",
+  "https://github.com/esphome/micro-wake-word-models/raw/main/models/hey_jarvis.tflite": "a9bb35449786dab6482869be829970547f59f1ffd08bcab448c3c76c9b208fc6",
+  "https://github.com/esphome/micro-wake-word-models/raw/main/models/okay_nabu.tflite": "f9af22ab15bf72a23157ac6d47593d48636ea6fbf65af57dc2ff7e65ad6769fe"
+}

@@ -20,6 +20,10 @@ _DEVICE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _WAKE_WORD = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 DEVICE_SETTING_SCHEMA: dict[str, dict[str, Any]] = {
+    "voice": {
+        "type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+        "default": "default", "apply": "immediate", "gateway_owned": True,
+    },
     # -- capability, not a setting ------------------------------------------------------------
     # The rate a device's own audio path runs at, so the gateway can send it audio it can play
     # as-is. Reported by the device, NEVER sent as desired state: a Pi satellite would report it
@@ -140,6 +144,8 @@ def validate_settings(values: dict[str, Any]) -> dict[str, Any]:
             raise ConfigValidationError(f"{name} must be at most {spec['maximum']}")
         if "enum" in spec and value not in spec["enum"]:
             raise ConfigValidationError(f"{name} must be one of {spec['enum']}")
+        if "pattern" in spec and not re.fullmatch(spec["pattern"], value):
+            raise ConfigValidationError(f"{name} contains unsupported characters")
         if name == "wake_word" and not _WAKE_WORD.fullmatch(value):
             raise ConfigValidationError("wake_word contains unsupported characters")
         clean[name] = value
@@ -158,6 +164,16 @@ class ConfigPlane:
         if self._pending_save:
             self._save(self._state)
             self._pending_save = False
+
+    def voice_for(self, device_id: str | None) -> str | None:
+        record = self._state["devices"].get(device_id, {})
+        voice = (record.get("desired") or {}).get("voice")
+        return None if voice in (None, "default") else voice
+
+    @staticmethod
+    def device_settings(record: dict) -> dict:
+        return {key: value for key, value in record["desired"].items()
+                if not DEVICE_SETTING_SCHEMA.get(key, {}).get("gateway_owned")}
 
     def schema(self) -> dict[str, Any]:
         return {
@@ -313,7 +329,7 @@ class ConfigPlane:
         if metadata is not None:
             if not isinstance(metadata, dict):
                 raise ConfigValidationError("metadata must be a JSON object")
-            for name in ("name", "area", "firmware_version", "boot_id"):
+            for name in ("name", "area", "firmware_version", "boot_id", "profile_id"):
                 value = metadata.get(name)
                 if value is not None:
                     if not isinstance(value, str) or len(value) > 128:
@@ -480,15 +496,19 @@ class ConfigPlane:
     def _public(record: dict[str, Any], *, connected: Optional[bool] = None) -> dict[str, Any]:
         desired = dict(record.get("desired") or {})
         reported = dict(record.get("reported") or {})
+        gateway_reported = {name: wanted for name, wanted in desired.items()
+                            if DEVICE_SETTING_SCHEMA.get(name, {}).get("gateway_owned")}
+        effective_reported = {**reported, **gateway_reported}
         drift = {
-            name: {"desired": wanted, "reported": reported.get(name)}
+            name: {"desired": wanted, "reported": effective_reported.get(name)}
             for name, wanted in desired.items()
-            if not values_agree(name, wanted, reported.get(name))
+            if not values_agree(name, wanted, effective_reported.get(name))
         }
         result = {
             **record,
             "desired": desired,
             "reported": reported,
+            "gateway_reported": gateway_reported,
             "drift": drift,
             "converged": (
                 record.get("reported_generation") == record.get("generation")

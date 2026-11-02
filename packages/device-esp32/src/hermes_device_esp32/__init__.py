@@ -43,6 +43,10 @@ PROFILE = DeviceProfile(
         "four-microphone array and a small speaker underneath."
     ),
     settings={
+        "voice": Setting("voice", "next_turn", remote=True,
+                         help="Synthesized on the Satellite Gateway; independent for each device."),
+        "tls_credentials": Setting("tls_credentials", "cable", remote=False),
+        "wake_model": Setting("wake_model", "cable", remote=False),
         "playback_volume": Setting("playback_volume", "immediate", remote=True,
                                    help="How loud it speaks."),
         "mic_volume": Setting("mic_volume", "immediate", remote=True,

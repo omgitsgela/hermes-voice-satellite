@@ -11,6 +11,24 @@ from __future__ import annotations
 
 import os
 import sys
+import shutil
+from pathlib import Path
+
+
+def host_python(*, home: Path | None = None, env: dict | None = None) -> str:
+    """Use Hermes' host runtime for the service venv, never the frozen installer executable."""
+    environment = os.environ if env is None else env
+    explicit = environment.get("HERMES_HOST_PYTHON") or environment.get("HERMES_PYTHON")
+    if explicit:
+        return str(explicit)
+    base = home or Path.home()
+    for prefix in (base / ".hermes/hermes-agent", base / "hermes-agent"):
+        for venv in ("venv", ".venv"):
+            candidate = prefix / venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+    # A host-managed Python is a prerequisite, not a package this installer adds.
+    return shutil.which("python3") or "python3"
 
 
 def helper_environment() -> dict[str, str] | None:

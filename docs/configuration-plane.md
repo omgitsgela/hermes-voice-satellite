@@ -10,6 +10,71 @@ the code, not from an intention: `gateway/config_plane.py` (state and validation
 (HTTP), `gateway/registry.py` (wire events), `pi/config_agent.py` (device side), `pi/device_apply.py`
 (hardware adapter), `pi/mic_gain_control.py` (input level).
 
+## Workbench management and per-device voices
+
+The installer's **Manage satellites over the network** route works from another computer without
+copying the announcement bearer token there. Its GUI and console share the same `Session` API.
+
+1. Connect to the pairing service's TLS port (normally 10704).
+2. Derive the identity code from the peer certificate and compare it to the saved record.
+3. Only after confirmation, POST `/manage` with pairing words and an allowlisted operation:
+   `{"words":"<pairing words>","path":"/config/devices","method":"GET","payload":{}}`.
+4. The pairing service authenticates/rate-limits the words and forwards the operation to its local
+   configuration plane using the host-only bearer token. No device certificate is issued.
+
+The workbench rechecks certificate identity on every request, including downloads and updates.
+Pairing words are not logged or put in URLs. Start over clears the authenticated target in memory.
+The proxy allows schema/device/library reads, single-device desired writes, and explicit voice
+downloads only; arbitrary routes, reports, announcements and fleet-wide writes are not proxyable.
+The host-owned `VOICE_CONFIG_LOCAL_URL` sets the loopback config-plane address when it differs from
+`http://127.0.0.1:8765`. It is never accepted from a remote request. Existing bearer HTTP clients
+continue to work; the HTTP token is not disclosed through pairing.
+
+### Voice library HTTP API
+
+- `GET /config/voices`: authenticated live Piper library plus installed models, including custom
+  models present as `.onnx`/`.onnx.json` pairs. Returns `voices` and `installed` IDs. Offline it falls
+  back to the checked-in snapshot; installed voices are still shown.
+- `POST /config/voices`: authenticated `{"voice":"<model ID>","consent":true}` installs a model/config
+  pair alongside existing voices. Both files must match the pinned SHA-256 trust snapshot; missing
+  hashes or mismatches are refused. No default/per-device selection changes as a side effect.
+- `PUT /config/devices/<id>/desired`: `settings.voice` assigns an installed voice; `default` removes
+  the override. An uninstalled voice is refused before changing desired state. Optimistic generation
+  checks still apply, and the installer reads the exact target back after accepting a write.
+
+`voice` is a **Satellite Gateway-owned** setting, not device firmware configuration. It is excluded
+from `hermes.config.desired.settings` sent to device agents. Public readback includes the accepted
+host selection separately in `gateway_reported`; `reported` remains the device’s own actual values.
+Physical device values and health still require their own report
+and matching generation. Existing profiles without a `voice` field retain the gateway fallback.
+The selected voice is resolved per destination at synthesis time; Piper model caches are keyed by
+model/config paths, never a mutable global choice. Streaming conversation speech and per-device
+announcements use the same provider interface. WAV speech from voices at other native sample rates
+is converted to the announcement tone format before concatenation; streamed speech uses the existing
+per-device converter. Only Piper is implemented; paid providers remain
+outside this contract.
+
+### Capability and convergence display
+
+Enrolled certificates with no configuration record are listed as unknown, waiting for their first
+device report; no profile or editable capability is guessed for them. Listing does not mutate state.
+The installer intersects controls with the device profile's remote flags. It shows name, health,
+connected/offline state, remote-capable settings and cable/card-only settings. Existing firmware
+metadata identifies first-party profiles; an explicit `metadata.profile_id` identifies other
+registered profiles. Unknown profiles have no editable remote controls.
+
+Playback/microphone volume, LED brightness and wake threshold are remote-capable in first-party
+profiles. Pi wake-word selection is remote; the ESP32 profile requires a cable for that selection.
+In all cases a newly selected wake word must already have its model on the device. Wi-Fi, dial
+addresses, TLS credentials and wake-model installation remain cable/card operations. Writes to
+those fields are refused by the installer's backend before any config-plane write.
+
+A successful HTTP write means **accepted**, not applied. The installer displays desired versus
+reported values, health and pending/converged status, and has an explicit readback refresh. An offline
+device stays pending; a device error is shown. Browser coverage uses fixture acknowledgements, while
+`scripts/test_installer_fleet_network.py` exercises the actual TLS proxy and HTTP handlers locally.
+Neither test configures a deployed service or proves a real satellite applied a setting.
+
 ## 1. What this is
 
 One authenticated HTTP endpoint on the Satellite Gateway host, plus a control pair of Wyoming events over the
@@ -49,6 +114,7 @@ the host already did, because a host is not a trust boundary for a device.
 
 | Setting | Type | Bounds | Default | Applies by |
 |---|---|---|---|---|
+| `voice` | string | safe Piper model ID or `default` | `default` | Satellite Gateway, next synthesis |
 | `wake_word` | string | `^[a-z0-9][a-z0-9_-]{0,63}$` | `okay_nabu` | wake service restart |
 | `wake_threshold` | number | 0.05 – 0.99 | `0.35` | wake service restart |
 | `mic_volume` | integer | 0 – 100 | `78` | immediate |
