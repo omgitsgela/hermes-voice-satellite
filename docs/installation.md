@@ -193,6 +193,13 @@ both chips ship in `firmware/stock/`, and
 procedure (a full-chip write at `0x0` is the one correct use of it) and the stock→project path in
 reverse. A restored ESP32 stops talking to any gateway until someone provisions it.
 
+Installing onto a **stock** XVF3800 board (never flashed before)? The current firmware runs the
+I2S link at 48 kHz with the co-processor as clock master, which a stock v1.0.4 co-processor does
+not speak — the microphone path stays dead until the co-processor gets the 48 kHz master image
+(shipped at `firmware/stock/xmos-official-v1.0.9-48k-master-dfu.bin`; Safe Mode + `dfu-util`
+procedure in [`firmware/stock/README.md`](../firmware/stock/README.md)). Check the first boot's
+bring-up line: `version=1.0.9` means the pairing is right, `version=1.0.4` means it is not.
+
 Provisioning is a **set, not a menu**: TLS credential, wake model, endpoint, and Wi-Fi profile are
 all required, because a board missing any one is a dead board. An incomplete provision is refused
 before a byte is written. Everything secret moves as a file path — the certificate directory, the

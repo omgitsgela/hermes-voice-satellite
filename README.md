@@ -327,7 +327,7 @@ it.
 - [`docs/endpointing-profiles.md`](docs/endpointing-profiles.md) opt-in pause-tolerant listening for hesitant or slower speech
 - [`docs/agent-and-model-routing.md`](docs/agent-and-model-routing.md) choose either a model route alias or a complete named Hermes Bot/profile for every satellite conversation
 - [`docs/wake-word-licensing.md`](docs/wake-word-licensing.md) which wake word models may be used commercially, and the terms attached to each source
-- [`firmware/stock/README.md`](firmware/stock/README.md) the device's undo: verified stock images for both chips (ESP32 full-flash and XMOS v1.0.4 DFU), and how to restore to stock or go stock→project
+- [`firmware/stock/README.md`](firmware/stock/README.md) the device's undo and the pairing rule: verified stock images for both chips (ESP32 full-flash, XMOS v1.0.4 stock DFU) plus the 48 kHz master image the current firmware needs, with restore and stock→project procedures
 - [`docs/outbound-link.md`](docs/outbound-link.md) the device dials the Satellite Gateway: the bootstrap file it carries, installing the service so it dials on boot, and what it does not do yet
 
 ## Status and known gaps
