@@ -267,12 +267,14 @@ needs, where it lives, and what it is for. Read it before deploying.
 
 Two separate things, and only one of them has restrictions:
 
-- **Wake word models.** The recommended default is a community-library model from the hosted
-  openWakeWord trainer, and that site's terms license such models for **personal and non-commercial use
-  only**. The pre-trained models that ship with the openWakeWord software are Apache-2.0 and carry no
-  such restriction. Before deploying commercially, read
-  [`docs/wake-word-licensing.md`](docs/wake-word-licensing.md): it sets out which source carries which
-  terms, and the one case that needs care, which is compiling a model into a published firmware image.
+- **Wake word models.** The ESP32 firmware ships a default model trained through the
+  microwakeword.com hosted trainer's community library, which licenses such models for **personal and
+  non-commercial use only**. That is consistent with this repository's own licence, and it means a
+  **commercial deployment must switch models**: an Apache-2.0 model ships in the tree for exactly
+  that, and a model swap is a provisioning step, not a firmware rebuild. The pre-trained models that
+  ship with the openWakeWord software are Apache-2.0 and carry no such restriction. Read
+  [`docs/wake-word-licensing.md`](docs/wake-word-licensing.md) before deploying commercially, or
+  before compiling a model into a published firmware image.
 - **This repository's own code.** Licensed under the **PolyForm Noncommercial License 1.0.0**: see
   [`LICENSE`](LICENSE). Personal, hobby, research and non-profit use, which also means this project as
   shipped is a non-commercial one. [`THIRD-PARTY.md`](THIRD-PARTY.md) sets out what is redistributed here
@@ -288,7 +290,9 @@ snapshots its model. It is tracked upstream as #109765 with a fix proposed in #1
 once a release carries that.
 
 Run `hermes/patches/check-patches.sh` after every update; it is read-only and reports what is missing. See
-`docs/restart-safety-and-portability.md` for the planned hardening.
+`docs/restart-safety-and-portability.md` for the planned hardening. This project's own checkout is
+updated with `scripts/update-gateway.sh --base ~/hermes-voice-satellite` (code and dependencies, then a
+restart, leaving your env and TLS material alone); `docs/installation.md` has the upgrade section.
 
 ## Keeping the repository and your installation in step
 
@@ -311,7 +315,9 @@ it.
 
 ## Documentation
 
-- [`docs/timers-and-alarms.md`](docs/timers-and-alarms.md) timers and alarms: design spec, not built yet
+- [`docs/quick-reference.md`](docs/quick-reference.md) one page: everything a person can say to the satellite, and what answers it
+- [`docs/voice-commands.md`](docs/voice-commands.md) the bridge-local commands in full, and the phrases deliberately not matched
+- [`docs/timers-and-alarms.md`](docs/timers-and-alarms.md) timers and alarms: what a person says, the tool calls, and where the state lives
 - [`docs/satellite-http-config.md`](docs/satellite-http-config.md) configuration server for the satellite: feasibility research, not built
 - [`docs/owning-the-satellite-stack.md`](docs/owning-the-satellite-stack.md) what is pinned and vendored, our divergence from upstream, and how to rebuild the device
 - [`docs/feature-roadmap.md`](docs/feature-roadmap.md) features worth building ourselves, diffed against the successor project, with the reasoning for staying on Wyoming

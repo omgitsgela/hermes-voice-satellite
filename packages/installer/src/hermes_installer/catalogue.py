@@ -74,8 +74,8 @@ WAKE_WORDS: tuple[WakeWord, ...] = (
         format=TFLITE,
         source_url="firmware/esp32/models/hey_hermes.tflite",
         first_party=True,
-        licence="shipped with this project",
-        note="The default. Ours, so it can be supported.",
+        licence="community model, personal and non-commercial use only",
+        note="The default for an ESP32. The project licence is non-commercial too.",
     ),
     WakeWord(
         id="hey_hermes",
@@ -83,7 +83,7 @@ WAKE_WORDS: tuple[WakeWord, ...] = (
         format=ONNX,
         source_url="provisioned by the satellite installer",
         first_party=True,
-        licence="shipped with this project",
+        licence="community model, personal and non-commercial use only",
         note="The default for a Pi, provisioned by its installer.",
     ),
     WakeWord(

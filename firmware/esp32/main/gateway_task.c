@@ -596,7 +596,7 @@ static void gateway_task_set_identity(wy_session *session) {
     ESP_LOGI("fwbuild", "running ELF sha256=%s", elf_hash);
     snprintf(firmware_version, sizeof(firmware_version), "esp32-%.24s", elf_hash);
     /* The detection name IS the model name: wake_word is the model selector (the model file's
-     * stem, e.g. okay_nabu), and the detection event reports that same name. */
+     * stem, e.g. hey_hermes), and the detection event reports that same name. */
     nvs_read_str("wake_word", wake_word, sizeof(wake_word));
     wy_session_identity identity = { name, area, firmware_version, wake_word };
     wy_session_set_identity(session, &identity);

@@ -163,6 +163,27 @@ expectation, 2026-09-23: a feature enhancement belongs on the Issues page, not o
 #10 is a maintainer request rather than a gap against the successor project, and it is filed
 here all the same: this index is the list of what we intend to build, whatever the source of the idea.
 
+### Also open, and planned in their own issues
+
+| Issue | What it covers |
+|---|---|
+| [#22](https://github.com/omgitsgela/hermes-voice-satellite/issues/22) | Opt-in guest mode with restricted tools and private-result suppression |
+| [#23](https://github.com/omgitsgela/hermes-voice-satellite/issues/23) | Physical microphone privacy control with truthful mute-state feedback |
+| [#24](https://github.com/omgitsgela/hermes-voice-satellite/issues/24) | Voice-history review, explicit deletion, configurable local retention |
+| [#25](https://github.com/omgitsgela/hermes-voice-satellite/issues/25) | Quiet hours and a pull-to-hear inbox for non-urgent notifications |
+| [#27](https://github.com/omgitsgela/hermes-voice-satellite/issues/27) | Named local routines with triggers, conditions and action sequences |
+| [#28](https://github.com/omgitsgela/hermes-voice-satellite/issues/28) | Cloud-free household lists and task completion through a local adapter |
+| [#29](https://github.com/omgitsgela/hermes-voice-satellite/issues/29) | Local calendar and agenda adapter without a Google account |
+| [#30](https://github.com/omgitsgela/hermes-voice-satellite/issues/30) | Opt-in local speaker profiles for personalized sessions |
+| [#31](https://github.com/omgitsgela/hermes-voice-satellite/issues/31) | Carry satellite room context into smart-home target resolution |
+| [#33](https://github.com/omgitsgela/hermes-voice-satellite/issues/33) | Consent-based LAN intercom and room-addressed voice replies |
+| [#41](https://github.com/omgitsgela/hermes-voice-satellite/issues/41) | Reminders as a first-class primitive, separate from timers and alarms |
+| [#42](https://github.com/omgitsgela/hermes-voice-satellite/issues/42) | Presence-aware reminders and behaviours from local presence |
+| [#43](https://github.com/omgitsgela/hermes-voice-satellite/issues/43) | Reminders addressed to another household member, with per-person queries |
+| [#44](https://github.com/omgitsgela/hermes-voice-satellite/issues/44) | ESP32 firmware speaking Wyoming directly to the Satellite Gateway |
+| [#110](https://github.com/omgitsgela/hermes-voice-satellite/issues/110) | Train and validate a project-owned microWakeWord model |
+| [#120](https://github.com/omgitsgela/hermes-voice-satellite/issues/120) | Multiple voices on the gateway, selectable per satellite |
+
 Keep both places in step: this document carries the reasoning, the issues carry the work. When an
 issue is opened, link it here; when an idea arrives that is not already an issue, file it.
 
@@ -243,12 +264,6 @@ These are design intentions, not commitments. Each needs its own decision note b
   house, and it is the only feedback a device with no display can give. The ESP32 has no LED
   hardware wired yet, so this starts with a hardware decision (which pixels, which pin) before any
   firmware.
-- **48 kHz audio path.** Capture and playback are both 16 kHz today, which caps the audible band at
-  8 kHz and is the main remaining quality ceiling. Going higher needs the XVF3800's 48 kHz I2S
-  master build, a coordinated sample-rate change across capture, playback, the Satellite Gateway's TTS format
-  and the wake scorer's input, plus a bandwidth/memory check on the link. It is one migration, not
-  a switch: do it as a single coordinated change or not at all. See `prompt-tones.md` for the
-  existing rate split, which the migration would collapse.
 
 ## Built from this list
 

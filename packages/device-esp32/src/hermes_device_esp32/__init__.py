@@ -69,6 +69,34 @@ PROFILE = DeviceProfile(
 INSTALL_SCRIPT = "scripts/install-esp32.sh"
 PROVISION_SCRIPT = "scripts/esp32_provision.py"
 
+# The models that ship in the checkout, by selector. A word in this tuple can be
+# provisioned without the person supplying a file; anything else needs its own
+# model, because the firmware selects a model by name and a name with no model
+# leaves the satellite deaf.
+BUNDLED_MODELS = ("hey_hermes", "okay_nabu")
+
+
+def _bundled_model(word: str) -> str | None:
+    return f"firmware/esp32/models/{word}.tflite" if word in BUNDLED_MODELS else None
+
+
+def _resolved_model(request: DeviceRequest) -> str | None:
+    return request.wake_model or _bundled_model(request.wake_word) or None
+
+
+def _model_problem(request: DeviceRequest) -> str | None:
+    """Why this request cannot be provisioned as asked, or None.
+
+    A wake word is a selector: the firmware loads a model only when the blob's
+    name matches it. Provisioning the default model while selecting another
+    word is the failure this refuses, because the result is a satellite that is
+    configured, reports healthy, and never wakes.
+    """
+    if request.wake_word and not _resolved_model(request):
+        return (f"the wake word {request.wake_word!r} has no model in this checkout; "
+                f"choose one of {', '.join(BUNDLED_MODELS)} or supply the model file")
+    return None
+
 
 def _argv(request: DeviceRequest, action: str) -> tuple[str, ...]:
     argv = [INSTALL_SCRIPT, "--port", request.port or "", action, "--endpoint",
@@ -83,13 +111,11 @@ def _argv(request: DeviceRequest, action: str) -> tuple[str, ...]:
         # Pairing issued this record for this device; without it the provisioner refuses to write,
         # because it cannot confirm the certificate is the one the gateway registered.
         argv += ["--registry", request.registry_file]
-    model = request.wake_model
-    if not model and request.wake_word == PROFILE.wake_default:
-        # The firmware bundles its default model. Passing it explicitly is what keeps the phrase the
-        # installer showed and the phrase the device answers to the same phrase: without --model the
-        # script falls back to its own default, which is okay_nabu.
-        model = f"firmware/esp32/models/{request.wake_word}.tflite"
+    model = _resolved_model(request)
     if model:
+        # Passing the model explicitly is what keeps the phrase the installer showed and the phrase
+        # the device answers to the same phrase: without --model the script falls back to its own
+        # default, which is a different model with a different selector.
         argv += ["--model", model, "--model-name", request.wake_word]
     if request.wifi_ssid and request.wifi_psk_file:
         argv += ["--wifi-ssid", request.wifi_ssid, "--wifi-psk-file", request.wifi_psk_file]
@@ -104,6 +130,9 @@ class Esp32Xvf3800Driver:
             return StepResult(ok=False, summary="no USB port selected for this device")
         if not request.dial_address:
             return StepResult(ok=False, summary="no gateway address has been chosen yet")
+        problem = _model_problem(request)
+        if problem:
+            return StepResult(ok=False, summary=problem)
         require_posix("Flashing the board")
         return runner.run(
             Command(
@@ -123,6 +152,9 @@ class Esp32Xvf3800Driver:
                 summary="the board's own identity is needed to stage settings, and it has not "
                         "been read yet. Read it from the device first.",
             )
+        problem = _model_problem(request)
+        if problem:
+            return StepResult(ok=False, summary=problem)
         if request.extra.get("manage_only"):
             # First-time provisioning deliberately requires a complete credential set. A later
             # settings edit must not enter that script: it would demand pairing again and replace
@@ -140,9 +172,7 @@ class Esp32Xvf3800Driver:
                     "save the selected Wi-Fi network", secret_file=request.wifi_psk_file,
                 ))
             if request.wake_word or request.wake_model:
-                model = request.wake_model
-                if not model and request.wake_word == PROFILE.wake_default:
-                    model = f"firmware/esp32/models/{request.wake_word}.tflite"
+                model = _resolved_model(request)
                 if model:
                     commands.append(Command(
                         ("scripts/provision-device-model.py", "--port", request.port,

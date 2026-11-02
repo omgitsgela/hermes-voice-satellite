@@ -1,32 +1,42 @@
-# ESP32 firmware development
+# ESP32-S3 satellite firmware
 
-This directory contains an ESP-IDF diagnostic project and host-tested Wyoming components. The diagnostic has been built and boot-tested on a XIAO ESP32-S3; it is not yet a voice satellite.
+Firmware for the ESP32-S3 satellite with the Seeed XVF3800 four-microphone array: a Wyoming client
+that captures microphone audio, scores a microWakeWord model on the device, streams the utterance to
+the Satellite Gateway, and plays the spoken answer through its own speaker. It is the ESP32 half of
+the project documented in the repository root; the Pi satellite runs the upstream
+`wyoming-satellite` stack instead.
 
-## Diagnostic build
+## What boots, in order
 
-With ESP-IDF v6.1 activated, from this directory:
+1. **Power-on self-check.** `app_main` runs the Wyoming wire loopback through the real sender,
+   receiver and header validator, then a two-pattern read/write check over an explicitly allocated
+   1 MB PSRAM buffer, reporting heap and stack headroom. A failure stops here with the reason in the
+   log rather than starting a half-working device.
+2. **Provisioning console.** The USB Serial/JTAG console comes up (`READY 1 NETWORK_INACTIVE
+   AUDIO_INACTIVE`). This is the setup surface for a bare board and the recovery surface for a
+   configured one.
+3. **Register-on-boot.** A board that already holds an endpoint and a Wi-Fi profile does not wait for
+   a command: `provisioning_boot_gate()` starts the gateway task during boot. That task associates
+   Wi-Fi, dials the Satellite Gateway (plaintext registry, or TLS with the provisioned client
+   certificate), registers, receives its configuration, then runs the capture → wake → stream →
+   playback pipeline and the LED vocabulary. An unprovisioned board stays idle and says why.
+
+Build with ESP-IDF v6.1:
 
 ```sh
 IDF_TARGET=esp32s3 idf.py build
 ```
 
-This is a diagnostic, not a usable voice satellite. `app_main` runs a synthetic
-loopback check through the real C sender, receiver, and header validator, logs
-pass/fail, then performs a two-pattern read/write check over an explicitly allocated
-1 MB PSRAM buffer. It frees that buffer, reports internal/external heap statistics
-and minimum free main-task stack, then enters the USB provisioning console. It does not initialize microphone,
-speaker, Wi-Fi, Bluetooth, or XMOS controls. Build defaults select 8 MB flash,
-USB Serial/JTAG console, an 8 KB main task stack, and 8 MB Octal PSRAM at 80 MHz
-with the SDK startup memory test enabled. Do not flash until preservation and
-deployment gates have been satisfied.
+Build defaults select 8 MB flash, USB Serial/JTAG console, an 8 KB main task stack, and 8 MB Octal
+PSRAM at 80 MHz with the SDK startup memory test enabled. Flashing is the deployment step in
+[`docs/installation.md`](../../docs/installation.md) and
+[`docs/field-test.md`](../../docs/field-test.md): the application region only, at the manifest's
+offsets, never a chip erase (the model, credentials, NVS and PHY calibration live outside the app
+region), and never the merged image at `0x0`.
 
-The memory-pattern helper uses volatile accesses so the compiler cannot substitute
-computed values for actual memory reads. This is a bring-up check, not exhaustive
-RAM qualification or full-workload resource acceptance. ESP-IDF's stack high-water
-API reports bytes, unlike upstream FreeRTOS's word-count convention.
-
-Host tests: `.venv/bin/python -B scripts/test_esp32_selftest.py` from the repo root.
-The host entry-point test uses a logging shim; it is not proof of MCU boot.
+The diagnostic self-check is not exhaustive RAM qualification, and the host tests do not prove MCU
+boot or acoustic behaviour. ESP-IDF's stack high-water API reports bytes, unlike upstream FreeRTOS's
+word-count convention.
 
 
 ## Current milestone
@@ -665,37 +675,26 @@ and the neighbouring regions did not move.
 
 ## Still pending
 
-Done in this branch and pending the flash gate: a persistent session that outlives
-registration (the supervisor, the register-on-boot task, and the soak that measures it);
-the XMOS I2C/I2S bring-up (compiled and host-tested, not yet run on this board). What
+The pipeline above is implemented and host-tested, and a clean build is the compile gate. What
 remains genuinely open:
 
-- **Device-side verification of this branch's code.** Everything above is proved by host
-  tests and a clean build against the real driver headers; nothing in items 1–7 has been
-  run on the board yet. The device still carries the multi-Wi-Fi build. The first flash is
-  the gate that turns "compiled and host-green" into "on the hardware," and it bundles the
-  manifest and hashes from `bundle-esp32-flash.py`.
-- **A real soak on the board.** The harness is unit-tested; its first hour-long window
-  against the running link has not happened.
-- **Audio capture and playback.** The bring-up proves the path initializes and the codec
-  answers; a stream, a sample, the amplifier, and the 4 Ω/3 W level have all been deferred
-  on purpose. The XMOS audio path (the XS3's own firmware, the mic array) is a separate
-  bring-up with its own checkpoint discipline.
-- **A device-side XMOS readback.** The host tooling (`xmos-firmware.py`) is dry-run-only
-  and reads through an injected driver; no readback of this board's XMOS image has been
-  taken yet.
-- **Wake inference and a selected licensed model**, and the storage it will need from the
-  `storage` partition (after the 8 KB TLS region).
-- **USB audio transport.**
-- **Secure enrollment.** Credentials are provisioned out of band and the device-side
-  material is written over USB; there is no authenticated enrollment flow.
-- **A persistent PC relay service** (the relay is one bounded run) and full Gateway
-  configuration/lease interoperability (the probe does not implement the configuration
-  plane, so the Gateway holds desired-but-unreported state for a device it registers).
-- **Audio-event schemas / general binary decoding.**
-- **Combined-workload memory and stack measurements**, an installer, and Windows
-  acceptance.
+- **Authenticated enrolment.** Identities and the client certificate are provisioned out of band
+  over USB. The device has no authenticated enrollment flow; it consumes what the installer wrote
+  and reports its state honestly (see the `enroll` diagnostics in the provisioning console).
+- **USB and Bluetooth transports.** The Wyoming session runs over TCP and TLS. `usb://` and
+  `bt://` are understood by the installer's endpoint vocabulary but are not implemented in
+  firmware, so an installer asked for one refuses rather than producing a satellite that cannot
+  connect.
+- **A purpose-trained wake model.** The firmware ships a community microWakeWord model with its
+  own manifest (the policy travels in the model blob, so a swap is a provisioning step, not a
+  rebuild). Training and publishing this project's own model is issue #110.
+- **Per-board acoustic acceptance.** The host tests cannot prove microphone or speaker behaviour.
+  A new board is accepted with [`docs/field-test.md`](../../docs/field-test.md): flash, provision,
+  wake it by voice, and hear an answer. A long soak against the running link is part of that
+  acceptance, not a substitute for it.
+- **A device-side XMOS image readback.** The host tooling (`xmos-firmware.py`) is dry-run-only and
+  reads through an injected driver; no readback of a board's XMOS image is recorded here.
 
-Host tests do not validate microphone or acoustic behavior. Diagnostic and provisioning
-builds have been flashed, read back byte-for-byte, and boot-tested; that does not
-establish production firmware, installer portability, or full voice functionality.
+Host tests do not validate microphone or acoustic behaviour. Diagnostic and provisioning builds
+have been flashed, read back byte-for-byte, and boot-tested; that does not establish a production
+board by itself, which is what the field-test runbook is for.

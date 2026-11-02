@@ -1,11 +1,37 @@
-# Bundled wake model — attribution and license
+# Bundled wake model: attribution and licence
 
-This directory holds the **default wake-word model** bundled with the ESP32/XVF3800 satellite so a
-plain install works without the user supplying a model. The installer
-(`scripts/install-esp32.sh`) provisions it by default; `--model <path>` or `--download-model
-<url>` replace it with a custom model after the fact.
+This directory holds the wake-word models that ship with the repository, so a plain install works
+without the user supplying one. The installer (`scripts/install-esp32.sh`) provisions the default
+model; `--model <path>` or `--download-model <url>` replace it afterwards.
 
-## Model
+## The default model
+
+| | |
+|---|---|
+| File | `hey_hermes.tflite` (microWakeWord v2, streaming INT8 TFLite) |
+| Wake word | "Hey Hermes" |
+| Trained by | [microwakeword.com](https://microwakeword.com) hosted trainer, community library |
+| Inference params | `hey_hermes.json` (`probability_cutoff` 0.5, `sliding_window_size` 5, `feature_step_size` 10, `tensor_arena_size` 32000) |
+| Delivered SHA-256 (tflite) | `377545239b78e0671a92f1ae7a4bbbf9a18c170263edb9aba3db5f23fcb0ed4e` |
+
+`scripts/test_esp32_wake_scorer.py` pins that hash and the four manifest numbers, so a silent
+substitution or a drifted default is caught by the test suite.
+
+## Licence, and what it means for a deployer
+
+The default model comes from a hosted community trainer, and its terms are **personal and
+non-commercial use only**. Shipping it as the default is a deliberate decision for this project,
+whose own code is under the PolyForm Noncommercial License 1.0.0: the repository as published is a
+non-commercial project, and the default model matches that.
+
+**A commercial deployment must switch models.** The terms of the community model do not grant
+commercial use, and this repository cannot grant it either. The switch is one provisioning command,
+not a firmware rebuild, because each model carries its own inference policy in the model blob
+(see below). Use a model whose licence permits your use, such as the Apache-2.0
+`okay_nabu.tflite` in this directory, a model trained with the open-source toolkit, or a
+commercially licensed model. `docs/wake-word-licensing.md` sets out the sources and their terms.
+
+## The alternative model in this tree
 
 | | |
 |---|---|
@@ -14,53 +40,38 @@ plain install works without the user supplying a model. The installer
 | Trained by | [esphome/micro-wake-word-models](https://github.com/esphome/micro-wake-word-models) (Kevin Ahrendt) |
 | Inference params | `okay_nabu.json` (`probability_cutoff` 0.97, `sliding_window_size` 5, `feature_step_size` 10, `tensor_arena_size` 26080) |
 | Delivered SHA-256 (tflite) | `0689abe1912a95a3318a0d8cb2e67bad0cbcfe3e24dd6e050c75debddfb6f891` |
+| Licence | **Apache-2.0**, redistribution permitted |
 
-## License
+It ships so that switching to a redistributable model needs no download and no network access.
 
-The model comes from [esphome/micro-wake-word-models](https://github.com/esphome/micro-wake-word-models),
-which is **Apache-2.0**. The delivered file is byte-identical to the repository's
-`models/v2/okay_nabu.tflite` (SHA-256 verified 2026-10-20), and
-`scripts/test_esp32_wake_scorer.py` pins that hash, so a silent substitution is caught.
-Apache-2.0 permits redistribution, so — unlike its predecessor — this model is clean for a
-public prebuilt bundle.
+## Switching models is one provisioning step
 
-## Why this model and why now
+The model partition holds one blob: a `WKM1` header followed by the model bytes. From header
+version 2 the model's own inference policy (cutoff, window, step, arena) travels in that header,
+written from the model's `.json` manifest by `scripts/provision-device-model.py`. The device scores
+the model with the numbers the model was trained for, so a swap does not need a firmware change:
 
-The previous bundled default was `hey_hermes` (microwakeword.com hosted trainer, community
-library), licensed **personal and non-commercial only** — sufficient for a home satellite in a
-private repository, but not for a public prebuilt bundle. In the house, the ESP32 satellite
-reliably missed "Hey Hermes" while the Pi satellite's own model worked, so the ESP32's bundled
-default moved to `okay_nabu`: an Apache-2.0 microWakeWord v2 model from the same ESPHome model
-library the firmware's engine runs, with the same tensor contract (`[1, 3, 40]` int8 in,
-`[1, 1]` uint8 out) the scorer validates at init.
+```sh
+# provision the model and point the selector at it, in one install run
+scripts/install-esp32.sh --provision --port <usb-port> \
+    --model firmware/esp32/models/okay_nabu.tflite --model-name okay_nabu \
+    --tls-certs <dir> --device-id <id> --endpoint <host>:10702 \
+    --wifi-ssid <ssid> --wifi-psk-file <file>
+```
 
-`hey_hermes.tflite` + `hey_hermes.json` remain in this tree as a **rollback pair**, but a
-complete rollback is three steps, not one, because the model, the model *selector*, and the
-inference *policy* live in three separate places:
+The manifest is picked up automatically from `<model>.json` beside the model file; `--params-json`
+overrides it. A model with no manifest is provisioned as header version 1, and the firmware's
+compiled defaults apply, which is honest but only correct for the model those defaults describe.
 
-1. **Provision the blob.** Re-run the installer's provision step with the old model
-   (`install-esp32.sh --provision --port <usb-port> --model firmware/esp32/models/hey_hermes.tflite
-   --model-name hey_hermes`, plus the board's usual `--tls-certs`, `--device-id`, `--endpoint`
-   and Wi-Fi arguments — the provision path requires them all, so a bare `--model` line exits
-   with usage).
-2. **Point the selector at it.** The firmware loads a model only when the blob's header name
-   equals the NVS `wake_word` selector (which the config plane's `wake_word` setting drives).
-   Set the board's desired `wake_word` to `hey_hermes`, or it will reject the blob and fall back
-   to the placeholder.
-3. **Restore the inference policy.** The cutoff/window/step/arena are compile-time defaults in
-   `wy_mww_params_default()`, currently `okay_nabu`'s 0.97/5/10/26080. `hey_hermes` wants
-   0.5/5/10/32000 — until those are reverted and the firmware rebuilt and flashed, the old model
-   runs under the new (stricter, wrong-sized) policy. Reverting the parameters and rebuilding is
-   the part that makes this a "restore the previous model" rather than a partial swap.
+Two numbers worth knowing, because they are the model's own selectivity gate rather than a bug:
+`hey_hermes` ships `probability_cutoff` 0.5 and `okay_nabu` 0.97. The scorer reports a score only
+when the 5-slice sliding window mean crosses that cutoff, so 0.97 demands a much stronger, sustained
+match before a wake. The engine's `wake_threshold` (default 0.35) is a second gate on the crossing
+score; at either cutoff the model's own gate does the work. If activation proves too strict or too
+loose, the levers are the model and its manifest, not the engine threshold.
 
-The model itself keeps the microwakeword.com personal/non-commercial terms, so it must not
-enter a public bundle.
+## Do not hand-edit the models
 
-One difference that is expected, not a bug: `okay_nabu` ships `probability_cutoff` 0.97 while
-`hey_hermes` shipped 0.5. The cutoff is the model's primary selectivity gate — the scorer only
-reports a score when a 5-slice sliding window crosses it, and that score is the window's mean —
-so 0.97 demands a much stronger, sustained match before a wake, at the cost of the phrase having
-to be said clearly. The engine's `wake_threshold` (default 0.35) is a secondary gate on the
-crossing score, which at a 0.97 cutoff is always ≥ ~0.97; the cutoff does the work. If real
-activation proves too strict, the levers are saying the phrase clearly and the model itself,
-not the threshold.
+`hey_hermes.tflite`, `okay_nabu.tflite` and their `.json` manifests are upstream artifacts, pinned
+by SHA-256 in the test suite and by the licence above. Replace a model by adding a file and
+updating this notice, not by editing one in place.
