@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermes-voice-satellite-device-esp32"
-version = "0.1.0"
+version = "1.0.0"
 description = "ESP32-S3 with reSpeaker XVF3800 for the Hermes voice installer"
 requires-python = ">=3.10"
 dependencies = ["hermes-voice-satellite-installer"]
