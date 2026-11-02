@@ -212,6 +212,12 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._json(self.session.install_device(profile_id, **body))
                 return
+            if self.path == "/api/coprocessor":
+                # The audio chip's own operation: a separate write with its own socket and
+                # recovery mode, never folded into the ESP32 flash/provision run.
+                profile = str(body.pop("device_profile", "") or body.pop("device_id", ""))
+                self._json(self.session.flash(profile, **{**body, "step": "coprocessor"}))
+                return
             if self.path == "/api/voice-custom":
                 # A file dialog hands the page bytes, never a path, so the pair arrives as content
                 # and is staged privately. A typed path still works, for the console-shaped flow.

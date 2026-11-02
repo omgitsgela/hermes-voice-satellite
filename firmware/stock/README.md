@@ -116,9 +116,12 @@ This procedure was exercised on a real device on 2026-11-02: current state captu
 and the device confirmed silent to the gateway afterward.
 
 Restore the co-processor only if the bring-up line says `version=1.0.9` and you want true
-out-of-box state. This one needs the **XVF3800's own USB-C port** (the one next to the 3.5 mm
-jack) and a physical Safe Mode entry: power off, hold Mute, re-apply power, keep holding until the
-red LED blinks. Then:
+out-of-box state. The installer runs this operation for you — `scripts/install-esp32.sh
+--coprocessor --restore-factory` — as a run that writes *only* this chip (it refuses to combine
+with `--flash`/`--provision`, verifies the image hash, and will not start until `dfu-util -l`
+actually sees the board in DFU). The manual path, for understanding what the installer is doing:
+this one needs the **XVF3800's own USB-C port** (the one next to the 3.5 mm jack) and a physical
+Safe Mode entry: power off, hold Mute, re-apply power, keep holding until the red LED blinks. Then:
 
 ```sh
 dfu-util -l   # expect vendor 2886 product 001a, alt 1 = "reSpeaker DFU Upgrade"
@@ -140,7 +143,9 @@ surface for a bare board — then flash the reviewed release bundle's regions pe
 [`firmware/esp32/README.md`](../esp32/README.md). Then do the co-processor write: the current
 firmware needs the 48 kHz master pairing (see "Co-processor coupling" above), so from a stock
 device this is the Safe Mode + `dfu-util -a 1` procedure with
-`xmos-official-v1.0.9-48k-master-dfu.bin`. Verify at first boot: the bring-up line should read
+`xmos-official-v1.0.9-48k-master-dfu.bin` — or just run `scripts/install-esp32.sh --coprocessor`,
+which is deliberately a separate run on the chip's own socket. Two runs, two chips, one write each.
+Verify at first boot: the bring-up line should read
 `version=1.0.9`, and a `version=1.0.4` there means the mic path will stay dead.
 
 ## Distribution note

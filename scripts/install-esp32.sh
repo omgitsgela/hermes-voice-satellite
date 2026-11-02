@@ -4,13 +4,22 @@
 # This is the device-side counterpart of `scripts/install-pi.sh`. It turns a bare board into a
 # working satellite. The default path needs NO ESP-IDF: flash the prebuilt bundle, then provision.
 #
-#   1. flash      -- `esptool` writes the PREBUILT bundle (bootloader, partition table, app) to
+#   1. flash       -- `esptool` writes the PREBUILT bundle (bootloader, partition table, app) to
 #                    0x0. This is the default: the published bundle is what a new user flashes.
-#   2. provision  -- TLS material (out of band) + the wake model + Wi-Fi, over USB. This is what
+#   2. provision   -- TLS material (out of band) + the wake model + Wi-Fi, over USB. This is what
 #                    turns a flashed board into a satellite.
-#   3. build      -- (opt-in) `idf.py build` + `bundle-esp32-flash.py`: compile the firmware from
+#   3. build       -- (opt-in) `idf.py build` + `bundle-esp32-flash.py`: compile the firmware from
 #                    source and produce the bundle yourself. Needs ESP-IDF v6.1; a user who just
 #                    wants a working board does not need it.
+#   4. coprocessor -- write the XVF3800 audio-chip image over DFU. This is a SEPARATE OPERATION on
+#                    a DIFFERENT USB socket: the board must be in Safe Mode (hold Mute while
+#                    re-applying power until the red LED blinks) and cabled to the XVF3800's own
+#                    USB-C socket, next to the audio jack -- not the ESP32 socket the other steps
+#                    use. That is why it cannot be combined with --flash/--provision/--build in
+#                    one run: the person has to re-cable between them. A first-time board needs
+#                    this write or the microphone path stays dead (see firmware/stock/README.md,
+#                    "Co-processor coupling"); --restore-factory returns the chip to its stock
+#                    image. The image is chosen from a hash-verified table, never guessed.
 #
 # Flashing is the one act with teeth, so it is never implied: --flash is required to write the
 # board. The application region only: no chip erase, no eFuse or security change.
@@ -24,6 +33,9 @@
 #       --tls-certs ~/hermes-voice-bridge/state/registry-tls --device-id <id> \
 #       --endpoint tls://<host>:10702 \
 #       --wifi-ssid <ssid> --wifi-psk-file <file>
+#   scripts/install-esp32.sh --coprocessor    # write the audio-chip image (Safe Mode, its OWN
+#                                             #  USB socket; a separate operation from --flash)
+#   scripts/install-esp32.sh --coprocessor --restore-factory   # return the chip to its stock image
 #   scripts/install-esp32.sh --build                       # (opt-in) build + bundle from source
 #   scripts/install-esp32.sh --build --flash --port /dev/ttyACM0   # compile and flash in one go
 #   scripts/install-esp32.sh --dry-run ...                 # print every command, touch nothing
@@ -67,6 +79,9 @@ IDF_TARGET="esp32s3"
 DO_BUILD=0
 DO_FLASH=0
 DO_PROVISION=0
+DO_COPROCESSOR=0
+COPROC_FACTORY=0      # --restore-factory: write the stock image instead of the project one
+COPROC_IMAGE=""       # optional path override; the default images are hash-verified in the repo
 DRY_RUN=0
 MODEL_FILE=""
 MODEL_URL=""
@@ -134,7 +149,7 @@ with_idf() {
 }
 
 usage() {
-    sed -n '2,53p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,66p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -163,6 +178,9 @@ while [ $# -gt 0 ]; do
         --build)     DO_BUILD=1 ;;
         --flash)     DO_FLASH=1 ;;
         --provision) DO_PROVISION=1 ;;
+        --coprocessor) DO_COPROCESSOR=1 ;;
+        --restore-factory) COPROC_FACTORY=1 ;;
+        --coprocessor-image) [ $# -ge 2 ] || die "$1 needs a value"; COPROC_IMAGE="${2:-}"; PASSTHROUGH+=(--coprocessor-image "${2:-}"); shift ;;
         --guided)    GUIDED=1; GUIDED_EXPLICIT=1 ;;
         --dry-run)   DRY_RUN=1 ;;
         --port)      [ $# -ge 2 ] || die "$1 needs a value"; PORT="${2:-}"; shift ;;
@@ -183,6 +201,14 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+# --restore-factory names WHICH co-processor image to write, and there is no other operation
+# it could mean: taken on its own it implies the co-processor operation. Applied here, right
+# after parsing and before guided seeding, so guided mode seeds the same actions the flags asked
+# for rather than defaulting to the ESP32 path.
+if [ "$COPROC_FACTORY" = 1 ]; then
+    DO_COPROCESSOR=1
+fi
 
 # ---------------------------------------------------------------- guided setup (no flags)
 # Detection -> prompts (defaults in [brackets]) -> summary -> explicit yes/no -> the SAME steps
@@ -239,17 +265,44 @@ if [ "$GUIDED" = 1 ]; then
 
     # Defaults: flash + provision (what a new board needs); build stays opt-in. Explicit action
     # flags alongside --guided seed the defaults exactly instead.
-    if [ "$DO_FLASH" = 1 ] || [ "$DO_PROVISION" = 1 ] || [ "$DO_BUILD" = 1 ]; then
+    if [ "$DO_FLASH" = 1 ] || [ "$DO_PROVISION" = 1 ] || [ "$DO_BUILD" = 1 ] || [ "$DO_COPROCESSOR" = 1 ]; then
         if [ "$DO_FLASH" = 1 ]; then FLASH_YN='y'; else FLASH_YN='n'; fi
         if [ "$DO_PROVISION" = 1 ]; then PROV_YN='y'; else PROV_YN='n'; fi
         if [ "$DO_BUILD" = 1 ]; then BUILD_YN='y'; else BUILD_YN='n'; fi
+        if [ "$DO_COPROCESSOR" = 1 ]; then COPROC_YN_DEFAULT='y'; else COPROC_YN_DEFAULT='n'; fi
     else
         FLASH_YN='y'
         PROV_YN='y'
         BUILD_YN='n'
+        COPROC_YN_DEFAULT='n'
     fi
     guided_prompt_yn FLASH_YN "Write the firmware to the satellite over USB?" "$FLASH_YN"
     guided_prompt_yn PROV_YN "Set the satellite up (its name, the wake word, the network, and how it reaches your gateway)?" "$PROV_YN"
+
+    # The audio chip is its own operation, asked here (before any board questions) because it
+    # uses a different socket and a different mode: choosing it now means this run must NOT ask
+    # for Wi-Fi or certificates, and choosing it alongside the ESP32 steps needs an explicit
+    # "which one in this run" -- one run writes one chip.
+    guided_prompt_yn COPROC_YN "Write the AUDIO CHIP (the XVF3800 co-processor)? This is a separate operation: the cable moves to the chip's own USB socket (next to the audio jack) and the board goes into Safe Mode." "${COPROC_YN_DEFAULT:-n}"
+    COPROC_RUN=0
+    COPROC_NOTE=0
+    if [ "$COPROC_YN" = y ]; then
+        if [ "$FLASH_YN" = y ] || [ "$PROV_YN" = y ] || [ "$BUILD_YN" = y ]; then
+            echo
+            echo "   One run writes one chip: the audio chip and the ESP32 cannot share a single"
+            echo "   cabling, so this run does one or the other, and the other is a second run."
+            guided_prompt_yn CHIP_FIRST "Do the audio chip in this run? (the ESP32 side then takes a second run)" "y"
+        else
+            CHIP_FIRST=y
+        fi
+        if [ "$CHIP_FIRST" = y ]; then
+            COPROC_RUN=1; FLASH_YN=n; PROV_YN=n; BUILD_YN=n
+            if [ "$COPROC_FACTORY" = 1 ]; then COPROC_FACTORY_DEFAULT='y'; else COPROC_FACTORY_DEFAULT='n'; fi
+            guided_prompt_yn COPROC_FACTORY_YN "Return the audio chip to its stock factory image instead of the project image?" "$COPROC_FACTORY_DEFAULT"
+        else
+            COPROC_NOTE=1
+        fi
+    fi
 
     if [ "$FLASH_YN" = y ] || [ "$PROV_YN" = y ]; then
         PORT_DEFAULT="${PORT:-$(printf '%s\n' "$SERIAL_PORTS" | head -n1)}"
@@ -483,16 +536,34 @@ if [ "$GUIDED" = 1 ]; then
     fi
 
     # The one question that is not about the board. It is asked last and labelled as such, so a
-    # normal setup never has to think about compiling anything.
-    guided_prompt_yn BUILD_YN "Compile the firmware yourself instead? (advanced; not needed)" "$BUILD_YN"
-    if [ "$FLASH_YN" != y ] && [ "$PROV_YN" != y ] && [ "$BUILD_YN" != y ]; then
-        die "nothing selected: write the firmware, set the satellite up, or both"
+    # normal setup never has to think about compiling anything. A chip-write run never offers
+    # it: compiling has nothing to do with the audio chip, and the flag path would rightly
+    # refuse --coprocessor alongside --build.
+    if [ "$COPROC_RUN" != 1 ]; then
+        guided_prompt_yn BUILD_YN "Compile the firmware yourself instead? (advanced; not needed)" "$BUILD_YN"
+    fi
+    if [ "$FLASH_YN" != y ] && [ "$PROV_YN" != y ] && [ "$BUILD_YN" != y ] && [ "$COPROC_RUN" != 1 ]; then
+        die "nothing selected: write the firmware, set the satellite up, write the audio chip, or some combination across separate runs"
     fi
 
     echo
     echo "=== What I'll do ==="
     if [ "$BUILD_YN" = y ]; then echo "   build:   compile the firmware from source, then write it"; fi
     if [ "$FLASH_YN" = y ]; then echo "   write:   the firmware onto the satellite on $PORT"; fi
+    if [ "$COPROC_RUN" = 1 ]; then
+        if [ "${COPROC_FACTORY_YN:-n}" = y ]; then
+            echo "   audio chip: the STOCK factory image, over DFU in Safe Mode (its own USB socket)"
+        else
+            echo "   audio chip: the project 48 kHz master image, over DFU in Safe Mode (its own USB socket)"
+        fi
+        echo "             Remember to run this again for the other chip if both need writing;"
+        echo "             a first-time board needs BOTH (firmware/stock/README.md)."
+    fi
+    if [ "$COPROC_NOTE" = 1 ]; then
+        echo "   audio chip: this run is the ESP32 side. After it finishes, re-run this script"
+        echo "             and choose the audio chip for the co-processor write -- a first-time"
+        echo "             board needs both, in two separate runs."
+    fi
     if [ "$PROV_YN" = y ]; then
         echo "   set up:  its name, wake word, network, and link to your gateway (over $PORT)"
         if [ -n "$DEVICE_NAME" ] && [ "$DEVICE_NAME" != "$DEVICE_ID" ]; then
@@ -528,6 +599,10 @@ if [ "$GUIDED" = 1 ]; then
     if [ "$BUILD_YN" = y ]; then GUIDED_ARGS+=(--build); fi
     if [ "$FLASH_YN" = y ]; then GUIDED_ARGS+=(--flash); fi
     if [ "$PROV_YN" = y ]; then GUIDED_ARGS+=(--provision); fi
+    if [ "$COPROC_RUN" = 1 ]; then
+        GUIDED_ARGS+=(--coprocessor)
+        if [ "${COPROC_FACTORY_YN:-n}" = y ]; then GUIDED_ARGS+=(--restore-factory); fi
+    fi
     if [ "$FLASH_YN" = y ] || [ "$PROV_YN" = y ]; then GUIDED_ARGS+=(--port "$PORT"); fi
     if [ "$PROV_YN" = y ]; then
         GUIDED_ARGS+=(--tls-certs "$TLS_CERTS_DIR" --device-id "$DEVICE_ID"
@@ -595,7 +670,18 @@ PYMERGE
     guided_end install-esp32.sh "${GUIDED_ARGS[@]}"
 fi
 
-[ "$DO_BUILD" = 1 ] || [ "$DO_FLASH" = 1 ] || [ "$DO_PROVISION" = 1 ] || usage 1
+# The co-processor write is a separate physical operation, enforced here rather than left to the
+# docs: the board has to be in Safe Mode and cabled to the XVF3800's own USB-C socket, so no single
+# cabling can serve it and the ESP32 steps. Combining them in one run invites exactly the mistake
+# the separate-socket rule exists to prevent -- an image written to the wrong chip, at the wrong
+# offset, through the wrong controller.
+if [ "$DO_COPROCESSOR" = 1 ] && { [ "$DO_FLASH" = 1 ] || [ "$DO_PROVISION" = 1 ] || [ "$DO_BUILD" = 1 ]; }; then
+    die "--coprocessor cannot be combined with --flash/--provision/--build: the audio chip lives
+   on its own USB socket and needs Safe Mode (hold Mute while re-applying power until the red
+   LED blinks). Run the ESP32 steps and the co-processor step as two separate operations, with
+   the cable moved between them."
+fi
+[ "$DO_BUILD" = 1 ] || [ "$DO_FLASH" = 1 ] || [ "$DO_PROVISION" = 1 ] || [ "$DO_COPROCESSOR" = 1 ] || usage 1
 
 # A board write or a provisioning step needs a port; --build alone does not.
 if [ "$DO_FLASH" = 1 ] || [ "$DO_PROVISION" = 1 ]; then
@@ -627,6 +713,88 @@ if [ "$DO_BUILD" = 1 ]; then
         --bundle "$BUNDLE_DIR/flash.bundle.bin"
     echo "   manifest: $BUNDLE_DIR/flash.manifest.txt"
     echo "   bundle:   $BUNDLE_DIR/flash.bundle.bin"
+fi
+
+# ---------------------------------------------------------------- coprocessor (separate operation)
+# The XVF3800 audio co-processor is a second chip on the same board, written over DFU through its
+# OWN USB-C socket (next to the audio jack) while the board sits in Safe Mode. The ESP32 steps
+# above run through the ESP32's socket with the app running; this one runs with the app stopped.
+# That physical split is why the flag is exclusive and why the guided flow offers it as its own
+# operation with its own re-cabling instructions.
+#
+# The image comes from a hash-pinned table over the files committed in firmware/stock/, never from
+# a guess: the project pairing (48 kHz master, v1.0.9) for a working satellite, the stock v1.0.4
+# for --restore-factory. A --coprocessor-image override is still hashed and named out loud.
+if [ "$DO_COPROCESSOR" = 1 ]; then
+    echo "== co-processor (XVF3800, DFU) =="
+    STOCK_DIR="$REPO_ROOT/firmware/stock"
+    COPROC_SHA256=""
+    if [ -n "$COPROC_IMAGE" ]; then
+        COPROC_WANT="$COPROC_IMAGE"
+        echo "   image: $COPROC_WANT (operator-supplied; hash printed below and must be yours to write)"
+        if [ "$DRY_RUN" = 0 ]; then
+            echo "   hash:    sha256 $(sha256sum "$COPROC_WANT" | cut -d' ' -f1)"
+        fi
+    elif [ "$COPROC_FACTORY" = 1 ]; then
+        COPROC_WANT="$STOCK_DIR/xmos-official-v1.0.4-dfu.bin"
+        COPROC_SHA256="6c66525116ae085ca7bf80f7e343ca1a879d190152edb064c408139f044ab2c3"
+        echo "   image: the STOCK co-processor image (restore factory state)"
+    else
+        COPROC_WANT="$STOCK_DIR/xmos-official-v1.0.9-48k-master-dfu.bin"
+        COPROC_SHA256="6380851ac59b3c2efc9799264bdd0a35b15e9112e5ae5e7b6af8b2b05bb02f23"
+        echo "   image: the project pairing (48 kHz master) the current firmware needs"
+    fi
+    [ "$DRY_RUN" = 1 ] || [ -f "$COPROC_WANT" ] || die "no co-processor image at $COPROC_WANT"
+    if [ -n "$COPROC_SHA256" ]; then
+        if [ -f "$COPROC_WANT" ]; then
+            ACTUAL_SHA256="$(sha256sum "$COPROC_WANT" | cut -d' ' -f1)"
+            [ "$ACTUAL_SHA256" = "$COPROC_SHA256" ] ||
+                die "the co-processor image at $COPROC_WANT does not match the pinned hash
+   want $COPROC_SHA256
+   got  $ACTUAL_SHA256
+   Re-download it from the release, or re-run the committed copy from a fresh checkout."
+            echo "   verified: sha256 $COPROC_SHA256"
+        else
+            # A dry run on a checkout without the committed stock dir is legitimate (operator
+            # fetched nothing yet); a real run already died on the missing file above.
+            echo "   note: $COPROC_WANT is not present in this checkout; the real run needs it"
+        fi
+    fi
+    if [ "$DRY_RUN" = 0 ] && ! have dfu-util; then
+        die "writing the co-processor needs dfu-util (Debian/Ubuntu: sudo apt install dfu-util)"
+    fi
+    # Safe Mode gate. The DFU device only exists while the board is held in Safe Mode, so the
+    # enumeration check doubles as the "are you cabled to the right socket, in the right mode"
+    # check -- and both answers name the exact remedy instead of a bare dfu-util error.
+    echo
+    echo "   This step writes the AUDIO chip. It needs, and only works with:"
+    echo "     1. the cable in the XVF3800's USB-C socket (next to the audio jack),"
+    echo "        NOT the ESP32 socket the firmware write used;"
+    echo "     2. Safe Mode: power off, hold Mute, re-apply power, keep holding until the red"
+    echo "        LED blinks."
+    echo
+    if [ "$DRY_RUN" = 0 ]; then
+        DFU_SEEN="$(dfu-util -l 2>/dev/null || true)"
+        case "$DFU_SEEN" in
+            *"2886:001a"*) : ;;
+            *) die "no XVF3800 in DFU mode on this machine (dfu-util -l shows no 2886:001a).
+   The board is powered normally, or the cable is in the ESP32 socket. Unpower it, move the
+   cable to the audio chip's socket (by the audio jack), then hold Mute while re-applying
+   power until the red LED blinks, and run this again." ;;
+        esac
+    fi
+    run dfu-util -R -e -a 1 -D "$COPROC_WANT"
+    echo "   The 'Invalid DFU suffix signature' warning is expected for this raw image."
+    echo "   Success ends at dfuMANIFEST then dfuIDLE with status(0) = No error condition is"
+    echo "   present. Move the cable back to the ESP32 socket and power the board normally."
+    if [ "$COPROC_FACTORY" = 1 ]; then
+        echo "   The chip is back to its stock image. The ESP32 side is a separate operation:"
+        echo "   see firmware/stock/README.md for the full factory restore."
+    else
+        echo "   Verify at the next normal boot: the satellite's bring-up line should read"
+        echo "   version=1.0.9. A version=1.0.4 there means this write did not land, and the"
+        echo "   microphone path will stay dead until it does."
+    fi
 fi
 
 # ---------------------------------------------------------------- flash

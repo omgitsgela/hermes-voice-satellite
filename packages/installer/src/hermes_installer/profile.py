@@ -68,6 +68,9 @@ class DeviceProfile:
     wake_default: str = "hey_hermes"
     #: Device classes whose firmware is ours to ship, as opposed to a third party's.
     first_party: bool = False
+    #: True when the device has a second chip with its own flash procedure (a separate physical
+    #: operation: own USB socket, own recovery mode). The installer offers it as its own task.
+    coprocessor_flash: bool = False
 
     def __post_init__(self) -> None:
         if not self.id or not self.id.replace("-", "").isalnum():
