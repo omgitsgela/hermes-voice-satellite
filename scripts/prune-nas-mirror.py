@@ -46,7 +46,11 @@ def main():
     if mirror is None:
         print("prune: pass the NAS parent directory or set VOICE_NAS_MOUNT", file=sys.stderr)
         return 1
-    if not (mirror / 'Gateway').is_dir():
+    # The sanity anchor is the mirror's own generated marker, not a tracked code directory:
+    # code directories rename (gateway/ became satellite_gateway/) but SYNC-INFO.txt is
+    # rewritten by every successful mirror run, so a missing marker means this is not a
+    # mirror we are allowed to prune.
+    if not (mirror / 'SYNC-INFO.txt').is_file():
         print(f"prune: NAS mirror not found at {mirror}, nothing done", file=sys.stderr)
         return 1
     tracked = tracked_files()
