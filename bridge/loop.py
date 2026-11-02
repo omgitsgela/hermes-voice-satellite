@@ -86,15 +86,6 @@ from bridge.satellite import SatelliteClient
 
 _LOGGER = logging.getLogger("bridge.loop")
 
-# How long after our own playback a wake word may still be dismissed as our own echo. Beyond
-# this a wake is a genuine one no matter what any flag says.
-SELF_TRIGGER_WINDOW_S = 3.0
-
-# How long the assistant may think out loud before it says anything at all before we say
-# "One moment." on its behalf. The reference satellite fills a slow tool call the same way, and
-# a slow first TOKEN deserves it just as much: silence after "Hey Hermes" reads as failure.
-SILENCE_FILLER_SECONDS = 4.0
-
 # Phrases that rotate the session on demand, checked on the normalised transcript.
 NEW_CONVERSATION_PHRASES = (
     "new conversation", "start a new conversation", "start over", "forget that",
@@ -217,11 +208,6 @@ class VoiceLoop:
         self._whisper = None
         self._last_turn_at: Optional[float] = None
         self._speaking = False
-        self._speaking_at = 0.0   # monotonic time of the last playback activity
-        # A wake detection that arrived mid-task and could not be used. It is the
-        # person's only way to be heard, so it is kept for the next turn rather
-        # than discarded -- see wait_for_wake.
-        self._held_wake: Optional[str] = None
         self.self_trigger_count = 0
         self.turns: list[TurnStats] = []
 
@@ -664,13 +650,6 @@ class VoiceLoop:
         """
         from bridge.config import WAKE_WAIT_SECONDS
 
-        # A wake held from an earlier, unusable moment comes before anything on the
-        # queue: the person already asked, and they have been waiting since.
-        if self._held_wake is not None:
-            name, self._held_wake = self._held_wake, None
-            _LOGGER.info("wake word: %s (held from a detection that arrived mid-task)", name)
-            return name
-
         if timeout is None:
             timeout = WAKE_WAIT_SECONDS
         deadline = asyncio.get_running_loop().time() + timeout
@@ -685,38 +664,17 @@ class VoiceLoop:
                 continue
             if Detection.is_type(event.type):
                 name = Detection.from_event(event).name
-                # No acoustic echo cancellation, so our own answer can trigger the wake word.
-                # But the suppression must be TIME-BOUNDED, never a bare flag: _speaking is
-                # cleared only at the end of a turn, so if it ever latches true the device goes
-                # permanently deaf -- every wake is discarded as a self-trigger, no turn can
-                # start, and therefore nothing ever clears the flag. That deadlock was observed:
-                # wakes were still being rejected as "during playback" many minutes after the
-                # last audio played. The device also independently suppresses its own chime
-                # before reporting a detection, so this is a second line of defence, not the
-                # primary one, and it must never be able to suppress indefinitely.
-                recently_spoke = (time.monotonic() - self._speaking_at) < SELF_TRIGGER_WINDOW_S
-                if self._speaking and recently_spoke:
+                if self._speaking:
+                    # No echo cancellation, so our own answer can trigger the wake word.
                     self.self_trigger_count += 1
-                    _LOGGER.warning("wake word %r within %.0fs of playback: treating as a "
-                                    "self-trigger, ignoring", name, SELF_TRIGGER_WINDOW_S)
+                    _LOGGER.warning("wake word %r during playback: treating as a "
+                                    "self-trigger, ignoring", name)
                     continue
-                if self._speaking and not recently_spoke:
-                    # The flag is latched but playback is long over. Recover rather than stay
-                    # deaf, and say so loudly: a latch means a turn never completed.
-                    _LOGGER.warning("wake word %r arrived with _speaking still set %.0fs after "
-                                    "the last playback (a turn never completed); accepting it "
-                                    "and clearing the flag", name,
-                                    time.monotonic() - self._speaking_at)
-                    self._speaking = False
                 _LOGGER.info("wake word: %s", name)
                 return name
 
-    async def wait_for_played(self, timeout: float = 20.0) -> bool:
-        """Wait for the satellite's `played`, absorbing stray detections meanwhile.
-
-        The bound is short on purpose. `played` is the device saying its speaker
-        finished, and firmware that does not emit it would otherwise park the whole
-        conversation here -- for the full timeout -- after every single reply."""
+    async def wait_for_played(self, timeout: float = 180.0) -> bool:
+        """Wait for the satellite's `played`, absorbing stray detections meanwhile."""
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
@@ -732,18 +690,8 @@ class VoiceLoop:
             if Played.is_type(event.type):
                 return True
             if Detection.is_type(event.type):
-                # A wake here is NOT self-trigger suppression material. This wait
-                # is for the device's `played`, which some firmware never sends --
-                # so the wait ran to its full timeout while every wake inside it
-                # was dismissed as an echo. Measured: one working conversation,
-                # then the next two attempts silenced with "treating as a
-                # self-trigger". The person is awake and asking; answer them.
-                name = Detection.from_event(event).name
-                _LOGGER.warning("wake word %r arrived while waiting for playback to "
-                                "finish; the reply is done as far as the person is "
-                                "concerned -- holding it for the next turn", name)
-                self._hold_wake(name)
-                return True
+                self.self_trigger_count += 1
+                _LOGGER.warning("wake word during playback: treating as a self-trigger")
 
     # -- interruption while a task is running (2026-09-23) --------------
 
@@ -799,19 +747,6 @@ class VoiceLoop:
         _LOGGER.warning("interruption: run would not accept the text, so it was dropped")
         return "steer_failed"
 
-    def _hold_wake(self, name: str) -> None:
-        """Keep a wake detection that arrived at a moment we could not use it.
-
-        A wake word is the person's only way to be heard. The interruption watcher
-        owns the satellite queue while a task runs, so a wake it cannot act on used
-        to be consumed and discarded: the tone sounded in the room and then nothing
-        at all happened. Hold it instead, and wait_for_wake hands it to the next
-        turn. Only one is kept -- a later wake replaces it, which is the more
-        recent request."""
-        self._held_wake = name
-        _LOGGER.info("wake word %r arrived mid-task and could not be used; "
-                     "keeping it for the next turn", name)
-
     async def _watch_for_interruption(self, state: "InterruptState") -> None:
         """Watch the satellite for a wake word while a task is running, and interrupt it.
 
@@ -854,20 +789,16 @@ class VoiceLoop:
                 _LOGGER.info("interruption: no speech after the wake (%.0fs); "
                              "carrying on with the running task", INTERRUPT_CAPTURE_SECONDS)
                 await self._end_capture()
-                self._hold_wake(name)
                 continue
             if state.done:
-                self._hold_wake(name)
                 return
             if result is None:
                 await self._end_capture()
-                self._hold_wake(name)
                 continue
             transcript = await self.transcribe(result.audio)
             if not transcript:
                 _LOGGER.info("interruption: nothing intelligible after the wake; ignoring")
                 await self._end_capture()
-                self._hold_wake(name)
                 continue
             _LOGGER.info("interruption heard: %s", transcript)
             outcome = await self._handle_interruption(transcript)
@@ -900,10 +831,6 @@ class VoiceLoop:
             _LOGGER.warning("could not re-arm the satellite after an interruption: %s", exc)
 
     async def capture_utterance(self, wake_word: str) -> Optional[EndpointResult]:
-        # Counts the microphone frames that actually arrive. "The device is
-        # streaming but the bridge hears nothing" is only diagnosable when the two
-        # ends are counted separately; the device prints the matching `capacct`.
-        audio_frames_seen = 0
         """Feed mic audio to the endpointer until the utterance is complete.
 
         Raises the announcement gate on entry. While the microphone is open the room is, by
@@ -932,13 +859,6 @@ class VoiceLoop:
                 continue
             if AudioChunk.is_type(event.type):
                 chunk = AudioChunk.from_event(event)
-                audio_frames_seen += 1
-                if audio_frames_seen % 50 == 0:
-                    # Runs every ~0.5 s of real audio. If these stop while the
-                    # device reports `capacct: sent …`, the loss is after the wire;
-                    # if the device reports drops, it never left the board.
-                    _LOGGER.info("capture: %d microphone frames received from %s",
-                                 audio_frames_seen, getattr(self.sat, "device_id", "satellite"))
                 result = endpoint.process(chunk.audio)
                 if result is not None:
                     return result
@@ -1023,9 +943,7 @@ class VoiceLoop:
                 return None, "capture returned nothing"
             if endpoint.ended_by == "no_speech":
                 # Silence for the whole window is an empty room, not a blip: close the
-                # activation rather than listening again. (The endpointing line above
-                # already reports how many bytes arrived; that count is the one to
-                # compare against the device's `capacct`.)
+                # activation rather than listening again.
                 return None, "nothing said after the wake word"
             if not endpoint.rejected:
                 return endpoint, ""
@@ -1312,35 +1230,19 @@ class VoiceLoop:
 
         t_gateway = time.perf_counter()
         self._speaking = True
-        self._speaking_at = time.monotonic()
         spoken_any = False
 
-        async def fill_silence(_event=None) -> None:
-            """Silence after "Hey Hermes" reads as failure; say something.
+        async def fill_silence(_event) -> None:
+            """A tool call costs seconds of silence; say something so it does not feel dead.
 
-            Covers BOTH of the ways a turn goes quiet before it starts: a tool call,
-            and a model that simply takes a while to produce its first token. The
-            reference satellite fills a slow tool call the same way; a slow first
-            token is the same experience from the room and deserves the same answer.
-
-            Only before the first real sentence, and only once: if the model has
-            already begun answering, a lead-in would talk over it.
+            Only before the first real sentence, and only once: if the model has already begun
+            answering, a lead-in would talk over it.
             """
             nonlocal spoken_any
             if not spoken_any and stats.first_delta_seconds == 0.0:
-                _LOGGER.info("nothing spoken yet after %.0fs: filling the silence",
-                             SILENCE_FILLER_SECONDS)
+                _LOGGER.info("tool call before any speech: filling the silence")
                 await stream.say("One moment.")
                 spoken_any = True
-
-        # The clock-based half of that: a turn that is merely slow to start used to
-        # get nothing, because nothing fired without a tool call.
-        async def _fill_if_still_silent() -> None:
-            await asyncio.sleep(SILENCE_FILLER_SECONDS)
-            await fill_silence()
-
-        filler_guard = asyncio.create_task(_fill_if_still_silent(),
-                                           name="silence-filler")
 
         # Watch for an interruption for as long as the task is running. The satellite keeps
         # listening for its wake word throughout, so a detection arriving here means someone
@@ -1357,13 +1259,11 @@ class VoiceLoop:
                                       name="interruption-watcher")
         try:
             async with self.sat.tts_stream() as stream:
-                _LOGGER.info("turn: audio-start sent; awaiting first reply text")
                 buffer = SentenceBuffer()
                 async for delta in self.gateway.ask(transcript,
                                                     on_tool_started=fill_silence):
                     if stats.first_delta_seconds == 0.0:
                         stats.first_delta_seconds = time.perf_counter() - t_gateway
-                        filler_guard.cancel()   # the model is answering: let it
                     if state.stop_playback:
                         break
                     for piece in buffer.push(delta):
@@ -1391,7 +1291,6 @@ class VoiceLoop:
             else:
                 await self.wait_for_played()
         except VoiceGatewayError as exc:
-            _LOGGER.error("turn: VoiceGatewayError while producing the reply: %s", exc)
             if state.stop_playback or "cancel" in str(exc).lower():
                 # We asked for this. Do not apologise for a stop the person requested.
                 stats.note = "interrupted: run cancelled"
@@ -1400,13 +1299,7 @@ class VoiceLoop:
                 stats.note = f"gateway error: {exc}"
                 _LOGGER.error("gateway failed: %s", exc)
                 await self.say("I can't reach my brain right now.")
-        except Exception:
-            _LOGGER.exception("turn: reply failed (device=%s generation=%s)",
-                              getattr(self.sat, "device_id", "direct"),
-                              getattr(self.sat, "generation", None))
-            raise
         finally:
-            filler_guard.cancel()
             state.done = True
             watcher.cancel()
             try:

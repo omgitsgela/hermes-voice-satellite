@@ -205,30 +205,6 @@ them, and the pattern is written down with the contract rather than with the inc
 [`configuration-plane.md`](configuration-plane.md) for the configuration plane and
 [`timers-and-alarms.md`](timers-and-alarms.md) for the timer store.
 
-## Done
-
-- **48 kHz audio path** — the I2S link now runs at 48 kHz in both directions, matching the Seeed
-  reference profile. Playback keeps the bridge's full TTS bandwidth instead of being low-passed at
-  7400 Hz. See `docs/audio-fidelity.md`. The capture side decimates back to 16 kHz for the wake
-  model and the uplink, which are 16 kHz contracts and did not change.
-
-## Planned, not yet started
-
-These are design intentions, not commitments. Each needs its own decision note before work starts.
-
-- **LED lifecycle on the ESP32 satellite.** The reference satellite's LEDs are the primary
-  diagnostic: gentle pulse while booting, blue on detection, yellow while streaming, violet while
-  thinking, dark when the answer starts. That vocabulary is worth having on every satellite in the
-  house, and it is the only feedback a device with no display can give. The ESP32 has no LED
-  hardware wired yet, so this starts with a hardware decision (which pixels, which pin) before any
-  firmware.
-- **48 kHz audio path.** Capture and playback are both 16 kHz today, which caps the audible band at
-  8 kHz and is the main remaining quality ceiling. Going higher needs the XVF3800's 48 kHz I2S
-  master build, a coordinated sample-rate change across capture, playback, the bridge's TTS format
-  and the wake scorer's input, plus a bandwidth/memory check on the link. It is one migration, not
-  a switch: do it as a single coordinated change or not at all. See `prompt-tones.md` for the
-  existing rate split, which the migration would collapse.
-
 ## Built from this list
 
 - **#26, pause-tolerant endpointing** (built 2026-09-24). Named, validated endpointing profiles with

@@ -27,19 +27,6 @@ class Identity(C.Structure):
 
 
 
-class WYUpsampler(C.Structure):
-    """A ctypes mirror of `wy_upsampler` in wyoming_audio.h.
-
-    The playback field changed from `wy_resampler` to `wy_upsampler` with the 48 kHz profile:
-    the up-sampler needs only a three-sample raw history plus a ratio, not the 32-tap FIR
-    history the down-sampler carries. That makes the C struct SMALLER, so the old mirror made
-    the whole WYSession 56 bytes too big and every offset after playback_rs wrong. Keep this in
-    step with the header -- test_the_ctypes_mirror_matches_the_c_struct proves it by size.
-    """
-    _fields_ = [('position', C.c_double), ('consumed', C.c_double),
-                ('hist', C.c_int16 * 3), ('ratio', C.c_double)]
-
-
 class WYResampler(C.Structure):
     """A ctypes mirror of `wy_resampler` in wyoming_audio.h.
 
@@ -402,7 +389,7 @@ class SessionTests(unittest.TestCase):
         lib = self.library()
         WY_HEADER_MAX, WY_DATA_MAX = 1024, 4096
         class WYSession(C.Structure):
-            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('stream_frames', C.c_uint32), ('paused', C.c_int),
+            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
                         ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
                         ('name', C.c_char * 65),
                         ('area', C.c_char * 65),
@@ -410,18 +397,16 @@ class SessionTests(unittest.TestCase):
                         ('wake_name', C.c_char * 65),
                         ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
                         ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
-                        ('unlock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
+                        ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
                         ('writer_lock_user', C.c_void_p),
                         ('playback_active', C.c_int), ('playback_ended', C.c_int),
                         ('playback_volume', C.c_int), ('playback_rate', C.c_int),
-                        ('playback_rs', WYUpsampler),
+                        ('playback_rs', WYResampler),
                         ('ring', C.c_void_p), ('ring_capacity', C.c_size_t),
                         ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
                         ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
                         ('config_handler', C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_char_p, C.c_size_t)),
-                        ('config_user', C.c_void_p),
-                        ('phase_notify', C.CFUNCTYPE(None, C.c_void_p, C.c_int)),
-                        ('phase_user', C.c_void_p)]
+                        ('config_user', C.c_void_p)]
         self.assertEqual(C.sizeof(WYSession), lib.wy_session_size(), 'the host struct must match the production layout')
         session = WYSession()
         self.assertEqual(lib.wy_session_init(C.byref(session), b'control-fixture', b'boot-1'), 0)
@@ -431,9 +416,9 @@ class SessionTests(unittest.TestCase):
         def acquire(user):
             acquired[0] += 1
             return 0
-        @C.CFUNCTYPE(C.c_int, C.c_void_p)
+        @C.CFUNCTYPE(None, C.c_void_p)
         def release(user):
-            return 0
+            pass
         session.lock_writer = acquire
         session.unlock_writer = release
         # Re-init, exactly as the supervisor does on a reconnect: the lock must survive.
@@ -456,7 +441,7 @@ class SessionTests(unittest.TestCase):
         lib = self.library()
         WY_HEADER_MAX, WY_DATA_MAX = 1024, 4096
         class WYSession(C.Structure):
-            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('stream_frames', C.c_uint32), ('paused', C.c_int),
+            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
                         ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
                         ('name', C.c_char * 65),
                         ('area', C.c_char * 65),
@@ -464,18 +449,16 @@ class SessionTests(unittest.TestCase):
                         ('wake_name', C.c_char * 65),
                         ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
                         ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
-                        ('unlock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
+                        ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
                         ('writer_lock_user', C.c_void_p),
                         ('playback_active', C.c_int), ('playback_ended', C.c_int),
                         ('playback_volume', C.c_int), ('playback_rate', C.c_int),
-                        ('playback_rs', WYUpsampler),
+                        ('playback_rs', WYResampler),
                         ('ring', C.c_void_p), ('ring_capacity', C.c_size_t),
                         ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
                         ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
                         ('config_handler', C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_char_p, C.c_size_t)),
-                        ('config_user', C.c_void_p),
-                        ('phase_notify', C.CFUNCTYPE(None, C.c_void_p, C.c_int)),
-                        ('phase_user', C.c_void_p)]
+                        ('config_user', C.c_void_p)]
         self.assertEqual(C.sizeof(WYSession), lib.wy_session_size(), 'the host struct must match the production layout')
         session = WYSession()
         self.assertEqual(lib.wy_session_init(C.byref(session), b'control-fixture', b'boot-1'), 0)
@@ -540,7 +523,7 @@ class SessionTests(unittest.TestCase):
         lib = self.library()
         WY_HEADER_MAX, WY_DATA_MAX = 1024, 4096
         class WYSession(C.Structure):
-            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('stream_frames', C.c_uint32), ('paused', C.c_int),
+            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
                         ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
                         ('name', C.c_char * 65),
                         ('area', C.c_char * 65),
@@ -548,54 +531,34 @@ class SessionTests(unittest.TestCase):
                         ('wake_name', C.c_char * 65),
                         ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
                         ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
-                        ('unlock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
+                        ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
                         ('writer_lock_user', C.c_void_p),
                         ('playback_active', C.c_int), ('playback_ended', C.c_int),
                         ('playback_volume', C.c_int), ('playback_rate', C.c_int),
-                        ('playback_rs', WYUpsampler),
+                        ('playback_rs', WYResampler),
                         ('ring', C.c_void_p), ('ring_capacity', C.c_size_t),
                         ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
                         ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
                         ('config_handler', C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_char_p, C.c_size_t)),
-                        ('config_user', C.c_void_p),
-                        ('phase_notify', C.CFUNCTYPE(None, C.c_void_p, C.c_int)),
-                        ('phase_user', C.c_void_p)]
+                        ('config_user', C.c_void_p)]
         self.assertEqual(C.sizeof(WYSession), lib.wy_session_size(), 'host struct must match the production layout')
         session = WYSession()
         self.assertEqual(lib.wy_session_init(C.byref(session), b'control-fixture', b'boot-1'), 0)
         ring = (C.c_int32 * 4096)()
         self.assertEqual(lib.wy_session_playback_configure(C.byref(session), ring, 4096 * 4, 100), 0)
-        # A CONSTANT tone, deliberately. The 48 kHz profile up-samples a local tone 3:1 with
-        # Catmull-Rom cubic, so a ramp no longer lands on its own sample values -- but cubic
-        # reproduces a constant EXACTLY, which lets this assert the thing it is actually about:
-        # the tone reaches the ring as stereo-32 full-scale with L=R and the volume applied.
-        # The up-sampled LENGTH is checked separately, so "no resample happened" cannot pass.
-        level = 1000
-        pcm = (C.c_int16 * 8)(*[level] * 8)   # 8 samples of 16 kHz mono S16
+        pcm = (C.c_int16 * 8)(*range(8))   # 8 samples of 16 kHz mono S16
         self.assertEqual(lib.wy_session_local_play(C.byref(session), pcm, 8), 0)
-        # 8 mono at 16 kHz up-sampled to 48 kHz yields 19 mono samples (the cubic needs two
-        # samples of lookahead, so the last couple of inputs are not yet interpolated) ->
-        # 19 stereo-32 frames -> 152 bytes in the ring. Three times the input, not equal to it.
-        ring_bytes = lib.wy_session_playback_bytes(C.byref(session))
-        self.assertEqual(ring_bytes, 152,
-                         'a local tone must be up-sampled to the link rate, not passed through')
-        self.assertGreater(ring_bytes, 8 * 2 * 4,
-                           'the tone must be wider than its 16 kHz source')
-        got = (C.c_int32 * (ring_bytes // 4))()
-        self.assertEqual(lib.wy_session_playback_read(C.byref(session), got, ring_bytes), ring_bytes)
-        # x * 65536, L=R, on every frame: a constant tone is reproduced exactly by the cubic.
-        # The FIRST three outputs are the cubic's warm-up -- its history is zero-filled at stream
-        # start, so it interpolates up out of silence before the constant is established. That is
-        # correct behaviour (a tone must not click on at full amplitude), not a defect, so the
-        # exact-value assertion covers the steady state from output 3 onward.
-        expected = level << 16
-        warmup_outputs = 3
-        for i in range(warmup_outputs * 2, ring_bytes // 4, 2):
-            self.assertEqual(got[i], expected, f'left of frame {i // 2}')
-            self.assertEqual(got[i + 1], expected, f'right of frame {i // 2}')
+        # 8 mono samples -> 16 stereo-32 frames -> 64 bytes in the ring.
+        self.assertEqual(lib.wy_session_playback_bytes(C.byref(session)), 64)
+        got = (C.c_int32 * 16)()
+        self.assertEqual(lib.wy_session_playback_read(C.byref(session), got, 16 * 4), 64)
+        # x << 16, L=R: sample 0 is silence, sample 1 is full-scale one step up.
+        self.assertEqual(got[0], 0)
+        self.assertEqual(got[1], 0)
+        self.assertEqual(got[2], 1 << 16)
+        self.assertEqual(got[3], 1 << 16)
         # The ring the test owns holds those frames (not a phantom count).
-        self.assertEqual(ring[warmup_outputs * 2], expected)
-        self.assertEqual(ring[warmup_outputs * 2 + 1], expected)
+        self.assertEqual(ring[2], 1 << 16)
         # Bad arguments are INVALID, not a write: NULL session / pcm, or no ring.
         self.assertEqual(lib.wy_session_local_play(None, pcm, 8), -1)
         bare = WYSession()
@@ -611,7 +574,7 @@ class SessionTests(unittest.TestCase):
         lib = self.library()
         WY_HEADER_MAX, WY_DATA_MAX = 1024, 4096
         class WYSession(C.Structure):
-            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('stream_frames', C.c_uint32), ('paused', C.c_int),
+            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
                         ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
                         ('name', C.c_char * 65),
                         ('area', C.c_char * 65),
@@ -619,18 +582,16 @@ class SessionTests(unittest.TestCase):
                         ('wake_name', C.c_char * 65),
                         ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
                         ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
-                        ('unlock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
+                        ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
                         ('writer_lock_user', C.c_void_p),
                         ('playback_active', C.c_int), ('playback_ended', C.c_int),
                         ('playback_volume', C.c_int), ('playback_rate', C.c_int),
-                        ('playback_rs', WYUpsampler),
+                        ('playback_rs', WYResampler),
                         ('ring', C.c_void_p), ('ring_capacity', C.c_size_t),
                         ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
                         ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
                         ('config_handler', C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_char_p, C.c_size_t)),
-                        ('config_user', C.c_void_p),
-                        ('phase_notify', C.CFUNCTYPE(None, C.c_void_p, C.c_int)),
-                        ('phase_user', C.c_void_p)]
+                        ('config_user', C.c_void_p)]
         session = WYSession()
         lib.wy_session_init(C.byref(session), b'cf', b'b1')
         ring = (C.c_int32 * 4096)()
@@ -993,43 +954,45 @@ class SessionTests(unittest.TestCase):
     @classmethod
     def _expected_playback_frames(cls, pcm, volume=50):
         """The canonical reference for the playback conversion, computed independently:
-        up-sample 22050->48000 (absolute cursor, Catmull-Rom cubic, the device's exact grid),
-        apply the clamped volume (llround), and expand to stereo 32-bit full-scale (x * 65536).
+        resample 22050->16000 (absolute cursor, linear interpolation, the device's exact grid),
+        apply the clamped volume (llround), and expand to stereo 32-bit full-scale (x << 16).
         Returns the flat list of int32 (L,R interleaved). This is the interop oracle: the device
-        must produce byte-identical frames to what a correct implementation would.
-
-        The 48 kHz profile up-samples instead of down-sampling, so there is NO anti-aliasing FIR
-        here (up-sampling cannot alias, and the FIR is exactly what the profile removes). The
-        cubic's correctness is proven independently by scripts/test_48k_resample.py; this oracle
-        only mirrors it so the conversion plumbing is still checked end to end."""
+        must produce byte-identical frames to what a correct implementation would."""
         import math
-        R = 22050.0 / 48000.0
-        hist = [0, 0, 0]      # k = -3, -2, -1 at stream start
-        n = len(pcm)
-
-        def at(k):
-            if 0 <= k < n:
-                return pcm[k]
-            return hist[k + 3] if -3 <= k < 0 else 0
-
-        def cubic(p0, p1, p2, p3, t):
-            a = float(p1)
-            b = 0.5 * (p2 - p0)
-            c = p0 - 2.5 * p1 + 2.0 * p2 - 0.5 * p3
-            d = -0.5 * p0 + 1.5 * p1 - 1.5 * p2 + 0.5 * p3
-            v = ((d * t + c) * t + b) * t + a
-            r = cls._c_llround(v)
-            return 32767 if r > 32767 else (-32768 if r < -32768 else r)
-
+        # The anti-aliasing FIR, exactly as the device applies it before interpolating: the
+        # same windowed-sinc coefficients, the same zero-filled history at stream start. The
+        # FIR's correctness (chunk invariance, stopband, passband, DC gain) is proven
+        # independently by scripts/test_resampler.py; this oracle only mirrors it so the
+        # conversion plumbing is still checked end to end.
+        FIR = [0, -5, -6, 70, -109, -35, 332, -416, -78, 912, -1126, -120, 2332, -3314,
+               -145, 18092, 18091, -145, -3314, 2332, -120, -1126, 912, -78,
+               -416, 332, -35, -109, 70, -6, -5, 0]
+        hist = [0] * (len(FIR) - 1)
+        filt = []
+        for x in pcm:
+            stage = hist + [x]
+            acc = sum(FIR[i] * stage[i] for i in range(len(FIR)))
+            hist = hist[1:] + [x]
+            v = (acc + 16384) >> 15
+            if v > 32767: v = 32767
+            if v < -32768: v = -32768
+            filt.append(v)
+        pcm = filt
+        R = 22050.0 / 16000.0
         mono = []
-        pos = 0.0
+        k = 0
         while True:
-            i0 = int(math.floor(pos))
-            t = pos - i0
-            if i0 + 2 >= n:
+            p = k * R
+            i0 = int(math.floor(p))
+            if i0 + 1 >= len(pcm):
                 break
-            mono.append(cubic(at(i0 - 1), at(i0), at(i0 + 1), at(i0 + 2), t))
-            pos += R
+            frac = p - i0
+            s = pcm[i0] * (1.0 - frac) + pcm[i0 + 1] * frac   # the device's exact lerp
+            v = cls._c_llround(s)
+            if v > 32767: v = 32767
+            if v < -32768: v = -32768
+            mono.append(v)
+            k += 1
         vol = volume
         if vol < 25: vol = 25
         if vol > 100: vol = 100
@@ -1241,7 +1204,7 @@ class SessionTests(unittest.TestCase):
         lib.wy_session_set_playback_volume.restype = C.c_int
         WY_HEADER_MAX, WY_DATA_MAX = 1024, 4096
         class WYSession(C.Structure):
-            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('stream_frames', C.c_uint32), ('paused', C.c_int),
+            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
                         ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
                         ('name', C.c_char * 65),
                         ('area', C.c_char * 65),
@@ -1249,18 +1212,16 @@ class SessionTests(unittest.TestCase):
                         ('wake_name', C.c_char * 65),
                         ('header', C.c_char * WY_HEADER_MAX), ('body', C.c_char * (WY_DATA_MAX + 1)),
                         ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
-                        ('unlock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
+                        ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
                         ('writer_lock_user', C.c_void_p),
                         ('playback_active', C.c_int), ('playback_ended', C.c_int),
                         ('playback_volume', C.c_int), ('playback_rate', C.c_int),
-                        ('playback_rs', WYUpsampler),
+                        ('playback_rs', WYResampler),
                         ('ring', C.c_void_p), ('ring_capacity', C.c_size_t),
                         ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
                         ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
                         ('config_handler', C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_char_p, C.c_size_t)),
-                        ('config_user', C.c_void_p),
-                        ('phase_notify', C.CFUNCTYPE(None, C.c_void_p, C.c_int)),
-                        ('phase_user', C.c_void_p)]
+                        ('config_user', C.c_void_p)]
         self.assertEqual(C.sizeof(WYSession), lib.wy_session_size(), 'the host struct must match the production layout')
         session = WYSession()
         self.assertEqual(lib.wy_session_init(C.byref(session), b'control-fixture', b'boot-1'), 0)
@@ -1395,25 +1356,23 @@ class SessionTests(unittest.TestCase):
         # Mirrors are declared per test method; rebuild the smallest complete one here so this
         # guard does not depend on another test having run.
         class WYSession(C.Structure):
-            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('stream_frames', C.c_uint32), ('paused', C.c_int),
+            _fields_ = [('state', C.c_int), ('streaming', C.c_int), ('paused', C.c_int),
                         ('device_id', C.c_char * 65), ('boot_id', C.c_char * 129),
                         ('name', C.c_char * 65),
                         ('area', C.c_char * 65), ('firmware_version', C.c_char * 33),
                         ('wake_name', C.c_char * 65),
                         ('header', C.c_char * 1024), ('body', C.c_char * 4097),
                         ('lock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
-                        ('unlock_writer', C.CFUNCTYPE(C.c_int, C.c_void_p)),
+                        ('unlock_writer', C.CFUNCTYPE(None, C.c_void_p)),
                         ('writer_lock_user', C.c_void_p),
                         ('playback_active', C.c_int), ('playback_ended', C.c_int),
                         ('playback_volume', C.c_int), ('playback_rate', C.c_int),
-                        ('playback_rs', WYUpsampler),
+                        ('playback_rs', WYResampler),
                         ('ring', C.c_void_p), ('ring_capacity', C.c_size_t),
                         ('ring_head', C.c_size_t), ('ring_tail', C.c_size_t),
                         ('pcm', C.c_void_p), ('mono', C.c_void_p), ('frames', C.c_void_p),
                         ('config_handler', C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_char_p, C.c_char_p, C.c_size_t)),
-                        ('config_user', C.c_void_p),
-                        ('phase_notify', C.CFUNCTYPE(None, C.c_void_p, C.c_int)),
-                        ('phase_user', C.c_void_p)]
+                        ('config_user', C.c_void_p)]
         self.assertEqual(C.sizeof(WYSession), lib.wy_session_size(),
                          'the ctypes WYSession mirror no longer matches the C struct size. '
                          'Update the mirrors and WYResampler to the current wyoming_session.h.')

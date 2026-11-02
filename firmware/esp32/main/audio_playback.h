@@ -20,9 +20,6 @@
  * pump task. Idempotent. Returns 0 when running, -1 when the channel could not be created. The
  * ring is the session's, configured by wy_session_playback_configure. */
 int audio_playback_start(void);
-/* Tell the pump where to report `played`. Refreshed per link, like the capture path. */
-void audio_playback_bind(void *session, void *user,
-                         int (*write)(void *, const void *, size_t));
 
 /* Stop the pump task and release the I2S TX channel. Idempotent: safe to call when nothing is
  * running, and safe to call from the link-down path. The amp is disarmed. */
@@ -54,10 +51,6 @@ int audio_dac_read(uint8_t reg, uint8_t *value);
 
 /* Write an arbitrary XVF3800 control register. */
 int audio_xvf_write(uint8_t resid, uint8_t cmd, const uint8_t *params, size_t nparams);
-
-/* Read an arbitrary XVF3800 control register. The caller marks the command as a read (cmd|0x80)
- * and sizes the reply; byte 0 of the reply is the status. */
-int audio_xvf_read(const uint8_t *cmd, size_t cmdlen, uint8_t *reply, size_t replylen);
 
 /* Write one AIC3104 register. */
 int audio_dac_write(uint8_t reg, uint8_t value);

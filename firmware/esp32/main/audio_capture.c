@@ -20,10 +20,7 @@
 #define CAPTURE_I2S_BCLK_PIN   GPIO_NUM_8
 #define CAPTURE_I2S_WS_PIN     GPIO_NUM_7
 #define CAPTURE_I2S_RX_PIN     GPIO_NUM_43
-/* 48 kHz I2S, per docs/audio-fidelity.md. The wake model and the Wyoming uplink are 16 kHz
- * contracts, so audio_capture_send_chunk decimates 3:1 after the downmix; everything downstream
- * of that point is unchanged and still speaks 16 kHz. */
-#define CAPTURE_I2S_RATE_HZ    48000
+#define CAPTURE_I2S_RATE_HZ    16000
 /* Same MCLK as the playback side: capture and playback share one I2S port in
  * full-duplex, so there is one master clock for both. */
 #define CAPTURE_I2S_MCLK_PIN   GPIO_NUM_9
@@ -50,9 +47,17 @@ static struct {
     volatile int stopping;
 } capture;
 
-/* Preserve the original wait bound while diagnosing contention. A timeout is a
- * candidate cause of link loss, not an established diagnosis; log it before tuning. */
-#define CAPTURE_WRITER_LOCK_WAIT_MS 100
+/* How long a link write may wait for the shared writer lock.
+ *
+ * This was 100 ms, which is far too short: the lock serialises EVERY link write, including a
+ * TLS write of a microphone chunk, and at the end of an utterance the gateway task needs the
+ * lock to send `streaming-stopped` while the capture task may still be finishing such a write.
+ * A 100 ms timeout therefore failed at exactly that moment -- the session was marked failed and
+ * the link torn down about 250 ms after the endpointer ended the clip, which is precisely the
+ * deterministic end-of-utterance disconnect that made every reply unreachable. The gateway task
+ * blocking here is safe: it waits for an in-flight write to finish, which is bounded by the
+ * transport, not by a race. */
+#define CAPTURE_WRITER_LOCK_WAIT_MS 2000
 
 static int writer_lock_acquire(void *user) {
     (void)user;
@@ -90,40 +95,12 @@ void audio_capture_install_writer_lock(void *session) {
     s->writer_lock_user = NULL;
 }
 
-/* Accounting for where the microphone audio actually goes.
- *
- * "The device is streaming but the bridge hears nothing" cannot be diagnosed by
- * looking at either end alone: the chunk can be dropped here (stream closed, a
- * writer-lock timeout, a link error) or lost after it leaves. These counters make
- * the boundary visible, so one wake says which side to look at instead of both. */
-static uint32_t chunks_sent;
-static uint32_t chunks_dropped;
-static uint32_t samples_sent;
-static uint32_t samples_dropped;
-
-/* The capture path's 48 kHz -> 16 kHz decimator. ONE instance, driven only from the capture
- * task (audio_capture_send_chunk is called from nowhere else), so its phase history is the
- * stream's own and needs no lock. Reset when a fresh stream starts. */
-static wy_decimator capture_decim;
-
-void audio_capture_reset_decimator(void) {
-    wy_decimator_reset(&capture_decim);
-}
-
 void audio_capture_send_chunk(const int32_t *frames, size_t frame_count) {
     if (!frames || !capture.session) return;
-    /* Two stages, in this order. The downmix runs at the I2S rate (48 kHz); the decimator then
-     * takes 3:1 down to the 16 kHz the wake model and the Wyoming uplink both contract for.
-     * Decimating IN PLACE is safe because the decimator emits one sample per three read, so its
-     * write index never overtakes its read index. */
-    int16_t wide[AUDIO_CAPTURE_FRAMES];                 /* 48 kHz, the I2S rate */
-    int16_t mono[AUDIO_CAPTURE_CHUNK_SAMPLES];          /* 16 kHz, the contract rate */
-    size_t samples = wy_audio_downmix_mono16(frames, frame_count, wide,
-                                             sizeof(wide) / sizeof(wide[0]));
+    int16_t mono[AUDIO_CAPTURE_FRAMES];
+    size_t samples = wy_audio_downmix_mono16(frames, frame_count, mono,
+                                             sizeof(mono) / sizeof(mono[0]));
     if (!samples) return;
-    samples = wy_decimate_48000_to_16000(&capture_decim, wide, samples,
-                                         mono, sizeof(mono) / sizeof(mono[0]));
-    if (!samples) return;   /* fewer than three input samples since the last chunk: nothing yet */
     /* D1 (increment 4): every downmixed chunk feeds the LOCAL wake detector first, always --
      * before the wake the chunk goes only to the detector (the reference's "audio goes to the
      * wake engine, not to the bridge"). The detector is driven from this task alone (its
@@ -132,21 +109,7 @@ void audio_capture_send_chunk(const int32_t *frames, size_t frame_count) {
     /* The session decides whether the microphone is open: a frame sent while the stream is
      * closed is dropped there, which is what keeps the pre-wake chime out of the next
      * utterance. After a wake opens the stream, the same chunks also go to the bridge. */
-    int sent = wy_session_send_audio(capture.session, mono, samples * 2,
-                                     capture.write, capture.user);
-    if (sent == WY_OK) {
-        chunks_sent++;
-        samples_sent += (uint32_t)samples;
-    } else {
-        chunks_dropped++;
-        samples_dropped += (uint32_t)samples;
-    }
-    if (chunks_sent + chunks_dropped >= 100) {
-        ESP_LOGI("capacct", "mic audio: sent %u chunks / %u samples, dropped %u / %u "
-                 "(dropped means the session refused the frame)",
-                 chunks_sent, samples_sent, chunks_dropped, samples_dropped);
-        chunks_sent = chunks_dropped = samples_sent = samples_dropped = 0;
-    }
+    wy_session_send_audio(capture.session, mono, samples * 2, capture.write, capture.user);
 }
 
 static void capture_task_fn(void *argument) {
@@ -160,16 +123,7 @@ static void capture_task_fn(void *argument) {
                                                 &bytes_read, CAPTURE_READ_TIMEOUT_MS);
             if (result != ESP_OK && result != ESP_ERR_TIMEOUT) {
                 /* A real I2S error: stop reading. The task exits; the next armed hook will
-                 * start it again with a fresh channel.
-                 *
-                 * This exit used to be SILENT, and that is the worst possible place for silence:
-                 * the I2S port is shared with playback (the TX joins the same controller as a
-                 * full-duplex pair when a reply is armed), so a capture read failure at exactly
-                 * that moment is a live candidate for the link dying during a reply -- and from
-                 * the bridge all such failures look identical to a device that reset. Report the
-                 * driver error so the two can be told apart. */
-                ESP_LOGW("capio", "capture read failed: %s (0x%x); capture task exiting",
-                         esp_err_to_name(result), (unsigned)result);
+                 * start it again with a fresh channel. */
                 break;
             }
         }
@@ -222,10 +176,6 @@ int audio_capture_start(void *session, void *user,
 
     i2s_chan_config_t channel = I2S_CHANNEL_DEFAULT_CONFIG(CAPTURE_I2S_PORT, I2S_ROLE_MASTER);
     if (i2s_new_channel(&channel, NULL, &capture.rx) != ESP_OK) {
-        /* The usual cause is the other half of the full-duplex pair still owning the controller
-         * (a playback channel that has not finished tearing down). Without this line the
-         * microphone simply never comes back and nothing in the log says why. */
-        ESP_LOGW("capio", "capture: i2s_new_channel failed; the microphone did not start");
         capture.rx = NULL;   /* nothing was allocated; the stale one was already released above */
         return -1;
     }
@@ -255,13 +205,6 @@ int audio_capture_start(void *session, void *user,
      * early-out above, so it runs on a REAL task start, not on a pointer refresh. It reads the
      * config wake settings and loads the model from flash once. */
     wake_detector_start(session, user, write);
-    /* Fresh filter state for a fresh hardware stream. capture_decim is file-static and holds the
-     * previous stream's FIR history and 3:1 phase; without this a restarted channel opens with
-     * stale history and a phase that may not match, so the first few outputs of the new stream
-     * are filtered against the OLD one's samples. This is the only place it is reset: the
-     * capture task is the sole reader of the decimator, and a task START is the moment a new
-     * stream begins. Resetting it per wake or from another task would corrupt a live stream. */
-    audio_capture_reset_decimator();
     if (xTaskCreate(capture_task_fn, "aud_cap", CAPTURE_TASK_STACK, NULL,
                     CAPTURE_TASK_PRIORITY, &capture.task) != pdPASS || !capture.task) {
         capture.task = NULL;

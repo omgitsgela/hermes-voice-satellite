@@ -3,7 +3,6 @@
 
 #include "wyoming_audio.h"   /* the amp GPO command encoder + XVF I2C/GPO constants (the audio contract) */
 #include "wyoming_session.h"
-#include "wy_wake.h"
 #include "driver/i2c_master.h"
 #include "driver/i2s_std.h"
 #include "esp_err.h"
@@ -47,10 +46,7 @@
 #define PLAYBACK_I2S_BCLK_PIN  GPIO_NUM_8
 #define PLAYBACK_I2S_WS_PIN    GPIO_NUM_7
 #define PLAYBACK_I2S_TX_PIN    GPIO_NUM_44
-/* 48 kHz I2S, per docs/audio-fidelity.md. This is the profile's real win: the bridge's TTS at
- * 22050 Hz is now UP-sampled to 48 kHz instead of being low-passed at 7400 Hz and crushed into
- * 16 kHz. The voice keeps its full bandwidth. */
-#define PLAYBACK_I2S_RATE_HZ   48000
+#define PLAYBACK_I2S_RATE_HZ   16000
 /* MCLK feeds the XVF3800 and, through it, the AIC3104: GPIO9 on the XIAO ESP32S3.
  * Seeed publishes this pin as part of the board's I2S pin map. */
 #define PLAYBACK_I2S_MCLK_PIN  GPIO_NUM_9
@@ -81,23 +77,6 @@ static TickType_t plb_delay_ms(int ms) {
 static i2s_chan_handle_t tx;
 static TaskHandle_t task;
 static volatile int stopping;
-
-/* One lock for the shared I2C pins (SDA 5 / SCL 6), held across an ENTIRE transaction's
- * bus-create-through-bus-delete lifetime. The bus is created per call with the port left to the
- * driver to pick, and the ESP32-S3 has two controllers: separate handles do not serialise two
- * users of the same pins. The amplifier, the codec, the LED ring and the diagnostics all share
- * this bus, so without this a timer-driven LED write can collide with an audio control write and
- * take the sound down with it. */
-static SemaphoreHandle_t i2c_bus_lock;
-
-static void i2c_bus_take(void) {
-    if (!i2c_bus_lock) {
-        i2c_bus_lock = xSemaphoreCreateMutex();
-        if (!i2c_bus_lock) return;
-    }
-    xSemaphoreTake(i2c_bus_lock, portMAX_DELAY);
-}
-static void i2c_bus_give(void) { if (i2c_bus_lock) xSemaphoreGive(i2c_bus_lock); }
 static void *session;   /* the supervisor's session; the ring's single reader is the pump task */
 /* When set, the amplifier stays in whatever state it was forced to and the pump leaves it
  * alone. Without this the pump releases the amp the moment the ring drains, so a manual
@@ -173,10 +152,6 @@ int audio_playback_play_mono(const int16_t *mono, size_t n) {
 #define AIC3104_I2S_32BIT       0x30
 
 static int xvf_control_write_at(uint8_t addr, const uint8_t *cmd, size_t len, const char *what) {
-    /* The lock is held across the WHOLE create-transmit-destroy lifetime, not just the transmit:
-     * two users allocating and tearing down the same pins concurrently can interfere at any of
-     * those steps. */
-    i2c_bus_take();
     i2c_master_bus_handle_t bus = NULL;
     i2c_master_bus_config_t bus_cfg = {
         .i2c_port = (i2c_port_num_t)-1,
@@ -188,7 +163,7 @@ static int xvf_control_write_at(uint8_t addr, const uint8_t *cmd, size_t len, co
     };
     esp_err_t rc = i2c_new_master_bus(&bus_cfg, &bus);
     if (rc != ESP_OK) { ESP_LOGW("xvf", "%s: bus failed %d (addr=0x%02x)", what, (int)rc, (unsigned)addr);
-        i2c_bus_give(); return -(int)rc; }
+        return -(int)rc; }
     i2c_master_dev_handle_t dev = NULL;
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
@@ -207,7 +182,6 @@ static int xvf_control_write_at(uint8_t addr, const uint8_t *cmd, size_t len, co
     }
     i2c_master_bus_rm_device(dev);
     i2c_del_master_bus(bus);
-    i2c_bus_give();
     return rc == ESP_OK ? 0 : -(int)rc;
 }
 
@@ -223,42 +197,6 @@ int audio_xvf_write(uint8_t resid, uint8_t cmd, const uint8_t *params, size_t np
     buf[2] = (uint8_t)nparams;
     for (size_t i = 0; i < nparams; ++i) buf[3 + i] = params[i];
     return xvf_control_write_at(XVF_I2C_ADDRESS, buf, 3 + nparams, "xvf write");
-}
-
-/* Read an arbitrary XVF3800 control register. The caller sends the command bytes already
- * marked as a read (cmd | 0x80) and sized; the reply is [status, ...data]. This is the same
- * shape the bring-up probe uses for VERSION, which is the verified part of the pattern. Used
- * for the direction-of-arrival telemetry the LED ring follows. */
-int audio_xvf_read(const uint8_t *cmd, size_t cmdlen, uint8_t *reply, size_t replylen) {
-    if (!cmd || !reply || cmdlen == 0 || replylen == 0 || replylen > 32) return -1;
-    i2c_master_bus_handle_t bus = NULL;
-    i2c_master_bus_config_t bus_cfg = {
-        .i2c_port = (i2c_port_num_t)-1,
-        .sda_io_num = XVF_I2C_SDA_PIN,
-        .scl_io_num = XVF_I2C_SCL_PIN,
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
-    };
-    i2c_bus_take();
-    esp_err_t rc = i2c_new_master_bus(&bus_cfg, &bus);
-    if (rc != ESP_OK) { i2c_bus_give(); return -(int)rc; }
-    i2c_master_dev_handle_t dev = NULL;
-    i2c_device_config_t dev_cfg = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address = XVF_I2C_ADDRESS,
-        .scl_speed_hz = XVF_I2C_SCL_HZ,
-        .flags.disable_ack_check = false,
-    };
-    rc = i2c_master_bus_add_device(bus, &dev_cfg, &dev);
-    if (rc == ESP_OK) {
-        /* Request and reply are ONE transaction to a caller: the lock covers both halves. */
-        rc = i2c_master_transmit_receive(dev, cmd, cmdlen, reply, replylen, 200);
-        i2c_master_bus_rm_device(dev);
-    }
-    i2c_del_master_bus(bus);
-    i2c_bus_give();
-    return rc == ESP_OK ? 0 : -(int)rc;
 }
 
 int audio_xvf_route_output(int right, int category, int source) {
@@ -287,7 +225,6 @@ int audio_dac_write(uint8_t reg, uint8_t value) {
 
 int audio_dac_read(uint8_t reg, uint8_t *value) {
     if (!value) return -1;
-    i2c_bus_take();   /* the codec is on the same pins as the amp, the LEDs and the XVF */
     i2c_master_bus_handle_t bus = NULL;
     i2c_master_bus_config_t bus_cfg = {
         .i2c_port = (i2c_port_num_t)-1,
@@ -298,7 +235,7 @@ int audio_dac_read(uint8_t reg, uint8_t *value) {
         .flags.enable_internal_pullup = true,
     };
     esp_err_t rc = i2c_new_master_bus(&bus_cfg, &bus);
-    if (rc != ESP_OK) { i2c_bus_give(); return -(int)rc; }
+    if (rc != ESP_OK) return -(int)rc;
     i2c_master_dev_handle_t dev = NULL;
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
@@ -310,7 +247,6 @@ int audio_dac_read(uint8_t reg, uint8_t *value) {
     if (rc == ESP_OK) rc = i2c_master_transmit_receive(dev, &reg, 1, value, 1, 200);
     i2c_master_bus_rm_device(dev);
     i2c_del_master_bus(bus);
-    i2c_bus_give();
     return rc == ESP_OK ? 0 : -(int)rc;
 }
 
@@ -320,23 +256,11 @@ int audio_dac_init(void) {
 
     /* ---- Clocking first: without a locked PLL nothing else means anything. ----------
      * The XVF3800 clocks the AIC3104 with BCLK = 1.024 MHz (16 kHz x 64) and there is no
-     * separate MCLK reaching this chip, so the PLL is fed from BCLK and fs TRACKS BCLK: triple
-     * the bit clock and every derived rate triples with it. That is why this sequence is
-     * unchanged for the 48 kHz link -- it is not a fixed-rate configuration.
-     *
-     * CORRECTION, 2026-10-15. This comment used to say "J = 48". The datasheet disagrees: Page 0
-     * Register 4 is "PLL Programming Register B", with the PLL J value in D7-D2 (000001 = J 1
-     * ... 111111 = J 63) and D1-D0 reserved. So 0x30 = 0b00110000 puts 0b001100 = 12 in the J
-     * field, i.e. J = 12, not 48. The VALUES are right -- they are what produces correct-speed
-     * audio on real hardware -- but the number written beside them was not the number the chip
-     * reads. Do not "correct" the register to 0xC0 on the strength of the old comment: the chip
-     * was never reading 48.
-     *
-     * The one open question is whether fs(ref) (which Register 7 D7 declares as nominally 48 kHz)
-     * remains inside the chip's valid range once BCLK has tripled. It is left as-is because the
-     * alternative is a speculative register change to a path that demonstrably works and cannot
-     * be A/B tested here. If playback is ever flaky at 48 kHz but fine at 16 kHz, that is the
-     * first thing to look at. Register 3: PLL enable (D7), Q (D6-D3), P (D2-D0). */
+     * separate MCLK reaching this chip, so the PLL is fed from BCLK. TI's documented
+     * relation is fs(ref) = (PLLCLK_IN x K x R) / (2048 x P), which for BCLK 1.024 MHz and
+     * J=48, D=0, R=2, P=1 gives exactly 48 kHz; register 2 then selects fs = fs(ref)/3 =
+     * 16 kHz. The register sequence follows a known-working AIC3104 setup, rescaled to our
+     * BCLK. Register 3: PLL enable (D7), Q (D6-D3), P (D2-D0). */
     rc |= aic_write(0x66, 0xA2);   /* reg 102: CLKDIV_IN and PLLCLK_IN both = BCLK */
     rc |= aic_write(0x65, 0x00);   /* reg 101: CODEC_CLKIN = PLLDIV_OUT */
     rc |= aic_write(0x03, 0x91);   /* reg 3:   PLL on, Q=2, P=1 */
@@ -390,12 +314,6 @@ int audio_playback_amp(int enabled) {
      * the link is left alone. */
     uint8_t cmd[XVF_I2C_GPO_CMD_LEN];
     wy_amp_gpo_command(cmd, enabled);
-    /* Deliberately NO LED work here. The amplifier is armed from the playback pump's realtime
-     * path and from the local-tone path, so lighting the ring here did two bad things at once:
-     * it blocked the audio pump on three extra I2C transactions, and it overwrote the wake
-     * sweep, because the activation chime uses this same amplifier. The chime's amp edges are
-     * not speech, and they must not be presented as though they were. */
-    i2c_bus_take();
     i2c_master_bus_handle_t bus = NULL;
     i2c_master_bus_config_t bus_cfg = {
         .i2c_port = (i2c_port_num_t)-1,
@@ -412,7 +330,6 @@ int audio_playback_amp(int enabled) {
     if (rc != ESP_OK) {
         ESP_LOGW("plb_amp", "amp %d: i2c_new_master_bus failed %d (sda=%d scl=%d)",
                  enabled, (int)rc, (int)XVF_I2C_SDA_PIN, (int)XVF_I2C_SCL_PIN);
-        i2c_bus_give();
         return (int)rc;
     }
     i2c_master_dev_handle_t dev = NULL;
@@ -433,34 +350,10 @@ int audio_playback_amp(int enabled) {
     }
     i2c_master_bus_rm_device(dev);
     i2c_del_master_bus(bus);
-    i2c_bus_give();
     return (int)rc;
-    }
+}
 
 static int pump_logged;
-
-/* Where to report `played`, and whether this answer has already been reported.
- *
- * `played` is the device saying its speaker finished. Without it the bridge waits
- * after every reply for an event that never arrives, which measured as ~20 s of
- * dead air per turn. The link pointers are refreshed on every bind, exactly like
- * the capture path: a reconnect hands back the same pump with a new transport. */
-static wy_session *playback_session;
-static void *playback_user;
-static int (*playback_write)(void *, const void *, size_t);
-static int played_reported = 1;   /* nothing to report until a stream is armed */
-/* The done tone is the awake pair descending ("that answer is finished"), and it is queued
- * through the SAME ring as the answer so the amplifier policy carries it. Rendered once. */
-static int16_t done_tone[5120];
-static size_t done_tone_samples;
-static int done_queued;
-
-void audio_playback_bind(void *session, void *user,
-                         int (*write)(void *, const void *, size_t)) {
-    playback_session = (wy_session *)session;
-    playback_user = user;
-    playback_write = write;
-}
 
 /* Bounded retry for a stalled I2S write. Each idle attempt costs PLAYBACK_WRITE_MS plus a 1 ms
  * yield; this many in a row means the channel is genuinely not taking data, and the batch must be
@@ -527,38 +420,6 @@ static void playback_task_fn(void *argument) {
              * auto-clear flags off, that starved DMA replays stale audio instead of silence --
              * which is exactly the choppiness in speech. Amplifier bookkeeping falls through so
              * the keepalive below runs unconditionally. */
-        }
-        /* A stream that has ENDED and a ring that has DRAINED means the speaker is
-         * finished: say so exactly once. Re-armed by the rising edge of the bridge's
-         * playback flag, so the next answer is reported too. */
-        if (wy_session_playback_active(s)) {
-            played_reported = 0;
-            done_queued = 0;
-        } else if (!played_reported && wy_session_playback_ended(s) &&
-                   wy_session_playback_bytes(s) == 0 && !done_queued) {
-            /* The answer has finished sounding: mark it with the done tone BEFORE saying
-             * `played`, so the bridge's wait ends after the room has heard the closing
-             * gesture too. One tone per answer, never per chunk. */
-            if (!done_tone_samples) {
-                size_t need = wy_done_render(NULL, 0);
-                if (need <= sizeof(done_tone) / sizeof(done_tone[0]))
-                    done_tone_samples = wy_done_render(done_tone, need);
-            }
-            if (done_tone_samples &&
-                wy_session_local_play(s, done_tone, done_tone_samples) == WY_OK) {
-                ESP_LOGI("plb", "done tone queued (%u samples)", (unsigned)done_tone_samples);
-            }
-            done_queued = 1;
-        } else if (!played_reported && done_queued && wy_session_playback_ended(s) &&
-                   wy_session_playback_bytes(s) == 0) {
-            if (playback_write &&
-                wy_session_send_played(s, playback_write, playback_user) == WY_OK) {
-                ESP_LOGI("plb", "played: reported to the gateway");
-            } else {
-                ESP_LOGW("plb", "played: could not be reported (link=%p write=%p)",
-                         playback_user, (const void *)playback_write);
-            }
-            played_reported = 1;
         }
         size_t n = wy_session_playback_read(s, frame, sizeof(frame));   /* bytes, <= sizeof(frame) */
         if (n == 0) {
@@ -640,13 +501,7 @@ int audio_playback_start(void) {
      * silence -- so any momentary underrun becomes an audible glitch rather than a quiet gap.
      * Underrun protection costs one memset per completed buffer. */
     channel.auto_clear_after_cb = true;
-    if (i2s_new_channel(&channel, &tx, NULL) != ESP_OK) {
-        /* The usual cause is the capture RX already owning I2S_NUM_0 in a state the driver will
-         * not pair with. Silent failure here means an answer is produced, sent, and never played,
-         * with nothing in the log -- indistinguishable from the device ignoring the reply. */
-        ESP_LOGW("plb", "playback: i2s_new_channel failed; no reply can be played");
-        tx = NULL; return -1;
-    }
+    if (i2s_new_channel(&channel, &tx, NULL) != ESP_OK) { tx = NULL; return -1; }
     /* Same clock/slot/WS/BCLK as the capture RX, so the driver constitutes the full-duplex pair
      * and the two share the port clock. The data pin is the TX's (GPIO44); the RX keeps 43. */
     i2s_std_config_t std = {
@@ -670,39 +525,27 @@ int audio_playback_start(void) {
         },
     };
     if (i2s_channel_init_std_mode(tx, &std) != ESP_OK) {
-        ESP_LOGW("plb", "playback: i2s init failed; no reply can be played");
         i2s_del_channel(tx);
         tx = NULL;
         return -1;
     }
     if (i2s_channel_enable(tx) != ESP_OK) {
-        ESP_LOGW("plb", "playback: i2s enable failed; no reply can be played");
         i2s_del_channel(tx);
         tx = NULL;
         return -1;
     }
     /* Size the amp's drain rest (F4) from the real DMA queue the driver allocated, not a guess.
-     * total_dma_buf_size is the whole queue in bytes; at the link rate * 2 channels * 4 bytes
-     * per word that is a real-time duration. The rate is DERIVED, not retyped: the old code
-     * kept dividing by 128000 (the 16 kHz byte rate) after the comment above it had already
-     * been updated to 48 kHz, so the reported drain duration was three times the truth. It is an UPPER bound on how long
+     * total_dma_buf_size is the whole queue in bytes; at 16 kHz * 2 channels * 4 bytes per
+     * word = 128000 bytes/second that is a real-time duration. It is an UPPER bound on how long
      * audio can still be sounding after the ring drains, so resting the amp that long can never
      * clip the tail, and the queue is short (a few hundred ms) so the amp barely overruns its
      * silence. A failed query leaves the drain at 0, i.e. the pre-fix behaviour: still safe
      * (no use-after-free), just a possible clipped tail. */
     i2s_chan_info_t info;
-    if (i2s_channel_get_info(tx, &info) == ESP_OK && info.total_dma_buf_size > 0) {
-        /* Bytes per second of I2S wire: link rate * 2 channels * 4 bytes per 32-bit word.
-         * Derived from the rate constant so this cannot silently disagree with the clock again.
-         * The division rounds UP: this is an upper bound on how long audio can still be sounding,
-         * and under-estimating it would let the amplifier be cut while the ring is still draining. */
-        const uint64_t bytes_per_second =
-            (uint64_t)PLAYBACK_I2S_RATE_HZ * 2u * 4u;
-        playback_drain_ms = (int32_t)(((uint64_t)info.total_dma_buf_size * 1000u
-                                       + bytes_per_second - 1u) / bytes_per_second);
-    } else {
+    if (i2s_channel_get_info(tx, &info) == ESP_OK && info.total_dma_buf_size > 0)
+        playback_drain_ms = (int32_t)((uint64_t)info.total_dma_buf_size * 1000u / 128000u);
+    else
         playback_drain_ms = 0;
-    }
     /* The TX clocks out silence until the first write, and the amp stays off until the session
      * says an answer is playing, so starting the channel early (at registration, before the
      * first wake) is what makes the first answer start clean: the DMA is already primed. */
@@ -714,8 +557,6 @@ int audio_playback_start(void) {
         tx = NULL;
         return -1;
     }
-    ESP_LOGI("plb", "playback ready (amp drain %ld ms; the TX is armed and the DMA is primed)",
-             (long)playback_drain_ms);
     return 0;
 }
 

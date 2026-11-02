@@ -22,12 +22,7 @@
 /* One I2S read fills this many 32-bit stereo frames (160 = 10 ms at 16 kHz). One read is one
  * audio-chunk -- 160 samples, 320 bytes, a 10 ms cadence for low latency, well under the
  * WY_AUDIO_CHUNK_SAMPLES (1024) bound the session enforces, so no per-chunk buffering is needed. */
-/* Frames read from I2S per call. The uplink contract is a 10 ms chunk of 16 kHz mono (160
- * samples); at the 48 kHz I2S rate a 10 ms read is 480 frames, and audio_capture_send_chunk
- * decimates those 3:1 back to exactly 160. So the size is 480 at the wire and 160 at the
- * contract, and the two are kept adjacent so nobody has to derive one from the other. */
-#define AUDIO_CAPTURE_FRAMES       480u   /* 48 kHz I2S frames per 10 ms read */
-#define AUDIO_CAPTURE_CHUNK_SAMPLES 160u  /* 16 kHz mono samples after 3:1 decimation */
+#define AUDIO_CAPTURE_FRAMES 160u
 
 /* Convert one I2S read into mono and send it if the stream is open. Exposed separately so the
  * read/convert/send sequence can be read top to bottom; not for host use. */

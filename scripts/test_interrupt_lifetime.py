@@ -42,13 +42,6 @@ class HangingLoop:
         self.captures = 0
         self.rearmed = 0
         self.eof = False
-        self.held_wake = None
-
-    def _hold_wake(self, name):
-        # A wake the watcher cannot use is kept for the next turn rather than
-        # dropped (see VoiceLoop._hold_wake). The stub records it so the test can
-        # see the watcher continued instead of vanishing into the capture.
-        self.held_wake = name
 
     @property
     def sat(self):

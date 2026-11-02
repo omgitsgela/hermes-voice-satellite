@@ -12,8 +12,6 @@
 #include "mbedtls/x509_crt.h"
 #include <stdio.h>
 #include <string.h>
-#include <errno.h>
-#include "esp_log.h"
 
 #define TLS_DIAL_TIMEOUT_MS 8000
 #define TLS_HANDSHAKE_TIMEOUT_MS 20000
@@ -98,11 +96,9 @@ int gateway_tls_link_read(void *context, void *data, size_t size) {
     gateway_tls_link *link = context;
     mbedtls_ssl_context *ssl = &((tls_contexts *)link->contexts)->ssl;
     for (;;) {
-        errno = 0;
         int count = mbedtls_ssl_read(ssl, data, size);
         if (count > 0) return count;
         if (count == MBEDTLS_ERR_SSL_WANT_READ || count == MBEDTLS_ERR_SSL_WANT_WRITE) continue;
-        ESP_LOGW("gwtls", "read failed rc=%d errno=%d requested=%u", count, errno, (unsigned)size);
         return -1;
     }
 }
@@ -111,11 +107,9 @@ int gateway_tls_link_write(void *context, const void *data, size_t size) {
     gateway_tls_link *link = context;
     mbedtls_ssl_context *ssl = &((tls_contexts *)link->contexts)->ssl;
     for (;;) {
-        errno = 0;
         int count = mbedtls_ssl_write(ssl, data, size);
         if (count > 0) return count;
         if (count == MBEDTLS_ERR_SSL_WANT_READ || count == MBEDTLS_ERR_SSL_WANT_WRITE) continue;
-        ESP_LOGW("gwtls", "write failed rc=%d errno=%d requested=%u", count, errno, (unsigned)size);
         return -1;
     }
 }

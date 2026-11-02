@@ -135,13 +135,6 @@ class TtsStream:
             await self._send(self._AudioStop().event())
             _LOGGER.info("tts stream closed: %d chars, %.2f s of audio", self._chars_sent,
                          self._seconds_sent)
-        except (Exception, asyncio.CancelledError):
-            # Cleanup must not replace the failure (or cancellation) that led here.
-            # A stop error on an otherwise successful stream must still propagate.
-            if exc[1] is None:
-                raise
-            _LOGGER.warning("tts: audio-stop failed while handling %s; preserving original error",
-                            type(exc[1]).__name__, exc_info=True)
         finally:
             if self._holds_lock:
                 self._holds_lock = False
@@ -156,32 +149,14 @@ class TtsStream:
         if not text:
             return 0.0
         sent = 0.0
-        chunks_sent = 0
-        _LOGGER.info("tts: synthesis started (%d chars)", len(text))
         for pcm, rate, width, channels in synthesize_chunks(text):
             converted = self._converter.convert(
                 self._AudioChunk(rate=rate, width=width, channels=channels, audio=pcm))
-            # Piper yields whole sentences, not bounded transport frames. Embedded peers
-            # cap payloads at 16 KiB; use smaller, sample-aligned chunks and pace each one.
-            frame_bytes = converted.width * converted.channels
-            chunk_bytes = (4096 // frame_bytes) * frame_bytes
-            if chunk_bytes == 0 or len(converted.audio) % frame_bytes:
-                raise ValueError("TTS output is not sample-aligned")
-            for offset in range(0, len(converted.audio), chunk_bytes):
-                chunk = self._AudioChunk(rate=converted.rate, width=converted.width,
-                                         channels=converted.channels,
-                                         audio=converted.audio[offset:offset + chunk_bytes])
-                if chunks_sent == 0:
-                    _LOGGER.info("tts: sending first PCM chunk (%d bytes, %d Hz/%d/%d)",
-                                 len(chunk.audio), chunk.rate, chunk.width, chunk.channels)
-                await self._send(chunk.event())
-                chunks_sent += 1
-                sent += chunk.seconds
-                self._seconds_sent += chunk.seconds
-                if self._pace:
-                    await asyncio.sleep(chunk.seconds / self._pace)
-        _LOGGER.info("tts: transmitted %d chunks, %.2fs of audio (not playback confirmation)",
-                     chunks_sent, sent)
+            await self._send(converted.event())
+            sent += converted.seconds
+            if self._pace:
+                await asyncio.sleep(converted.seconds / self._pace)
+        self._seconds_sent += sent
         self._chars_sent += len(text)
         return sent
 

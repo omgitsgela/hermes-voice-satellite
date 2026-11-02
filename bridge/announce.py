@@ -761,12 +761,7 @@ class Announcer:
                 raise
             except Exception as exc:  # noqa: BLE001 - a failed announcement is dropped
                 self.dropped += 1
-                # Log the traceback, not just the exception. A bare AssertionError with an empty
-                # message was undiagnosable from the log line alone -- the announcement failed and
-                # there was nothing to act on. exc_info costs nothing here and only fires on the
-                # failure path.
-                _LOGGER.warning("announcement %s failed: %s: %s", item.id, type(exc).__name__, exc,
-                                exc_info=exc)
+                _LOGGER.warning("announcement %s failed: %s: %s", item.id, type(exc).__name__, exc)
                 self._log({"id": item.id, "outcome": "failed", "source": item.source,
                            "key": item.key, "text": item.text,
                            "error": f"{type(exc).__name__}: {exc}"})

@@ -13,8 +13,7 @@
  * silently broke every host suite that compiled it. */
 #ifndef ESP_LOGE
 #define ESP_LOGE(tag, ...) ((void)0)
-#define ESP_LOGW(tag, ...) do { fprintf(stderr, "%s: ", tag); \
-    fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } while (0)
+#define ESP_LOGW(tag, ...) ((void)0)
 #define ESP_LOGI(tag, ...) ((void)0)
 #define ESP_LOGD(tag, ...) ((void)0)
 #endif
@@ -62,16 +61,6 @@ static const char *session_wake_name(const wy_session *s) {
  * single-threaded, so the lock compiles out and the layout is unchanged. */
 #define WY_PLAYBACK_MONO_MAX   2048u   /* int16: resampled 16 kHz mono, one slice */
 #define WY_PLAYBACK_FRAME_MAX  4096u   /* int32: stereo-32 frames, one slice */
-
-/* The largest 22050 Hz INPUT slice whose up-sampled result still fits WY_PLAYBACK_MONO_MAX.
- * 22050 -> 48000 expands by 2.177 and the up-sampler needs two samples of lookahead, so at most
- * (2048 - 2) * 22050 / 48000 = 940 input samples may be fed per call.
- *
- * This bound matters, not just tidies: wy_resample_22050_to_48000 stops when its OUTPUT buffer
- * fills, and marks the whole input chunk consumed regardless. Feed it more than 940 samples in
- * one call and the tail of the answer is silently discarded -- audible as a reply cut short. The
- * caller therefore slices its input to this, exactly as wy_session_local_play does for a tone. */
-#define WY_PLAYBACK_IN_MAX     940u   /* 22050 Hz samples per call: never overflows the scratch */
 static int16_t playback_mono_scratch[WY_PLAYBACK_MONO_MAX];
 static int32_t playback_frame_scratch[WY_PLAYBACK_FRAME_MAX];
 #ifdef ESP_PLATFORM
@@ -146,7 +135,7 @@ int wy_session_playback_configure(wy_session *session, int32_t *ring, size_t rin
     session->playback_volume = volume;   /* clamped in wy_apply_volume; the floor never silences */
     session->playback_active = 0;
     session->playback_ended = 0;
-    wy_upsampler_reset(&session->playback_rs);
+    wy_resampler_reset(&session->playback_rs);
     playback_ring_lock_give();
     return WY_OK;
 }
@@ -181,45 +170,31 @@ int wy_session_local_play(wy_session *session, const int16_t *mono, size_t n) {
              (unsigned)n, (unsigned)session->ring_capacity, (unsigned)session->playback_volume);
     /* The device's own local tone (the wake chime): the same speaker path as a bridge answer,
      * so the pump task's amplifier policy (armed while the ring is not empty) carries it. The
-     * difference from the inbound audio-chunk path is only the source: the chime is rendered at
-     * 16 kHz by the same generator the Pi satellite uses, so it is UP-SAMPLED to the link rate here
-     * (one up-sampler per tone, reset at entry, so its history is the tone's own) -- then the
-     * volume (the config plane's level, the floor never silences) and the stereo-32 expand
+     * difference from the inbound audio-chunk path is only the source: this is already at the
+     * board's 16 kHz (the chime is rendered at that rate), so there is no resample step -- but
+     * the volume (the config plane's level, the floor never silences) and the stereo-32 expand
      * are the SAME wy_apply_volume / wy_expand_mono16_to_stereo32 the answer uses, and the ring
      * append is under the ring lock, exactly like the inbound path: the append's drop-oldest
      * touches the same head the pump advances, and the scratch is shared with every
      * wy_session_step driver, so the conversion+append is one atomic unit. Input longer than
      * one scratch slice is sliced: the scratch is file-static and shared, and a second driver
      * between slices must not find a half-converted buffer. */
-    /* One up-sampler per tone, as an AUTOMATIC (stack) variable -- not static. A file-static
-     * one was reset outside the ring lock and the lock was released between slices, so a second
-     * tone (a diagnostic tone overlapping the playback task's done tone) could reset or advance
-     * the first one's cursor and history mid-tone. The resampler's lifetime is per invocation;
-     * only the scratch and the ring are shared, and those stay under the per-slice lock.
-     * It is reset at entry rather than per slice: the cursor and the cubic history must span the
-     * whole tone or every slice boundary would step the waveform. */
-    wy_upsampler tone_up;
-    wy_upsampler_reset_at(&tone_up, 16000.0, (double)WY_AUDIO_I2S_RATE_HZ);
-    /* The slice is sized for the UP-SAMPLED result: a 3:1 expansion must fit the scratch, so at
-     * most a third of it may be fed in. Slicing larger would overflow playback_mono_scratch. */
-    const size_t max_in = WY_PLAYBACK_MONO_MAX / 3;
     size_t remaining = n;
-    const int16_t *src = mono;
     while (remaining) {
-        size_t slice = remaining < max_in ? remaining : max_in;
+        size_t slice = remaining < WY_PLAYBACK_MONO_MAX ? remaining : WY_PLAYBACK_MONO_MAX;
         playback_ring_lock_take();
-        size_t mono_n = wy_resample_22050_to_48000(&tone_up, src, slice,
-                                playback_mono_scratch, WY_PLAYBACK_MONO_MAX);
+        size_t mono_n = slice;
+        memcpy(playback_mono_scratch, mono, mono_n * 2);
         wy_apply_volume(playback_mono_scratch, mono_n, session->playback_volume);
         size_t frame_n = wy_expand_mono16_to_stereo32(playback_mono_scratch, mono_n,
                             playback_frame_scratch, WY_PLAYBACK_FRAME_MAX);
         playback_ring_append_locked(session, playback_frame_scratch, frame_n);
         playback_ring_lock_give();
-        src += slice;
+        mono += mono_n;
         remaining -= slice;
-        }
-        return WY_OK;
-        }
+    }
+    return WY_OK;
+}
 
 int wy_session_playback_active(const wy_session *session) {
     return session ? session->playback_active : 0;
@@ -316,8 +291,6 @@ static int stop_streaming(wy_session *session, wy_write_fn write_fn, void *ctx) 
      * a wake that started the stream between the pre-check and the lock. If the send fails the
      * flag stays set: the stream is not actually over. */
     if (!session->streaming) return WY_OK;
-    session->stream_frames = 0;   /* the next wake starts a fresh, bounded stream */
-    ESP_LOGI("gwstop", "stop-streaming: acquiring writer lock");
     int result = writer_lock(session);
     if (result != WY_OK) return result;
     if (session->streaming) {
@@ -325,7 +298,6 @@ static int stop_streaming(wy_session *session, wy_write_fn write_fn, void *ctx) 
         if (!result) session->streaming = 0;
     }
     writer_unlock(session);
-    ESP_LOGI("gwstop", "stop-streaming: result=%d streaming=%d", result, session->streaming);
     return result;
 }
 
@@ -352,10 +324,6 @@ int wy_session_init(wy_session *session, const char *device_id, const char *boot
      * agent's durable state -- the generation guard -- would be orphaned along with it). */
     int (*config_handler)(void *, const char *, char *, size_t) = session->config_handler;
     void *config_user = session->config_user;
-    /* The presentation seam is the same kind of installed-once config: the glue announces it once
-     * and a reconnect must not leave the device unlit for the rest of the boot. */
-    void (*phase_notify)(void *, int) = session->phase_notify;
-    void *phase_user = session->phase_user;
     /* The device identity is the same kind of installed-once config: a reconnect must not
      * forget the satellite's name, area, firmware version or detection name. */
     char name[65], area[65], firmware_version[33], wake_name[65];
@@ -372,8 +340,6 @@ int wy_session_init(wy_session *session, const char *device_id, const char *boot
     session->playback_volume = playback_volume;
     session->config_handler = config_handler;
     session->config_user = config_user;
-    session->phase_notify = phase_notify;
-    session->phase_user = phase_user;
     memcpy(session->name, name, sizeof(name));
     memcpy(session->area, area, sizeof(area));
     memcpy(session->firmware_version, firmware_version, sizeof(firmware_version));
@@ -412,22 +378,6 @@ int wy_session_set_config(wy_session *session,
     return WY_OK;
 }
 
-/* Announce a phase to the presentation layer. Called only from wy_session_step -- the LINK task,
- * never the realtime playback pump -- so a device that lights its ring does so off the audio
- * path. A missing callback is not an error: the core does not require a presentation. */
-static void announce_phase(wy_session *session, int phase)
-{
-    if (session && session->phase_notify) session->phase_notify(session->phase_user, phase);
-}
-
-void wy_session_set_phase_notify(wy_session *session,
-                                 void (*fn)(void *user, int phase), void *user)
-{
-    if (!session) return;
-    session->phase_notify = fn;
-    session->phase_user = user;
-}
-
 int __attribute__((used)) wy_session_wake(wy_session *session, const char *wake_word,
                     wy_write_fn write_fn, void *ctx) {
     if (!session || !wake_word || !write_fn) return WY_INVALID;
@@ -453,29 +403,10 @@ int __attribute__((used)) wy_session_wake(wy_session *session, const char *wake_
                          NULL, 0);
     if (!result)
         result = wy_send(write_fn, ctx, "streaming-started", NULL, NULL, 0);
-    if (!result) {
-        session->streaming = 1;
-        session->stream_frames = 0;
-    }
+    if (!result) session->streaming = 1;
     writer_unlock(session);
     if (result != WY_OK) { session->state = WY_SESSION_FAILED; return result; }
-    /* The microphone is open and the query is being captured. The device's wake animation
-     * already covers this moment and will usually get here first; the announcement is for the
-     * case where a stream opens without one (a bridge-driven wake-now), and the presentation
-     * layer is free to ignore it when it is already showing this phase. */
-    announce_phase(session, WY_PHASE_VOICE);
     return WY_OK;
-    }
-
-    /* Tell the bridge its speaker has finished.
- *
- * `played` is the device saying "that answer is done sounding". The bridge waits for
- * it after every reply, and firmware that never sends it parks the conversation in
- * that wait -- measured at a full 20 s of dead air after every answer. It is one
- * control frame under the writer lock, exactly like every other link write. */
-int wy_session_send_played(wy_session *session, wy_write_fn write_fn, void *ctx) {
-    if (!session || !write_fn) return WY_INVALID;
-    return locked_send(session, write_fn, ctx, "played", NULL, NULL, 0);
 }
 
 int wy_session_send_audio(wy_session *session, const void *pcm, size_t length,
@@ -489,22 +420,6 @@ int wy_session_send_audio(wy_session *session, const void *pcm, size_t length,
      * of the last one. */
     if (!session || !pcm || !write_fn) return WY_INVALID;
     if (!session->streaming) return WY_INVALID;
-    /* An open microphone stream is a promise to someone in the room, and it must not be
-     * open-ended. The bridge ends it with `transcript`; if that never arrives -- a wake the
-     * bridge loses track of, a crash mid-turn -- the device would keep streaming a room
-     * nobody is listening to. The reference satellite closes its stream at the end of the
-     * utterance; this is the same guarantee, enforced from the device side. */
-    if (++session->stream_frames >= WY_STREAM_MAX_FRAMES) {
-        ESP_LOGW("gwstop", "streaming: closing after %u frames with no transcript "
-                 "(the host stopped driving this utterance)",
-                 (unsigned)session->stream_frames);
-        (void)stop_streaming(session, write_fn, ctx);
-        /* A stream that ends without a transcript still ends. Without this the ring is left
-         * showing a query that is not happening -- a false wake with no speech would leave the
-         * direction marker lit for the rest of the boot. */
-        announce_phase(session, WY_PHASE_IDLE);
-        return WY_INVALID;
-        }
     if (length == 0 || length > WY_AUDIO_CHUNK_SAMPLES * 2 || length % 2) return WY_INVALID;
     int lock_result = writer_lock(session);
     if (lock_result != WY_OK) return lock_result;
@@ -524,12 +439,10 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
     if (!read_fn || !write_fn) { session->state = WY_SESSION_FAILED; return WY_INVALID; }
     if (session->state == WY_SESSION_FAILED) return WY_INVALID;
     if (session->state == WY_SESSION_REFUSED) return WY_REFUSED;
-    wy_frame frame = {0};
-    const char *phase = "header-read";
+    wy_frame frame;
     cJSON *data = NULL;
     int result = wy_read_header(read_fn, ctx, session->header, sizeof(session->header));
     if (result) goto done;
-    phase = "header-parse";
     result = wy_parse_header(session->header, strlen(session->header), &frame);
     if (result) goto done;
     /* Wire order is data then payload (the canonical writer emits them in that order), and
@@ -540,21 +453,15 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
      * drained but not decoded, because wy_decode_control is, by design, for control frames
      * only and refuses any frame that carries a payload. Decoding it is what made the first
      * inbound audio-chunk fail the whole session. */
-    if (strcmp(frame.type, "audio-chunk"))
-        ESP_LOGI("gwframe", "received type=%s data=%u payload=%u", frame.type,
-                 (unsigned)frame.data_length, (unsigned)frame.payload_length);
-    phase = "body-read";
     if (frame.data_length) {
         result = wy_read_exact(read_fn, ctx, session->body, frame.data_length);
         if (result) goto done;
         if (!frame.payload_length) {
-            phase = "body-decode";
             result = wy_decode_control(session->header, strlen(session->header),
                                        session->body, frame.data_length, &data);
             if (result) goto done;
         }
     }
-    phase = "payload-read";
     if (frame.payload_length) {
         if (session->playback_active && !strcmp(frame.type, "audio-chunk")) {
             /* Inbound playback for the speaker: convert the PCM as it is drained. The payload
@@ -577,26 +484,16 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
                      * lock across both is what keeps a second converter or a concurrent pump
                      * read from clobbering either. The wire read is OUTSIDE the lock, so a
                      * slow reader never holds the transport up. */
-                    /* Sub-slice to WY_PLAYBACK_IN_MAX so the up-sampled result always fits the
-                     * scratch (see its definition for what silently breaks otherwise). Each
-                     * sub-slice is one lock/append unit; the resampler's absolute cursor keeps
-                     * the sub-slices continuous. */
-                    const int16_t *src = (const int16_t *)session->body;
+                    playback_ring_lock_take();
                     size_t samples = even / 2;
-                    while (samples) {
-                        size_t take = samples < WY_PLAYBACK_IN_MAX ? samples : WY_PLAYBACK_IN_MAX;
-                        playback_ring_lock_take();
-                        size_t mono_n = wy_resample_22050_to_48000(&session->playback_rs,
-                                            src, take,
-                                            playback_mono_scratch, WY_PLAYBACK_MONO_MAX);
-                        wy_apply_volume(playback_mono_scratch, mono_n, session->playback_volume);
-                        size_t frame_n = wy_expand_mono16_to_stereo32(playback_mono_scratch, mono_n,
-                                            playback_frame_scratch, WY_PLAYBACK_FRAME_MAX);
-                        playback_ring_append_locked(session, playback_frame_scratch, frame_n);
-                        playback_ring_lock_give();
-                        src += take;
-                        samples -= take;
-                    }
+                    size_t mono_n = wy_resample_22050_to_16000(&session->playback_rs,
+                                        (const int16_t *)session->body, samples,
+                                        playback_mono_scratch, WY_PLAYBACK_MONO_MAX);
+                    wy_apply_volume(playback_mono_scratch, mono_n, session->playback_volume);
+                    size_t frame_n = wy_expand_mono16_to_stereo32(playback_mono_scratch, mono_n,
+                                        playback_frame_scratch, WY_PLAYBACK_FRAME_MAX);
+                    playback_ring_append_locked(session, playback_frame_scratch, frame_n);
+                    playback_ring_lock_give();
                     remaining -= even;
                 }
                 if (remaining & 1) {
@@ -621,7 +518,6 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
             }
         }
     }
-    phase = "dispatch";
     if (!strcmp(frame.type, "describe")) {
         char info[768];
         int info_len = snprintf(info, sizeof(info),
@@ -654,9 +550,6 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
             version->valuedouble != 1) result = WY_INVALID;
         else session->state = WY_SESSION_REGISTERED;
     } else if (!strcmp(frame.type, "hermes.register.refused")) {
-        /* The host said no. This is not a wobbly link that might come back -- it is a definite
-         * refusal -- so it is red at once rather than after the disconnect grace. */
-        announce_phase(session, WY_PHASE_ERROR);
         session->state = WY_SESSION_REFUSED;
         result = WY_REFUSED;
     } else if (!strcmp(frame.type, "run-satellite")) {
@@ -665,26 +558,20 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
         else {
             /* The reference stops a running stream on run-satellite too (it is "back to
              * wake-word listening"), and clears a pause. */
-            int was_streaming = session->streaming;
             if (session->streaming) result = stop_streaming(session, write_fn, ctx);
             if (!result) {
                 session->paused = 0;
                 session->state = WY_SESSION_RUN_REQUESTED;
-                /* The bridge closes a silent window this way: "back to wake-word listening". A
-                 * wake that heard nothing must not leave the ring claiming a query. */
-                if (was_streaming) announce_phase(session, WY_PHASE_IDLE);
             }
         }
     } else if (!strcmp(frame.type, "pause-satellite")) {
         if (session->state != WY_SESSION_REGISTERED && session->state != WY_SESSION_RUN_REQUESTED)
             result = WY_INVALID;
         else {
-            int was_streaming = session->streaming;
             if (session->streaming) result = stop_streaming(session, write_fn, ctx);
             if (!result) {
                 session->paused = 1;
                 session->state = WY_SESSION_REGISTERED;
-                if (was_streaming) announce_phase(session, WY_PHASE_IDLE);
             }
         }
     } else if (!strcmp(frame.type, "transcript")) {
@@ -696,10 +583,6 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
             result = WY_INVALID;
         else
             result = stop_streaming(session, write_fn, ctx);
-        /* The utterance has been captured and handed over. From here the bridge is working out
-         * the answer, which is exactly the "thinking" the device should be showing: the gap
-         * between the person stopping talking and the first word coming back. */
-        if (result == WY_OK) announce_phase(session, WY_PHASE_TRANSCRIPT);
     } else if (!strcmp(frame.type, "audio-start")) {
         /* The bridge's answer begins. The device plays the stream on the board's clock: it must
          * be the bridge's SND_FORMAT (22050 Hz / 16-bit / mono) -- the one rate this device
@@ -712,7 +595,7 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
         if (cJSON_IsNumber(rate) && rate->valuedouble == 22050 &&
             cJSON_IsNumber(width) && width->valuedouble == 2 &&
             cJSON_IsNumber(channels) && channels->valuedouble == 1) {
-            wy_upsampler_reset(&session->playback_rs);
+            wy_resampler_reset(&session->playback_rs);
             /* Reset the ring under the lock: the playback task may be mid-read (draining the
              * last answer) while the bridge starts the next one, so an unlocked reset would
              * race the reader's head advance. */
@@ -725,8 +608,6 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
             session->playback_active = 1;
             ESP_LOGW("audstart", "audio-start: playback armed, returning to the link loop");
             session->playback_ended = 0;
-            /* The answer is arriving: stop glowing and start showing that it is being said. */
-            announce_phase(session, WY_PHASE_SPEAKING);
         }
     } else if (!strcmp(frame.type, "audio-chunk")) {
         /* Inbound playback audio: converted into the ring by the payload block above when the
@@ -741,11 +622,6 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
         if (session->playback_active) {
             session->playback_active = 0;
             session->playback_ended = 1;
-            /* Everything the bridge will say has been sent. The ring still drains and the
-             * speaker still sounds its tail, so the light goes dark a moment early -- chosen
-             * deliberately over announcing from the playback pump, which is the realtime path
-             * and must not be made to do I2C work. */
-            announce_phase(session, WY_PHASE_IDLE);
         }
     } else if (!strcmp(frame.type, "wake-now")) {
         /* The bridge's "open the microphone" command, for a follow-up window that has no wake
@@ -756,19 +632,6 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
          * before the host is ready fails the same way an out-of-order wake would. */
         result = wy_session_wake(session, session_wake_name(session), write_fn, ctx);
         if (result == WY_INVALID) result = WY_OK;   /* a dropped wake-now is not a fault */
-        /* A follow-up window is open: the bridge is listening for more speech with no wake word.
-         * This is the moment the reference satellite shows its dim teal, and it is the only
-         * signal the device has that the conversation is not over. */
-        announce_phase(session, WY_PHASE_FOLLOWUP);
-    } else if (!strcmp(frame.type, "led-idle") || !strcmp(frame.type, "led-busy") ||
-               !strcmp(frame.type, "led-followup")) {
-        /* The bridge's explicit presentation commands. The reference satellite receives these
-         * over its own control socket; here they arrive as ordinary events. They matter because
-         * the bridge uses led-idle to clean up after aborted work and an expired follow-up --
-         * exactly the cases the device cannot work out for itself. */
-        if (!strcmp(frame.type, "led-idle")) announce_phase(session, WY_PHASE_IDLE);
-        else if (!strcmp(frame.type, "led-busy")) announce_phase(session, WY_PHASE_TRANSCRIPT);
-        else announce_phase(session, WY_PHASE_FOLLOWUP);
     } else if (!strcmp(frame.type, "hermes.config.desired")) {
         /* The bridge's declarative config dispatch, sent right after registration (and on
          * reconnect). The session is only the transport: it NUL-terminates the decoded data
@@ -816,10 +679,6 @@ int wy_session_step(wy_session *session, wy_read_fn read_fn, wy_write_fn write_f
         if (frame.payload_length) result = WY_INVALID;
     }
 done:
-    if (result)
-        ESP_LOGW("gwframe", "failed phase=%s type=%s data=%u payload=%u result=%d",
-                 phase, frame.type[0] ? frame.type : "unknown",
-                 (unsigned)frame.data_length, (unsigned)frame.payload_length, result);
     cJSON_Delete(data);
     if (result && session->state != WY_SESSION_REFUSED) session->state = WY_SESSION_FAILED;
     return result;

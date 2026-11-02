@@ -4,12 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifdef ESP_PLATFORM
 #include "esp_log.h"
-#else
-#define ESP_LOGW(tag, ...) do { fprintf(stderr, "%s: ", tag); \
-    fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } while (0)
-#endif
 
 /* One wy_session_step per registration attempt may make several reads (describe, then the
  * register.ok). The drive is capped so a bridge that accepts the connection but never completes
@@ -283,12 +278,6 @@ int gateway_supervisor_step(gateway_supervisor *sup) {
             append(sup, "session=refused");
             return GW_REFUSED;
         }
-        /* Record the actual pumping failure before teardown changes session state. */
-        char failure[112];
-        snprintf(failure, sizeof(failure), "pump=failed result=%d state=%d streaming=%d",
-                 result, wy_session_state(session), wy_session_streaming(session));
-        append(sup, failure);
-        ESP_LOGW("gwstep", "%s", failure);
         /* WY_IO / WY_INVALID / WY_LIMIT: the bridge closed the link or the transport erred.
          * This is the only thing that ends an idle persistent session, on purpose. */
         link_down(sup);

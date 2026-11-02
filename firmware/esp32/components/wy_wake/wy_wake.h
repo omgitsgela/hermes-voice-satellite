@@ -97,16 +97,6 @@ void wy_wake_set_streaming(wy_wake *w, int streaming);
  * self-trigger, not a person, and is consumed. The core does not manage this
  * flag itself -- the glue owns it, because only the glue knows how long a
  * rendered sound lasts. */
-/* Is the device's own output still audible to its microphone?
- * `active` is the bridge's stream flag, `queued_bytes` what the ring still holds,
- * and `frames_since_queue_moved` how many 10 ms feed frames have passed since the
- * ring last SHRANK. A queue that has stopped moving is stalled, not playing: it
- * must not keep the detector deaf. See the definition for why that distinction is
- * the difference between a working device and one that is silently mute. */
-int wy_wake_playback_sounds(int active, size_t queued_bytes,
-                            uint32_t frames_since_queue_moved);
-uint32_t wy_wake_playback_stall_frames(void);
-
 void wy_wake_set_playback_active(wy_wake *w, int active);
 
 /* The stream stopped (the bridge's transcript or a pause). The core leaves
@@ -132,8 +122,4 @@ bool wy_wake_has_model(const wy_wake *w);
  * needs; otherwise it renders min(cap, needed) samples into `out` and returns the
  * number written. The device glue streams the samples to the I2S TX. */
 size_t wy_chime_render(int16_t *out, size_t cap);
-/* The done tone: "that answer is finished". Same pair as the chime, descending.
- * Both reproduce the reference satellite's sound set exactly -- see
- * `scripts/make_chimes.py`, the single source of truth for these tones. */
-size_t wy_done_render(int16_t *out, size_t cap);
 #endif

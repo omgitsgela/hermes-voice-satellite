@@ -9,7 +9,6 @@
  */
 #include "wy_wake.h"
 #include <math.h>
-#include <math.h>
 #include <string.h>
 
 #define WY_WAKE_NAME_MAX 64u
@@ -166,38 +165,6 @@ void wy_wake_set_playback_active(wy_wake *w, int active)
     w->playback = active ? 1 : 0;
 }
 
-/* How many 10 ms feed frames a queue may go without shrinking before it counts
- * as STALLED rather than draining. A live speaker consumes the ring continuously,
- * so the gap between drains is small even for a full ring; a wedged pump never
- * advances it at all. */
-#define WY_WAKE_STALL_FRAMES 50u   /* 500 ms with no movement */
-
-uint32_t wy_wake_playback_stall_frames(void)
-{
-    return WY_WAKE_STALL_FRAMES;
-}
-
-/* Is the device's own output still audible to its microphone?
- *
- * `active` is the bridge's stream flag; `queued_bytes` is what the ring still
- * holds; `frames_since_queue_moved` is how many feed frames have passed since the
- * ring last SHRANK by any amount.
- *
- * The second clause used to read `queued_bytes > 0` on its own, and that is the
- * deadlock: a queue that is filled and never drained keeps the detector deaf for
- * ever, while the room hears nothing because nothing is playing. Silence and
- * permanent deafness from one predicate. Whether audio can be heard is a question
- * about DRAINING, not about the queue being non-empty. */
-int wy_wake_playback_sounds(int active, size_t queued_bytes,
-                            uint32_t frames_since_queue_moved)
-{
-    if (active)
-        return 1;   /* the bridge says it is sending audio: authoritative */
-    if (queued_bytes == 0)
-        return 0;
-    return frames_since_queue_moved < WY_WAKE_STALL_FRAMES;
-}
-
 void wy_wake_stream_ended(wy_wake *w)
 {
     if (w == NULL)
@@ -228,78 +195,47 @@ bool wy_wake_has_model(const wy_wake *w)
  * (tau 100 samples). Pure math, deterministic, no file dependency: the device
  * streams the samples to the I2S TX, and the host test pins the exact bytes. */
 #define WY_CHIME_RATE      16000.0
-#define WY_TONE_ATTACK_MS  15.0   /* raised-cosine attack: a struck note, not a beep */
-#define WY_TONE_GAP_MS     18.0   /* between notes, so they read as two distinct strikes */
-#define WY_TONE_AMPLITUDE  0.20   /* the reference set's -14 dBFS-ish level */
+/* 120 ms per note and THREE notes (was 2 x 80 ms = 160 ms total). A 160 ms blip is easy to
+ * miss entirely, which is exactly what people reported: the device WAS acknowledging the wake,
+ * but nobody could hear it happen. The point of this tone is to answer "did you hear me?" -- so
+ * it has to be impossible to mistake for a stray click. */
+#define WY_CHIME_NOTE_SMP  1920u   /* 120 ms per note */
+#define WY_CHIME_ATTACK    80u     /* 5 ms linear attack */
+#define WY_CHIME_TAU       100.0   /* exponential decay time constant (samples) */
+#define WY_CHIME_PEAK      16384.0 /* half of int16 full scale: headroom, no clipping */
 
-typedef struct { double freq; double ms; } wy_tone_note;
-
-static size_t wy_tone_note_samples(double ms) {
-    return (size_t)(WY_CHIME_RATE * ms / 1000.0);
+static double wy_chime_note_freq(size_t note)
+{
+    /* A rising three-tone figure reads as "I heard you", not as a stray click. */
+    static const double freqs[3] = { 660.0, 880.0, 1100.0 };
+    return freqs[note < 3 ? note : 2];
 }
 
-static size_t wy_tone_gap_samples(void) {
-    return wy_tone_note_samples(WY_TONE_GAP_MS);
+static int16_t wy_chime_sample(size_t t, double freq)
+{
+    /* t: sample index within the note; freq: the note's frequency (Hz). */
+    double amp;
+    if (t < WY_CHIME_ATTACK)
+        amp = (double)t / (double)WY_CHIME_ATTACK;   /* linear attack 0 -> 1 */
+    else
+        amp = exp(-(double)(t - WY_CHIME_ATTACK) / WY_CHIME_TAU);
+    return (int16_t)llrint(amp * WY_CHIME_PEAK * sin(2.0 * 3.14159265358979323846 * freq *
+                                                    (double)t / WY_CHIME_RATE));
 }
 
-/* Render one note into out[0..cap). Returns the sample count. */
-static size_t wy_tone_note_render(int16_t *out, size_t cap, double freq, double ms) {
-    size_t n = wy_tone_note_samples(ms);
-    if (n > cap) n = cap;
-    size_t attack = wy_tone_note_samples(WY_TONE_ATTACK_MS);
-    if (attack > n) attack = n;
-    /* Decay time constant is 0.35 of the note's own duration, so long notes ring longer. */
-    double tau = 0.35 * ms / 1000.0;
-    if (tau < 1e-6) tau = 1e-6;
-    for (size_t i = 0; i < n; ++i) {
-        double t = (double)i / WY_CHIME_RATE;
-        double env = exp(-t / tau);
-        if (attack && i < attack) {
-            double x = (double)i / (double)attack;
-            env *= 0.5 - 0.5 * cos(3.14159265358979323846 * x);
-        }
-        double sample = sin(2.0 * 3.14159265358979323846 * freq * t) * env * WY_TONE_AMPLITUDE;
-        double scaled = sample * 32767.0;
-        if (scaled > 32767.0) scaled = 32767.0;
-        if (scaled < -32768.0) scaled = -32768.0;
-        out[i] = (int16_t)llround(scaled);
-    }
-    return n;
-}
-
-static size_t wy_tones_render(int16_t *out, size_t cap,
-                              const wy_tone_note *notes, size_t count) {
-    if (!out) {
-        /* NULL is a length query: notes plus the gaps between them. */
-        size_t total = 0;
-        for (size_t i = 0; i < count; ++i) total += wy_tone_note_samples(notes[i].ms);
-        return total + (count > 1 ? (count - 1) * wy_tone_gap_samples() : 0);
-    }
-    size_t used = 0;
-    for (size_t i = 0; i < count; ++i) {
-        if (i) {
-            size_t gap = wy_tone_gap_samples();
-            if (used + gap > cap) gap = cap - used;
-            for (size_t g = 0; g < gap; ++g) out[used + g] = 0;
-            used += gap;
-        }
-        if (used >= cap) break;
-        used += wy_tone_note_render(out + used, cap - used, notes[i].freq, notes[i].ms);
-    }
-    return used;
-}
-
-/* The wake chime: "I heard you". */
 size_t wy_chime_render(int16_t *out, size_t cap)
 {
-    static const wy_tone_note notes[2] = { {392.0, 120.0}, {523.0, 170.0} };
-    return wy_tones_render(out, cap, notes, 2);
-}
-
-/* The done tone: "that answer is finished". Same pair, descending, so the two sound of a
- * piece while still telling you which half of the exchange you are in. */
-size_t wy_done_render(int16_t *out, size_t cap)
-{
-    static const wy_tone_note notes[2] = { {523.0, 120.0}, {392.0, 170.0} };
-    return wy_tones_render(out, cap, notes, 2);
+    size_t total = 3 * WY_CHIME_NOTE_SMP;
+    size_t n = (cap < total) ? cap : total;
+    if (out == NULL)
+        return total;
+    for (size_t note = 0; note < 3; note++) {
+        double freq = wy_chime_note_freq(note);
+        for (size_t t = 0; t < WY_CHIME_NOTE_SMP; t++) {
+            if (note * WY_CHIME_NOTE_SMP + t >= n)
+                break;
+            out[note * WY_CHIME_NOTE_SMP + t] = wy_chime_sample(t, freq);
+        }
+    }
+    return n;
 }

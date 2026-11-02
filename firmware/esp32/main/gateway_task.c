@@ -1,5 +1,4 @@
 #include "gateway_task.h"
-#include "led_status.h"
 #include "gateway_supervisor.h"
 #include "gateway_tls.h"
 #include "gateway_socket.h"
@@ -19,7 +18,6 @@
 #include "esp_heap_caps.h"
 #include <string.h>
 #include "esp_log.h"
-#include "esp_app_desc.h"
 
 /* The device half of "register on boot": a persistent gateway task that runs the supervisor
  * (item 1) for the life of the session, re-dialing -- and re-associating Wi-Fi -- whenever the
@@ -39,24 +37,7 @@
  * end of the send, then decays. A 30 s answer therefore needs ~15 s of hold. 16 s of stereo-32
  * at 16 kHz = 16 * 16000 * 2 = 512000 slots = 2 MiB of PSRAM (ample on the 8 MiB XIAO S3).
  * Overflow drops the OLDEST frame (a late sample is unplayable), never the link. */
-/* The ring is sized in SECONDS of audio at the link rate, never in raw slots. It used to be a
- * bare 512000 with a comment saying "16 s at 16 kHz"; when the link went to 48 kHz the constant
- * stayed and the buffer silently shrank to 5.33 s, so a long answer sent at the bridge's 2x pace
- * overflowed and dropped speech with no error anywhere. Deriving it from the rate means the two
- * cannot drift apart again.
- *
- * 16 s is the real requirement, not padding: the bridge sends at 2x pace, so a 30 s answer
- * finishes arriving in 15 s while 30 s of audio still has to drain -- roughly 15 s must be
- * held. At 48 kHz stereo-32 that is 16 * 48000 * 2 = 1536000 slots = 5.86 MiB of PSRAM.
- * See the fallback below for what happens when the 8 MiB XIAO cannot give that. */
-#define GATEWAY_PLAYBACK_RING_SECONDS 16u
-#define GATEWAY_PLAYBACK_RING_FRAMES \
-    (GATEWAY_PLAYBACK_RING_SECONDS * WY_AUDIO_I2S_RATE_HZ * 2u)
-
-/* How far the fallback may shrink before admitting defeat. 4 s is the smallest buffer that still
- * plays a typical short answer end to end at 2x pace; below that the ring is worse than useless
- * because it clips almost every reply. */
-#define GATEWAY_PLAYBACK_RING_MIN_SECONDS 4u
+#define GATEWAY_PLAYBACK_RING_FRAMES 512000
 
 static struct {
     char host[PROVISION_HOST_MAX];
@@ -130,10 +111,6 @@ static int gateway_task_establish(void *user, gw_link *link) {
     return 0;
 }
 
-/* Whether this boot has ever reached the host. Decides green-once versus silent-reconnect; see
- * docs/leds.md. Declared here because both the registration and the link-down hooks read it. */
-static int led_have_connected;
-
 /* Called by the supervisor exactly when a session (re)reaches registered: the handshake regime
  * is over, the idle regime begins, and an idle read is the healthy state. Lifting the deadline
  * to "no deadline" is what makes the persistent read block until a real end of stream instead of
@@ -143,21 +120,10 @@ static int led_have_connected;
  * re-registration after a link bounce (which stopped the pump in on_link_down) starts it again. */
 static int gateway_task_on_registered(void *user) {
     (void)user;
-    /* The green ready flash on the first connection of a boot; silent on any reconnect. */
-    led_status_connected(!led_have_connected);
-    led_have_connected = 1;
     if (state.transport == PROVISION_TRANSPORT_TLS)
         gateway_tls_link_set_deadline(&state.tls_link, GATEWAY_SOCKET_NO_DEADLINE);
     else
         state.tcp_socket.deadline_us = GATEWAY_SOCKET_NO_DEADLINE;
-    /* The pump reports `played` when an answer finishes sounding, so bind it to the
-     * link alongside the capture path. Refreshed every registration: a reconnect
-     * hands back the same tasks with a new transport. */
-    {
-        gw_link link = gateway_supervisor_link(&supervisor);
-        audio_playback_bind(gateway_supervisor_session(&supervisor), link.user,
-                            link.write_fn);
-    }
     audio_playback_start();
     return 0;
 }
@@ -250,9 +216,9 @@ static void cfg_stage_wake(const char *key, const char *value) {
 
 /* The apply adapter: the device's real "what can I actually apply" half. It sets the LIVE
  * playback volume (the one setting with a live path -- the next audio slice picks it up), stages
- * wake settings to NVS for the next increment, applies led_brightness to the ring, and is HONEST
- * about the rest: mic_gain / locale / update_channel have no live adapter, so they are never put
- * in `actual`. The health reported is degraded whenever any desired key is not in `actual` (which
+ * the wake settings to NVS for the next increment, and is HONEST about the rest: mic_gain /
+ * led_brightness / locale / update_channel have no live adapter, so they are never put in
+ * `actual`. The health reported is degraded whenever any desired key is not in `actual` (which
  * is always, on this device, because the bridge sends the full 7-key profile). Only what is
  * really applied goes in `actual` -- nothing is claimed that was not. */
 static int cfg_apply(void *user, const char *settings_json,
@@ -298,21 +264,6 @@ static int cfg_apply(void *user, const char *settings_json,
     const cJSON *word = cJSON_GetObjectItemCaseSensitive(settings, "wake_word");
     if (word && cJSON_IsString(word) && word->valuestring)
         cfg_stage_wake("wake_word", word->valuestring);
-    /* led_brightness: NOW a live adapter. It was staged as "no adapter" before the ring had a
-     * driver, which left every device pinned at full regardless of what the fleet asked for. The
-     * fleet's scale is 1-31 (docs/configuration-plane.md); the ring's own scale is 0-255 and the
-     * core does the scaling. Only a value the device actually took is reported in `actual`. */
-    const cJSON *brightness = cJSON_GetObjectItemCaseSensitive(settings, "led_brightness");
-    if (brightness) {
-        if (cJSON_IsNumber(brightness) && !cJSON_IsBool(brightness) &&
-            brightness->valuedouble >= 1 && brightness->valuedouble <= 31 &&
-            brightness->valuedouble == (double)(long)brightness->valuedouble &&
-            led_status_set_brightness((unsigned)brightness->valuedouble) == 0) {
-            cJSON_AddNumberToObject(actual, "led_brightness", brightness->valuedouble);
-        } else {
-            degraded = 1;
-        }
-    }
     /* Any desired key that did not land in `actual` makes this a partial apply. */
     if (!cJSON_Compare(actual, settings, 1)) degraded = 1;
     *out_health = degraded ? WY_CFG_HEALTH_DEGRADED : WY_CFG_HEALTH_HEALTHY;
@@ -350,10 +301,6 @@ static void gateway_task_on_link_down(void *user) {
      * by peer"). This path is reached at the exact moment a voice reply should arrive, and until
      * now it has been silent. */
     ESP_LOGW("gwlink", "on_link_down: the gateway link is going away (user=%p)", user);
-    /* NOT led_have_connected = 0. This latch is "has this MCU boot ever reached the host", and a
-     * disconnect is not a reboot. Clearing it here made every reconnect flash green, which turns
-     * the once-per-boot handshake into a routine blink people learn to ignore. */
-    led_status_disconnected();   /* red only if it stays away: see docs/leds.md */
     (void)user;
     audio_capture_stop();
     audio_playback_stop();
@@ -506,14 +453,7 @@ static void gateway_task_set_identity(wy_session *session) {
     char name[65], area[65], firmware_version[33], wake_word[65];
     nvs_read_str("device_name", name, sizeof(name));
     nvs_read_str("device_area", area, sizeof(area));
-    /* Identify the executing image, not a saved user label or a copied bundle. The
-     * descriptor hash is populated by the image builder from the linked ELF. */
-    const esp_app_desc_t *app = esp_app_get_description();
-    char elf_hash[65];
-    for (size_t i = 0; i < sizeof(app->app_elf_sha256); ++i)
-        snprintf(elf_hash + i * 2, 3, "%02x", app->app_elf_sha256[i]);
-    ESP_LOGI("fwbuild", "running ELF sha256=%s", elf_hash);
-    snprintf(firmware_version, sizeof(firmware_version), "esp32-%.24s", elf_hash);
+    nvs_read_str("firmware_version", firmware_version, sizeof(firmware_version));
     /* The detection name IS the model name: wake_word is the model selector (the model file's
      * stem, e.g. hey_hermes), and the detection event reports that same name. */
     nvs_read_str("wake_word", wake_word, sizeof(wake_word));
@@ -525,12 +465,6 @@ int gateway_task_start(const char *host, unsigned port, int transport,
                        const char *ssid, const char *psk, char *report, size_t capacity) {
     if (active) return -1;  /* one gateway session at a time */
     if (!host || !host[0] || !ssid || !ssid[0]) return -1;
-
-    /* The ring says "starting up" before anything else can fail, and keeps saying it until the
-     * host connects. A device with power and no network should be visibly alive, not dark. */
-    if (led_status_start() == 0) (void)led_status_boot();
-    /* The latch is NOT reset here either: restarting the gateway session is not a reboot, and the
-     * startup look must not replay for it. led_status_boot() itself is once-per-boot. */
 
     if (device_identity(state.device_id, sizeof(state.device_id),
                         state.boot_id, sizeof(state.boot_id)) != 0) return -1;
@@ -561,12 +495,6 @@ int gateway_task_start(const char *host, unsigned port, int transport,
      * re-init exactly like the writer-lock callbacks and the playback ring. */
     gateway_task_set_identity((wy_session *)gateway_supervisor_session(&supervisor));
 
-    /* The presentation seam, installed once like the identity and the writer lock: the session
-     * announces which phase a turn is in and the ring shows it. Survives the supervisor's per-link
-     * re-init because the callback and its user live in the session, not in the link. */
-    wy_session_set_phase_notify((wy_session *)gateway_supervisor_session(&supervisor),
-                                led_status_on_phase, NULL);
-
     /* The playback ring is a device-lifetime PSRAM buffer: the bridge's answers convert into it
      * and the pump reads it at realtime. It is owned here (the file-static playback_ring), not
      * in the session -- a gateway restart frees the old session (the supervisor does it on
@@ -588,39 +516,16 @@ int gateway_task_start(const char *host, unsigned port, int transport,
         heap_caps_free(playback_ring);
         playback_ring = NULL;
     }
-    /* Ask for the full 16 s, then halve until it fits. The 8 MiB PSRAM must also hold the wake
-     * model and the diagnostic arena, so a 48 kHz-sized ring is not guaranteed; refusing to
-     * configure playback at all (the old behaviour on any failure) would leave the device silent
-     * when a smaller ring still plays most answers. Each attempt is logged so a device that is
-     * silently running short can be diagnosed from the console. */
-    int32_t *ring = NULL;
-    size_t ring_frames = GATEWAY_PLAYBACK_RING_FRAMES;
-    for (unsigned seconds = GATEWAY_PLAYBACK_RING_SECONDS;
-         seconds >= GATEWAY_PLAYBACK_RING_MIN_SECONDS; seconds /= 2) {
-        ring_frames = (size_t)seconds * WY_AUDIO_I2S_RATE_HZ * 2u;
-        ring = heap_caps_calloc(ring_frames, sizeof(int32_t),
-                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (ring) {
-            if (seconds != GATEWAY_PLAYBACK_RING_SECONDS) {
-                ESP_LOGW("gwplay", "playback ring: %u s did not fit; using %u s (%u slots)",
-                         (unsigned)GATEWAY_PLAYBACK_RING_SECONDS, seconds, (unsigned)ring_frames);
-            }
-            break;
-        }
-        ESP_LOGW("gwplay", "playback ring: %u s (%u slots) did not fit in PSRAM",
-                 seconds, (unsigned)ring_frames);
-    }
+    int32_t *ring = heap_caps_calloc(GATEWAY_PLAYBACK_RING_FRAMES, sizeof(int32_t),
+                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (ring) {
         wy_session_playback_configure((wy_session *)session, ring,
-                                      ring_frames * sizeof(int32_t),
+                                      GATEWAY_PLAYBACK_RING_FRAMES * sizeof(int32_t),
                                       WY_VOLUME_DEFAULT_PERCENT);
         playback_ring = ring;
-        ESP_LOGI("plb_ring", "playback ring ready: %u frames (%u s at %u Hz)",
-                 (unsigned)ring_frames, (unsigned)(ring_frames / (WY_AUDIO_I2S_RATE_HZ * 2u)),
-                 (unsigned)WY_AUDIO_I2S_RATE_HZ);
+        ESP_LOGI("plb_ring", "playback ring ready: %u frames", (unsigned)GATEWAY_PLAYBACK_RING_FRAMES);
     } else {
-        ESP_LOGW("plb_ring", "playback ring allocation FAILED (tried down to %u frames)",
-                 (unsigned)ring_frames);
+        ESP_LOGW("plb_ring", "playback ring allocation FAILED (%u frames)", (unsigned)GATEWAY_PLAYBACK_RING_FRAMES);
         gateway_report_append(state.report, sizeof(state.report), "playback=unavailable reason=psram");
     }
     /* Point the pump at THIS session unconditionally, not only when the ring allocated: on a

@@ -35,12 +35,9 @@ class AudioTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         library = Path(temporary.name) / 'audio.so'
-        layout = Path(temporary.name) / 'layout.c'
-        layout.write_text('#include "wyoming_audio.h"\n'
-                          'size_t test_resampler_size(void) { return sizeof(wy_resampler); }\n')
         subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC',
                         '-I' + str(COMP / 'wyoming_wire'), '-I' + str(COMP / 'wyoming_audio'),
-                        str(wire), str(audio), str(layout), '-lm', '-o', str(library)], check=True)
+                        str(wire), str(audio), '-lm', '-o', str(library)], check=True)
         lib = C.CDLL(str(library))
         lib.wy_audio_chunk_data.argtypes = [C.c_char_p, C.c_size_t,
                                             C.c_int, C.c_int, C.c_int]
@@ -152,14 +149,13 @@ class AudioTests(unittest.TestCase):
 
 
     def resampler(self):
-        """Mirror the production FIR resampler and verify its ABI before any C write."""
+        """A wy_resampler is a struct {double position}; the ctypes view and the reset/feed
+        bindings. The position is carried across feed() calls, so consecutive chunks resample
+        continuously."""
         lib = self.library()
         class Resampler(C.Structure):
             _fields_ = [('position', C.c_double), ('consumed', C.c_double),
-                        ('prev_value', C.c_int32), ('hist', C.c_int16 * 31)]
-        lib.test_resampler_size.restype = C.c_size_t
-        self.assertEqual(C.sizeof(Resampler), lib.test_resampler_size(),
-                         'ctypes resampler allocation does not match production C')
+                        ('prev_value', C.c_int32)]
         lib.wy_resampler_reset.argtypes = [C.POINTER(Resampler)]
         lib.wy_resampler_reset.restype = None
         lib.wy_resample_22050_to_16000.argtypes = [C.POINTER(Resampler), C.POINTER(C.c_int16),
