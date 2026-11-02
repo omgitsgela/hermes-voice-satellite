@@ -28,7 +28,13 @@ class FailedGitResult:
 
 with tempfile.TemporaryDirectory() as tmp:
     mirror = pathlib.Path(tmp)
-    ordinary_file = mirror / "Gateway" / "important.py"
+    # The prune refuses to touch anything unless the mirror marker is present; this fixture
+    # is a real mirror whose git read-back fails, not a wrong directory. The code directory
+    # is deliberately named like the CURRENT tree (satellite_gateway/, not Gateway/): an
+    # anchor that still looked for the old name would refuse a real mirror here and this
+    # test would see the git failure never reached.
+    (mirror / "SYNC-INFO.txt").write_text("commit: fixture\n")
+    ordinary_file = mirror / "satellite_gateway" / "important.py"
     ordinary_file.parent.mkdir()
     ordinary_file.write_text("irreplaceable backup data\n")
 
@@ -75,9 +81,9 @@ print(f"prune failure checks: {4 - phase_one_failures}/4 passed")
 # to inspection of the constant.
 with tempfile.TemporaryDirectory() as tmp:
     mirror = pathlib.Path(tmp)
-    (mirror / "Gateway").mkdir()
-    (mirror / "Gateway" / "tracked.py").write_text("still tracked\n")
-    (mirror / "Gateway" / "stale.py").write_text("no longer tracked\n")
+    (mirror / "satellite_gateway").mkdir()
+    (mirror / "satellite_gateway" / "tracked.py").write_text("still tracked\n")
+    (mirror / "satellite_gateway" / "stale.py").write_text("no longer tracked\n")
     protected = [
         "private/device-images/satellite-sdcard.img.zst",
         "private/device-images/token-copy.txt",
@@ -94,10 +100,10 @@ with tempfile.TemporaryDirectory() as tmp:
 
     protected_failures = 0
     mod.mirror_root = lambda: mirror
-    # The fixture this check builds is <mirror>/Gateway/tracked.py, so the stubbed "tracked" set has
-    # to name the same path. It said "gateway/tracked.py" -- a different file -- so the guard had
+    # The fixture this check builds is <mirror>/satellite_gateway/tracked.py, so the stubbed "tracked" set has
+    # to name the same path. It said "Gateway/tracked.py" -- a different file -- so the guard had
     # nothing to protect and the check failed on its own inconsistency.
-    mod.tracked_files = lambda: {"Gateway/tracked.py"}
+    mod.tracked_files = lambda: {"satellite_gateway/tracked.py"}
     sys.argv = [str(HERE / "prune-nas-mirror.py"), "--apply"]
     try:
         with contextlib.redirect_stdout(io.StringIO()):
@@ -108,10 +114,10 @@ with tempfile.TemporaryDirectory() as tmp:
     if result != 0:
         failures.append("apply returned failure while a protected file existed")
         protected_failures += 1
-    if not (mirror / "Gateway" / "tracked.py").is_file():
+    if not (mirror / "satellite_gateway" / "tracked.py").is_file():
         failures.append("apply deleted a file the repository still tracks")
         protected_failures += 1
-    if (mirror / "Gateway" / "stale.py").exists():
+    if (mirror / "satellite_gateway" / "stale.py").exists():
         failures.append("apply kept a file the repository no longer tracks")
         protected_failures += 1
     for rel in protected + generated:
