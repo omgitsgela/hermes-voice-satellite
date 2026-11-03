@@ -316,6 +316,7 @@ it.
 ## Documentation
 
 - [`docs/quick-reference.md`](docs/quick-reference.md) one page: everything a person can say to the satellite, and what answers it
+- [`docs/voice-instructions.md`](docs/voice-instructions.md) the recommended context frame sent with every request: why each clause exists, and a starting frame to adapt
 - [`docs/voice-commands.md`](docs/voice-commands.md) the bridge-local commands in full, and the phrases deliberately not matched
 - [`docs/timers-and-alarms.md`](docs/timers-and-alarms.md) timers and alarms: what a person says, the tool calls, and where the state lives
 - [`docs/satellite-http-config.md`](docs/satellite-http-config.md) configuration server for the satellite: feasibility research, not built
