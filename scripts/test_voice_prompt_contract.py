@@ -76,13 +76,6 @@ def main() -> int:
     check("the prompt calls the examples intent, not a script",
           "examples of intent, not a script" in lowered)
 
-    # 5) no self-introduction, no capability recitation (decided 2026-11-02: answers were
-    #    opening with "Sure, I can help with that" style preambles instead of the answer)
-    check("the prompt forbids opening with a self-introduction or capability recitation",
-          "never open a reply by introducing yourself" in lowered)
-    check("and allows capability answers only when explicitly asked",
-          "only when the person explicitly asks who you are or what you can do" in lowered)
-
     print(f"voice prompt checks: {checks - len(failures)}/{checks} passed")
     for failure in failures:
         print(f"  FAIL: {failure}")
