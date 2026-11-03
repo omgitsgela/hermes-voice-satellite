@@ -1,0 +1,30 @@
+AUTOMATIC-RESTART VERIFICATION - 2026-11-02 (owner-approved live test)
+Scope of approval: model pin, satellite-stack planned restart, and one forced
+recovery test of the Hermes API gateway child only. Voice briefly unavailable;
+no reboot was performed in this session.
+
+Planned restart (17:15 local): stop sentinel created and verified, task
+stopped, sentinel removed, Start-ScheduledTask, supervisor relaunched all
+three owned children (supervisor.log 17:15:12).
+
+Forced recovery test: the task-owned core child tree (redirector PID 32396 +
+base interpreter PID 25968 serving 127.0.0.1:8642) was verified as owned by
+the supervisor (parent chain terminates at supervise.pyw PID 31804) BEFORE
+termination, then taskkill /T /F executed once. Old PIDs confirmed gone.
+supervisor.log: "hermes_cli.main: exited 1; retry in 10s" at 17:16:49,
+relaunch pid=22384 at 17:17:00. Authenticated GET /v1/health returned 200
+ok ~7.6s after the kill. No foreign process was touched.
+
+Still NOT proven: survival across a real Windows reboot/logout cycle. The
+login trigger plus 999x1min restart policy is installed and verified live;
+the reboot claim requires a future reboot with this user logged in.
+
+Root cause of the earlier "I can't reach my brain right now": satellite_gateway.loop
+logged VoiceGatewayError - connection refused to 127.0.0.1:8642 at 16:54:28.
+At that moment the Hermes API gateway ran as a foreground process outside the
+supervisor and had disappeared; the three-service supervisor took over at
+17:04:14. Post-fix verified: authenticated /config/devices shows
+esp32-68ee8f4b5988 connected/healthy/converged with empty drift; the pinned
+voice model answered live turns on gpt-6-luna (agent.log
+model=gpt-6-luna provider=openai-codex platform=api_server, including a real
+spoken exchange).

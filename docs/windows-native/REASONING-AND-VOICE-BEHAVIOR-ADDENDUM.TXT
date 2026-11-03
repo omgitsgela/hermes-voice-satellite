@@ -1,0 +1,109 @@
+REASONING-EFFORT CONTROL + VOICE ANSWER BEHAVIOR ADDENDUM - 2026-11-02
+(later session; supplements CONTEXT-AND-FALLBACK-ADDENDUM.TXT and
+MODEL-PIN-ADDENDUM.TXT; current installed pin state is recorded in section 4)
+
+1) HOW THE SATELLITE SELECTS ITS MODEL AND REASONING AT THE API
+The satellite sends its durable pin (voice-model.json at the project root) on
+every POST /v1/runs request as model / provider / model_options /
+require_model_lock. The Hermes API gateway translates the request's
+model_options into the agent's reasoning config via
+gateway/platforms/api_server.py _request_reasoning_config():
+  - model_options.reasoning_effort accepts: none (aliases false/disabled, or
+    JSON boolean false), minimal, low, medium, high, xhigh, max, ultra.
+  - "none" becomes {"enabled": false} = thinking OFF for that session.
+  - When the request carries a valid reasoning selection it OVERRIDES the
+    gateway's global agent.reasoning_effort (config.yaml) for that session.
+    The global value still applies to every other surface (Desktop, CLI, etc.).
+This means reasoning for voice can be tuned per-satellite by editing
+voice-model.json ONLY - no Hermes core code change and no global config
+change is needed, and other chats are unaffected.
+Known limit (verified in source): if a mid-turn fallback swap activates,
+chat_completion_helpers re-resolves reasoning_config for the fallback model
+from config.yaml (per-model reasoning_overrides > global reasoning_effort).
+The per-request "none" does not follow the session into the fallback model.
+Making reasoning satellite-only for the fallback too would require a Hermes
+core change; it was deliberately NOT done. config.yaml was NOT touched.
+
+2) WHAT WAS CHANGED AND WHAT IT WAS ROLLED BACK TO
+- Investigated switching the pinned primary (gpt-6-luna / openai-codex) from
+  reasoning_effort "low" to "none" for faster voice answers, and keeping the
+  pin-based selection rather than any global setting.
+- Applied "none" (voice-model.json), loaded via the planned-stop restart
+  procedure, and verified live (see 3).
+- Owner then decided "medium" is preferred; the pin was set back to
+  reasoning_effort "medium" with the same restart procedure and re-verified.
+- CURRENT INSTALLED STATE: model gpt-6-luna, provider openai-codex,
+  reasoning_effort medium, service_tier priority, require_model_lock false.
+  (require_model_lock false keeps the fallback chain: llamacpp/qwen38 serves
+  the turn when the pinned provider itself fails; unknown provider slugs
+  still fail closed by design.)
+
+3) VERIFICATION EVIDENCE FOR THE REASONING CHANGES (2026-11-02, live)
+- Planned-stop restart run twice (sentinel created -> four listener ports
+  close and task reaches Ready -> sentinel removed -> Start-ScheduledTask ->
+  10701/10702/10704/8642 re-listen under new PIDs). Not a SIGKILL "End".
+- Ad-hoc gateway translation check: feeding the live voice-model.json into
+  the running build's api_server._request_reasoning_config() returned
+  {"enabled": False} for "none" (proves the wire format; run from a temp
+  script, deleted after).
+- scripts/windows/verify_voice_backend.py through the real voice session:
+  HEALTH ok, real inference completed, RUN_STATUS completed model=gpt-6-luna
+  (run after each restart).
+- agent.log voice-session conversation-turn lines: model=gpt-6-luna
+  provider=openai-codex platform=api_server.
+- voice_satellite fleet_status after each restart: esp32-68ee8f4b5988
+  connected/healthy/converged, empty drift, wake okay_nabu, voice
+  en_US-hfc_female-medium.
+- Focused unit suite local-tests test_voice_model_pin in the runtime .venv:
+  4/4 OK. (Label: focused tests + ad-hoc checks, not a full-suite pass.)
+- Incident observed during verification (NOT caused by the reasoning edit):
+  the codex pin hit HTTP 429 usage-limit; with require_model_lock false the
+  chain activated per design - agent.log "Fallback activated: gpt-6-luna ->
+  qwen38 (llamacpp)" and the fallback line logged
+  "Fallback qwen38: reasoning_config resolved: {'enabled': True,
+  'effort': 'medium'}", which is the section-1 limit made visible.
+
+4) VOICE ANSWER BEHAVIOR: "ONE MOMENT." VS IMMEDIATE ANSWER
+Host users may notice the satellite sometimes says "One moment." before an
+answer and sometimes answers directly. This is the satellite gateway's
+silence filler (satellite_gateway/loop.py):
+- Triggers on EITHER: (a) the run starts using a tool (on_tool_started from
+  /v1/runs events), or (b) 4 seconds pass (SILENCE_FILLER_SECONDS) with
+  nothing spoken yet - a slow first token gets the filler just like a tool
+  call.
+- Spoken at most once per turn and only before the first real sentence; the
+  timer is cancelled as soon as the model starts streaming.
+- Turns answered locally without reaching the model (volume commands,
+  "new conversation" reset phrases, rejected blips) never use the filler;
+  they get instant canned replies.
+- The Gateway (not the satellite) owns the "thinking" LED phase because the
+  satellite cannot tell the filler from the answer (both arrive as
+  AudioStart); the violet busy LED stays on through filler + tool work until
+  the answer starts playing.
+- Total gateway failure instead of silence produces the spoken fallback
+  "I can't reach my brain right now" (see
+  RESTART-AND-RECOVERY-VERIFICATION.TXT root-cause notes).
+
+5) HOW TO CHANGE REASONING YOURSELF (safe procedure)
+1. Edit only voice-model.json: set model_options.reasoning_effort to
+   "none" (off), or one of minimal/low/medium/high/xhigh/max/ultra. Keep
+   provider explicit. Invalid/unknown pins fail closed loudly.
+2. Planned stop: create <project>/state/windows-supervisor.stop, wait for
+   the owned children/listeners to disappear and the HermesVoiceSatellite
+   task to reach Ready.
+3. Remove the sentinel, then Start-ScheduledTask HermesVoiceSatellite.
+   (Never use Task Scheduler "End" as the planned stop - job containment
+   kills children abruptly.)
+4. Verify: verify_voice_backend.py, agent.log conversation-turn line,
+   fleet_status convergence. A restart IS required; editing the JSON alone
+   does not update the running client.
+5. This file only affects the satellite voice session. Do not set a global
+   model pin or global reasoning change to tune the satellite - that would
+   change Desktop and every other chat too.
+
+6) SANITIZATION NOTE
+This addendum contains no secrets, tokens, environment dumps or private
+paths beyond the documented project layout. It documents behavior verified
+on the contributor's Windows build; third-party re-hosts must re-verify against
+their own gateway build, since the fallback reasoning re-resolution and the
+model_options translation above are build-specific observations.

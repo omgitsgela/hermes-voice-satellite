@@ -1,0 +1,93 @@
+HERMES VOICE SATELLITE - LOCAL WINDOWS BACKGROUND STARTUP
+
+STATUS: PREPARED, NOT ACTIVATED. Installing does not launch anything immediately.
+No Hermes core files, Hermes gateway startup, audio settings, global packages,
+firewall rules or existing processes are changed by these project scripts.
+
+Run commands from Git Bash in:
+  cd '/c/Users/<operator>/AI Projects/hermes-voice-satellite'
+
+AFTER APPROVAL: INSTALL PER-USER LOGIN STARTUP (no admin needed)
+  .tools-venv/Scripts/python.exe scripts/windows/install_project_startup.py --install
+
+This creates only:
+  %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\HermesVoiceSatelliteProject.vbs
+The default command WITHOUT --install prints a preview and writes nothing:
+  .tools-venv/Scripts/python.exe scripts/windows/install_project_startup.py
+The generated VBS launches pythonw hidden at login. Installation does not execute
+that VBS, install a scheduled task, or touch Hermes gateway's own startup entry.
+
+AFTER APPROVAL: LAUNCH NOW (hidden, returns immediately)
+  .tools-venv/Scripts/pythonw.exe scripts/windows/supervise.pyw
+
+Do not run that launch command during preparation/testing. The main agent can
+stop its own manual pairing service separately, after authorization, before
+launching the supervisor. It must not terminate unrelated or Hermes processes.
+
+WHAT IS MANAGED
+  .venv/Scripts/python.exe -u -m satellite_gateway.loop
+  .tools-venv/Scripts/python.exe -u -m hermes_gateway.pairing_server --state state --dial tls://<gateway-LAN-IP>:10702 --bind <gateway-LAN-IP> --port 10704
+
+Both have the project root as working directory. The runtime reads the existing
+satellite-gateway.env. Children inherit environment; HERMES_HOME defaults locally
+to C:\Users\<operator>\AppData\Local\hermes if not already present. No global
+user/machine environment is written. These specifications are intentionally local
+to this installation. If bind IP or ports change, update service_specs and tests.
+
+SAFETY AND RECOVERY
+- One supervisor per project, including separate logon sessions: a Windows OS byte
+  lock at state/windows-supervisor.lock. Closing/crashing releases the lock; the
+  remaining empty file is normal. Do not delete it while a supervisor is running.
+- Before EACH launch, read-only Windows Python command-line and TCP listener
+  inventory is checked. Existing module processes block launching even while
+  loading, before they listen. ANY listener on runtime ports 8765 or 10702 blocks
+  starting the runtime; any listener on 10704 blocks pairing. A conflicting or
+  unhealthy foreign listener is left alone, never killed or replaced.
+- Foreign services are NOT adopted. They remain completely unmanaged. Recheck
+  after 30 seconds; start the missing child only after its process/listeners clear.
+- Inventory permission, timeout or parse failures fail closed: defer 30 seconds.
+  Process inventory and netstat commands are hidden and bounded at 15 seconds each.
+- Owned child exits (including exit 0) and launch failures retry after 10, 20, 40,
+  80, 160, then at most once every 300 seconds. A run lasting 300 seconds resets
+  the failure streak. Missing dependencies/LAN at login therefore cannot spin.
+- While an owned child remains alive, it is not restarted for a failed network
+  probe. These are process/listener liveness checks, not a functional voice,
+  certificate, microphone or protocol health test. Hung services are not killed.
+- Inspection-to-launch cannot be atomic with independently started dev commands.
+  Avoid manually starting the same modules concurrently with initial supervisor
+  takeover. Module/listener checks greatly reduce this unavoidable race.
+- If the supervisor itself is forcibly killed, children may remain. A subsequent
+  supervisor safely sees them as external and will not duplicate them. The
+  supervisor is not itself watched by a Windows service; launch it again or log
+  in again if it crashes.
+
+LOGS (inside this project)
+  logs/windows/supervisor.log                    (2 MB, two backups)
+  logs/windows/satellite_gateway.loop.log        (stdout + stderr, append)
+  logs/windows/hermes_gateway.pairing_server.log (stdout + stderr, append)
+The children use DEVNULL stdin and CREATE_NO_WINDOW. Logs may contain private
+operational details. Child logs are not size-rotated while open; periodically
+archive/prune them when the supervisor and its owned children are stopped.
+
+AFTER APPROVAL: STOP ONLY THIS SUPERVISOR AND ITS OWNED CHILDREN
+  .tools-venv/Scripts/python.exe -c "from pathlib import Path; Path('state/windows-supervisor.stop').touch()"
+The supervisor notices the file at the next loop boundary (normally 1 second;
+allow up to 30 seconds during bounded inspection), stops ONLY children it started
+(terminate, then kill on timeout), and releases its lock. Foreign dev services and
+Hermes core remain untouched. The stop file persists to inhibit future login
+launches; remove it only when ready to enable launch again:
+  .tools-venv/Scripts/python.exe -c "from pathlib import Path; Path('state/windows-supervisor.stop').unlink(missing_ok=True)"
+Then use the hidden launch command above. Do not create/remove this file during
+preparation, as it controls a potentially running project supervisor.
+
+AFTER APPROVAL: REMOVE ONLY THIS LOGIN ENTRY
+  .tools-venv/Scripts/python.exe -c "import os; from pathlib import Path; (Path(os.environ['APPDATA'])/'Microsoft/Windows/Start Menu/Programs/Startup/HermesVoiceSatelliteProject.vbs').unlink(missing_ok=True)"
+Removal alone does not stop an already running supervisor or any services.
+
+TESTS (safe isolated temp directories; subprocess service launches mocked)
+  .tools-venv/Scripts/python.exe -m unittest discover -s local-tests -v
+Tests cover exact project scope/interpreters, early module/listener duplicate
+checks, failed inspection, bounded backoff/reset, hidden redirected child launch,
+real Windows byte locking, owned-only stop, pythonw entry delegation, dry-run
+installation, quoting paths with spaces, missing prerequisites and foreign-file
+protection. Entry-point tests patch main, never run the live supervisor.

@@ -1,0 +1,96 @@
+CONTEXT CONTINUITY + MODEL FALLBACK ADDENDUM - 2026-11-02 (verified by live runs)
+
+1) SATELLITE CONTEXT DISCONTINUITY - ROOT CAUSE AND FIX
+Symptom reported: every wake appeared to start a brand-new conversation; the 20-minute
+idle window never carried context forward.
+Root cause (verified in gateway source, not guessed): the satellite calls
+POST /v1/runs, and that endpoint builds a fresh agent per run. It only carries prior
+turns when the request body includes conversation_history (api_server._handle_runs;
+precedence explicit conversation_history > previous_response_id). The satellite never
+sent history, so the gateway's agent.log showed history=0 on every voice turn even
+though the same session id was reused. The 20-minute idle window (loop.py
+--idle-reset-minutes default 20) only decides WHEN the session id rotates; nothing was
+feeding the retained session's messages back into the next run.
+Fix (local-tests/test_voice_model_pin.py written first, then implemented):
+satellite_gateway/gateway.py ask() now calls _session_history() before each turn:
+GET /api/sessions/{id}/messages?limit=60&order=latest, filtered to user/assistant
+roles, reversed to chronological, capped at 40 messages, and sent as
+conversation_history. A 404 (new/rotated/pruned session) or transport failure degrades
+to a fresh turn instead of breaking the voice loop. Tool messages are never replayed.
+Live proof: scripts/windows/verify_context_continuity.py against the running gateway -
+turn 1 planted a code word, turn 2 recalled it verbatim from history. PASS.
+Unit coverage: history replayed in order, tool noise filtered, missing session
+degrades cleanly. 25/25 local tests pass.
+
+2) PIN + AUTOMATIC FALLBACK (satellite)
+voice-model.json now carries require_model_lock: false (was true). With the lock
+true, an unavailable pinned provider fails closed loudly (good for cost/attribution,
+bad for availability). With it false, the gateway keeps the explicit pin
+(gpt-6-luna / openai-codex / low / priority) and, when the pin fails mid-turn
+(429, quota, connection), the agent's fallback chain serves the turn instead.
+The gateway deliberately refuses a request that names an UNKNOWN provider slug
+(config error path, fails closed before the chain) - that is correct and was
+confirmed deliberately: pinning to a provider that is not configured must fail
+closed loudly. Only real provider failures reach the chain.
+
+3) GLOBAL TEXT-MODEL FALLBACK (all of Hermes)
+Per the official docs page "Fallback Providers"
+(hermes-agent.nousresearch.com/docs/user-guide/features/fallback-providers):
+the current config shape is a top-level fallback_providers list in config.yaml,
+each entry needing BOTH provider and model; legacy fallback_model is honored for
+back-compat; hermes fallback (add/list/remove/clear) manages the same key.
+Applied to C:\Users\<operator>\AppData\Local\hermes\config.yaml:
+  fallback_providers:
+    - provider: llamacpp
+      model: qwen38
+No gateway restart is needed for this key: gateway/run.py refreshes
+fallback_providers from disk per agent create ("edits take effect without requiring
+a gateway restart"). Rate-limited primaries with a declared reset get benched until
+that reset; optionally tune fallback.min_switch_reset_seconds.
+Verified live twice against the running gateway:
+- Forced unknown-model on the codex provider: agent.log shows "Fallback activated:
+  <model> -> qwen38 (llamacpp)" and the turn completed on qwen38.
+- Genuine RateLimitError from the pinned gpt-6-luna (a real codex 429 during the
+  pin re-check): the SAME turn recovered to qwen38 automatically and still answered.
+Note this gateway build returns runtime=null on /v1/runs status; the authoritative
+fallback evidence is agent.log lines (Fallback activated / model=... provider=...),
+NOT the (doc-described) runtime field - documented here so future builds look in
+the right place.
+
+4) "I can't reach my brain right now" DIAGNOSIS (this machine, 2026-11-02)
+That line is spoken by loop.py when VoiceGateway.ask raises VoiceGatewayError.
+Log evidence (logs/windows/satellite_gateway.loop.log, 16:54:28):
+"Cannot connect to host 127.0.0.1:8642 ... remote computer refused the network
+connection" - the local API listener was down while the voice loop stayed up
+(it had just restarted a dead child; the listener was still binding). The supervisor
+(project_supervisor.py) relaunches children on EXIT only; a child that is alive but
+not yet listening, or hung, is not covered. Satellite itself (wake word, mic, STT,
+TTS, network to the PC) was proven working in the same window - spoken exchanges
+answered correctly minutes later. Verdict: satellite healthy; the message means the
+local brain endpoint (127.0.0.1:8642) was momentarily not accepting connections.
+
+5) VOICE_INSTRUCTIONS (NAS)
+The NAS docs/voice-instructions.md recommended frame was compared against the live
+satellite_gateway/config.py VOICE_INSTRUCTIONS. The live frame is the household-
+adapted form of the same structure (identical clause order; household specifics
+substituted for the bracketed slots, plus the lighting-presets and alarm-wiring
+clauses that fill the frame's bracketed slots). No change was required; the frame is
+re-sent on every /v1/runs request, so config edits take effect on the next utterance
+after the loop restarts.
+
+6) CHANGES MADE (full list)
+- satellite_gateway/gateway.py: _session_history() + conversation_history in ask();
+  load_runtime_config() accepts boolean require_model_lock (docs in docstring).
+- satellite_gateway/loop.py: passes runtime_config=load_runtime_config() to VoiceGateway.
+- voice-model.json: require_model_lock true -> false (pin unchanged).
+- config.yaml (Hermes global): top-level fallback_providers -> llamacpp/qwen38.
+- scripts/windows/verify_context_continuity.py, verify_fallback_pin.py: live probes.
+- local-tests/test_voice_model_pin.py: pin + history tests (25 tests total OK).
+- Planned stop/restart of the HermesVoiceSatellite scheduled task (stop sentinel,
+  then Start-ScheduledTask; all four ports verified listening after restart).
+
+7) ROLLBACK
+- Revert gateway.py/loop.py from the previous snapshots in this package
+  (snapshots/ dir) and delete voice-model.json to return to fail-closed no-fallback.
+- Remove the fallback_providers block from config.yaml to disable the global chain.
+- No firmware/device change was made; the ESP32 satellite is untouched.

@@ -1,0 +1,31 @@
+SUPERSEDED PARTIALLY - see CONTEXT-AND-FALLBACK-ADDENDUM.TXT and
+REASONING-AND-VOICE-BEHAVIOR-ADDENDUM.TXT: require_model_lock is now
+false so the pinned provider failure falls back to llamacpp/qwen38 instead of failing
+closed, and reasoning_effort is now medium (was low). The pin itself and probe evidence below stand.
+
+MODEL PIN ADDENDUM - 2026-11-02 (verified by live runs)
+VOICE_ROUTE_ALIAS stays empty so the satellite does not shadow the gateway's
+global default (Desktop etc. keep using their configured model).
+Durable voice pin: voice-model.json at the project root, read by
+satellite_gateway.gateway.load_runtime_config() and sent on every /v1/runs with
+model/provider/model_options/require_model_lock (confirmed lock; fails closed
+instead of silently using another model if the pinned provider is unavailable).
+Pinned selection: model gpt-6-luna, provider openai-codex,
+reasoning_effort low, service_tier priority (vendor label Fast, 1.5x speed).
+Selection basis: live probes against the running gateway over two rounds
+(n=3 each for the three finalists). Median first-text: gpt-6-luna 2.44s,
+gpt-6.1-terra 2.61s, gpt-6.1-sol 2.67s. gpt-6-astra 3.0s and gpt-6-sol 3.28s
+were single-sample only. All five GPT-6/6.1 slugs visible in the account's
+Codex catalog (6.1-sol, 6-astra, 6.1-terra, 6-sol, 6-luna) returned READY;
+Luna was consistently fastest, so it is pinned per the user's 'fastest
+available GPT 6/6.1' instruction.
+Probe ledgers: logs/windows/model-latency-probes.json and
+logs/windows/model-latency-followup.json (11 probes, ~171K tokens).
+Live voice proof after the planned restart: agent.log turn + API-call lines for
+session voice-esp32-68ee8f4b5988-20261102-171513 show
+model=gpt-6-luna provider=openai-codex platform=api_server, including a real
+spoken exchange answered on the pinned model.
+NOTE: GPT-6-Luna offers reasoning levels low..max (no 'ultra'), which is
+acceptable for voice latency. To change the pin: edit voice-model.json
+(provider and require_model_lock:true must stay) then planned-stop and restart
+the HermesVoiceSatellite task. Invalid/incomplete pins fail closed loudly.

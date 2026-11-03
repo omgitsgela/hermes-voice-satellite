@@ -1,0 +1,615 @@
+HERMES VOICE SATELLITE - NATIVE WINDOWS BUILD AND DEPLOYMENT RUNBOOK
+Documentation snapshot: 2026-11-02
+
+0. STATUS, AUTHORITY AND SAFETY
+=============================
+This is a documentation/sanitized-source archive, not an installer. Creating this
+archive does not install dependencies, start services, alter Hermes, flash either
+chip, change drivers/firewall rules, or rotate credentials. Commands below are a
+future operator runbook: review them and obtain the appropriate approval first.
+Never run the whole document as a script. Replace every <PLACEHOLDER> first.
+
+Startup: existing HermesVoiceSatellite Limited user login task is Running.
+the operator approves retaining this task, NOT an SCM service. Section 12 records
+live read-only evidence. Reboot/login and full voice acceptance remain untested.
+
+Local project: C:\Users\<operator>\AI Projects\hermes-voice-satellite
+Isolated SDK:  C:\Users\<operator>\esp
+NAS archive:   <NAS-share>\hermes-voice-satellite\docs\windows-native
+Local copy:    <project>\docs\windows-native
+Historical scope: C:\Users\<operator>\Documents\Hermes Voice Satellite Installation Notes.txt
+The notes were consulted only for scope; they are NOT copied into this archive.
+Their security incident must not be reproduced with a key or other credential.
+Treat any previously disclosed credential as compromised and coordinate rotation
+with the owner; documentation does not perform or establish successful rotation.
+
+The NAS permission applies to this documentation package only. No existing
+original project source, firmware, private state or secrets are overwritten.
+Human-facing documents in this package are plain .TXT. Source snapshots retain
+.py extensions, but are reference copies, not automatically installed patches.
+
+1. WHAT WAS ACTUALLY VERIFIED, AND WHAT IS HISTORICAL CONTEXT
+==========================================================
+Read and verified directly while creating this guide:
+- ESP-IDF checkout HEAD fff9895c82d744c7237be8847347bdd1b07c6643.
+- esp/source-provenance.json identifies source commit
+  56cd727a6a69da4b124a3e1b49e8853420aad3d5, 726 files, no mismatches.
+  All 726 listed files currently exist in esp/firmware and their SHA256 values
+  still match the provenance record. This is NOT a statement that the source
+  equals the published v1.0.0 release or that the whole local gateway is pristine.
+- Actual build/flasher_args.json: ESP32-S3, DIO, 8 MB, 80 MHz;
+  bootloader at 0x0; partition table 0x8000; application 0x10000.
+- Model companion manifest: okay_nabu, cutoff 0.97, sliding window 5,
+  feature step 10, tensor arena 26080 bytes.
+- Existing HFC female model files in voices/.
+- Five focused Windows regression tests passed; details in section 11.
+- Backup and stock binary SHA256 values were independently recomputed below.
+- Documentation and snapshot hashes are verified against NAS readback.
+
+Reported by the main deployment work, NOT reflashed/rebuilt by this archive task:
+- Native Windows firmware build completed in C:\Users\<operator>\esp\firmware\build.
+- Published v1.0.0 release bundle was selected and deployed; SHA256:
+  2d67d25fb3d648ca79383758ca509d2269eafd5b7bf59c7c43345e953283e436
+- Separately compiled local bundle SHA256:
+  849d551b035c49e43f664863e0cf8635b9e7a3092b95acddefe20bd6432eb611
+These are DIFFERENT artifacts. Do not label the release as this local build.
+The release bundle and its manifest are not present in the inspected project
+firmware tree; obtain the selected artifact pair from the release/deployment
+record, verify both, and never fabricate a path or use one manifest for another
+bundle. This package intentionally does not copy any firmware or device dump.
+Historical observed device: esp32-68ee8f4b5988, address ending .151; host ending
+.139. These are observations, not future configuration defaults or a fresh probe.
+Use the real LAN address determined for the new deployment, not those suffixes.
+
+2. SHELL, PATHS AND INTERPRETERS
+==============================
+Agent terminal commands on this Windows host run through Git Bash/MSYS, NOT
+PowerShell. Native python.exe remains Windows Python. Do not paste PowerShell
+syntax into Bash. Examples in this guide are Git Bash unless explicitly marked.
+
+  cd '/c/Users/<operator>/AI Projects/hermes-voice-satellite'
+  python --version
+  .tools-venv/Scripts/python.exe --version
+  .venv/Scripts/python.exe --version
+
+Current tooling context: python 3.11.15; python3 and bare pip are not available;
+uv is installed. Use an explicit interpreter and '-m pip', not an assumed pip or
+python3 command. Do not replace sys.executable with python3 in subprocess code.
+Quote every project path containing spaces. Native SDK arguments should use
+C:/Users/<operator>/... paths; /c/... is a Bash path and can become C:/c/... if passed
+to native tools with MSYS conversion disabled. If necessary set
+MSYS_NO_PATHCONV=1 for ONLY the invocation that needs it, with native paths.
+
+Two project venvs are intentionally separate:
+  .venv/Scripts/python.exe       speech/runtime dependencies
+  .tools-venv/Scripts/python.exe provisioning, pairing and project helper tools
+ESP-IDF has its own environment under esp/tools/python_env; never merge these.
+A missing module in one interpreter is not repaired by installing it in another.
+
+3. SOURCE AND TOOLCHAIN PROVENANCE / FIRST-TIME SDK SETUP
+======================================================
+Use a short, space-free writable firmware path: C:/Users/<operator>/esp/firmware.
+Keep the NAS original unchanged. Do not compile directly on a mapped network
+share. Copy the intended firmware/esp32 tree to the isolated location, recording
+the chosen source revision and any local patches before building.
+
+The existing source.git bare repository and project Git bundle provide a way to
+verify source without inventing .git metadata in the copied firmware tree:
+  git --git-dir='C:/Users/<operator>/esp/source.git' rev-parse HEAD
+  git --git-dir='C:/Users/<operator>/esp/source.git' ls-tree -r <SOURCE_COMMIT> -- firmware/esp32
+Inspect available refs first; HEAD need not be the desired source revision.
+For a new reconstruction, import the relevant bundle ref into an isolated bare
+repository. Compare each intended source file's raw Git blob ID with ls-tree,
+then record its SHA256. Git blob ID = SHA1('blob ' + decimal byte length + NUL +
+raw bytes); CRLF conversion changes the result. Do not silently normalize files.
+Existing provenance lists 726 firmware files at the commit named in section 1.
+Generated build/, sdkconfig and dependency state are not a complete Git checkout.
+Preserve dependencies.lock and sdkconfig.defaults from the selected source.
+
+Official SDK checkout/reconstruction (future operator, not executed by this task):
+  git clone --recursive https://github.com/espressif/esp-idf.git 'C:/Users/<operator>/esp/esp-idf'
+  git -C 'C:/Users/<operator>/esp/esp-idf' checkout fff9895c82d744c7237be8847347bdd1b07c6643
+  git -C 'C:/Users/<operator>/esp/esp-idf' submodule update --init --recursive
+Do NOT run clone over an existing directory. The installed SDK is v6.1.
+Use the archived run_idf.py after reviewing its hardcoded ROOT for the new host:
+  python C:/Users/<operator>/esp/run_idf.py install
+  python C:/Users/<operator>/esp/run_idf.py install-python-env
+
+run_idf.py clears PYTHONPATH, PYTHONHOME and VIRTUAL_ENV in its child environment,
+sets PYTHONNOUSERSITE=1, removes MSYSTEM* and MINGW*, and sets IDF_PATH and
+IDF_TOOLS_PATH inside esp/. It locates exactly one idf6.1*_env/Scripts/python.exe,
+sets IDF_PYTHON_ENV_PATH and ESP_IDF_VERSION=6.1, asks idf_tools.py export for the
+SDK tool PATH, and launches idf.py with cwd=esp/firmware. It does not change the
+global user/machine environment. Avoid run_idf.py env: it dumps the inherited
+environment and may reveal unrelated secrets. Inspect narrowly filtered keys only.
+
+Why this isolation matters:
+- SDK may reject an inherited MSYS shell marker even with native Windows Python.
+- An agent-injected PYTHONPATH can make pip falsely consider foreign packages
+  installed, then the dedicated venv fails imports. Clearing only VIRTUAL_ENV is
+  insufficient. Clear all three Python variables and disable user site packages.
+- Do not globally delete the user's variables or install SDK packages globally.
+
+Use the SDK venv's python.exe -m pip check and -m pip freeze to validate/document
+its dependencies. Existing esp/python-packages.txt is the installation record;
+not copied here. Tool versions recorded by the SDK verification include:
+  cmake 4.0.3; ninja 1.12.1; ccache 4.12.1; dfu-util 0.11;
+  xtensa-esp-elf esp-15.2.0_20251204; esp-clangd esp-21.1.3_20260408;
+  esp32ulp-elf 2.38_20240113; OpenOCD v0.12.0-esp32-20260703.
+The installer also cached a riscv32 toolchain; that does not change target=esp32s3.
+
+  python C:/Users/<operator>/esp/verify_downloads.py
+The script checks every non-.tmp archive under tools/dist against the SDK's
+ tools/tools.json SHA256 AND size, honoring rename_dist rather than assuming
+URL basename. It records esp/tool-downloads-verified.json. Existing record has
+12 verified archives; tools.json SHA256:
+  a2c2afb1bacb0213923f75ecbc7a8300548b16278d73e6454551a472e33abdbc
+This is consistency with selected upstream metadata, not independent signature
+verification. The script writes its report: do not run over a record you need to
+preserve without first arranging a new output or backup. No installer is run by
+this documentation task.
+
+4. BUILD, PACKAGE AND KEEP LOCAL BUILD DISTINCT FROM RELEASE
+==========================================================
+Review the selected firmware README, dependencies.lock and sdkconfig.defaults.
+For a new build tree only, confirm/configure target esp32s3 before compiling:
+  python C:/Users/<operator>/esp/run_idf.py set-target esp32s3
+  python C:/Users/<operator>/esp/run_idf.py build
+set-target can regenerate configuration/build state: do not use it casually on
+a tuned existing build. A successful build requires exit 0 and actual artifacts,
+not merely a compiler starting. Inspect flasher_args.json and application/ELF/map.
+Missing Git-derived application version metadata in a copied source tree is not
+by itself a compile failure; do not invent a commit to silence warnings.
+
+Package to NEW operator-chosen files, never to the published release path:
+  .tools-venv/Scripts/python.exe scripts/bundle-esp32-flash.py --build C:/Users/<operator>/esp/firmware/build --bundle '<NEW_LOCAL_BUNDLE.bin>' --out '<NEW_LOCAL_MANIFEST.txt>'
+  .tools-venv/Scripts/python.exe scripts/bundle-esp32-flash.py --build C:/Users/<operator>/esp/firmware/build --check '<NEW_LOCAL_MANIFEST.txt>'
+  .tools-venv/Scripts/python.exe scripts/bundle-esp32-flash.py --verify '<NEW_LOCAL_BUNDLE.bin>' --check '<NEW_LOCAL_MANIFEST.txt>' --expected-sha256 '<INDEPENDENT_REVIEWED_LOCAL_HASH>'
+Record source commit, SDK revision, dependency state, full build command/exit,
+manifest hash and bundle hash separately. Do not expect byte-for-byte identical
+bundles merely because source matches (build metadata/toolchain state may differ).
+
+For release deployment use the selected RELEASE bundle, RELEASE manifest and
+independent RELEASE hash from section 1. Never substitute the local bundle just
+because it compiles. This guide does not claim local-build on-device testing.
+
+5. ESP32 BACKUP, REGION FLASHING AND READBACK
+===========================================
+Hardware actions below require separate operator approval and the user's board.
+Use the ESP32 USB serial/JTAG connector, NOT the audio chip USB-C socket. Identify
+the COM port anew; examples use COM<PORT>. Close serial monitors first. Use a data
+cable and stable power. Do not open COM ports during documentation-only work.
+
+Before any change, capture the full fitted 8 MB flash to a NEW private file:
+  .tools-venv/Scripts/python.exe -m esptool --chip esp32s3 --port 'COM<PORT>' --baud 460800 read-flash 0 8388608 '<PRIVATE_NEW_BACKUP.bin>'
+Hash it and retain it privately. A provisioned dump includes Wi-Fi credentials,
+private keys and device state; do not put it on the documentation NAS. A hash is
+safe to record, but the bytes are not. Separate stock images from personal dumps.
+
+IMPORTANT: the bundler pads gaps with zeroes. Do NOT write its merged bundle
+contiguously at 0x0 for normal project updates: that could overwrite NVS/PHY and
+other preserved data. Extract reviewed components to a NEW output directory:
+  .tools-venv/Scripts/python.exe scripts/bundle-esp32-flash.py --verify '<RELEASE_BUNDLE.bin>' --check '<RELEASE_MANIFEST.txt>' --expected-sha256 2d67d25fb3d648ca79383758ca509d2269eafd5b7bf59c7c43345e953283e436 --extract '<NEW_EXTRACT_DIR>'
+Check the manifest/extraction filenames, sizes and per-component hashes. The
+actual local build map is 0x0 bootloader, 0x8000 partition table, 0x10000 app;
+confirm the selected release manifest agrees before using this example:
+  .tools-venv/Scripts/python.exe -m esptool --chip esp32s3 --port 'COM<PORT>' --baud 460800 write-flash --flash-mode dio --flash-size 8MB --flash-freq 80m 0x0 '<EXTRACTED_BOOTLOADER.bin>' 0x8000 '<EXTRACTED_PARTITION_TABLE.bin>' 0x10000 '<EXTRACTED_APPLICATION.bin>'
+Read back EACH exact component length from its manifest and compare SHA256 with
+the extracted component. Do not treat the writer's own verify message as the only
+evidence. Do not run erase-flash. Firmware/table are coupled; do not update one
+with an incompatible layout. ESP32 read/write may reset the board.
+
+Selected source partition layout (recheck for a different release):
+  NVS       0x009000 size 0x006000   preserve profiles and settings
+  PHY       0x00f000 size 0x001000   preserve
+  factory   0x010000 size 0x200000   application
+  storage   0x210000 size 0x400000   first 8192 bytes reserved for TLS
+  model     0x610000 size 0x1f0000   raw model blob, not a filesystem
+Do not format storage/model as SPIFFS merely because the partition subtype says
+spiffs. A filesystem header would overwrite the credential/model header.
+
+Verified existing backup/stock hashes (computed while writing this guide):
+  <project>/board-before-install-8mb.bin (8388608 bytes)
+  afe7b55ef757e56434c6f20add6db9604ffe951c1e24742cb6def5248b6c6362
+  Same as <project>/firmware/stock/esp32-full-flash-8mb.bin.
+  <project>/board-audio-before-update.bin (888832 bytes)
+  6380851ac59b3c2efc9799264bdd0a35b15e9112e5ae5e7b6af8b2b05bb02f23
+  Same as xmos-official-v1.0.9-48k-master-dfu.bin: this backup was ALREADY the
+  project-compatible audio image, NOT factory v1.0.4. Filename is not provenance.
+  Factory xmos-official-v1.0.4-dfu.bin (888832 bytes)
+  6c66525116ae085ca7bf80f7e343ca1a879d190152edb064c408139f044ab2c3
+
+6. SEPARATE AUDIO COPROCESSOR DFU / WINDOWS DRIVER STEPS
+======================================================
+ESP32 firmware flashing does NOT update the XMOS/XVF3800 coprocessor. Current
+project firmware requires v1.0.9 48 kHz MASTER on the audio chip; ESP32 is the
+48 kHz I2S SLAVE and decimates to 16 kHz for wake/uplink. Stock v1.0.4 is a
+16 kHz slave and is incompatible with this current pairing (dead mic/init_failed).
+
+Physical actions are USER actions; do not infer they happened from a command:
+1. Disconnect power. Move the data cable to the audio chip USB-C socket next to
+   the 3.5 mm jack, NOT the ESP32 serial connector.
+2. Hold Mute while restoring power, keep holding until the red LED blinks, then
+   release. This is Safe Mode/DFU. Ask the user to do it; no software substitute.
+3. List DFU devices. Expect VID 2886 PID 001a and alt 1, reSpeaker DFU Upgrade.
+4. If Windows sees the DFU device but libusb cannot open it, have the user select
+   ONLY the corresponding ReSpeaker DFU interface in Zadig and assign WinUSB.
+   Review name/VID/PID first. Do not replace the ordinary audio, ESP32 serial,
+   keyboard or hub driver; do not click driver/admin prompts without approval.
+   A driver change is separate from a firmware write.
+
+Existing local tool paths (not installed by this task):
+  <project>/tools/zadig-2.9.exe
+  <project>/tools/dfu-util/dfu-util-0.11-win64/dfu-util.exe
+
+From project root, after physical/driver confirmation:
+  tools/dfu-util/dfu-util-0.11-win64/dfu-util.exe -l
+Verify the image SHA256 in section 5, then (SEPARATE CHIP WRITE):
+  tools/dfu-util/dfu-util-0.11-win64/dfu-util.exe -R -e -a 1 -D firmware/stock/xmos-official-v1.0.9-48k-master-dfu.bin
+No sudo on native Windows. Invalid DFU suffix signature can be normal for this
+raw image; it is NOT by itself proof of failure or success. Look for manifest/
+idle completion with status 0, then replug normally and read the ESP32 bring-up
+line: version=1.0.9. Transfer completion alone does not prove working microphones.
+Do not send ESP32 flash offsets to the coprocessor or use its port for esptool.
+
+7. HOST NETWORK AND SANITIZED CONFIGURATION TEMPLATE
+==================================================
+The real gateway config was NOT inspected or copied. The following is a
+reconstruction template, not a claim of exact installed values. 192.0.2.10 is a
+TEST-NET example: REPLACE it with the host's device-reachable LAN address.
+Reserve that address in DHCP or arrange stable DNS; certificate SAN/pin, board
+endpoint and pairing --dial must agree. Do not use 0.0.0.0/localhost as a device
+endpoint. 0.0.0.0 is a listener bind wildcard, not an identity.
+
+For a NEW satellite-gateway.env only (never overwrite tuned installed config):
+  VOICE_GATEWAY_URL=http://127.0.0.1:8642
+  VOICE_PIPER_VOICE=en_US-hfc_female-medium
+  VOICE_REGISTRY_ENABLED=1
+  VOICE_REGISTRY_HOST=192.0.2.10
+  VOICE_REGISTRY_PORT=10701
+  VOICE_REGISTRY_TLS_PORT=10702
+  VOICE_REGISTRY_LEGACY_PLAINTEXT=0
+  VOICE_REGISTRY_ALLOW_UNAUTHENTICATED=0
+  VOICE_REGISTRY_TLS_CERT=C:/Users/<operator>/AI Projects/hermes-voice-satellite/state/registry-tls/server.crt
+  VOICE_REGISTRY_TLS_KEY=C:/Users/<operator>/AI Projects/hermes-voice-satellite/state/registry-tls/server.key
+  VOICE_REGISTRY_TLS_CLIENT_CA=C:/Users/<operator>/AI Projects/hermes-voice-satellite/state/registry-tls/client-ca.crt
+  VOICE_ANNOUNCE_HOST=127.0.0.1
+  VOICE_ANNOUNCE_PORT=8765
+  VOICE_DIRECT_DIAL_FALLBACK=0
+Path lines may be quoted as required by the project's EnvironmentFile parser;
+there is no shell variable expansion or inline-comment syntax. Process env
+wins over project file values in direct Python execution, even an explicitly
+empty value. Restart the appropriate owned process to reread configuration.
+The announcement bind above is a conservative local-only template, not an
+assertion that all LAN announcement integrations are configured that way.
+
+Ports / exposure:
+  8642  Hermes HTTP API: loopback only
+  8765  announcements/enrollment plane: local or explicitly trusted interface
+ 10702  device mTLS registry: host LAN, local-subnet firewall only
+ 10704  HTTPS pairing: host LAN, local-subnet firewall only
+ 10701  legacy plaintext: disabled, not an Internet fallback
+No router port forwards. Windows Private profile/local subnet rules must be
+reviewed separately. This documentation does not create or verify firewall rules.
+A mapped Z: drive may be absent in a scheduled task/elevated context. Runtime
+must use LOCAL project assets, not Z:; use NAS only for approved archival copies.
+
+8. mTLS, ENROLLMENT, WORDS AND SECRET FILE LOCATIONS
+=================================================
+No actual .env, Wi-Fi PSK, token file, key file, session log or memory file was
+read by the archive task. These are LOCATIONS ONLY; do not print their contents:
+  <project>/state/registry-tls/client-ca.crt and associated CA private key
+  <project>/state/registry-tls/server.crt and server.key
+  <project>/state/registry-tls/<DEVICE_ID>.crt and <DEVICE_ID>.key
+  <project>/state/device-credentials.json  (certificate fingerprint registry)
+  <project>/state/enroll-token.txt         (five enrollment/pairing words)
+  <project>/state/announce-token.txt       (announcement bearer token)
+  <project>/state/hermes-api-key.txt       (local API credential)
+  <project>/state/wifi-psk.txt              (Wi-Fi passphrase input file)
+  <project>/state/fleet-config.json        (desired device configuration)
+  <project>/satellite-gateway.env          (installed project configuration)
+  C:/Users/<operator>/AppData/Local/hermes/.env (native default Hermes credential env)
+Explicit HERMES_HOME overrides the Hermes directory. Do not silently point at
+~/.hermes on Windows, copy API keys into documentation or expose them in argv.
+Client installer paths described by upstream include
+~/.config/hermes-voice-satellite/enroll-token and certs/; those are alternate
+workbench inputs, not a claim that they are populated on this Windows machine.
+
+For a NEW host only, issue-registry-tls.py init creates registry trust. First read
+its --help and existing state: NEVER regenerate a live CA merely to fix a path.
+Future operator examples using the existing trust state:
+  .tools-venv/Scripts/python.exe scripts/issue-registry-tls.py --state state verify
+  .tools-venv/Scripts/python.exe scripts/issue-registry-tls.py --state state enroll --new '<DEVICE_ID>' --endpoint-host 192.0.2.10 --endpoint-port 10702
+Enroll --new refuses existing identities; replacement/force is a deliberate
+credential change, not routine retries. Factory-MAC-derived identity and a room's
+friendly name differ. Do not rename the registry identity to match the room.
+Use esp32_provision.py device-id on a running project board, or rom-mac only when
+needed for a stock board (ROM query resets it). Do not make up an identity.
+
+Pairing service specification (not launched here):
+  .tools-venv/Scripts/python.exe -u -m hermes_gateway.pairing_server --state state --dial tls://192.0.2.10:10702 --bind 192.0.2.10 --port 10704
+The package must be importable in that interpreter (packages/gateway/src source
+layout). Do not fix that by leaking another venv's site-packages via PYTHONPATH.
+Pairing uses the server certificate/key from registry-tls by default. The five
+words live in state/enroll-token.txt and are not part of this command line.
+The older announcement enrollment flow and separate HTTPS /pair service are
+related but not interchangeable protocols/URLs; match the chosen client's flow.
+
+Credential region staging uses file paths, NEVER PEM/private keys over the
+serial line protocol (which echoes commands). Review --help, then a dry staging
+invocation without --write, using a NEW private output directory:
+  .tools-venv/Scripts/python.exe scripts/provision-device-tls.py --certs state/registry-tls --device '<DEVICE_ID>' --host 192.0.2.10 --port 10702 --partitions firmware/esp32/partitions.csv --registry state/device-credentials.json --port-device 'COM<PORT>' --out '<PRIVATE_NEW_TLS_STAGING_DIR>'
+After reviewing the staged record and backup plan, --write explicitly authorizes
+the region write and readback. This is not performed by the documentation task.
+The first 8192 bytes at storage start hold credentials; the provisioner backs up
+and handles the enclosing region. Do not substitute an ad hoc unaligned write.
+Existing tls-provisioning/{credential-region,before-region,after-region}.bin are
+PRIVATE credential-bearing artifacts and are deliberately not copied or hashed
+into this public documentation package.
+
+9. WI-FI, MODEL AND DEVICE SETTINGS
+=================================
+All examples use SSID placeholder <WIFI_SSID>, never the installed SSID. Keep the
+passphrase in a local access-controlled file. Do not place it in a shell command,
+transcript, docs or NAS. Windows ACLs, not POSIX chmod alone, enforce privacy.
+
+Once the project firmware and TLS trust are ready, review and stage:
+  .tools-venv/Scripts/python.exe scripts/esp32_provision.py --port 'COM<PORT>' device-id
+  .tools-venv/Scripts/python.exe scripts/esp32_provision.py --port 'COM<PORT>' set-endpoint tls://192.0.2.10:10702
+  .tools-venv/Scripts/python.exe scripts/esp32_provision.py --port 'COM<PORT>' save-profile '<WIFI_SSID>' '<PRIVATE_PSK_FILE>'
+  .tools-venv/Scripts/python.exe scripts/provision-device-model.py --model firmware/esp32/models/okay_nabu.tflite --name okay_nabu --params-json firmware/esp32/models/okay_nabu.json --port 'COM<PORT>'
+  .tools-venv/Scripts/python.exe scripts/esp32_provision.py --port 'COM<PORT>' set-wake okay_nabu
+  .tools-venv/Scripts/python.exe scripts/esp32_provision.py --port 'COM<PORT>' restart
+  .tools-venv/Scripts/python.exe scripts/esp32_provision.py --port 'COM<PORT>' status
+These commands have hardware side effects and are a FUTURE runbook only. Close
+the COM port between tools; model esptool writes reset the board. Confirm status
+and actual reported state after reboot, not just staged desired settings.
+Model, wake selector, TLS credential, endpoint and Wi-Fi are a complete set.
+
+Okay Nabu caveat: its companion specifies probability_cutoff=0.97 and a five-frame
+sliding window. A single peak score, model-loaded status, WAKE_FIRE command or
+synthetic Piper recording does NOT prove reliable acoustic detection. Upstream
+notes report synthesized wake words scoring around 0.001. Use real human speech
+in the room and record the actual rolling-score behavior. Do not claim listening
+works from low/zero scores, lower thresholds blindly, or call forced wakes proof
+of normal detection. Preserve each model's own policy and review model licensing.
+
+10. HFC FEMALE SPEECH AND FULL VOICE CHECK
+========================================
+Selected voice is en_US-hfc_female-medium (not the example/default HFC male).
+Expected local assets:
+  <project>/voices/en_US-hfc_female-medium.onnx
+  <project>/voices/en_US-hfc_female-medium.onnx.json
+Use the project's download/switch helpers with checksum and sample-rate checks
+if reconstructing absent assets. Never replace a tuned live voice implicitly.
+Piper's contract is 22050 Hz audio; do not change rates independently of the
+playback path. A female voice existing on disk is not proof both the Satellite
+Gateway and Hermes route use it; verify effective config in each owned process.
+
+Separate acceptance gates after the operator actually deploys:
+- ESP32 boot/COM identity and normal coprocessor version=1.0.9.
+- Wi-Fi association and expected LAN endpoint, not a stale DHCP address.
+- Client certificate accepted, registry shows the correct device connected.
+- Desired/reported model/selector/settings agree after reboot.
+- Real human says Okay Nabu; actual detector/chime appears, not forced WAKE_FIRE.
+- Mic audio contains speech; STT result is sensible; API handles the current turn.
+- HFC female audible reply completes, no stale or duplicate completion response.
+- Reconnect and restart tests are approved separately; host unit tests prove
+  neither hardware health nor startup persistence.
+
+11. LOCAL WINDOWS FIX SNAPSHOTS AND TEST EVIDENCE
+===============================================
+Approved source snapshots are under snapshots/project/ and snapshots/esp/.
+Paths preserve the installed file's relative location. They are evidence/reference
+copies; compare with the target version before adopting. Do not copy blindly over
+a newer working source tree. SHA256-MANIFEST.TXT inventories every archived file.
+Current Windows startup scripts and seven local test modules are archived.
+The startup TXT snapshot is stale; section 12 supersedes it. No tests rerun here.
+
+Fixes inspected in actual local source:
+A. scripts/provision-device-model.py: Windows cannot reopen a NamedTemporaryFile
+   held by its creator. Uses TemporaryDirectory and a closed model.bin before
+   esptool opens it; cleanup after subprocess. Test opens the blob from a second
+   real Python process while mocking hardware subprocess invocation.
+B. packages/gateway/src/hermes_gateway/pairing_server.py: ScriptEnroller invokes
+   sys.executable, not nonexistent python3, preserving the pairing environment.
+   Test mocks issuer execution and creates only fake temporary credentials.
+C. satellite_gateway/config_plane.py: atomic file persistence guards os.fchmod
+   with hasattr for Windows. mkstemp is private by design on POSIX; Windows ACL
+   protections still need independent review. Atomic replace remains in place.
+D. satellite_gateway/config.py: Hermes .env path follows HERMES_HOME, otherwise
+   LOCALAPPDATA/hermes on Windows (rather than assuming Unix ~/.hermes).
+E. esp/run_idf.py and verify_downloads.py: isolated native SDK launch and cached
+   archive metadata verification described in section 3. Hardcoded paths must be
+   reviewed before reusing these snapshots on another account.
+
+Actually run during this documentation task, from the local project root:
+  .tools-venv/Scripts/python.exe -m unittest discover -s local-tests -p test_model_flash_temp.py -v
+  Result: 1 test passed (0.056s); no actual COM port opened.
+  .tools-venv/Scripts/python.exe -m unittest discover -s local-tests -p test_pairing_interpreter.py -v
+  Result: 1 test passed (0.003s); issuer subprocess mocked.
+  .venv/Scripts/python.exe -m pytest tests/test_windows_runtime_local.py -q
+  Result: 3 passed in 0.19s; isolated temp paths, no listeners/devices/real creds.
+  Warning: pytest-asyncio async fixture default loop scope is unset; nonfatal.
+All three commands exited 0. No full test suite, new build, real device test or
+scheduled-task activation was performed by this documentation task.
+
+12. WINDOWS LOGIN TASK, OWNERSHIP AND RECOVERY
+=============================================
+Selected deployment: HermesVoiceSatellite, the operator, Limited, InteractiveToken,
+no stored password. Logon delay PT15S, NOT boot-before-login operation. the operator
+approves retaining this existing login task rather than converting to SCM.
+Live read-only task export: RestartOnFailure Count999/IntervalPT1M;
+ExecutionTimeLimit PT0S; IgnoreNew; StartWhenAvailable true; battery start/stop
+restrictions false. Running, LastRunTime2026-11-02T17:04:12-07:00, result267009
+(running, not completed-run success). Base action executable:
+C:/Users/<operator>/AppData/Roaming/uv/python/cpython-3.11-windows-x86_64-none/pythonw.exe
+Argument: quoted <project>/scripts/windows/supervise.pyw; working dir=<project>.
+
+Live supervisor log starts17:04:12 PID24992; launched32528/7524/22604.
+Read-only process parent chains and actual listener owners:
+24992 ->32528 ->29956 satellite_gateway.loop:<gateway-LAN-IP>:10702,
+127.0.0.1:8765. 24992 ->7524 ->1956 hermes_gateway.pairing_server:
+<gateway-LAN-IP>:10704. 24992 ->22604 ->10520 hermes_cli.main gateway run:
+127.0.0.1:8642. Intermediate PIDs are venv redirectors; final PIDs own listeners.
+These are point-in-time observations, NEVER future kill targets. Listener evidence
+is not API authentication or acoustic/microphone/end-to-end voice proof. Earlier
+16:54:28 connection refusal predates17:04 takeover; do not call it a fresh failure.
+
+OWNED SERVICE SPECIFICATIONS / ENVIRONMENT
+Satellite: .venv/Scripts/python.exe -u -m satellite_gateway.loop, project cwd.
+Pairing: .tools-venv/Scripts/python.exe -u -m hermes_gateway.pairing_server
+--state state --dial tls://<gateway-LAN-IP>:10702 --bind <gateway-LAN-IP> --port 10704,
+project cwd. API: <HermesHome>/hermes-agent/venv/Scripts/python.exe -u -m
+hermes_cli.main gateway run, core checkout cwd. API backend ownership does NOT
+include hermes_cli.main serve, CLI chat, Hermes Desktop or every Hermes process.
+Inherited HERMES_HOME wins; default C:/Users/<operator>/AppData/Local/hermes.
+Children remove PYTHONPATH/PYTHONHOME/VIRTUAL_ENV, set PYTHONNOUSERSITE=1 and
+PYTHONUNBUFFERED=1. Other inherited environment is not fully sanitized; never
+dump it. Credentials/config stay private/local; no mapped NAS runtime dependency.
+
+JOB CONTAINMENT / RECOVERY (inspected source policy, NOT live fault injection)
+Lifetime byte lock state/windows-supervisor.lock plus scheduler IgnoreNew prevent
+duplicates. Private non-inheritable Windows Job Object KILL_ON_JOB_CLOSE contains
+owned trees including redirector descendants. CREATE_SUSPENDED, assign before
+NtResumeProcess; assignment/resume failure kills child; no requested breakaway.
+Closing supervisor job contains owned trees, not foreign processes. Foreign
+same-module/listener conflicts or failed inventory defer30 seconds, never adopt,
+kill or replace. Inventory commands each bounded15 seconds. Child exits including0
+and launch failures retry10,20,40,80,160,300 seconds capped300; a run lasting300
+seconds resets the failure streak. Living but hung/protocol-unhealthy children
+are NOT killed automatically. Scheduler recovery for supervisor failure is a
+separate999 attempts at1 minute. Configured recovery is not an exercised test.
+Supervisor log rotates2 MB/two backups. Child logs logs/windows/<module>.log
+append without rotation while open, including hermes_cli.main.log. Logs can
+contain private data; excluded from archive. Hidden children; DEVNULL stdin.
+
+OPERATOR CONTROLS (future actions, approval required; NOT executed in this pass)
+From Git Bash wrap PowerShell in powershell.exe -NoProfile -Command '...'.
+Read-only: Get-ScheduledTask, Get-ScheduledTaskInfo, Export-ScheduledTask, each
+with -TaskName HermesVoiceSatellite. Start: inspect state/windows-supervisor.stop
+first; do not erase intentional stop; Start-ScheduledTask -TaskName HermesVoiceSatellite.
+Planned stop: create empty state/windows-supervisor.stop. Supervisor notices at
+loop boundary and closes owned job. Allow bounded inspection; verify descendants
+and listeners close. Sentinel persists, inhibiting future launches; removal is an
+explicit re-enable decision. Stop-ScheduledTask -TaskName HermesVoiceSatellite
+only if needed after planned stop. Disable-ScheduledTask prevents future launches
+but does not itself stop runtime; Stop alone does not disable task. Approved
+restart: planned stop, closure verification, authorized sentinel removal,
+Enable-ScheduledTask if needed, Start-ScheduledTask, fresh authenticated health
+and actual spoken verification. Never globally terminate Python or unrelated Hermes.
+
+RECONSTRUCTION / HISTORICAL SOURCES / ACCEPTANCE LIMITS
+For new host resolve SID, project paths and real base pythonw. task_definition.py
+renders UTF-16-declared XML. Inspect before install_task.ps1 reads local
+state/windows-task.xml and registers it. Installer writes local install-result/
+error records; it does not render XML or start task. Do not copy private installed
+state/machine-specific XML to a new host. Legacy install_project_startup.py VBS
+Startup-folder method is NOT selected deployment. Archived BACKGROUND-STARTUP.TXT
+is byte-exact but STALE: not-activated, two-child, VBS and orphan statements are
+superseded here. activate_task_migration.ps1 is one-time migration with historical
+PID guards, NOT a generic restart control; do not blindly execute it.
+No runtime/configuration/task changes made by this documentation operation.
+No new suite run, recovery injection or full Windows reboot/logout/login test.
+Current process/listener state does not prove persistence or voice acceptance.
+Model pin/route is NOT finalized here. Main will add separate current verification/
+model addendum, then regenerate manifest and verify NAS bytes again.
+
+13. TROUBLESHOOTING, INCLUDING DELAYED OLD COMPLETIONS
+====================================================
+Import errors despite a successful install:
+  Check which python.exe ran; remove inherited PYTHONPATH/PYTHONHOME/VIRTUAL_ENV
+  only from the relevant child environment and use PYTHONNOUSERSITE=1. Do not
+  solve this by sharing Hermes site-packages with the SDK/runtime venv.
+PermissionError in model flash:
+  Check the closed temporary-file fix and focused test; do not disable antivirus
+  or make temp directories globally writable as a first response.
+AttributeError: os.fchmod:
+  Use the guarded native fix; do not strip all atomic-persistence protection.
+Pairing issuer cannot find python3:
+  Ensure sys.executable in ScriptEnroller and correct interpreter/package imports.
+TLS authentication/pinning fails after moving host:
+  Compare endpoint, server SAN and pinned certificate, and device identity mapping.
+  Reuse trust deliberately; do not regenerate CA, bypass TLS or enable plaintext
+  to hide the mismatch. Check local-subnet firewall and the correct LAN address.
+DFU sees no devices:
+  Ask user to verify socket, data cable and Safe Mode; inspect the exact DFU driver
+  before considering WinUSB. Serial COM detection is not coprocessor DFU detection.
+Mic is silent despite normal ESP32 boot:
+  Read coprocessor version and 48 kHz role pairing first, then real capture.
+Wake model loaded but no wake:
+  Match model header name with set-wake selector; use real speech and policy-aware
+  rolling scores. Do not confuse a forced wake test with acoustic acceptance.
+Gateway duplication or ports already occupied:
+  Inventory process executable/command line, creation time and listener owner
+  read-only. Do not kill all Python processes. Follow main's ownership policy.
+NAS unavailable in task:
+  Use local assets. A user-mapped drive may not exist under task/elevated logon.
+
+Delayed OLD completion messages / stale tool notifications:
+- A background completion notification can arrive after a later command has
+  already succeeded, or after main has changed service state. Its arrival time
+  is NOT the execution time or current status. Check the exact command/session,
+  start time, exit code and artifact path before acting on it.
+- Do not rerun a flash, installer, restore or service launch solely because an old
+  message mentions failure/incomplete work. Read fresh narrowly scoped state.
+- Distinguish an old agent/build completion notification from stale spoken audio:
+  for spoken replies, correlate current turn/session/request IDs and timestamps,
+  then check duplicate runtime/announcement producers. Avoid reading/exporting
+  personal session history to diagnose a generic startup issue.
+- Keep build logs, service logs and hardware validation separate. A background
+  installer exit 0 cannot establish current device connectivity or current voice.
+- On true uncertainty stop and report the last independently verified stage;
+  never replace missing evidence with plausible-looking success output.
+
+14. ROLLBACK AND BACKUP DISCIPLINE
+================================
+Always capture the current state privately before rollback so rollback is itself
+reversible. Do not overwrite the pre-install backup. Verify the selected backup's
+hash and fitted flash size, not just its filename.
+
+Project rollback: restore the previously reviewed bootloader/table/application
+REGIONS as a compatible set, preserving NVS/TLS/model where layout allows. If
+credentials/configuration changed, coordinate restoring their private paired
+state; never overwrite current CA/device registry with an arbitrary old copy.
+
+True vendor reset is the exceptional case where a full 8 MB write at 0x0 is
+appropriate. After approval and backup, select the stock ESP32 image from section
+5 and compare its hash, write it whole at 0x0, read back 8388608 bytes and compare
+again. This removes the project application/state and should stop registry use.
+Separately restore the coprocessor via the SAME user Safe Mode + WinUSB/DFU steps
+but choose xmos-official-v1.0.4-dfu.bin. Verify that image's hash first. Restoring
+only one chip does not establish true factory compatibility; stock ESP32 plus
+48 kHz-master coprocessor compatibility was not proven by this documentation.
+
+Host rollback: follow section 12 ownership/stop controls; disable only this
+project's scheduled task and stop only its owned children. Restore selected
+project patches/config from private backups after comparing version compatibility.
+Do not remove unrelated Hermes startup or kill unrelated Hermes/Python processes.
+Do not rotate/revoke/regenerate keys as an undocumented side effect of rollback.
+
+15. ARCHIVE CONTENTS, LIMITATIONS AND INTEGRITY
+============================================
+This archive intentionally excludes installed environment files, secret files,
+identity words, certificates/keys, personal network names, device dumps, firmware
+binaries, logs, memories/sessions, Git history and all dependencies. It is NOT a
+complete standalone source release or credential backup. Use the original
+project archive, approved source commit, SDK sources and privately retained
+runtime state to reconstruct the system.
+
+Subset retains original build/fix files and adds scripts/windows/*.py, *.pyw,
+*.ps1, BACKGROUND-STARTUP.TXT and local-tests/test_*.py. Device capture helper
+and unapproved sources remain excluded.
+The source files were reviewed for embedded private-key blocks and credential
+literals; they contain variable/path names and synthetic test material, not
+installed credentials. No current secret file was opened to produce snapshots.
+Unchanged snapshots retain exact source bytes; any future redactions must be
+recorded explicitly rather than pretending to match the installed file hash.
+
+SHA256-MANIFEST.TXT lists this guide and every approved source snapshot, relative
+paths, byte sizes and SHA256 values. It deliberately excludes itself to avoid a
+self-hash cycle. Its own hash is reported separately to the parent/user. Local
+files were updated locally and mirrored only to approved NAS documentation paths.
+All manifest files and manifest itself were read back byte-for-byte from NAS.
+The manifest excludes itself; its own hash is reported separately. Adding main's
+current verification/model addendum requires regeneration and fresh NAS readback.

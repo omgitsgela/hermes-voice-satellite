@@ -1,0 +1,22 @@
+2026-11-02 SANITIZED DOCUMENTATION UPDATE
+
+Only local/NAS docs/windows-native written. 16 allowlisted source files scanned
+before copy for private-key headers, common provider/GitHub/AWS token patterns and
+quoted credential assignments of12+ characters: no candidate findings. Scans are
+not universal security proof. No .env/state/credentials/raw flash/environment dump.
+Exact source bytes retained. Legacy startup TXT preserved and flagged stale;
+guide section12 supersedes it. No runtime/config/task mutation, test suite run,
+recovery injection or reboot. Model pin not finalized; separate main addendum.
+Manifest excludes itself. All listed files and manifest separately verified by
+NAS byte readback. Human-facing documents plain TXT; source extensions retained.
+2026-11-02 SECOND UPDATE (reasoning/voice-behavior session)
+Added REASONING-AND-VOICE-BEHAVIOR-ADDENDUM.TXT: how the satellite pin selects
+model+reasoning per /v1/runs request, the none<->medium change and rollback to
+medium, live verification evidence, the fallback reasoning re-resolution limit,
+the "One moment." silence-filler behavior, and the safe change procedure.
+voice-model.example.json and snapshots/project/voice-model.json updated to the
+installed state (medium, require_model_lock false). MODEL-PIN-ADDENDUM.TXT header
+now flags reasoning low->medium supersession. SHA256-MANIFEST.TXT regenerated
+over 36 files with per-file NAS byte readback: all match. config.yaml and Hermes
+core were NOT modified; voice reasoning is tuned solely via voice-model.json.
+

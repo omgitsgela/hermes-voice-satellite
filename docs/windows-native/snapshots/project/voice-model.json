@@ -1,0 +1,9 @@
+{
+  "model": "gpt-6-luna",
+  "provider": "openai-codex",
+  "model_options": {
+    "reasoning_effort": "medium",
+    "service_tier": "priority"
+  },
+  "require_model_lock": false
+}
