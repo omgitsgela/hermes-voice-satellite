@@ -38,8 +38,9 @@ def check(label, got, want):
 
 
 class RecordingStream:
-    def __init__(self):
+    def __init__(self, say_delay=0.0):
         self.said = []
+        self.say_delay = say_delay
 
     async def __aenter__(self):
         return self
@@ -48,6 +49,10 @@ class RecordingStream:
         return False
 
     async def say(self, text):
+        # A real say() synthesizes and streams for a good fraction of a second;
+        # the delay is what lets a second trigger land inside its await window.
+        if self.say_delay:
+            await asyncio.sleep(self.say_delay)
         self.said.append(text)
         return 0.1
 
@@ -56,7 +61,8 @@ class RecordingStream:
         return 0.1
 
 
-def make_bridge(gateway_deltas, delay_before_first):
+def make_bridge(gateway_deltas, delay_before_first,
+                tool_started_delay=None, say_delay=0.0, delta_delay=0.0):
     """A loop whose gateway is slow on purpose. Everything else is a stub."""
     gateway = Loop.__new__(Loop)
     gateway.turns = []
@@ -70,7 +76,7 @@ def make_bridge(gateway_deltas, delay_before_first):
     gateway.stop_requested = False
     gateway.interrupt_enabled = False
     gateway.gateway = types.SimpleNamespace(session_id="filler-test", stop=None)
-    stream = RecordingStream()
+    stream = RecordingStream(say_delay=say_delay)
     async def next_event(_timeout):
         return None
 
@@ -114,6 +120,12 @@ def make_bridge(gateway_deltas, delay_before_first):
 
     async def ask(_text, on_tool_started=None):
         await asyncio.sleep(delay_before_first)
+        if tool_started_delay is not None and on_tool_started is not None:
+            # Fire while the first filler's say() await is still in flight.
+            await asyncio.sleep(tool_started_delay)
+            await on_tool_started(None)
+        if delta_delay:
+            await asyncio.sleep(delta_delay)
         for delta in gateway_deltas:
             yield delta
 
@@ -142,6 +154,41 @@ async def main() -> int:
         loop_module.SILENCE_FILLER_SECONDS = saved
     check("a fast turn says no filler", "One moment." in stream.said, False)
     check("a fast turn still answers", stream.said, ["A real answer."])
+
+    # 3. race (2026-11-02): two triggers arm the same filler and one lands
+    #    WHILE the other's say() await is still in flight. The once-only
+    #    guard must be claimed BEFORE the await, or the second trigger reads
+    #    the stale flag and synthesizes a second "One moment." back to back.
+    #    Both orders are tested. Timings are deterministic, not wall-clock
+    #    luck: filler=0.1s, say()=0.2s, and each second trigger is placed
+    #    inside the first's await window.
+    for label, kw in (
+        # timer filler fires at 0.1 and occupies [0.1, 0.3]; tool.started
+        # fires at 0.25, inside that window. The answer delta is held to
+        # 0.45 so the delta-cancel cannot erase an in-flight filler (the
+        # real ask() awaits the tool.started callback inline, so its delta
+        # never overtakes a running filler either).
+        ("tool.started racing the timer filler",
+         dict(delay_before_first=0.25, tool_started_delay=0.0,
+              say_delay=0.2, delta_delay=0.2)),
+        # tool.started fires first at 0.0 and its filler occupies [0.0, 0.2];
+        # the timer fires at 0.1, inside that window. The answer delta only
+        # arrives at 0.5, after the filler window, so the cancel cannot mask
+        # the race.
+        ("timer racing the tool.started filler",
+         dict(delay_before_first=0.0, tool_started_delay=0.0,
+              say_delay=0.2, delta_delay=0.5)),
+    ):
+        gateway, stream = make_bridge(["A real answer."], **kw)
+        loop_module.SILENCE_FILLER_SECONDS = 0.1
+        try:
+            await asyncio.wait_for(gateway.one_turn(), timeout=5.0)
+        finally:
+            loop_module.SILENCE_FILLER_SECONDS = saved
+        check(f"{label}: filler said once",
+              stream.said.count("One moment."), 1)
+        check(f"{label}: the answer still follows",
+              stream.said[-1], "A real answer.")
 
     print(f"silence-filler checks: {checks - len(failures)}/{checks} passed")
     for f in failures:

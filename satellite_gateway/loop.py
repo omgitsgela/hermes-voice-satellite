@@ -1616,10 +1616,16 @@ class VoiceLoop:
             """
             nonlocal spoken_any
             if not spoken_any and stats.first_delta_seconds == 0.0:
+                # Claim the once-per-turn flag BEFORE the await. say() takes
+                # ~0.3-1.0 s of Piper synthesis and chunking; a second trigger
+                # (the timer racing a tool.started, or two tool.started events)
+                # arriving inside that window used to read the still-False flag
+                # and speak a second "One moment." back to back (2026-11-02).
+                # asyncio is single-threaded, so check-then-claim here is atomic.
+                spoken_any = True
                 _LOGGER.info("nothing spoken yet after %.0fs: filling the silence",
                              SILENCE_FILLER_SECONDS)
                 await stream.say("One moment.")
-                spoken_any = True
 
         # The clock-based half of that: a turn that is merely slow to start used to
         # get nothing, because nothing fired without a tool call.
