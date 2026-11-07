@@ -41,14 +41,15 @@ extern "C" {
 #define WY_LED_XVF_ADDR        0x2C
 #define WY_LED_RESID           20    /* the GPO Servicer resource */
 
-/* Command IDs on that resource. The first five are taken from Seeed's own published Arduino
- * example for this board, so they are not guesses. */
+/* Command IDs confirmed by Seeed's XVF3800 I2C command list and xvf_host.py.
+ * COLOR is one packed 0x00RRGGBB uint32; DOA_COLOR is base then marker (two uint32).
+ * Both commands serialize each word little-endian: B, G, R, 0. */
 #define WY_LED_CMD_EFFECT      12
 #define WY_LED_CMD_BRIGHTNESS  13
-#define WY_LED_CMD_GAMMIFY     14    /* PROVISIONAL: inferred from the host_control command order */
+#define WY_LED_CMD_GAMMIFY     14
 #define WY_LED_CMD_SPEED       15
 #define WY_LED_CMD_COLOR       16
-#define WY_LED_CMD_DOA_COLOR   17    /* PROVISIONAL: inferred from the host_control command order */
+#define WY_LED_CMD_DOA_COLOR   17
 
 /* LED_EFFECT values. This is the device's entire expressive range. */
 #define WY_LED_FX_OFF          0

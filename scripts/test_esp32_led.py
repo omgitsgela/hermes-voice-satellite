@@ -6,7 +6,8 @@ testable here: compile the real wy_led.c with -Wall -Wextra -Werror, feed it lif
 and assert the exact bytes that would go out on the wire.
 
 What matters most is not that commands are emitted but that they are the RIGHT ones, so the
-assertions compare colours and effects against pi/2mic_service.py byte for byte. Two satellites
+assertions compare decoded RGB colours and effects against pi/2mic_service.py. Raw payload
+assertions separately pin little-endian packed 0x00RRGGBB words. Two satellites
 that disagree about what red means are worse than one that has no lights at all.
 """
 import ctypes as C
@@ -34,9 +35,11 @@ class LedHarness(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         library = Path(temporary.name) / 'led.so'
-        subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC',
-                        '-I' + str(COMP / 'wy_led'),
-                        str(COMP / 'wy_led/wy_led.c'), '-o', str(library)], check=True)
+        built = subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC',
+                                '-I' + str(COMP / 'wy_led'),
+                                str(COMP / 'wy_led/wy_led.c'), '-o', str(library)],
+                               capture_output=True, text=True, timeout=120)
+        self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
         lib = C.CDLL(str(library))
         lib.wy_led_size.restype = C.c_size_t
         lib.wy_led_init.argtypes = [C.c_void_p, EMIT, C.c_void_p]
@@ -80,10 +83,16 @@ class LedHarness(unittest.TestCase):
         w = self.last(12)
         return w.params[0] if w else None
 
+    def decode_colour(self, params):
+        """Decode one complete little-endian 0x00RRGGBB word to semantic RGB."""
+        self.assertEqual(len(params), 4, 'a packed RGB word is exactly four bytes')
+        self.assertEqual(params[3], 0, 'the packed colour high byte must be zero')
+        return bytes([params[2], params[1], params[0]])
+
     def colour_of(self):
-        """The most recent colour written, or None if no colour has been written yet."""
+        """The most recent decoded RGB colour, or None if none has been written."""
         w = self.last(16)
-        return w.params[:3] if w else None
+        return self.decode_colour(w.params) if w else None
 
     def tick(self, ms):
         self.lib.wy_led_tick(self.buf, ms)
@@ -96,50 +105,50 @@ class LedHarness(unittest.TestCase):
         for w in self.writes:
             self.assertEqual(w.resid, 20, 'LED commands belong on the GPO servicer resource')
 
-    def test_a_colour_write_is_four_bytes_not_three(self):
-        """The device expects R,G,B,reserved. Three bytes is a truncated command."""
+    def test_a_colour_write_is_one_little_endian_packed_rgb_word(self):
+        """Red 0x00FF0000 is B,G,R,0 on the wire; no RGB triplet is sent."""
         self.lib.wy_led_error(self.buf)
         colour = self.last(16)
-        self.assertEqual(len(colour.params), 4, 'the colour payload must be 4 bytes')
-        self.assertEqual(colour.params[3], 0, 'the fourth byte is reserved and must be zero')
+        self.assertEqual(colour.params, bytes.fromhex('0000ff00'))
 
     def test_the_command_ids_match_seeeds_published_example(self):
-        """EFFECT 12, BRIGHTNESS 13, SPEED 15, COLOR 16: from Seeed's own Arduino sketch.
+        """EFFECT 12, BRIGHTNESS 13, SPEED 15, COLOR 16, DOA_COLOR 17: Seeed's I2C list.
         Every one is asserted, because a wrong ID in any of them is a feature that silently
         does nothing. They are not all written by one lifecycle call -- brightness is set at
         boot and on change, not on every look -- so drive the paths that own each."""
         self.lib.wy_led_boot(self.buf)               # brightness 13, colour 16, speed 15, effect 12
         self.lib.wy_led_set_brightness(self.buf, 20)  # brightness 13 again
         self.lib.wy_led_thinking(self.buf)            # colour 16, speed 15, effect 12
-        for cmd in (12, 13, 15, 16):
+        self.lib.wy_led_listening(self.buf)           # DoA colours 17 and moving marker 4
+        for cmd in (12, 13, 15, 16, 17):
             self.assertIsNotNone(self.last(cmd), f'command {cmd} was never emitted')
 
-    # --- the palette, byte for byte against pi/2mic_service.py ---
+    # --- the semantic RGB palette against pi/2mic_service.py ---
 
     def test_error_is_red(self):
         self.lib.wy_led_error(self.buf)
-        self.assertEqual(self.last(16).params[:3], bytes([255, 0, 0]))
+        self.assertEqual(self.colour_of(), bytes([255, 0, 0]))
         self.assertEqual(self.effect_of(), 3, 'a solid colour is effect 3')
 
     def test_thinking_is_the_working_violet(self):
         self.lib.wy_led_thinking(self.buf)
-        self.assertEqual(self.last(16).params[:3], bytes([150, 70, 255]))
+        self.assertEqual(self.colour_of(), bytes([150, 70, 255]))
         self.assertEqual(self.effect_of(), 1, 'the thinking glow is a breath, not a flat colour')
 
     def test_followup_is_dim_teal(self):
         self.lib.wy_led_followup(self.buf)
-        self.assertEqual(self.last(16).params[:3], bytes([0, 64, 64]))
+        self.assertEqual(self.colour_of(), bytes([0, 64, 64]))
         self.assertEqual(self.effect_of(), 3, 'steady, so it cannot be mistaken for the glow')
 
     def test_voice_started_is_yellow(self):
         self.lib.wy_led_voice_started(self.buf)
-        self.assertEqual(self.last(16).params[:3], bytes([255, 255, 0]))
+        self.assertEqual(self.colour_of(), bytes([255, 255, 0]))
 
     # --- the boot and connection handshake ---
 
     def test_boot_is_a_white_breath(self):
         self.lib.wy_led_boot(self.buf)
-        self.assertEqual(self.last(16).params[:3], bytes([255, 255, 255]))
+        self.assertEqual(self.colour_of(), bytes([255, 255, 255]))
         self.assertEqual(self.effect_of(), 1, 'the startup look pulses')
 
     def test_one_coarse_tick_completes_the_whole_flash(self):
@@ -167,7 +176,7 @@ class LedHarness(unittest.TestCase):
         self.lib.wy_led_boot(self.buf)
         self.writes.clear()
         self.lib.wy_led_connected(self.buf, 1)
-        greens = [w for w in self.writes if w.cmd == 16 and w.params[:3] == bytes([0, 255, 0])]
+        greens = [w for w in self.writes if w.cmd == 16 and self.decode_colour(w.params) == bytes([0, 255, 0])]
         self.assertEqual(len(greens), 1, 'the colour is set once and then the effect is toggled')
         # Count the commands, not the sampled state: a phase that runs past its last change would
         # otherwise be counted once per tick. Three flashes is exactly six phases, and the first
@@ -213,7 +222,7 @@ class LedHarness(unittest.TestCase):
                          'a later presentation must not swallow the outage')
         self.writes.clear()                          # only what happens FROM the expiry counts
         self.tick(20001)
-        reds = [w for w in self.writes if w.cmd == 16 and w.params[:3] == bytes([255, 0, 0])]
+        reds = [w for w in self.writes if w.cmd == 16 and self.decode_colour(w.params) == bytes([255, 0, 0])]
         self.assertEqual(len(reds), 1, 'the expiry itself must EMIT the red, not merely think it')
         self.assertEqual(self.effect_of(), 3)
 
@@ -283,7 +292,7 @@ class LedHarness(unittest.TestCase):
         self.assertEqual(self.lib.wy_led_red_pending(self.buf), 0, 'the reconnect cancelled it')
         self.writes.clear()                      # only what happens FROM HERE may be judged
         self.tick(30000)
-        reds = [w for w in self.writes if w.cmd == 16 and w.params[:3] == bytes([255, 0, 0])]
+        reds = [w for w in self.writes if w.cmd == 16 and self.decode_colour(w.params) == bytes([255, 0, 0])]
         self.assertEqual(reds, [], 'the cancelled red still appeared')
 
     def test_the_grace_period_is_thirty_seconds(self):
@@ -338,28 +347,28 @@ class LedHarness(unittest.TestCase):
         self.assertEqual(self.effect_of(), 4, 'and then it points at the speaker')
 
     def test_direction_mode_pairs_a_quiet_ring_with_a_bright_marker(self):
-        # Direction is no longer what LISTENING shows (the ring must answer "is it ready for me"),
-        # but it is still a live pattern on the voice-start path, which goes yellow and then points
-        # at the speaker. Drive it there so the DOA encoding keeps its coverage.
+        # The voice-start path reaches the same moving marker as direct LISTENING.
         self.lib.wy_led_voice_started(self.buf)
         self.tick(501)
         doa = self.last(17)
-        self.assertEqual(len(doa.params), 6, 'two RGB colours: base then marker')
-        self.assertEqual(doa.params[:3], bytes([0, 0, 0]), 'the ring itself stays quiet')
-        self.assertEqual(doa.params[3:6], bytes([255, 255, 255]), 'the marker is the bright part')
+        self.assertEqual(len(doa.params), 8, 'two complete packed RGB words: base then marker')
+        self.assertEqual(doa.params, bytes.fromhex('00000000ffffff00'))
+        self.assertEqual(self.decode_colour(doa.params[:4]), bytes([0, 0, 0]),
+                         'the ring itself stays quiet')
+        self.assertEqual(self.decode_colour(doa.params[4:]), bytes([255, 255, 255]),
+                         'the marker is the bright part')
 
-    def test_listening_is_idempotent_with_the_sweep(self):
+    def test_listening_selects_direction_even_after_a_wake_sweep(self):
         self.lib.wy_led_wake(self.buf)
         self.lib.wy_led_listening(self.buf)
-        # Listening is a STEADY colour (effect 3), not the DOA pattern (4): the ring has to answer
-        # "is it ready for me", and a direction display answers a different question.
-        self.assertEqual(self.effect_of(), 3)
+        self.assertEqual(self.effect_of(), 4, 'listening retains the moving direction marker')
+        self.assertEqual(self.lib.wy_led_state(self.buf), 4)  # WY_LED_STATE_LISTENING
 
     # --- the rest of the lifecycle ---
 
     def test_transcript_is_green_and_brief(self):
         self.lib.wy_led_transcript(self.buf)
-        self.assertEqual(self.last(16).params[:3], bytes([0, 255, 0]))
+        self.assertEqual(self.colour_of(), bytes([0, 255, 0]))
         self.tick(999)
         self.assertEqual(self.effect_of(), 3, 'it is still green just before the second is up')
         self.tick(2)
@@ -371,7 +380,7 @@ class LedHarness(unittest.TestCase):
 
     def test_speaking_is_the_working_colour(self):
         self.lib.wy_led_speaking(self.buf)
-        self.assertEqual(self.last(16).params[:3], bytes([150, 70, 255]))
+        self.assertEqual(self.colour_of(), bytes([150, 70, 255]))
         self.assertEqual(self.effect_of(), 3, 'solid while the answer is audible')
 
     # --- brightness ---
