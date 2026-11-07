@@ -289,6 +289,15 @@ async def scenario_loser_release() -> None:
                 break
             await asyncio.sleep(0.05)
         runs = [i for i, t in enumerate(types) if t == "run-satellite"]
+        # The re-arm follows the pause by one more loop step; bounded egress writes (#166)
+        # put each send behind its own task, so poll for the pair rather than expecting
+        # both in the snapshot that first caught the pause.
+        for _ in range(20):
+            if pause_at >= 0 and any(r > pause_at for r in runs):
+                break
+            await asyncio.sleep(0.05)
+            types = beta.types_seen()
+            runs = [i for i, t in enumerate(types) if t == "run-satellite"]
         check("beta's listen stream cancelled", pause_at >= 0, True)
         check("beta re-armed silently after the pause",
               any(r > pause_at for r in runs), True)
