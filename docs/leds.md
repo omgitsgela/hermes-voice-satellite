@@ -142,14 +142,23 @@ There is no new wiring and no new peripheral: the LEDs are one more control writ
 |---|---|---|---|
 | `LED_EFFECT` | 12 | 1 byte | 0 off, 1 breath, 2 rainbow, 3 single, 4 doa |
 | `LED_BRIGHTNESS` | 13 | 1 byte | 0–255 |
-| `LED_GAMMIFY` | 14 | 1 byte | **provisional ID** |
+| `LED_GAMMIFY` | 14 | 1 byte | gamma correction: 0 off, 1 on |
 | `LED_SPEED` | 15 | 1 byte | effect speed |
-| `LED_COLOR` | 16 | 4 bytes | R, G, B, reserved — four bytes, not three |
-| `LED_DOA_COLOR` | 17 | 6 bytes | base colour then marker colour |
+| `LED_COLOR` | 16 | 4 bytes | one packed RGB `uint32` (`0x00RRGGBB`), little-endian: B, G, R, 0 |
+| `LED_DOA_COLOR` | 17 | 8 bytes | two packed RGB `uint32` words: base then marker, each B, G, R, 0 |
 
-The IDs 12, 13, 15, 16 are from Seeed's own published Arduino example. **14 and 17 are inferred**
-from the `host_control` command ordering and must be confirmed with one live probe before they are
-trusted. They are named constants in `wy_led.h`, so a correction is a one-line change.
+The IDs and payload types/counts are confirmed by [Seeed's I2C command list](https://wiki.seeedstudio.com/respeaker_xvf_3800_i2c_list/)
+and the vendor's [pinned `xvf_host.py`](https://github.com/respeaker/reSpeaker_XVF3800_USB_4MIC_ARRAY/blob/4b49bfd19977c63cf6e90dfe9e5827e74e20bf6d/python_control/xvf_host.py).
+In particular, `(20, 16)` takes one `uint32` and `(20, 17)` takes two, not two RGB
+triplets. The high byte of **each** packed colour word is zero. For example, red
+`0x00FF0000` is `00 00 FF 00`; violet `(150, 70, 255)` is `FF 46 96 00`;
+the documented black-base/white-marker DoA pair is `00 00 00 00 FF FF FF 00`.
+
+These are wire-format corrections, not a change to the phase table or palette. Vendor
+Arduino colour labels conflict with their packing shifts, so serialization follows
+the packed RGB convention above. Native tests prove the emitted bytes only: physical
+red/blue channel mapping, rendered colours and movement of the listening marker still
+require on-device readback and visual acceptance after deployment.
 
 ## Brightness is on two scales
 

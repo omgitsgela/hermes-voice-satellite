@@ -66,20 +66,23 @@ static int set_effect(wy_led *led, uint8_t effect)
 
 static int set_color(wy_led *led, uint32_t r, uint32_t g, uint32_t b)
 {
-    /* The wire format is R, G, B, reserved -- four bytes, not three. A device that expects four
-     * will misread a three-byte write as a truncated command. */
-    uint8_t p[4] = { (uint8_t)r, (uint8_t)g, (uint8_t)b, 0x00 };
+    /* One packed 0x00RRGGBB uint32, serialized little-endian: B, G, R, 0. The vendor's own
+     * host tool (xvf_host.py) sends this command as struct.pack('I', colour), and its
+     * command list types LED_COLOR as ONE uint32, not an R,G,B byte triplet. Red is
+     * 00 00 FF 00 on the wire. */
+    uint8_t p[4] = { (uint8_t)b, (uint8_t)g, (uint8_t)r, 0x00 };
     return emit(led, WY_LED_CMD_COLOR, p, sizeof(p));
 }
 
 static int set_doa_colors(wy_led *led, uint32_t base_r, uint32_t base_g, uint32_t base_b,
                           uint32_t doa_r, uint32_t doa_g, uint32_t doa_b)
 {
-    /* Two uint32 colours: the quiet ring, then the bright marker at the speaker. Six bytes as
-     * R,G,B,R,G,B with no reserved byte between them. */
-    uint8_t p[6] = {
-        (uint8_t)base_r, (uint8_t)base_g, (uint8_t)base_b,
-        (uint8_t)doa_r, (uint8_t)doa_g, (uint8_t)doa_b
+    /* Two packed 0x00RRGGBB uint32 colours, each little-endian: the quiet base ring, then
+     * the bright marker at the speaker. The vendor's command list types LED_DOA_COLOR as
+     * TWO uint32 values (length 2), so the payload is eight bytes, not six RGB bytes. */
+    uint8_t p[8] = {
+        (uint8_t)base_b, (uint8_t)base_g, (uint8_t)base_r, 0x00,
+        (uint8_t)doa_b, (uint8_t)doa_g, (uint8_t)doa_r, 0x00
     };
     return emit(led, WY_LED_CMD_DOA_COLOR, p, sizeof(p));
 }
@@ -259,13 +262,13 @@ int wy_led_listening(wy_led *led)
 {
     if (!led) return -1;
     if (red_owns(led)) return 0;   /* red is already saying something more important */
-    /* STEADY colour, not the direction-of-arrival pattern.
-     *
-     * "Is it ready for me?" is the only question a person asks at this moment, and a DOA pattern
-     * answers a different one -- it moves with the room, and with no clear direction it looks like
-     * the device is doing something private rather than waiting for you. A solid ring means exactly
-     * one thing: the microphone is open and it is your turn. Direction can be shown while idle. */
-    return show_single(led, WY_LED_STATE_LISTENING, WY_LED_BLUE_R, WY_LED_BLUE_G, WY_LED_BLUE_B, 1);
+    /* The DIRECTION pattern, which is what docs/leds.md has always described for this phase
+     * ("black ring + white marker: the bright point is where the person is"). A steady solid
+     * ring was tried and reached a board; it was rejected in the field the same night -- a
+     * flat blue that outlives its turn reads as a fault, and the moving marker is the signal
+     * the listener uses to confirm the satellite is actually hearing him. Do not replace this
+     * with show_single again: scripts/test_led_wire_protocol.py pins it (#163). */
+    return show_doa(led, WY_LED_STATE_LISTENING, 1);
 }
 
 int wy_led_voice_started(wy_led *led)

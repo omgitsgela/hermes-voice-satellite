@@ -778,7 +778,12 @@ void provisioning_console_run(void) {
                     snprintf(response, sizeof(response),
                              "ERR XVF_READ usage: XVF_READ <resid> <cmd> [bytes 1-16]");
                 } else {
-                    uint8_t cmd[3] = { (uint8_t)r, (uint8_t)(cm | 0x80), (uint8_t)nbytes };
+                    /* The count field is status-INCLUSIVE: the chip always returns one status
+                     * byte before the payload, and the vendor's own read() asks for
+                     * data_length + 1 and sends the same in the header. Counting only nbytes
+                     * told the co-processor to return one byte fewer than we asked the bus
+                     * for, so multi-byte reads (DOA_VALUE, VERSION) came back short (#164). */
+                    uint8_t cmd[3] = { (uint8_t)r, (uint8_t)(cm | 0x80), (uint8_t)(nbytes + 1u) };
                     uint8_t reply[17] = {0};
                     int rc = audio_xvf_read(cmd, sizeof(cmd), reply, (size_t)nbytes + 1u);
                     if (rc != 0) {
