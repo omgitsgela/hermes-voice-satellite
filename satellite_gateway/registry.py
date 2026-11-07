@@ -54,6 +54,15 @@ from satellite_gateway.net import enable_tcp_keepalive
 
 log = logging.getLogger("satellite_gateway.registry")
 
+#: Bound for a single egress write (#166). The steady path awaited `drain()` forever, under the
+#: connection's write lock. When a device's TCP window stalls (a wedged mid-turn device, a busy
+#: USB-bridge host, an 11 s think gap measured on a Windows installation), that forever-wait
+#: parked the lock and every sender queued behind it, including the session pump that carries
+#: mic audio - perceived in the room as one-way silence. Five seconds is far above every healthy
+#: write and far below the point where a turn is still recoverable, so a stalled peer is now
+#: failed explicitly instead of silencing the house.
+WRITE_TIMEOUT_SECONDS = 5.0
+
 #: Bumped when the registration contract changes, so an old device is refused clearly instead of
 #: half-working.
 PROTOCOL_VERSION = 1
@@ -491,15 +500,35 @@ class SatelliteConnection:
     # -- egress ---------------------------------------------------------------
 
     async def send(self, event: Event) -> bool:
-        """Write one event. Serialised, so ordering is preserved without the caller holding a lock."""
+        """Write one event. Serialised, so ordering is preserved without the caller holding a lock.
+
+        Bounded (#166): the write+drain gets WRITE_TIMEOUT_SECONDS, not forever. A stalled peer
+        that cannot accept an event must fail this connection -- the stream may be half-written,
+        so a timeout is a torn frame by protocol and the only honest recovery is closure -- and
+        closure releases the write lock and every typed waiter instead of parking the session
+        pump behind a dead socket (the host-side "nothing said in 30s" root cause).
+        """
         if self.closed:
             return False
         async with self._write_lock:
             if self.closed:
                 return False
-            try:
+
+            async def _write() -> None:
                 await async_write_event(event, self.writer)
                 await self.writer.drain()
+
+            try:
+                await asyncio.wait_for(_write(), WRITE_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError:
+                # Must precede the OSError arm: TimeoutError IS an OSError since 3.11.
+                log.warning(
+                    "device %s generation %s: egress write exceeded %.1fs; closing the "
+                    "connection so no sender waits behind a stalled peer (#166)",
+                    self.device_id, self.generation, WRITE_TIMEOUT_SECONDS,
+                )
+                await self.close()
+                return False
             except (ConnectionError, OSError, asyncio.IncompleteReadError):
                 await self.close()
                 return False
